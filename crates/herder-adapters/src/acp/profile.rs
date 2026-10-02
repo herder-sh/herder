@@ -9,6 +9,10 @@
 //! Each agent must ask before every write or command, so the adapter can apply the session's
 //! permission mode: OpenCode is launched with `OPENCODE_PERMISSION={"*":"ask"}`, as by default
 //! it runs most tools unasked; Grok and Cursor ask by default over ACP.
+//!
+//! None of them reports limit windows over ACP, so no account of theirs shows usage. OpenCode
+//! has none to report either: `opencode stats` totals tokens and cost from its own sessions,
+//! not the model provider's quota, so its limits surface only as turn errors.
 
 use std::process::Stdio;
 

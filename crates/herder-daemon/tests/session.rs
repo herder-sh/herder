@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
@@ -55,10 +56,10 @@ impl EventSink for Recorder {
     }
 }
 
-/// The fake adapter, keeping every start request so tests can check the seed, and every
-/// command the daemon sent it.
+/// An adapter, the fake one unless a test says otherwise, keeping every start request so tests
+/// can check the seed, and every command the daemon sent it.
 struct Recording {
-    fake: FakeAdapter,
+    adapter: Box<dyn Adapter>,
     starts: Arc<Mutex<Vec<StartRequest>>>,
     commands: Arc<Mutex<Vec<AdapterCommand>>>,
 }
@@ -66,7 +67,7 @@ struct Recording {
 impl Adapter for Recording {
     fn start(&self, request: StartRequest) -> StartFuture {
         self.starts.lock().unwrap().push(request.clone());
-        let started = self.fake.start(request);
+        let started = self.adapter.start(request);
         let commands = self.commands.clone();
         Box::pin(async move {
             let mut session = started.await?;
@@ -146,7 +147,7 @@ impl Daemon {
     /// restarts, as the fake scripts expect.
     async fn open(dir: &Path, script: &str, turns: Arc<AtomicU64>) -> Self {
         let recording = Recording {
-            fake: FakeAdapter::new(fixture(script)),
+            adapter: Box::new(FakeAdapter::new(fixture(script))),
             starts: Default::default(),
             commands: Default::default(),
         };
@@ -1141,7 +1142,7 @@ async fn terminals_get_the_worktree_until_the_session_is_archived() {
 async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
     let dir = tempfile::tempdir().unwrap();
     let recording = || Recording {
-        fake: FakeAdapter::new(fixture("first.jsonl")),
+        adapter: Box::new(FakeAdapter::new(fixture("first.jsonl"))),
         starts: Default::default(),
         commands: Default::default(),
     };
@@ -1583,18 +1584,33 @@ async fn compose_down_brings_down_a_project_the_session_started() {
     daemon.stop().await;
 }
 
-/// Fake adapters that play one script per start, in order, recording every start request and
+/// Adapters that play one script per start, in order, recording every start request and
 /// every command across starts.
 struct Scripted {
     scripts: Mutex<Vec<PathBuf>>,
+    /// The adapter that plays a script.
+    play: fn(PathBuf) -> Box<dyn Adapter>,
     starts: Arc<Mutex<Vec<StartRequest>>>,
     commands: Arc<Mutex<Vec<AdapterCommand>>>,
 }
 
 impl Scripted {
+    /// The fake adapter, playing `scripts`.
     fn new(scripts: &[&str]) -> Arc<Self> {
+        Self::playing(scripts, |script| Box::new(FakeAdapter::new(script)))
+    }
+
+    /// The ACP adapter with OpenCode's profile, replaying recordings of `opencode acp`.
+    fn opencode(recordings: &[&str]) -> Arc<Self> {
+        Self::playing(recordings, |recording| {
+            Box::new(AcpAdapter::replaying(AgentProfile::opencode(), recording))
+        })
+    }
+
+    fn playing(scripts: &[&str], play: fn(PathBuf) -> Box<dyn Adapter>) -> Arc<Self> {
         Arc::new(Self {
             scripts: Mutex::new(scripts.iter().rev().map(|name| fixture(name)).collect()),
+            play,
             starts: Default::default(),
             commands: Default::default(),
         })
@@ -1618,7 +1634,7 @@ impl Adapter for Scripted {
             .pop()
             .expect("a script per start");
         Recording {
-            fake: FakeAdapter::new(script),
+            adapter: (self.play)(script),
             starts: self.starts.clone(),
             commands: self.commands.clone(),
         }
@@ -2692,6 +2708,53 @@ async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback
             "assistant: Splitting the lexer out."
         ]
     );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_opencode_account_at_its_limit_fails_over_to_another_by_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let opencode = Scripted::opencode(&["opencode_limit.jsonl", "opencode_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Opencode, opencode.clone())],
+        &[
+            ("opencode-a", Provider::Opencode, false),
+            ("opencode-b", Provider::Opencode, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("opencode-a").await;
+    daemon.send(&session, "reply with the word ok").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines,
+        [
+            "-: status Running",
+            "alice: user turn-1 reply with the word ok",
+            // The model OpenCode reports through its model config option.
+            "-: model_switched opencode/big-pickle",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 LimitReached",
+            "-: account_switched opencode-b",
+            "alice: user turn-2 reply with the word ok",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 ok",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = opencode.starts();
+    let [on_a, on_b] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_a.config_dir, Some(dir.path().join("opencode-a")));
+    assert_eq!(on_b.config_dir, Some(dir.path().join("opencode-b")));
+    // The retry's recording only matches a prompt that carries this transcript.
+    assert_eq!(seed_texts(on_b), ["user: reply with the word ok"]);
     daemon.shutdown.cancel();
 }
 

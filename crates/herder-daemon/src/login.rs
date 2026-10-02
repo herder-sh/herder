@@ -10,13 +10,18 @@
 //!   the owner exits it once logged in.
 //! - Codex: `codex login --device-auth`.
 //! - Cursor: `agent login`.
+//! - OpenCode: `opencode auth login`, with `XDG_DATA_HOME` at the config dir, where it writes
+//!   `opencode/auth.json`. The owner picks a model provider and pastes its API key or follows
+//!   its device flow; a provider whose login waits for a browser callback to localhost only
+//!   works on the daemon's own machine.
 //!
 //! A login that exits with 0 is not taken at its word: quitting `claude` before logging in exits
 //! with 0 too. herder then asks the provider's own CLI whether the config dir is logged in,
 //! with a check that changes nothing ([`LoginStatus`]): `claude auth status --json`, `codex
-//! login status`, `agent status --format json`. Only when it says so is the account added: it
-//! is appended to the daemon's config file ([`crate::config::append_account`]), which stays
-//! the one list of accounts, then offered to sessions and announced to clients. A login that
+//! login status`, `agent status --format json`, `opencode auth list`. Only when it says so is
+//! the account added: it is appended to the daemon's config file
+//! ([`crate::config::append_account`]), which stays the one list of accounts, then offered to
+//! sessions and announced to clients. A login that
 //! fails, or that the check finds logged out, adds nothing, and removes the config dir if
 //! herder created it. Either way the outcome is the terminal's last line.
 //!
@@ -113,6 +118,15 @@ pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, Logi
             &["login"],
             &["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"],
             (&["status", "--format", "json"], Some("isAuthenticated")),
+        ),
+        // `opencode auth list` has no JSON and exits with 0 logged out too; OpenCode runs its
+        // own free models with no login, so an account without one still works.
+        login(
+            Provider::Opencode,
+            &AgentProfile::opencode().program,
+            &["auth", "login"],
+            &["XDG_DATA_HOME"],
+            (&["auth", "list"], None),
         ),
     ])
 }
@@ -517,7 +531,14 @@ mod tests {
                 vec!["CURSOR_CONFIG_DIR".into(), "XDG_CONFIG_HOME".into()]
             )
         );
-        assert_eq!(programs.len(), 3);
+        assert_eq!(
+            argv(&Provider::Opencode),
+            (
+                vec!["opencode".into(), "auth".into(), "login".into()],
+                vec!["XDG_DATA_HOME".into()]
+            )
+        );
+        assert_eq!(programs.len(), 4);
         let status = |provider: &Provider| {
             let status = &programs[provider].status;
             (status.args.join(" "), status.logged_in_field.as_deref())
@@ -531,6 +552,7 @@ mod tests {
             status(&Provider::Cursor),
             ("status --format json".into(), Some("isAuthenticated"))
         );
+        assert_eq!(status(&Provider::Opencode), ("auth list".into(), None));
     }
 
     #[tokio::test]
