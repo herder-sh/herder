@@ -275,7 +275,7 @@ async fn is_branch(repo: &Path, name: &str) -> Result<bool, Error> {
 }
 
 /// Runs git in `dir`, returning its trimmed stdout, or its stderr as the error.
-async fn git<I, S>(dir: &Path, args: I) -> Result<String, Error>
+pub(crate) async fn git<I, S>(dir: &Path, args: I) -> Result<String, Error>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,

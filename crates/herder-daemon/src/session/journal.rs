@@ -4,14 +4,16 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
-use herder_protocol::{Event, EventBody, Seq, SessionHead, SessionId, Timestamp, UserId};
+use herder_protocol::{
+    Event, EventBody, PullRequest, Seq, SessionHead, SessionId, Timestamp, UserId,
+};
 use herder_store::{NewEvent, Session, Store};
 
 use super::EventSink;
 
 /// The journal shared by every session actor.
 #[derive(Clone)]
-pub(super) struct Journal {
+pub(crate) struct Journal {
     store: Arc<Mutex<Store>>,
     sink: Arc<dyn EventSink>,
 }
@@ -28,8 +30,9 @@ impl Journal {
         &*self.sink
     }
 
-    /// Appends an event now and publishes it once stored.
-    pub(super) async fn record(
+    /// Appends an event now and publishes it once stored. Publishing happens under the store
+    /// lock, so events reach the sink in seq order whichever task records them.
+    pub(crate) async fn record(
         &self,
         session_id: SessionId,
         by: Option<UserId>,
@@ -41,15 +44,17 @@ impl Journal {
             by,
             body,
         };
-        let stored = self
-            .with_store(move |store| store.append(event))
-            .await
-            .context("appending to the journal")?;
-        self.sink.event(&stored);
-        Ok(stored)
+        let sink = self.sink.clone();
+        self.with_store(move |store| {
+            let stored = store.append(event)?;
+            sink.event(&stored);
+            Ok(stored)
+        })
+        .await
+        .context("appending to the journal")
     }
 
-    pub(super) async fn read_since(
+    pub(crate) async fn read_since(
         &self,
         session_id: SessionId,
         after_seq: Seq,
@@ -60,22 +65,28 @@ impl Journal {
     }
 
     /// Every event of a session, oldest first.
-    pub(super) async fn all(&self, session_id: SessionId) -> Result<Vec<Event>> {
+    pub(crate) async fn all(&self, session_id: SessionId) -> Result<Vec<Event>> {
         self.read_since(session_id, 0, usize::MAX).await
     }
 
-    pub(super) async fn session(&self, session_id: SessionId) -> Result<Option<Session>> {
+    pub(crate) async fn session(&self, session_id: SessionId) -> Result<Option<Session>> {
         self.with_store(move |store| store.session(&session_id))
             .await
     }
 
     /// Every branch the session owns, in the order first seen.
-    pub(super) async fn branches(&self, session_id: SessionId) -> Result<Vec<String>> {
+    pub(crate) async fn branches(&self, session_id: SessionId) -> Result<Vec<String>> {
         self.with_store(move |store| store.session_branches(&session_id))
             .await
     }
 
-    pub(super) async fn sessions(&self) -> Result<Vec<Session>> {
+    /// Pull requests tracked for the session, ordered by number.
+    pub(crate) async fn prs(&self, session_id: SessionId) -> Result<Vec<PullRequest>> {
+        self.with_store(move |store| store.session_prs(&session_id))
+            .await
+    }
+
+    pub(crate) async fn sessions(&self) -> Result<Vec<Session>> {
         self.with_store(|store| store.sessions()).await
     }
 

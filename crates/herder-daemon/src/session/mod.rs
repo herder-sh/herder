@@ -42,6 +42,12 @@
 //! worktree, keeps its branches and journals the `archived` status; an archived session takes
 //! no further commands.
 //!
+//! # Pull requests
+//!
+//! Once [`SessionManager::track_prs`] runs, each new worktree gets herder's git hooks, archive
+//! removes them, and `link_pr` / `unlink_pr` go to the tracker ([`crate::prs`]), which journals
+//! pull request events alongside the session's actor.
+//!
 //! # Questions
 //!
 //! A question the agent asks is journaled as `question_asked`, routed to the user, and blocks
@@ -55,11 +61,11 @@
 //! next prompt, seeded with the journal's items.
 
 mod actor;
-mod journal;
+pub(crate) mod journal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use herder_adapters::Adapter;
 use herder_protocol::{
@@ -74,6 +80,7 @@ use tracing::warn;
 use actor::{Actor, Request, SessionCommand};
 use journal::Journal;
 
+use crate::prs::{self, PrTracker};
 use crate::worktree::{self, Worktrees};
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
@@ -158,6 +165,8 @@ struct Inner {
     turn_ids: TurnIds,
     worktrees: Worktrees,
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
+    /// Pull request tracking, once started.
+    prs: OnceLock<Arc<PrTracker>>,
     shutdown: CancellationToken,
 }
 
@@ -182,6 +191,7 @@ impl SessionManager {
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
                 actors: Mutex::new(HashMap::new()),
+                prs: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -247,10 +257,14 @@ impl SessionManager {
             CommandBody::ArchiveSession { session_id, force } => {
                 return self.archive(by, session_id, force).await;
             }
+            CommandBody::LinkPr { session_id, number } => {
+                return self.prs()?.link(by, session_id, number).await;
+            }
+            CommandBody::UnlinkPr { session_id, number } => {
+                return self.prs()?.unlink(by, session_id, number).await;
+            }
             CommandBody::SwitchAccount { .. }
             | CommandBody::SwitchProvider { .. }
-            | CommandBody::LinkPr { .. }
-            | CommandBody::UnlinkPr { .. }
             | CommandBody::OpenTerminal { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
@@ -263,6 +277,28 @@ impl SessionManager {
             }
         };
         self.send(session_id, by, request).await
+    }
+
+    /// Starts pull request tracking ([`crate::prs`]) for every session, until the manager's
+    /// shutdown; once per manager.
+    pub async fn track_prs(&self, config: prs::Config) -> anyhow::Result<Arc<PrTracker>> {
+        let inner = &self.inner;
+        if inner.prs.get().is_some() {
+            anyhow::bail!("pull requests are tracked already");
+        }
+        let tracker =
+            PrTracker::start(inner.journal.clone(), config, inner.shutdown.clone()).await?;
+        let _ = inner.prs.set(Arc::clone(&tracker));
+        Ok(tracker)
+    }
+
+    fn prs(&self) -> Result<&PrTracker, ErrorInfo> {
+        self.inner.prs.get().map(|prs| &**prs).ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                "pull request tracking is not running",
+            )
+        })
     }
 
     /// Archives `session_id` for `by`: removes its worktree, keeping its branches, and makes it
@@ -381,6 +417,9 @@ impl SessionManager {
             .record(session_id.clone(), Some(by), body)
             .await
             .map_err(internal)?;
+        if let Some(prs) = inner.prs.get() {
+            prs.install(&session_id, &worktree.path).await;
+        }
         match inner.journal.heads().await {
             Ok(heads) => inner.journal.sink().sessions_changed(&heads),
             Err(err) => warn!("cannot list sessions after creating {session_id}: {err:#}"),
