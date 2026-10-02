@@ -186,7 +186,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("y / n", "allow / deny the pending approval"),
     ("1-9", "pick an answer to the pending question"),
     ("Ctrl-c, :interrupt", "interrupt the running turn"),
-    (":", "commands: model, mode, archive, new"),
+    (":", "commands: model, mode, archive, new, down"),
     ("n", "new session"),
     ("p", "focus the session's pull requests"),
     ("P", "every session's pull requests"),

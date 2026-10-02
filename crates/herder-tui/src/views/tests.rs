@@ -620,3 +620,42 @@ fn a_new_session_from_a_project_on_narrow_and_wide_screens() {
     press(&mut app, KeyCode::Char('n'));
     narrow_and_wide("project_new_session", &mut app);
 }
+
+#[test]
+fn host_resources_in_the_machines_panel_on_narrow_and_wide_screens() {
+    let mut app = fake::tree();
+    fake::with_resources(&mut app, fake::host_resources(4), false);
+    press(&mut app, KeyCode::Char('m'));
+    narrow_and_wide("machine_resources", &mut app);
+}
+
+#[test]
+fn a_sessions_usage_wait_and_leftovers_on_narrow_and_wide_screens() {
+    let mut app = open_s2(vec![fake::status(
+        herder_protocol::SessionStatus::WaitingForCapacity,
+    )]);
+    fake::with_resources(&mut app, fake::host_resources(4), true);
+    narrow_and_wide("session_resources", &mut app);
+}
+
+#[test]
+fn resource_figures_are_redrawn_as_they_arrive() {
+    let mut app = open_s2(Vec::new());
+    let text = |app: &mut App| format!("{:?}", render(app, 120, 40).backend());
+    // Nothing to show yet: no strip.
+    assert!(!text(&mut app).contains("resources"));
+    fake::with_resources(&mut app, fake::host_resources(2), true);
+    let shown = text(&mut app);
+    assert!(
+        shown.contains("cpu 12% · mem 768 MiB · 3 processes"),
+        "{shown}"
+    );
+    assert!(shown.contains(":down brings app down"), "{shown}");
+    assert!(!shown.contains("waiting for capacity"), "{shown}");
+    let mut busier = fake::host_resources(2);
+    busier.cpu_percent = 97.0;
+    fake::with_resources(&mut app, busier, false);
+    let shown = text(&mut app);
+    assert!(shown.contains("cpu  97%"), "{shown}");
+    assert!(!shown.contains("3 processes"), "{shown}");
+}

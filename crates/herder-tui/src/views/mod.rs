@@ -16,6 +16,7 @@ mod pairing;
 mod palette;
 mod projects;
 mod prs;
+mod resources;
 mod sessions;
 mod status;
 mod switch;
@@ -98,12 +99,14 @@ fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
         inbox::draw(frame, area, app, compact);
     } else {
         let (area, controls) = composer::split(area, app);
-        let [strip, area] = Layout::vertical([
+        let [strip, usage, area] = Layout::vertical([
             Constraint::Length(prs::strip_height(app)),
+            Constraint::Length(resources::strip_height(app, compact)),
             Constraint::Fill(1),
         ])
         .areas(area);
         prs::strip(frame, strip, app, compact);
+        resources::strip(frame, usage, app, compact);
         transcript::draw(frame, area, app, compact);
         if let Some(controls) = controls {
             composer::draw(frame, controls, app, compact);
