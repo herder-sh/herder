@@ -6,14 +6,16 @@
 //! budget from [`budget`]:
 //!
 //! 1. A transcript that fits is returned unchanged.
-//! 2. Otherwise reasoning is dropped (no adapter replays it), and every tool output longer than
-//!    [`TRUNCATE_ABOVE`] characters keeps its head and tail around a `[… N chars elided …]`
-//!    marker.
+//! 2. Otherwise reasoning is dropped (no adapter replays it), and tool outputs longer than
+//!    [`TRUNCATE_ABOVE`] characters are cut to their head and tail around a
+//!    `[… N chars elided …]` marker, oldest turn first, stopping as soon as it fits. The newest
+//!    [`PROTECTED_TURNS`] turns are left whole.
 //! 3. If it still does not fit, whole turns are dropped, oldest first, always keeping the
-//!    opening request (the first user message) and the newest turns. Only when the newest turn
-//!    alone is too big are its own oldest items dropped. A tool call and its result are always
-//!    dropped together.
-//! 4. Whenever anything was dropped, a [`NOTE`] user message goes right after the opening
+//!    opening request (the first user message) and the newest [`PROTECTED_TURNS`] turns.
+//! 4. Only when those turns alone are too big are their tool outputs cut, oldest first, then
+//!    their oldest turns dropped, then the newest turn's own oldest items. A tool call and its
+//!    result are always dropped together.
+//! 5. Whenever anything was dropped, a [`NOTE`] user message goes right after the opening
 //!    request, so the agent knows history is missing.
 //!
 //! Tokens are estimated as bytes / 4 plus a small per-item overhead: providers' tokenizers are
@@ -28,6 +30,9 @@ mod tests;
 
 /// Tool outputs longer than this many characters are cut down when a transcript is condensed.
 pub const TRUNCATE_ABOVE: usize = 4_000;
+
+/// Newest turns whose tool outputs are cut only when they alone exceed the budget.
+pub const PROTECTED_TURNS: usize = 3;
 
 /// Characters kept from each end of a cut tool output.
 const KEEP_EACH_END: usize = 1_500;
@@ -80,15 +85,16 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
     let mut items: Vec<Item> = items
         .into_iter()
         .filter(|item| !matches!(item.body, ItemBody::Reasoning { .. } | ItemBody::Unknown))
-        .map(truncate)
         .collect();
     let head = items
         .iter()
         .position(|item| matches!(item.body, ItemBody::UserMessage { .. }))
         .map(|index| items.remove(index));
     let mut turns = turns(items);
-    let fixed = head.as_ref().map_or(0, cost);
-    let mut total: usize = fixed + turns.iter().map(|turn| estimate(turn)).sum::<usize>();
+    let mut total =
+        head.as_ref().map_or(0, cost) + turns.iter().map(|t| estimate(t)).sum::<usize>();
+    let older = turns.len().saturating_sub(PROTECTED_TURNS);
+    shorten(&mut turns[..older], &mut total, budget);
     if total <= budget {
         return head
             .into_iter()
@@ -104,6 +110,10 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
         body: ItemBody::UserMessage { text: NOTE.into() },
     };
     total += cost(&note);
+    while total > budget && turns.len() > PROTECTED_TURNS {
+        total -= estimate(&turns.remove(0));
+    }
+    shorten(&mut turns, &mut total, budget);
     while total > budget && turns.len() > 1 {
         total -= estimate(&turns.remove(0));
     }
@@ -116,6 +126,19 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
         .chain(std::iter::once(note))
         .chain(turns.into_iter().flatten())
         .collect()
+}
+
+/// Cuts long tool outputs in `turns`, oldest first, until `total` fits `budget`, keeping
+/// `total` current.
+fn shorten(turns: &mut [Vec<Item>], total: &mut usize, budget: usize) {
+    for item in turns.iter_mut().flatten() {
+        if *total <= budget {
+            return;
+        }
+        let before = cost(item);
+        truncate(item);
+        *total -= before.saturating_sub(cost(item));
+    }
 }
 
 /// Estimated tokens of one item.
@@ -132,7 +155,7 @@ fn cost(item: &Item) -> usize {
 }
 
 /// Cuts a long tool output down to its head and tail around an elision marker.
-fn truncate(mut item: Item) -> Item {
+fn truncate(item: &mut Item) {
     if let ItemBody::ToolResult { output, .. } = &mut item.body {
         let chars = output.chars().count();
         if chars > TRUNCATE_ABOVE {
@@ -142,7 +165,6 @@ fn truncate(mut item: Item) -> Item {
             *output = format!("{head}\n[… {elided} chars elided …]\n{tail}");
         }
     }
-    item
 }
 
 /// Items split into runs of the same turn, in order; the journal keeps a turn's items together.

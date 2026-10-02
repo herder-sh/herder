@@ -114,31 +114,55 @@ fn a_200_turn_session_fits_keeping_the_opening_request_and_the_newest_turns() {
             .any(|item| matches!(item.body, ItemBody::Reasoning { .. }))
     );
     assert_pairs_intact(&seed);
+    // The newest turns keep their outputs whole; the older ones kept are cut.
     for item in &seed {
         if let ItemBody::ToolResult { output, .. } = &item.body {
-            assert!(output.contains("[… 3000 chars elided …]"), "{output}");
-            assert!(output.chars().count() < TRUNCATE_ABOVE);
+            let newest = ["198-result", "199-result", "200-result"].contains(&item.id.as_str());
+            assert_eq!(output.chars().count() == 6_000, newest, "{}", item.id);
+            assert_eq!(output.contains("[… 3000 chars elided …]"), !newest);
         }
     }
 }
 
+fn output<'a>(seed: &'a [Item], id: &str) -> &'a str {
+    match seed
+        .iter()
+        .find(|item| item.id.as_str() == id)
+        .map(|item| &item.body)
+    {
+        Some(ItemBody::ToolResult { output, .. }) => output,
+        other => panic!("expected tool result {id}, got {other:?}"),
+    }
+}
+
 #[test]
-fn truncating_tool_outputs_comes_before_dropping_turns() {
+fn cuts_go_to_the_oldest_outputs_first_and_stop_once_it_fits() {
     let items = session(10, 20_000);
-    let seed = transcript(items.clone(), 20_000);
-    // Every turn survives, minus its reasoning, with its tool output cut.
+    // Cutting five outputs is not enough, six is.
+    let seed = transcript(items.clone(), 26_000);
+    assert!(estimate(&seed) <= 26_000);
+    // Every turn survives, minus its reasoning: nothing was dropped.
     assert_eq!(seed.len(), items.len() - 10);
-    assert!(
-        !seed
-            .iter()
-            .any(|item| item.body == ItemBody::UserMessage { text: NOTE.into() })
-    );
-    let ItemBody::ToolResult { output, .. } = &seed[2].body else {
-        panic!("expected a tool result, got {:?}", seed[2]);
-    };
-    assert!(output.starts_with(&"x".repeat(KEEP_EACH_END)));
-    assert!(output.contains("[… 17000 chars elided …]"));
-    assert!(output.ends_with(&"x".repeat(KEEP_EACH_END)));
+    assert!(!ids(&seed).contains(&NOTE_ID));
+    for n in 1..=6 {
+        let cut = output(&seed, &format!("{n}-result"));
+        assert!(cut.starts_with(&"x".repeat(KEEP_EACH_END)));
+        assert!(cut.contains("[… 17000 chars elided …]"), "{n}");
+        assert!(cut.ends_with(&"x".repeat(KEEP_EACH_END)));
+    }
+    // The newest turn's long output, and the others the cuts did not reach, stay whole.
+    for n in 7..=10 {
+        assert_eq!(output(&seed, &format!("{n}-result")).len(), 20_000, "{n}");
+    }
+}
+
+#[test]
+fn the_newest_turns_are_cut_only_when_they_alone_exceed_the_budget() {
+    let seed = transcript(session(3, 20_000), 4_000);
+    assert!(estimate(&seed) <= 4_000);
+    for n in 1..=3 {
+        assert!(output(&seed, &format!("{n}-result")).contains("[… 17000 chars elided …]"));
+    }
 }
 
 #[test]

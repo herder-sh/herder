@@ -1327,6 +1327,11 @@ async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() 
         panic!("expected a tool result, got {:?}", last[2]);
     };
     assert_eq!(call_id, &ItemId::new("call-200"));
-    assert!(output.contains("[… 3000 chars elided …]"));
+    // The newest turn keeps its output whole; older ones were cut to make room.
+    assert_eq!(output.len(), 6_000);
+    assert!(seed.iter().any(|item| matches!(
+        &item.body,
+        ItemBody::ToolResult { output, .. } if output.contains("[… 3000 chars elided …]")
+    )));
     daemon.stop().await;
 }
