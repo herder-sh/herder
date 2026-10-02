@@ -1,8 +1,20 @@
 //! Logins: adding an account by running its provider's own login in a login terminal.
 //!
 //! Each login runs in a fresh config dir, handed to the provider's CLI through its config dir
-//! variable, on a pseudo-terminal relayed to the owner who asked ([`crate::terminal`]). The
-//! owner completes the provider's own flow there; herder never reads what it writes.
+//! variables, on a pseudo-terminal relayed to the owner who asked ([`crate::terminal`]). The
+//! owner completes the provider's own flow there, a device code or a URL to open and a code to
+//! paste back, so it works from another machine; nothing relies on a callback to localhost.
+//! herder never reads what the login writes.
+//!
+//! - Claude: `claude` itself, whose first run in an empty config dir walks through `/login`;
+//!   the owner exits it once logged in.
+//! - Codex: `codex login --device-auth`.
+//! - Cursor: `agent login`.
+//!
+//! A login that exits with 0 adds the account: it is appended to the daemon's config file
+//! ([`crate::config::append_account`]), which stays the one list of accounts, then offered to
+//! sessions and announced to clients. A login that fails adds nothing, and removes the config
+//! dir if herder created it. Either way the outcome is the terminal's last line.
 //!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
 
@@ -11,12 +23,15 @@ use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
+use herder_adapters::acp::AgentProfile;
 use herder_protocol::{Account, AccountId, ErrorCode, ErrorInfo, Provider};
 use portable_pty::CommandBuilder;
+use tracing::{info, warn};
 
-use crate::config::{ID_RULE, resolve_path, valid_id};
+use crate::config::{self, ID_RULE, resolve_path, valid_id};
+use crate::session::{AccountConfig, SessionManager};
 
 /// How to log in to one provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,61 +40,141 @@ pub struct LoginProgram {
     pub program: PathBuf,
     /// Its arguments.
     pub args: Vec<String>,
-    /// The variable that points the CLI at the account's config dir.
-    pub config_env: String,
+    /// The variables that point the CLI at the account's config dir.
+    pub config_env: Vec<String>,
 }
 
-/// The login of every provider herder can add accounts of. Cheap to clone.
+/// The login of each provider herder can add accounts of, running the binary `binaries` names
+/// for it, else the provider's own CLI on `PATH`.
+pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, LoginProgram> {
+    let login = |provider: Provider, default: &str, args: &[&str], config_env: &[&str]| {
+        let program = binaries
+            .get(&provider)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(default));
+        let strings = |values: &[&str]| values.iter().map(|&v| v.to_owned()).collect();
+        let program = LoginProgram {
+            program,
+            args: strings(args),
+            config_env: strings(config_env),
+        };
+        (provider, program)
+    };
+    HashMap::from([
+        login(Provider::Claude, "claude", &[], &["CLAUDE_CONFIG_DIR"]),
+        login(
+            Provider::Codex,
+            "codex",
+            &["login", "--device-auth"],
+            &["CODEX_HOME"],
+        ),
+        login(
+            Provider::Cursor,
+            &AgentProfile::cursor().program,
+            &["login"],
+            &["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"],
+        ),
+    ])
+}
+
+/// Adds accounts through their providers' logins. Cheap to clone. The default adds none.
 #[derive(Clone, Default)]
 pub struct Logins {
-    programs: Arc<HashMap<Provider, LoginProgram>>,
+    inner: Option<Arc<Inner>>,
+}
+
+struct Inner {
+    programs: HashMap<Provider, LoginProgram>,
+    /// The daemon's config file, where added accounts are saved.
+    config_file: PathBuf,
+    sessions: SessionManager,
+    /// Held while an account is saved, so two logins ending at once both land.
+    saving: Mutex<()>,
 }
 
 /// An account to add, as the owner asked for it.
 pub(crate) struct NewAccount<'a> {
     pub account_id: &'a AccountId,
     pub provider: &'a Provider,
+    pub label: Option<&'a str>,
     pub config_dir: Option<&'a str>,
 }
 
+/// A login about to run: the command, and what to do once it exits.
+pub(crate) struct Login {
+    /// The provider's login, in the account's config dir.
+    pub command: CommandBuilder,
+    /// Adds the account if the login succeeded.
+    pub pending: Pending,
+}
+
+/// An account waiting for its login to end.
+pub(crate) struct Pending {
+    inner: Arc<Inner>,
+    account_id: AccountId,
+    account: AccountConfig,
+    /// Whether herder created the config dir, and so may remove it.
+    created: bool,
+}
+
 impl Logins {
-    /// Logins running `programs`; no other provider's accounts can be added.
-    pub fn new(programs: HashMap<Provider, LoginProgram>) -> Self {
+    /// Logins running `programs`, saving accounts to `config_file` and adding them to
+    /// `sessions`. No other provider's accounts can be added.
+    pub fn new(
+        programs: HashMap<Provider, LoginProgram>,
+        config_file: PathBuf,
+        sessions: SessionManager,
+    ) -> Self {
         Self {
-            programs: Arc::new(programs),
+            inner: Some(Arc::new(Inner {
+                programs,
+                config_file,
+                sessions,
+                saving: Mutex::new(()),
+            })),
         }
     }
 
-    /// The login of `account`, in its config dir, which is created empty. `accounts` are the
-    /// daemon's accounts and `logging_in` the accounts with a login running; the new id must
-    /// be neither.
-    pub(crate) fn command(
+    /// The login of `account`, in its config dir, which is created empty if it does not exist.
+    /// `logging_in` are the accounts with a login running; the new id must be neither one of
+    /// them nor an account already.
+    pub(crate) fn start(
         &self,
         account: &NewAccount<'_>,
-        accounts: &[Account],
         logging_in: &[AccountId],
-    ) -> Result<CommandBuilder, ErrorInfo> {
-        self.command_with_env(account, accounts, logging_in, |key| std::env::var_os(key))
+    ) -> Result<Login, ErrorInfo> {
+        self.start_with_env(account, logging_in, |key| std::env::var_os(key))
     }
 
-    fn command_with_env(
+    fn start_with_env(
         &self,
         account: &NewAccount<'_>,
-        accounts: &[Account],
         logging_in: &[AccountId],
         env: impl Fn(&str) -> Option<OsString>,
-    ) -> Result<CommandBuilder, ErrorInfo> {
+    ) -> Result<Login, ErrorInfo> {
         let NewAccount {
             account_id,
             provider,
+            label,
             config_dir,
         } = account;
+        let unsupported = || {
+            error(
+                ErrorCode::Unsupported,
+                format!(
+                    "herder cannot add {} accounts; add them to the daemon's config",
+                    provider.as_str()
+                ),
+            )
+        };
+        let inner = self.inner.as_ref().ok_or_else(unsupported)?;
         if !valid_id(account_id.as_str()) {
             return Err(error(
                 ErrorCode::BadRequest,
                 format!("account id {:?} {ID_RULE}", account_id.as_str()),
             ));
         }
+        let accounts: Vec<Account> = inner.sessions.accounts();
         if accounts.iter().any(|a| a.account_id == **account_id) || logging_in.contains(account_id)
         {
             return Err(error(
@@ -87,29 +182,84 @@ impl Logins {
                 format!("account {account_id} already exists"),
             ));
         }
-        let program = self.programs.get(provider).ok_or_else(|| {
-            error(
-                ErrorCode::Unsupported,
-                format!("herder cannot add {} accounts", provider.as_str()),
-            )
-        })?;
+        let program = inner.programs.get(provider).ok_or_else(unsupported)?;
         let default = format!("~/.{}-{account_id}", provider.as_str());
         let dir = resolve_path(Path::new(config_dir.unwrap_or(&default)), &env)
             .map_err(|err| error(ErrorCode::BadRequest, format!("config dir: {err:#}")))?;
-        fresh_dir(&dir)?;
+        let created = fresh_dir(&dir)?;
         let mut command = CommandBuilder::new(&program.program);
         command.args(&program.args);
         command.cwd(&dir);
-        command.env(&program.config_env, &dir);
-        Ok(command)
+        for var in &program.config_env {
+            command.env(var, &dir);
+        }
+        let account = AccountConfig {
+            provider: (*provider).clone(),
+            label: label.map_or_else(|| account_id.to_string(), str::to_owned),
+            config_dir: Some(dir),
+            failover: false,
+        };
+        Ok(Login {
+            command,
+            pending: Pending {
+                inner: Arc::clone(inner),
+                account_id: (*account_id).clone(),
+                account,
+                created,
+            },
+        })
     }
 }
 
+impl Pending {
+    /// Adds the account if its login exited with 0; returns the outcome, as a line for the
+    /// login terminal.
+    pub(crate) fn finish(self, exit_code: Option<i32>) -> String {
+        let Pending {
+            inner,
+            account_id,
+            account,
+            created,
+        } = self;
+        if exit_code != Some(0) {
+            if created
+                && let Some(dir) = &account.config_dir
+                && let Err(err) = std::fs::remove_dir_all(dir)
+            {
+                warn!(%account_id, "cannot remove {}: {err}", dir.display());
+            }
+            let code = exit_code.map_or_else(|| "a signal".to_owned(), |code| code.to_string());
+            return line(&format!(
+                "the login exited with {code}; account {account_id} was not added"
+            ));
+        }
+        let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Err(err) = config::append_account(&inner.config_file, &account_id, &account) {
+            warn!(%account_id, "cannot save the account: {err:#}");
+            return line(&format!(
+                "logged in, but cannot add account {account_id}: {err:#}"
+            ));
+        }
+        if !inner.sessions.add_account(account_id.clone(), account) {
+            return line(&format!(
+                "account {account_id} was saved, but one with its id already runs; restart the daemon"
+            ));
+        }
+        info!(%account_id, config_file = %inner.config_file.display(), "account added");
+        line(&format!("added account {account_id}"))
+    }
+}
+
+/// `text` as a line of herder's own in a terminal.
+fn line(text: &str) -> String {
+    format!("\r\nherder: {text}\r\n")
+}
+
 /// Creates `dir`, owner-only, unless it is an empty directory already: a login never lands
-/// on top of another.
-fn fresh_dir(dir: &Path) -> Result<(), ErrorInfo> {
+/// on top of another. Returns whether it created it.
+fn fresh_dir(dir: &Path) -> Result<bool, ErrorInfo> {
     match std::fs::read_dir(dir).map(|mut entries| entries.next().is_none()) {
-        Ok(true) => return Ok(()),
+        Ok(true) => return Ok(false),
         Ok(false) => {
             return Err(error(
                 ErrorCode::Conflict,
@@ -136,7 +286,8 @@ fn fresh_dir(dir: &Path) -> Result<(), ErrorInfo> {
                 ErrorCode::Internal,
                 format!("cannot create {}: {err}", dir.display()),
             )
-        })
+        })?;
+    Ok(true)
 }
 
 fn error(code: ErrorCode, message: String) -> ErrorInfo {
@@ -145,88 +296,215 @@ fn error(code: ErrorCode, message: String) -> ErrorInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
-    fn logins() -> Logins {
-        Logins::new(HashMap::from([(
-            Provider::Codex,
-            LoginProgram {
-                program: PathBuf::from("codex"),
-                args: vec!["login".into(), "--device-auth".into()],
-                config_env: "CODEX_HOME".into(),
-            },
-        )]))
+    use herder_store::Store;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::hub::Hub;
+    use crate::session::{self, Accounts, Adapters, Setup};
+    use crate::worktree::Worktrees;
+
+    struct Fixture {
+        home: tempfile::TempDir,
+        logins: Logins,
+        sessions: SessionManager,
     }
 
-    fn try_login(
-        home: &Path,
-        id: &str,
-        provider: Provider,
-        config_dir: Option<&str>,
-        accounts: &[Account],
-    ) -> Result<CommandBuilder, ErrorInfo> {
-        let home = home.as_os_str().to_owned();
-        let account_id = AccountId::new(id);
-        let account = NewAccount {
-            account_id: &account_id,
-            provider: &provider,
-            config_dir,
+    /// Logins on a daemon with one codex account, `codex`, in the default location.
+    async fn fixture() -> Fixture {
+        let home = tempfile::tempdir().unwrap();
+        let hub = Arc::new(Hub::default());
+        let accounts = Accounts::from([(
+            AccountId::new("codex"),
+            AccountConfig {
+                provider: Provider::Codex,
+                label: "Codex".into(),
+                config_dir: None,
+                failover: false,
+            },
+        )]);
+        let setup = Setup {
+            store: Store::open(home.path().join("herder.db")).unwrap(),
+            adapters: Adapters::new(),
+            accounts,
+            sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            turn_ids: session::ulid_turn_ids(),
+            worktrees: Worktrees::new(home.path().join("worktrees")),
         };
-        let logging_in = [AccountId::new("busy")];
-        logins().command_with_env(&account, accounts, &logging_in, move |key| {
-            (key == "HOME").then(|| home.clone())
-        })
+        let sessions = SessionManager::open(setup, CancellationToken::new())
+            .await
+            .unwrap();
+        let logins = Logins::new(
+            programs(&HashMap::new()),
+            home.path().join("daemon.toml"),
+            sessions.clone(),
+        );
+        Fixture {
+            home,
+            logins,
+            sessions,
+        }
+    }
+
+    impl Fixture {
+        fn start(
+            &self,
+            id: &str,
+            provider: Provider,
+            config_dir: Option<&str>,
+        ) -> Result<Login, ErrorInfo> {
+            let home = self.home.path().as_os_str().to_owned();
+            let account_id = AccountId::new(id);
+            let account = NewAccount {
+                account_id: &account_id,
+                provider: &provider,
+                label: None,
+                config_dir,
+            };
+            let logging_in = [AccountId::new("busy")];
+            self.logins
+                .start_with_env(&account, &logging_in, move |key| {
+                    (key == "HOME").then(|| home.clone())
+                })
+        }
     }
 
     #[test]
-    fn a_login_runs_in_a_fresh_owner_only_config_dir() {
-        use std::os::unix::fs::PermissionsExt;
+    fn each_provider_logs_in_with_its_own_cli_and_config_dir_variables() {
+        let binaries = HashMap::from([(Provider::Codex, PathBuf::from("/opt/codex"))]);
+        let programs = programs(&binaries);
+        let argv = |provider: &Provider| {
+            let program = &programs[provider];
+            let mut argv = vec![program.program.to_string_lossy().into_owned()];
+            argv.extend(program.args.iter().cloned());
+            (argv, program.config_env.clone())
+        };
+        assert_eq!(
+            argv(&Provider::Claude),
+            (vec!["claude".into()], vec!["CLAUDE_CONFIG_DIR".into()])
+        );
+        assert_eq!(
+            argv(&Provider::Codex),
+            (
+                vec!["/opt/codex".into(), "login".into(), "--device-auth".into()],
+                vec!["CODEX_HOME".into()]
+            )
+        );
+        assert_eq!(
+            argv(&Provider::Cursor),
+            (
+                vec!["agent".into(), "login".into()],
+                vec!["CURSOR_CONFIG_DIR".into(), "XDG_CONFIG_HOME".into()]
+            )
+        );
+        assert_eq!(programs.len(), 3);
+    }
 
-        let home = tempfile::tempdir().unwrap();
-        let command = try_login(home.path(), "codex-2", Provider::Codex, None, &[]).unwrap();
-        let dir = home.path().join(".codex-codex-2");
-        assert_eq!(command.get_argv(), &["codex", "login", "--device-auth"]);
-        assert_eq!(command.get_env("CODEX_HOME"), Some(dir.as_os_str()));
-        assert_eq!(command.get_cwd(), Some(&dir.as_os_str().to_owned()));
+    #[tokio::test]
+    async fn a_login_runs_in_a_fresh_owner_only_config_dir() {
+        let f = fixture().await;
+        let login = f.start("cursor-2", Provider::Cursor, None).unwrap();
+        let dir = f.home.path().join(".cursor-cursor-2");
+        assert_eq!(login.command.get_argv(), &["agent", "login"]);
+        for var in ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"] {
+            assert_eq!(login.command.get_env(var), Some(dir.as_os_str()));
+        }
+        assert_eq!(login.command.get_cwd(), Some(&dir.as_os_str().to_owned()));
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-
         // An empty dir is still fresh.
-        try_login(
-            home.path(),
-            "codex-3",
-            Provider::Codex,
-            Some("~/.codex-codex-2"),
-            &[],
-        )
-        .unwrap();
+        f.start("cursor-3", Provider::Cursor, Some("~/.cursor-cursor-2"))
+            .unwrap();
     }
 
-    #[test]
-    fn a_login_never_reuses_an_id_or_a_config_dir_in_use() {
-        let home = tempfile::tempdir().unwrap();
-        std::fs::create_dir(home.path().join("used")).unwrap();
-        std::fs::write(home.path().join("used/auth.json"), "").unwrap();
-        let existing = [Account {
-            account_id: AccountId::new("codex"),
-            provider: Provider::Codex,
-            label: "Codex".into(),
-            usage: Vec::new(),
-        }];
+    #[tokio::test]
+    async fn a_login_never_reuses_an_id_or_a_config_dir_in_use() {
+        let f = fixture().await;
+        std::fs::create_dir(f.home.path().join("used")).unwrap();
+        std::fs::write(f.home.path().join("used/auth.json"), "").unwrap();
         let cases = [
             ("codex", Provider::Codex, None, ErrorCode::Conflict),
             ("busy", Provider::Codex, None, ErrorCode::Conflict),
             ("a b", Provider::Codex, None, ErrorCode::BadRequest),
-            ("new", Provider::Gemini, None, ErrorCode::Unsupported),
+            ("new", Provider::Grok, None, ErrorCode::Unsupported),
             ("new", Provider::Codex, Some("rel"), ErrorCode::BadRequest),
             ("new", Provider::Codex, Some("~/used"), ErrorCode::Conflict),
         ];
         for (id, provider, dir, code) in cases {
-            let err = try_login(home.path(), id, provider, dir, &existing)
+            let err = f
+                .start(id, provider, dir)
                 .err()
                 .unwrap_or_else(|| panic!("{id} {dir:?} was accepted"));
             assert_eq!(err.code, code, "{id} {dir:?}: {}", err.message);
         }
-        assert!(!home.path().join(".codex-new").exists());
+        assert!(!f.home.path().join(".codex-new").exists());
+        let err = Logins::default()
+            .start_with_env(
+                &NewAccount {
+                    account_id: &AccountId::new("x"),
+                    provider: &Provider::Claude,
+                    label: None,
+                    config_dir: None,
+                },
+                &[],
+                |_| None,
+            )
+            .err()
+            .unwrap();
+        assert_eq!(err.code, ErrorCode::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn a_successful_login_saves_and_adds_the_account() {
+        let f = fixture().await;
+        let login = f.start("codex-2", Provider::Codex, None).unwrap();
+        let line = login.pending.finish(Some(0));
+        assert_eq!(line, "\r\nherder: added account codex-2\r\n");
+        let ids: Vec<_> = f
+            .sessions
+            .accounts()
+            .into_iter()
+            .map(|account| account.account_id)
+            .collect();
+        assert_eq!(ids, [AccountId::new("codex"), AccountId::new("codex-2")]);
+        let saved = std::fs::read_to_string(f.home.path().join("daemon.toml")).unwrap();
+        let dir = f.home.path().join(".codex-codex-2");
+        assert_eq!(
+            saved,
+            format!(
+                "[[accounts]]\nid = \"codex-2\"\nprovider = \"codex\"\nlabel = \"codex-2\"\n\
+                 config_dir = \"{}\"\n",
+                dir.display()
+            )
+        );
+        assert!(dir.is_dir());
+        // A second account with the id cannot start.
+        let err = f.start("codex-2", Provider::Codex, None).err().unwrap();
+        assert_eq!(err.code, ErrorCode::Conflict);
+    }
+
+    #[tokio::test]
+    async fn a_failed_login_adds_nothing_and_removes_the_dir_it_created() {
+        let f = fixture().await;
+        let login = f.start("codex-2", Provider::Codex, None).unwrap();
+        let dir = f.home.path().join(".codex-codex-2");
+        std::fs::write(dir.join("partial"), "").unwrap();
+        let line = login.pending.finish(Some(1));
+        assert!(
+            line.contains("exited with 1; account codex-2 was not added"),
+            "{line}"
+        );
+        assert!(!dir.exists());
+        assert_eq!(f.sessions.accounts().len(), 1);
+        assert!(!f.home.path().join("daemon.toml").exists());
+
+        // A dir the owner made is kept.
+        let own = f.home.path().join("own");
+        std::fs::create_dir(&own).unwrap();
+        let login = f.start("codex-3", Provider::Codex, Some("~/own")).unwrap();
+        login.pending.finish(None);
+        assert!(own.is_dir());
     }
 }

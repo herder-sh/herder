@@ -1,4 +1,5 @@
-//! The machines panel and the add-machine dialog, over the main screen.
+//! The machines panel, the add-machine dialog and the add-account dialog, over the main
+//! screen.
 
 use herder_client_core::auth::PairingUri;
 use herder_client_core::{ConnectionState, Machine};
@@ -9,6 +10,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragraph};
 
+use crate::accounts::{self, AddAccount};
 use crate::app::App;
 use crate::machines::{AddMachine, Field, Form, MachinePanel, Step};
 
@@ -16,9 +18,10 @@ use crate::machines::{AddMachine, Field, Form, MachinePanel, Step};
 const LABEL: usize = 13;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
-    match &panel.add {
-        Some(add) => dialog(frame, area, app, add),
-        None => list(frame, area, app, panel),
+    match (&panel.account, &panel.add) {
+        (Some(account), _) => account_dialog(frame, area, app, account),
+        (None, Some(add)) => dialog(frame, area, app, add),
+        (None, None) => list(frame, area, app, panel),
     }
 }
 
@@ -51,7 +54,7 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
     let area = popup(area, rows + details.len() + 3);
     let block = Block::bordered()
         .title(" machines ")
-        .title_bottom(keys("a add  r reconnect  Esc close"))
+        .title_bottom(keys("a add machine  n add account  r reconnect  Esc close"))
         .border_style(Style::new().fg(Color::Cyan))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
@@ -109,6 +112,18 @@ fn details(machine: &Machine, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(machine.name.clone(), super::bold())];
     lines.extend(field("state", &state, Style::new().fg(color), width));
     lines.extend(field("role", role, Style::new(), width));
+    let accounts = machine
+        .accounts
+        .iter()
+        .map(|account| format!("{} ({})", account.account_id, account.provider.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let accounts = if accounts.is_empty() {
+        "none".to_owned()
+    } else {
+        accounts
+    };
+    lines.extend(field("accounts", &accounts, Style::new(), width));
     lines.extend(field(
         "host id",
         machine.host_id.as_str(),
@@ -202,6 +217,85 @@ fn dialog(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: &AddAccount) {
+    let width = value_width(area);
+    let machine = app
+        .machines
+        .iter()
+        .find(|machine| machine.host_id == account.host_id)
+        .map_or_else(
+            || account.host_id.to_string(),
+            |machine| machine.name.clone(),
+        );
+    let choices: Vec<Span> = accounts::PROVIDERS
+        .iter()
+        .enumerate()
+        .flat_map(|(at, provider)| {
+            let style = if at == account.provider {
+                Style::new().reversed()
+            } else {
+                super::dim()
+            };
+            [
+                Span::styled(format!(" {} ", provider.as_str()), style),
+                Span::raw(" "),
+            ]
+        })
+        .collect();
+    let label_style = |which: accounts::Field| {
+        if account.focus == which {
+            Style::new().fg(Color::Cyan)
+        } else {
+            super::dim()
+        }
+    };
+    let mut provider = vec![Span::styled(
+        format!("  {:<LABEL$}", "provider"),
+        label_style(accounts::Field::Provider),
+    )];
+    provider.extend(choices);
+    let text = |which, label: &str, value: &str, placeholder: &str| {
+        let mut line = text_input(account.focus == which, label, value, width);
+        if value.is_empty() {
+            line.push_span(Span::styled(placeholder.to_owned(), super::dim()));
+        }
+        line
+    };
+    let mut lines = vec![
+        Line::raw(format!(
+            "Runs the provider's own login on {machine}, in a terminal here."
+        )),
+        Line::raw(""),
+        Line::from(provider),
+        text(accounts::Field::Id, "id", &account.id, "e.g. work"),
+        text(accounts::Field::Label, "label", &account.label, "the id"),
+        text(
+            accounts::Field::ConfigDir,
+            "config dir",
+            &account.config_dir,
+            &account.default_config_dir(),
+        ),
+        Line::raw(""),
+        Line::styled(accounts::login_hint(account.provider()), super::dim()),
+        Line::styled(
+            "The account is added once the login succeeds. Ctrl-] d detaches.",
+            super::dim(),
+        ),
+    ];
+    if let Some(error) = &account.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(error.clone(), Style::new().fg(Color::Red)));
+    }
+    let area = popup(area, lines.len() + 4);
+    let block = Block::bordered()
+        .title(" add an account ")
+        .title_bottom(keys("Enter log in  Tab field  ←→ provider  Esc cancel"))
+        .border_style(Style::new().fg(Color::Cyan))
+        .padding(Padding::uniform(1));
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn form(form: &Form, error: Option<&String>, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::raw("On the machine to add, run `herder pair` and paste the link it prints:"),
@@ -228,7 +322,11 @@ fn form(form: &Form, error: Option<&String>, width: usize) -> Vec<Line<'static>>
 
 /// One form field: its label, then its value's end, with a cursor when it is being typed in.
 fn input(form: &Form, which: Field, label: &str, value: &str, width: usize) -> Line<'static> {
-    let focused = form.focus == which;
+    text_input(form.focus == which, label, value, width)
+}
+
+/// A text field: its label, then its value's end, with a cursor if `focused`.
+fn text_input(focused: bool, label: &str, value: &str, width: usize) -> Line<'static> {
     let room = width.saturating_sub(1).max(4);
     let chars: Vec<char> = value.chars().collect();
     let shown: String = chars[chars.len().saturating_sub(room)..].iter().collect();

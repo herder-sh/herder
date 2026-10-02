@@ -47,6 +47,10 @@ pub fn login_shell() -> PathBuf {
         .map_or_else(|| PathBuf::from("/bin/sh"), PathBuf::from)
 }
 
+/// Runs once a login terminal's program exits, with its exit code; returns a last line of
+/// output for the terminal.
+pub(crate) type OnExit = Box<dyn FnOnce(Option<i32>) -> String + Send>;
+
 /// Every open terminal on this daemon. Cheap to clone.
 #[derive(Clone)]
 pub struct Terminals {
@@ -110,11 +114,13 @@ impl Terminals {
         command.arg("-l");
         command.cwd(cwd);
         let purpose = TerminalPurpose::Shell { session_id };
-        self.spawn(purpose, command, cols, rows, outbox)
+        self.spawn(purpose, command, cols, rows, outbox, None)
     }
 
     /// Opens a terminal of `cols` by `rows` running `command`, the login of `account_id`, and
-    /// attaches `outbox`. The new terminal list is queued before any of its output.
+    /// attaches `outbox`. The new terminal list is queued before any of its output. Once the
+    /// login exits, `on_exit` gets its exit code and returns a last line of output, shown
+    /// before the terminal closes.
     pub(crate) fn open_login(
         &self,
         account_id: AccountId,
@@ -122,9 +128,10 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
+        on_exit: OnExit,
     ) -> Result<TerminalId, ErrorInfo> {
         let purpose = TerminalPurpose::Login { account_id };
-        self.spawn(purpose, command, cols, rows, outbox)
+        self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))
     }
 
     fn spawn(
@@ -134,6 +141,7 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
+        on_exit: Option<OnExit>,
     ) -> Result<TerminalId, ErrorInfo> {
         let size = size(cols, rows)?;
         let pair = native_pty_system()
@@ -173,7 +181,7 @@ impl Terminals {
         let id = terminal_id.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("terminal-{terminal_id}"))
-            .spawn(move || terminals.pump(&id, &term, reader, child));
+            .spawn(move || terminals.pump(&id, &term, reader, child, on_exit));
         if let Err(err) = spawned {
             if let Some(term) = self.inner.remove(&terminal_id) {
                 term.hang_up();
@@ -287,6 +295,7 @@ impl Terminals {
         term: &Term,
         mut reader: Box<dyn Read + Send>,
         mut child: Box<dyn portable_pty::Child + Send + Sync>,
+        on_exit: Option<OnExit>,
     ) {
         let mut buf = vec![0; READ_CHUNK];
         loop {
@@ -321,6 +330,9 @@ impl Terminals {
                 None
             }
         };
+        if let Some(on_exit) = on_exit {
+            term.publish(terminal_id, on_exit(exit_code).as_bytes());
+        }
         self.inner.close(terminal_id, exit_code);
     }
 

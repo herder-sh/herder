@@ -11,7 +11,7 @@ use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use herder_client_core::{Client, Error, Machine, TerminalEvent, TerminalStream};
+use herder_client_core::{Client, Error, Machine, NewAccount, TerminalEvent, TerminalStream};
 use herder_protocol::{ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
@@ -43,6 +43,8 @@ pub enum Target {
     New(SessionId),
     /// An open terminal.
     Existing(TerminalId),
+    /// A new account's login.
+    Login(NewAccount),
 }
 
 /// How an attach ended.
@@ -52,6 +54,8 @@ pub enum Ended {
     Detached,
     /// The shell exited.
     Exited(Option<i32>),
+    /// An account's login ended; what herder made of it.
+    Login(String),
     /// The attach did not happen or broke off.
     Failed(String),
 }
@@ -63,7 +67,7 @@ impl Ended {
             Ended::Detached => "detached; the terminal keeps running".to_owned(),
             Ended::Exited(Some(code)) => format!("terminal exited with {code}"),
             Ended::Exited(None) => "terminal exited".to_owned(),
-            Ended::Failed(error) => error.clone(),
+            Ended::Login(text) | Ended::Failed(text) => text.clone(),
         }
     }
 }
@@ -206,6 +210,7 @@ pub async fn attach(
     terminal: &mut DefaultTerminal,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
+    let login = matches!(target, Target::Login(_));
     let stream = match target {
         Target::New(session_id) => {
             tokio::time::timeout(
@@ -218,6 +223,13 @@ pub async fn attach(
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
                 client.attach_terminal(host_id, &terminal_id),
+            )
+            .await
+        }
+        Target::Login(account) => {
+            tokio::time::timeout(
+                ATTACH_TIMEOUT,
+                client.add_account(host_id, account, cols, rows),
             )
             .await
         }
@@ -241,8 +253,15 @@ pub async fn attach(
     }
     let (tx, typed) = mpsc::unbounded_channel();
     input.set(Some(tx));
-    let ended = pipe(&stream, typed, &mut stdout).await;
+    let mut tail = Tail::default();
+    let mut ended = pipe(&stream, typed, &mut stdout, &mut tail).await;
     input.set(None);
+    if let (true, Ended::Exited(code)) = (login, &ended) {
+        ended = Ended::Login(tail.outcome().unwrap_or_else(|| match code {
+            Some(code) => format!("the login exited with {code}"),
+            None => "the login exited".to_owned(),
+        }));
+    }
     drop(stream);
 
     let restored = write_all(&mut stdout, RESET)
@@ -254,11 +273,35 @@ pub async fn attach(
     }
 }
 
-/// Pipes bytes both ways until a detach or the shell's exit.
+/// The end of a terminal's output: where herder's own last line about a login is.
+#[derive(Debug, Default)]
+pub struct Tail(Vec<u8>);
+
+impl Tail {
+    /// Bytes kept; herder's lines are short.
+    const KEEP: usize = 1024;
+
+    fn push(&mut self, data: &[u8]) {
+        self.0.extend_from_slice(data);
+        let excess = self.0.len().saturating_sub(Self::KEEP);
+        self.0.drain(..excess);
+    }
+
+    /// The last line the daemon wrote about the login, without its `herder: ` mark.
+    fn outcome(&self) -> Option<String> {
+        String::from_utf8_lossy(&self.0)
+            .lines()
+            .rev()
+            .find_map(|line| line.trim().strip_prefix("herder: ").map(str::to_owned))
+    }
+}
+
+/// Pipes bytes both ways until a detach or the shell's exit, keeping the output's `tail`.
 async fn pipe(
     stream: &TerminalStream,
     mut typed: mpsc::UnboundedReceiver<Vec<u8>>,
     stdout: &mut std::io::Stdout,
+    tail: &mut Tail,
 ) -> Ended {
     use tokio::signal::unix::{SignalKind, signal};
     // Without the signal, resizes are just not forwarded.
@@ -268,6 +311,7 @@ async fn pipe(
         tokio::select! {
             event = stream.next() => match event {
                 Some(TerminalEvent::Output(data)) => {
+                    tail.push(&data);
                     if let Err(err) = write_all(stdout, &data) {
                         return Ended::Failed(format!("cannot write to the screen: {err}"));
                     }
@@ -345,9 +389,24 @@ mod tests {
     }
 
     #[test]
+    fn a_login_ends_with_herders_last_line() {
+        let mut tail = Tail::default();
+        assert_eq!(tail.outcome(), None);
+        tail.push(b"Open https://example.com\r\nherder: not this\r\n");
+        tail.push(&[b'x'; 2000]);
+        tail.push(b"\r\nherder: added account work\r\n");
+        assert_eq!(tail.outcome().as_deref(), Some("added account work"));
+        assert_eq!(tail.0.len(), Tail::KEEP);
+    }
+
+    #[test]
     fn endings_read_as_notices() {
         assert_eq!(Ended::Exited(Some(3)).notice(), "terminal exited with 3");
         assert_eq!(Ended::Exited(None).notice(), "terminal exited");
+        assert_eq!(
+            Ended::Login("added account work".into()).notice(),
+            "added account work"
+        );
         let forbidden = Error::Rejected(herder_protocol::ErrorInfo {
             code: ErrorCode::Forbidden,
             message: "owners only".into(),

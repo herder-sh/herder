@@ -23,6 +23,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .map(|row| match row {
             Target::New(_) => ListItem::new(Line::styled("+ new terminal", super::bold())),
             Target::Existing(terminal_id) => ListItem::new(format!("  terminal {terminal_id}")),
+            // Never a picker row: a login is started from the machines panel.
+            Target::Login(account) => ListItem::new(format!("  login {}", account.account_id)),
         })
         .collect();
     let height = u16::try_from(rows.len() + 4).unwrap_or(u16::MAX);

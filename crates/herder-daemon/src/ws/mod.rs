@@ -161,7 +161,7 @@ impl<B: Backend> Shared<B> {
             CommandBody::AddAccount {
                 account_id,
                 provider,
-                label: _,
+                label,
                 config_dir,
                 cols,
                 rows,
@@ -177,12 +177,19 @@ impl<B: Backend> Shared<B> {
                 let account = NewAccount {
                     account_id: &account_id,
                     provider: &provider,
+                    label: label.as_deref(),
                     config_dir: config_dir.as_deref(),
                 };
-                let command =
-                    self.logins
-                        .command(&account, &self.backend.accounts(), &logging_in)?;
-                let terminal_id = terminals.open_login(account_id, command, cols, rows, outbox)?;
+                let login = self.logins.start(&account, &logging_in)?;
+                let pending = login.pending;
+                let terminal_id = terminals.open_login(
+                    account_id,
+                    login.command,
+                    cols,
+                    rows,
+                    outbox,
+                    Box::new(move |exit_code| pending.finish(exit_code)),
+                )?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
             CommandBody::AttachTerminal { terminal_id } => {

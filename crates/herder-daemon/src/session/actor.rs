@@ -781,8 +781,7 @@ impl Actor {
         account_id: AccountId,
         to: Switch,
     ) -> Result<(), ErrorInfo> {
-        let accounts = &self.inner.accounts;
-        let account = accounts.get(&account_id).ok_or_else(|| {
+        let account = self.inner.account(&account_id).ok_or_else(|| {
             error(
                 ErrorCode::NotFound,
                 format!("account {account_id} does not exist"),
@@ -1007,8 +1006,7 @@ impl Actor {
         let session = &self.session;
         let account = self
             .inner
-            .accounts
-            .get(&session.account_id)
+            .account(&session.account_id)
             .ok_or_else(|| fatal(format!("account {} is not configured", session.account_id)))?;
         let adapter = self.inner.adapters.get(&session.provider).ok_or_else(|| {
             fatal(format!(
@@ -1261,8 +1259,8 @@ impl Actor {
         .await;
         self.record_branches().await;
         self.turn = None;
-        let to = if self.inner.accounts.get(&account_id).map(|a| &a.provider)
-            == Some(&self.session.provider)
+        let to = if self.inner.account(&account_id).map(|a| a.provider)
+            == Some(self.session.provider.clone())
         {
             Switch::Account
         } else {

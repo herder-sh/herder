@@ -33,14 +33,13 @@ pub fn runs(provider: &Provider) -> bool {
     PROVIDERS.contains(provider)
 }
 
-/// The adapter for every provider at least one account belongs to, each running the binary
-/// `binaries` names for it, else the provider's own CLI on `PATH`.
-pub fn adapters(accounts: &Accounts, binaries: &HashMap<Provider, PathBuf>) -> Adapters {
+/// The adapter for every provider herder runs, each running the binary `binaries` names for
+/// it, else the provider's own CLI on `PATH`; ready for accounts added later.
+pub fn adapters(binaries: &HashMap<Provider, PathBuf>) -> Adapters {
     let mut adapters = Adapters::new();
-    for account in accounts.values() {
-        let provider = &account.provider;
-        if let Some(adapter) = adapter(provider, binaries.get(provider).cloned()) {
-            adapters.register(provider.clone(), adapter);
+    for provider in PROVIDERS {
+        if let Some(adapter) = adapter(&provider, binaries.get(&provider).cloned()) {
+            adapters.register(provider, adapter);
         }
     }
     adapters
@@ -70,12 +69,11 @@ fn adapter(provider: &Provider, binary: Option<PathBuf>) -> Option<Arc<dyn Adapt
     })
 }
 
-/// The usage probe ([`crate::usage`]) for every provider that has one and at least one account,
-/// running the same binary as its adapter.
-pub fn probes(accounts: &Accounts, binaries: &HashMap<Provider, PathBuf>) -> Probes {
+/// The usage probe ([`crate::usage`]) for every provider that has one, running the same binary
+/// as its adapter; ready for accounts added later.
+pub fn probes(binaries: &HashMap<Provider, PathBuf>) -> Probes {
     let mut probes = Probes::new();
-    for account in accounts.values() {
-        let provider = &account.provider;
+    for provider in &PROVIDERS {
         let binary = binaries.get(provider).cloned();
         let probe: Arc<dyn Probe> = match provider {
             Provider::Claude => Arc::new(match binary {
@@ -178,16 +176,11 @@ mod tests {
         let codex_home = dir.path().join("codex-home");
         let claude = account(Provider::Claude, None);
         let codex = account(Provider::Codex, Some(&codex_home));
-        let accounts = Accounts::from([
-            (AccountId::new("claude"), claude.clone()),
-            (AccountId::new("codex"), codex.clone()),
-        ]);
         let binaries = HashMap::from([
             (Provider::Claude, cli.clone()),
             (Provider::Codex, cli.clone()),
         ]);
-        let adapters = adapters(&accounts, &binaries);
-        assert!(adapters.get(&Provider::Cursor).is_none());
+        let adapters = adapters(&binaries);
 
         let out = |provider: &str| format!("OUT={}/{provider}.env", dir.path().display());
         assert_eq!(
@@ -205,11 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn adapters_cover_every_provider_with_an_account() {
-        let accounts = Accounts::from(
-            PROVIDERS.map(|provider| (AccountId::new(provider.as_str()), account(provider, None))),
-        );
-        let adapters = adapters(&accounts, &HashMap::new());
+    fn adapters_cover_every_provider() {
+        let adapters = adapters(&HashMap::new());
         for provider in PROVIDERS {
             assert!(adapters.get(&provider).is_some(), "{}", provider.as_str());
         }
@@ -252,11 +242,8 @@ mod tests {
     }
 
     #[test]
-    fn probes_cover_claude_and_codex_accounts_only() {
-        let accounts = Accounts::from(
-            PROVIDERS.map(|provider| (AccountId::new(provider.as_str()), account(provider, None))),
-        );
-        let probes = probes(&accounts, &HashMap::new());
+    fn probes_cover_claude_and_codex_only() {
+        let probes = probes(&HashMap::new());
         let mut providers: Vec<_> = probes.keys().map(Provider::as_str).collect();
         providers.sort_unstable();
         assert_eq!(providers, ["claude", "codex"]);

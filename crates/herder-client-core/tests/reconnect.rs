@@ -55,7 +55,7 @@ echo "Logged in"
     LoginProgram {
         program: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
-        config_env: "FAKE_CONFIG_DIR".into(),
+        config_env: vec!["FAKE_CONFIG_DIR".into()],
     }
 }
 
@@ -121,7 +121,12 @@ impl Daemon {
                 name: "test-host".into(),
             };
             let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-            let logins = Logins::new(HashMap::from([(fake_provider(), fake_login())]));
+            // The login is fake; the account it adds is a real provider's, as the config holds.
+            let logins = Logins::new(
+                HashMap::from([(Provider::Codex, fake_login())]),
+                dir.join("daemon.toml"),
+                sessions.clone(),
+            );
             let server = Server::new(
                 tls,
                 Arc::clone(&auth),
@@ -598,22 +603,31 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     daemon.kill().await;
 }
 
+/// Reads a login terminal until it closes; returns its exit code.
+async fn login_exit(stream: &TerminalStream, screen: &mut Screen) -> Option<i32> {
+    loop {
+        match next_event(stream).await {
+            Some(TerminalEvent::Output(data)) => {
+                screen.text.push_str(&String::from_utf8_lossy(&data))
+            }
+            Some(TerminalEvent::Closed { exit_code }) => return exit_code,
+            Some(event) => panic!("unexpected {event:?}"),
+            None => panic!("the stream ended without its exit"),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn adding_an_account_relays_its_login_to_the_owner() {
+async fn adding_an_account_relays_its_login_and_saves_the_account() {
     let tmp = tempfile::tempdir().unwrap();
-    let daemon = Daemon::start(
-        &tmp.path().join("daemon"),
-        0,
-        "mid_turn.jsonl",
-        Arc::default(),
-    )
-    .await;
+    let daemon_dir = tmp.path().join("daemon");
+    let daemon = Daemon::start(&daemon_dir, 0, "mid_turn.jsonl", Arc::default()).await;
     let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
     let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
-    let config_dir = tmp.path().join("fake-2");
+    let config_dir = tmp.path().join("codex-2");
     let new_account = |account_id: &str| NewAccount {
         account_id: AccountId::new(account_id),
-        provider: fake_provider(),
+        provider: Provider::Codex,
         label: Some("Second".into()),
         config_dir: Some(config_dir.to_str().unwrap().to_owned()),
     };
@@ -625,7 +639,7 @@ async fn adding_an_account_relays_its_login_to_the_owner() {
         .await
         .unwrap();
     let refused = member
-        .add_account(&host, new_account("fake-2"), 80, 24)
+        .add_account(&host, new_account("codex-2"), 80, 24)
         .await
         .err();
     assert!(
@@ -642,8 +656,25 @@ async fn adding_an_account_relays_its_login_to_the_owner() {
         "{taken:?}"
     );
 
+    // A failed login adds nothing.
     let stream = client
-        .add_account(&host, new_account("fake-2"), 80, 24)
+        .add_account(&host, new_account("codex-2"), 80, 24)
+        .await
+        .unwrap();
+    let mut screen = Screen::default();
+    screen.read_until(&stream, "Code: ").await;
+    stream.input(b"WRONG\n".to_vec());
+    assert_eq!(login_exit(&stream, &mut screen).await, Some(1));
+    assert!(
+        screen.text.contains("herder: the login exited with 1"),
+        "{}",
+        screen.text
+    );
+    assert!(!config_dir.exists());
+    drop(stream);
+
+    let stream = client
+        .add_account(&host, new_account("codex-2"), 80, 24)
         .await
         .unwrap();
     let mut screen = Screen::default();
@@ -654,7 +685,7 @@ async fn adding_an_account_relays_its_login_to_the_owner() {
             terminal.terminal_id == stream.terminal_id()
                 && terminal.purpose
                     == TerminalPurpose::Login {
-                        account_id: AccountId::new("fake-2"),
+                        account_id: AccountId::new("codex-2"),
                     }
         })
     };
@@ -668,18 +699,31 @@ async fn adding_an_account_relays_its_login_to_the_owner() {
     .expect("the login terminal was never listed");
 
     stream.input(b"ABCD\n".to_vec());
-    screen.read_until(&stream, "Logged in").await;
-    loop {
-        match next_event(&stream).await {
-            Some(TerminalEvent::Output(_)) => {}
-            Some(event) => {
-                assert_eq!(event, TerminalEvent::Closed { exit_code: Some(0) });
-                break;
-            }
-            None => panic!("the stream ended without its exit"),
-        }
-    }
+    assert_eq!(login_exit(&stream, &mut screen).await, Some(0));
+    assert!(
+        screen.text.contains("herder: added account codex-2"),
+        "{}",
+        screen.text
+    );
     // The login ran in the config dir it was given.
     assert!(config_dir.join("logged-in").exists());
+    // The account is listed to every client, and saved to the config.
+    for client in [&client, &member] {
+        let added = |client: &Client| {
+            client.machines()[0].accounts.iter().any(|account| {
+                account.account_id.as_str() == "codex-2" && account.label == "Second"
+            })
+        };
+        let changes = client.changes();
+        tokio::time::timeout(TIMEOUT, async {
+            while !added(client) {
+                changes.next().await;
+            }
+        })
+        .await
+        .expect("the account was never listed");
+    }
+    let saved = std::fs::read_to_string(daemon_dir.join("daemon.toml")).unwrap();
+    assert!(saved.contains("id = \"codex-2\""), "{saved}");
     daemon.kill().await;
 }

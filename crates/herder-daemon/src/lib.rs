@@ -52,8 +52,8 @@ pub fn run(config: Config) -> Result<()> {
                 }
                 token.cancel();
             });
-            let adapters = accounts::adapters(&config.accounts, &config.binaries);
-            let probes = accounts::probes(&config.accounts, &config.binaries);
+            let adapters = accounts::adapters(&config.binaries);
+            let probes = accounts::probes(&config.binaries);
             serve(&config, adapters, probes, config.accounts.clone(), shutdown).await
         })
 }
@@ -190,17 +190,14 @@ pub async fn serve(
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
-    ws::Server::new(
-        tls,
-        auth,
-        hub,
-        sessions,
-        terminals.clone(),
-        login::Logins::default(),
-        host,
-    )
-    .run(listener, shutdown)
-    .await;
+    let logins = login::Logins::new(
+        login::programs(&config.binaries),
+        config.path.clone(),
+        sessions.clone(),
+    );
+    ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host)
+        .run(listener, shutdown)
+        .await;
     terminals.close_all();
     info!("herder daemon stopped");
     Ok(())
@@ -233,6 +230,7 @@ mod tests {
     async fn serve_returns_once_shutdown_is_cancelled() {
         let tmp = tempfile::tempdir().unwrap();
         let config = Config {
+            path: tmp.path().join("daemon.toml"),
             listen: "127.0.0.1:0".parse().unwrap(),
             data_dir: tmp.path().join("data"),
             log: config::LogConfig::default(),
