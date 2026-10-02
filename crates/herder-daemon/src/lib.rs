@@ -2,20 +2,24 @@
 
 pub mod config;
 pub mod data_dir;
+pub mod hub;
 pub mod logging;
 pub mod session;
 pub mod worktree;
+pub mod ws;
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use herder_protocol::{Event, Item, ItemId, SessionHead, SessionId};
+use herder_protocol::HostId;
+use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub use config::Config;
 pub use data_dir::DataDir;
+pub use hub::Hub;
 
 /// Runs the daemon until SIGTERM or Ctrl-C, then shuts down cleanly.
 pub fn run(config: Config) -> Result<()> {
@@ -42,43 +46,52 @@ pub fn run(config: Config) -> Result<()> {
         })
 }
 
-/// Opens the data dir and runs until `shutdown` is cancelled. Later components hang off
-/// `shutdown`.
+/// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`.
 pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let data_dir = DataDir::open(&config.data_dir)?;
+    let host = ws::Host {
+        id: HostId::new(data_dir.host_id().to_string()),
+        name: host_name(),
+    };
+    let tls = ws::Tls::load_or_create(&data_dir.root().join("tls"), &host.name)?;
     let store_path = data_dir.root().join("db/herder.db");
     let store = herder_store::Store::open(&store_path)
         .with_context(|| format!("opening the journal {}", store_path.display()))?;
+    let hub = Arc::new(Hub::default());
     // Adapters register here as they land (Claude: P1.6), accounts with the accounts
-    // component, and the sink becomes the WebSocket hub (P1.2).
+    // component.
     let setup = session::Setup {
         store,
         adapters: session::Adapters::new(),
         accounts: session::Accounts::new(),
-        sink: Arc::new(NoClients),
+        sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
-    let _sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    let listener = TcpListener::bind(config.listen)
+        .await
+        .with_context(|| format!("listening on {}", config.listen))?;
     info!(
         host_id = %data_dir.host_id(),
         data_dir = %data_dir.root().display(),
-        listen = %config.listen,
+        listen = %listener.local_addr()?,
+        tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
-    shutdown.cancelled().await;
+    ws::Server::new(tls, hub, sessions, host)
+        .run(listener, shutdown)
+        .await;
     info!("herder daemon stopped");
     Ok(())
 }
 
-/// The event sink until clients can connect: nobody to publish to.
-struct NoClients;
-
-impl session::EventSink for NoClients {
-    fn event(&self, _: &Event) {}
-    fn snapshot(&self, _: &SessionId, _: &Item) {}
-    fn delta(&self, _: &SessionId, _: &ItemId, _: &str) {}
-    fn sessions_changed(&self, _: &[SessionHead]) {}
+/// This machine's host name, for display.
+fn host_name() -> String {
+    nix::unistd::gethostname()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 #[cfg(test)]
@@ -102,5 +115,6 @@ mod tests {
         task.await.unwrap().unwrap();
         assert!(tmp.path().join("data/host-id").is_file());
         assert!(tmp.path().join("data/db/herder.db").is_file());
+        assert!(tmp.path().join("data/tls/cert.pem").is_file());
     }
 }

@@ -1,0 +1,635 @@
+//! The server over real TLS sockets on localhost.
+
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use herder_protocol::{
+    AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
+    ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
+    PermissionMode, Provider, Seq, ServerHello, ServerMessage, SessionHead, SessionId, TurnId,
+};
+use herder_store::{NewEvent, Store};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::WebPkiSupportedAlgorithms;
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use tokio::net::{TcpSocket, TcpStream};
+use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_util::sync::CancellationToken;
+
+use super::{Backend, Host, Identity, Server, Tls};
+use crate::hub::{self, DELTA_BACKLOG, Hub};
+use crate::session::EventSink;
+
+const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Streamed by the throttled-client test: far more than the socket buffers between server and
+/// client hold, so a client that stops reading pushes back on the server.
+const CHUNK: usize = 8 * 1024;
+const CHUNKS: usize = 1200;
+
+/// Serves the journal the test writes to; accepts `send_prompt`, rejects everything else.
+struct TestBackend {
+    store: Arc<Mutex<Store>>,
+    commands: Arc<AtomicUsize>,
+}
+
+impl Backend for TestBackend {
+    async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
+        let sessions = self.store.lock().unwrap().sessions()?;
+        Ok(sessions
+            .into_iter()
+            .map(|session| SessionHead {
+                session_id: session.session_id,
+                head_seq: session.last_seq,
+            })
+            .collect())
+    }
+
+    async fn read_since(
+        &self,
+        session_id: &SessionId,
+        after_seq: Seq,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Event>> {
+        Ok(self
+            .store
+            .lock()
+            .unwrap()
+            .read_since(session_id, after_seq, limit)?)
+    }
+
+    async fn command(
+        &self,
+        _: &Identity,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        self.commands.fetch_add(1, Ordering::SeqCst);
+        match command {
+            CommandBody::SendPrompt { .. } => Ok(CommandResult::Applied),
+            _ => Err(ErrorInfo {
+                code: ErrorCode::Unsupported,
+                message: "test backend".into(),
+            }),
+        }
+    }
+}
+
+/// A running server, with the journal writer the session manager would own.
+struct Daemon {
+    addr: SocketAddr,
+    fingerprint: String,
+    hub: Arc<Hub>,
+    store: Arc<Mutex<Store>>,
+    commands: Arc<AtomicUsize>,
+    shutdown: CancellationToken,
+    _tmp: tempfile::TempDir,
+}
+
+impl Daemon {
+    async fn start() -> Arc<Self> {
+        let tmp = tempfile::tempdir().unwrap();
+        let tls = Tls::load_or_create(tmp.path(), "localhost").unwrap();
+        let store = Arc::new(Mutex::new(
+            Store::open(tmp.path().join("journal.sqlite3")).unwrap(),
+        ));
+        let commands = Arc::new(AtomicUsize::new(0));
+        let backend = TestBackend {
+            store: Arc::clone(&store),
+            commands: Arc::clone(&commands),
+        };
+        let hub = Arc::new(Hub::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let host = Host {
+            id: HostId::new("host"),
+            name: "localhost".into(),
+        };
+        let fingerprint = tls.fingerprint().to_owned();
+        let server = Server::new(tls, Arc::clone(&hub), backend, host);
+        tokio::spawn(server.run(listener, shutdown.clone()));
+        Arc::new(Self {
+            addr,
+            fingerprint,
+            hub,
+            store,
+            commands,
+            shutdown,
+            _tmp: tmp,
+        })
+    }
+
+    /// Appends to the journal and publishes, as the session manager does.
+    fn append(&self, session: &SessionId, body: EventBody) -> Event {
+        let event = self
+            .store
+            .lock()
+            .unwrap()
+            .append(NewEvent {
+                session_id: session.clone(),
+                at: jiff::Timestamp::now(),
+                by: None,
+                body,
+            })
+            .unwrap();
+        self.hub.event(&event);
+        event
+    }
+
+    fn create_session(&self, id: &str) -> SessionId {
+        let session = SessionId::new(id);
+        self.append(
+            &session,
+            EventBody::SessionCreated {
+                repo: "/repo".into(),
+                worktree: "/repo/wt".into(),
+                branch: "b".into(),
+                provider: Provider::Claude,
+                account_id: AccountId::new("a"),
+                model: "m".into(),
+                permission_mode: PermissionMode::Ask,
+                parent: None,
+                task: None,
+            },
+        );
+        session
+    }
+
+    async fn client(&self) -> Client {
+        Client::connect(self.addr, &self.fingerprint, None).await
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
+}
+
+fn message(id: &str, text: &str) -> Item {
+    Item {
+        id: ItemId::new(id),
+        turn_id: TurnId::new("t1"),
+        body: ItemBody::AssistantMessage { text: text.into() },
+    }
+}
+
+fn added(id: &str, text: &str) -> EventBody {
+    EventBody::ItemAdded {
+        item: message(id, text),
+    }
+}
+
+/// Accepts exactly the certificate with the pinned fingerprint, as paired clients will.
+#[derive(Debug)]
+struct Pinned {
+    fingerprint: String,
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for Pinned {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        if super::fingerprint(end_entity) == self.fingerprint {
+            Ok(ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "certificate fingerprint mismatch".into(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+/// What a client knows: the durable events it holds and the items streaming right now.
+#[derive(Debug, Default)]
+struct View {
+    events: Vec<Event>,
+    streaming: HashMap<ItemId, Item>,
+    snapshots: usize,
+    deltas: usize,
+}
+
+impl View {
+    fn apply(&mut self, message: ServerMessage) {
+        match message {
+            ServerMessage::Event(event) => {
+                if let EventBody::ItemAdded { item } = &event.body {
+                    self.streaming.remove(&item.id);
+                }
+                if let Some(last) = self.events.last() {
+                    assert_eq!(event.seq, last.seq + 1, "gap or duplicate");
+                }
+                self.events.push(event);
+            }
+            ServerMessage::Snapshot { item, .. } => {
+                self.snapshots += 1;
+                self.streaming.insert(item.id.clone(), item);
+            }
+            ServerMessage::Delta { item_id, text, .. } => {
+                self.deltas += 1;
+                let item = self
+                    .streaming
+                    .get_mut(&item_id)
+                    .expect("a delta for an item without a snapshot");
+                hub::append(&mut item.body, &text);
+            }
+            _ => {}
+        }
+    }
+
+    fn last_seq(&self) -> Seq {
+        self.events.last().map_or(0, |event| event.seq)
+    }
+
+    fn text(&self, id: &str) -> Option<&str> {
+        match &self.streaming.get(&ItemId::new(id))?.body {
+            ItemBody::AssistantMessage { text } => Some(text),
+            _ => None,
+        }
+    }
+}
+
+struct Client {
+    ws: WebSocketStream<TlsStream<TcpStream>>,
+    view: View,
+}
+
+impl Client {
+    /// Connects over TLS, pinning `fingerprint`; `recv_buffer` shrinks the socket's receive
+    /// buffer so a client that stops reading pushes back on the server sooner.
+    async fn connect(addr: SocketAddr, fingerprint: &str, recv_buffer: Option<u32>) -> Self {
+        let provider = rustls::crypto::ring::default_provider();
+        let verifier = Pinned {
+            fingerprint: fingerprint.to_owned(),
+            algorithms: provider.signature_verification_algorithms,
+        };
+        let config = ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth();
+        let socket = TcpSocket::new_v4().unwrap();
+        if let Some(size) = recv_buffer {
+            socket.set_recv_buffer_size(size).unwrap();
+        }
+        let tcp = socket.connect(addr).await.unwrap();
+        let tls = TlsConnector::from(Arc::new(config))
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await
+            .unwrap();
+        let ws_config = WebSocketConfig::default()
+            .max_message_size(None)
+            .max_frame_size(None);
+        let (ws, _) = tokio_tungstenite::client_async_with_config(
+            format!("wss://localhost:{}/", addr.port()),
+            tls,
+            Some(ws_config),
+        )
+        .await
+        .unwrap();
+        Self {
+            ws,
+            view: View::default(),
+        }
+    }
+
+    async fn send(&mut self, message: &ClientMessage) {
+        let text = serde_json::to_string(message).unwrap();
+        self.ws.send(Message::text(text)).await.unwrap();
+    }
+
+    /// The next message, or `None` once the server closed the connection.
+    async fn try_recv(&mut self) -> Option<ServerMessage> {
+        loop {
+            let frame = tokio::time::timeout(TIMEOUT, self.ws.next())
+                .await
+                .expect("no message from the server");
+            match frame {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return None,
+                Some(Ok(Message::Text(text))) => return Some(serde_json::from_str(&text).unwrap()),
+                Some(Ok(_)) => {}
+            }
+        }
+    }
+
+    async fn recv(&mut self) -> ServerMessage {
+        self.try_recv()
+            .await
+            .expect("the server closed the connection")
+    }
+
+    /// Says hello and reads the server hello and the lists that follow it.
+    async fn hello(&mut self, resume: Vec<Cursor>) -> ServerHello {
+        self.send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "test".into(),
+            resume,
+        }))
+        .await;
+        let ServerMessage::Hello(hello) = self.recv().await else {
+            panic!("expected a hello");
+        };
+        assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
+        hello
+    }
+
+    async fn subscribe(&mut self, session: &SessionId, after_seq: Seq) {
+        self.send(&ClientMessage::Subscribe(Cursor {
+            session_id: session.clone(),
+            after_seq,
+        }))
+        .await;
+    }
+
+    /// Applies messages until `done` holds for the view.
+    async fn read_until(&mut self, done: impl Fn(&View) -> bool) {
+        while !done(&self.view) {
+            let message = self.recv().await;
+            self.view.apply(message);
+        }
+    }
+}
+
+fn cursor(session: &SessionId, after_seq: Seq) -> Cursor {
+    Cursor {
+        session_id: session.clone(),
+        after_seq,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hello_is_answered_with_the_protocol_version_and_lists() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client
+        .send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "test".into(),
+            resume: Vec::new(),
+        }))
+        .await;
+    let ServerMessage::Hello(hello) = client.recv().await else {
+        panic!("expected a hello");
+    };
+    assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(hello.host_id, HostId::new("host"));
+    let ServerMessage::Sessions { sessions } = client.recv().await else {
+        panic!("expected the sessions list");
+    };
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(
+        (&sessions[0].session_id, sessions[0].head_seq),
+        (&session, 1)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_protocol_version_is_refused() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    client
+        .send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION + 1,
+            client: "test".into(),
+            resume: Vec::new(),
+        }))
+        .await;
+    let ServerMessage::Error { error } = client.recv().await else {
+        panic!("expected an error");
+    };
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    assert!(client.try_recv().await.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn commands_are_answered_by_the_backend() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let command = |id: &str, body| {
+        ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body,
+        })
+    };
+    let prompt = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "hi".into(),
+    };
+    client.send(&command("c1", prompt)).await;
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("c1"),
+            result: CommandResult::Applied,
+        }
+    );
+    // A resend is answered again without reaching the backend.
+    let prompt = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "hi".into(),
+    };
+    client.send(&command("c1", prompt)).await;
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    client.send(&command("c2", interrupt)).await;
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::CommandRejected { command_id, .. } if command_id == CommandId::new("c2")
+    ));
+    client.subscribe(&SessionId::new("nope"), 0).await;
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Error { error } if error.code == ErrorCode::NotFound
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_clients_see_identical_durable_streams() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    for n in 0..300 {
+        daemon.append(&session, added(&format!("old{n}"), "x"));
+    }
+    let mut early = daemon.client().await;
+    early.hello(vec![cursor(&session, 0)]).await;
+
+    // Events keep landing while the second client replays the journal.
+    let publisher = tokio::spawn({
+        let daemon = Arc::clone(&daemon);
+        let session = session.clone();
+        async move {
+            for n in 0..300 {
+                let id = format!("new{n}");
+                daemon.hub.snapshot(&session, &message(&id, ""));
+                EventSink::delta(&*daemon.hub, &session, &ItemId::new(&id), "partial");
+                daemon.append(&session, added(&id, "final"));
+                if n % 10 == 0 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let mut late = daemon.client().await;
+    late.hello(Vec::new()).await;
+    late.subscribe(&session, 0).await;
+    publisher.await.unwrap();
+
+    let head = 1 + 300 + 300;
+    early.read_until(|view| view.last_seq() == head).await;
+    late.read_until(|view| view.last_seq() == head).await;
+    assert_eq!(early.view.events, late.view.events);
+    let seqs: Vec<Seq> = early.view.events.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, (1..=head).collect::<Vec<_>>());
+    assert!(early.view.streaming.is_empty() && late.view.streaming.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_throttled_client_never_builds_a_backlog_and_converges() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut fast = daemon.client().await;
+    fast.hello(vec![cursor(&session, 0)]).await;
+    let mut slow = Client::connect(daemon.addr, &daemon.fingerprint, Some(4096)).await;
+    slow.hello(vec![cursor(&session, 0)]).await;
+    fast.read_until(|view| view.last_seq() == 1).await;
+    slow.read_until(|view| view.last_seq() == 1).await;
+
+    let turn = daemon.append(
+        &session,
+        EventBody::TurnStarted {
+            turn_id: TurnId::new("t1"),
+        },
+    );
+    daemon.hub.snapshot(&session, &message("long", ""));
+    let chunk = "y".repeat(CHUNK);
+    let full_text = chunk.repeat(CHUNKS);
+    let fast_reader = tokio::spawn({
+        let full_text = full_text.clone();
+        async move {
+            fast.read_until(|view| view.text("long") == Some(&full_text))
+                .await;
+            fast
+        }
+    });
+
+    // Far more text than the socket buffers hold, streamed while the slow client reads
+    // nothing at all.
+    for _ in 0..CHUNKS {
+        EventSink::delta(&*daemon.hub, &session, &ItemId::new("long"), &chunk);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let peak = daemon.hub.peak_backlog();
+
+    // Now the slow client reads, slowly, and catches up with the item still in progress.
+    let mut slow_messages = 0;
+    while slow.view.text("long") != Some(&full_text) {
+        let message = slow.recv().await;
+        slow.view.apply(message);
+        slow_messages += 1;
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let mut fast = fast_reader.await.unwrap();
+    assert!(
+        peak <= DELTA_BACKLOG + 2,
+        "a client queued {peak} messages, over the delta backlog of {DELTA_BACKLOG}"
+    );
+    assert!(
+        slow.view.snapshots >= 2,
+        "the slow client never lost deltas: {} snapshots",
+        slow.view.snapshots
+    );
+    assert!(
+        slow_messages < 100,
+        "{slow_messages} messages reached the slow client"
+    );
+    assert_eq!(slow.view.streaming, fast.view.streaming);
+
+    // Both converge on the same durable stream once the item completes.
+    daemon.append(&session, added("long", &full_text));
+    daemon.hub.snapshot(&session, &message("tail", "the"));
+    EventSink::delta(&*daemon.hub, &session, &ItemId::new("tail"), " end");
+    fast.read_until(|view| view.text("tail") == Some("the end"))
+        .await;
+    slow.read_until(|view| view.text("tail") == Some("the end"))
+        .await;
+    assert_eq!(slow.view.events, fast.view.events);
+    assert_eq!(slow.view.last_seq(), turn.seq + 1);
+    assert_eq!(slow.view.streaming, fast.view.streaming);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_resumes_from_its_cursor_after_a_disconnect() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    for n in 0..10 {
+        daemon.append(&session, added(&format!("i{n}"), "x"));
+    }
+    let mut client = daemon.client().await;
+    client.hello(vec![cursor(&session, 0)]).await;
+    client.read_until(|view| view.last_seq() == 6).await;
+    let held = std::mem::take(&mut client.view.events);
+    drop(client);
+
+    for n in 10..15 {
+        daemon.append(&session, added(&format!("i{n}"), "x"));
+    }
+    let mut client = daemon.client().await;
+    client.hello(vec![cursor(&session, 6)]).await;
+    client.read_until(|view| view.last_seq() == 16).await;
+    let seqs: Vec<Seq> = client.view.events.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, (7..=16).collect::<Vec<_>>());
+    assert_eq!(held.last().unwrap().seq, 6);
+
+    // Live events follow the replay with nothing repeated.
+    daemon.append(&session, added("i15", "x"));
+    client.read_until(|view| view.last_seq() == 17).await;
+    assert_eq!(client.view.events.len(), 11);
+}

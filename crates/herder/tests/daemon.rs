@@ -18,7 +18,7 @@ fn write_config(dir: &Path) -> std::path::PathBuf {
     std::fs::write(
         &path,
         format!(
-            "listen = \"127.0.0.1:7447\"\ndata_dir = {:?}\n\n[log]\nformat = \"json\"\n",
+            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n[log]\nformat = \"json\"\n",
             data_dir.to_str().unwrap()
         ),
     )
@@ -100,7 +100,9 @@ fn starts_writes_data_dir_and_stops_on_sigterm() {
     }
     let host_id = std::fs::read_to_string(data.join("host-id")).unwrap();
     assert!(started.contains(host_id.trim()), "{started}");
-    assert!(started.contains("127.0.0.1:7447"), "{started}");
+    // Port 0: the daemon logs the port it actually bound.
+    assert!(started.contains("127.0.0.1:"), "{started}");
+    assert!(started.contains("tls_fingerprint"), "{started}");
 
     sigterm(&child);
     let status = wait_with_timeout(&mut child);
