@@ -24,13 +24,14 @@
 //! # Approvals
 //!
 //! An approval request is journaled as `approval_requested` and so reaches every subscribed
-//! client. Every request is routed to the user for now; the route is kept per request so the
-//! primary session can be asked first later. The session is `needs_you` while any open request
-//! is routed to a user, and back to `running` once the last one is answered; a turn may have
-//! several open at once. The first `answer_approval` for an open request wins: it is journaled
-//! as `approval_resolved` (`by` the answering user) and then sent to the agent. A later answer
-//! is refused as a `conflict` (already resolved), one for an id never requested as
-//! `not_found`. When a turn ends, however it ended, its open requests are journaled as
+//! client. A top-level session's requests are routed to the user, a child's to its primary
+//! session unless they are the user's to decide ([`routing`]). The session is `needs_you`
+//! while any open request is routed or escalated to a user, and back to `running` once none
+//! is; a turn may have several open at once. The first answer to an open request wins, a
+//! user's `answer_approval` or the primary session's `answer`: it is journaled as
+//! `approval_resolved` (`by` the answering user, or `answered_by` the primary with no `by`) and
+//! then sent to the agent. A user's later answer is refused as a `conflict` (already
+//! resolved), one for an id never requested as `not_found`. When a turn ends, however it ended, its open requests are journaled as
 //! `expired` with no `by`, since no answer can reach the agent any more.
 //!
 //! # Worktrees and archive
@@ -61,8 +62,10 @@
 //!
 //! # Questions
 //!
-//! A question the agent asks is journaled as `question_asked`, routed to the user, and blocks
-//! the turn until an `answer_question` command answers it.
+//! A question the agent asks is journaled as `question_asked`, routed like an approval request
+//! but never beyond the primary's authority, and blocks the turn until a user's
+//! `answer_question` or the primary's `answer` answers it, whichever comes first. A turn's end
+//! drops its open questions.
 //!
 //! # Restart
 //!
@@ -74,7 +77,10 @@
 
 mod actor;
 pub(crate) mod journal;
+mod routing;
 mod tasks;
+
+pub use routing::{Escalation, Notifier};
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -188,8 +194,10 @@ struct Inner {
     prs: OnceLock<Arc<PrTracker>>,
     /// herder's MCP server, once started.
     mcp: OnceLock<Arc<Mcp>>,
-    /// Children's reports waiting for their primaries.
+    /// Children's reports and requests waiting for their primaries.
     tasks: Tasks,
+    /// Where children's requests that go to the user are announced, once set.
+    notifier: OnceLock<Arc<dyn Notifier>>,
     shutdown: CancellationToken,
 }
 
@@ -218,6 +226,7 @@ impl SessionManager {
                 prs: OnceLock::new(),
                 mcp: OnceLock::new(),
                 tasks,
+                notifier: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -336,6 +345,16 @@ impl SessionManager {
             .mcp
             .set(Mcp::start(config, tools, inner.shutdown.clone())?);
         Ok(())
+    }
+
+    /// Announces every child request that goes to the user instead of its primary session to
+    /// `notifier` from now on ([`routing`]); once per manager. Without one, nothing is
+    /// announced beyond the journal.
+    pub fn notify_escalations(&self, notifier: Arc<dyn Notifier>) -> anyhow::Result<()> {
+        self.inner
+            .notifier
+            .set(notifier)
+            .map_err(|_| anyhow::anyhow!("escalations have a notifier already"))
     }
 
     fn prs(&self) -> Result<&PrTracker, ErrorInfo> {

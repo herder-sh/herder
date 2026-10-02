@@ -10,16 +10,19 @@ use anyhow::Result;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
     Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult, ErrorClass,
-    ErrorCode, ErrorInfo, EventBody, Item, ItemBody, ItemId, PermissionMode, QuestionId, Route,
-    SessionStatus, TurnError, TurnId, UserId,
+    ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId, PermissionMode,
+    QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
 };
 use herder_store::Session;
-use herder_tasktools::WaitForOutput;
+use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::journal::Journal;
+use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::tasks::Tasks;
 use super::{Inner, error};
 use crate::{handoff, worktree};
@@ -54,15 +57,40 @@ pub(super) enum Request {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     },
-    /// Passed to the adapter as given. Routing questions to the primary session is P2b.4.
+    /// The first answer to an open question applies.
     AnswerQuestion {
         question_id: QuestionId,
         answer: Answer,
+    },
+    /// The primary session's agent answers or escalates one of this child's requests; `done`
+    /// learns the outcome, as the tool reports it.
+    FromPrimary {
+        primary: SessionId,
+        act: PrimaryAct,
+        done: oneshot::Sender<Result<(), ToolError>>,
     },
     /// Removes the worktree, keeping its branches, and makes the session read-only.
     Archive {
         force: bool,
     },
+}
+
+/// What a primary session does with a child's request, with the adapter's ids.
+pub(super) enum PrimaryAct {
+    Answer(AnswerInput),
+    Escalate {
+        request: RequestRef,
+        note: Option<String>,
+    },
+}
+
+/// An open question or approval request: who it waits for.
+struct Open {
+    route: Route,
+    /// When it goes to the user if the primary session has not answered it.
+    deadline: Option<Instant>,
+    /// The request as the primary session and the notifier see it.
+    request: tasktools::Request,
 }
 
 pub(super) struct Actor {
@@ -76,16 +104,19 @@ pub(super) struct Actor {
     queue: VecDeque<(Option<UserId>, String)>,
     /// The latest assistant message of the running turn: a child's report when it ends.
     last_reply: Option<String>,
-    /// Approval requests of the running turn not yet answered, oldest first, with who each is
-    /// put to.
-    approvals: Vec<(ApprovalId, Route)>,
+    /// Approval requests of the running turn not yet answered, oldest first.
+    approvals: Vec<(ApprovalId, Open)>,
     /// Questions of the running turn not yet answered, with how many choices each offers.
-    questions: HashMap<QuestionId, usize>,
+    questions: HashMap<QuestionId, (usize, Open)>,
+    /// A child's tool calls of the running turn, by item: what its approval requests ask for.
+    tool_calls: HashMap<ItemId, (String, Value)>,
 }
 
 enum Next {
     Command(SessionCommand),
     Adapter(Option<AdapterEvent>),
+    /// A request routed to the primary session ran out of time.
+    Overdue,
     Stop,
 }
 
@@ -100,6 +131,7 @@ impl Actor {
             last_reply: None,
             approvals: Vec::new(),
             questions: HashMap::new(),
+            tool_calls: HashMap::new(),
         }
     }
 
@@ -110,6 +142,13 @@ impl Actor {
     ) {
         loop {
             let next = {
+                let deadline = self.next_deadline();
+                let overdue = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                };
                 let adapter_event = async {
                     match self.adapter.as_mut() {
                         Some(adapter) => adapter.events.recv().await,
@@ -120,6 +159,7 @@ impl Actor {
                     () = shutdown.cancelled() => Next::Stop,
                     command = commands.recv() => command.map_or(Next::Stop, Next::Command),
                     event = adapter_event => Next::Adapter(event),
+                    () = overdue => Next::Overdue,
                 }
             };
             match next {
@@ -133,6 +173,7 @@ impl Actor {
                     self.start_next().await;
                 }
                 Next::Adapter(event) => self.adapter_event(event).await,
+                Next::Overdue => self.escalate_overdue().await,
                 Next::Stop => {
                     if let Some(adapter) = self.adapter.take() {
                         let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
@@ -148,6 +189,12 @@ impl Actor {
         by: Option<UserId>,
         request: Request,
     ) -> Result<CommandResult, ErrorInfo> {
+        // Before the archive check: an archived child's requests are all resolved, which the
+        // primary should hear as such.
+        if let Request::FromPrimary { primary, act, done } = request {
+            let _ = done.send(self.primary_act(primary, act).await);
+            return Ok(CommandResult::Applied);
+        }
         if self.session.status == SessionStatus::Archived {
             return Err(error(
                 ErrorCode::Conflict,
@@ -203,36 +250,26 @@ impl Actor {
                 question_id,
                 answer,
             } => {
-                let Some(&choices) = self.questions.get(&question_id) else {
+                let Some((choices, _)) = self.questions.get(&question_id) else {
                     return Err(error(
                         ErrorCode::NotFound,
                         format!("question {question_id} is not pending"),
                     ));
                 };
                 if let Answer::Choice { index } = answer
-                    && index as usize >= choices
+                    && index as usize >= *choices
                 {
                     return Err(error(
                         ErrorCode::BadRequest,
                         format!("question {question_id} has no choice {index}"),
                     ));
                 }
-                self.questions.remove(&question_id);
-                if let Some(adapter) = &self.adapter {
-                    let _ = adapter.commands.send(AdapterCommand::AnswerQuestion {
-                        question_id: question_id.clone(),
-                        answer: answer.clone(),
-                    });
-                }
-                let body = EventBody::QuestionAnswered {
-                    question_id,
-                    answer,
-                    answered_by: Answerer::User,
-                };
-                self.record(by, body).await.map_err(super::internal)?;
-                self.settle().await;
+                self.answer_question(by, question_id, answer, Answerer::User)
+                    .await
+                    .map_err(super::internal)?;
             }
             Request::Archive { force } => self.archive(by, force).await?,
+            Request::FromPrimary { .. } => {}
         }
         Ok(CommandResult::Applied)
     }
@@ -249,13 +286,28 @@ impl Actor {
         let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id) else {
             return Err(self.not_open(&approval_id).await);
         };
+        self.resolve_approval(by, open, decision, Answerer::User)
+            .await
+            .map_err(super::internal)
+    }
+
+    /// Journals the answer to the open approval at `open`, then lets the agent go on.
+    async fn resolve_approval(
+        &mut self,
+        by: Option<UserId>,
+        open: usize,
+        decision: ApprovalDecision,
+        answered_by: Answerer,
+    ) -> Result<()> {
+        let approval_id = self.approvals[open].0.clone();
         let body = EventBody::ApprovalResolved {
             approval_id: approval_id.clone(),
             decision: decision.into(),
-            answered_by: Answerer::User,
+            answered_by,
         };
-        self.record(by, body).await.map_err(super::internal)?;
-        self.approvals.remove(open);
+        self.record(by, body).await?;
+        let (approval_id, open) = self.approvals.remove(open);
+        self.withdraw(&open, RequestRef::Approval(approval_id.clone()));
         if let Some(adapter) = &self.adapter {
             // A closed channel means the CLI is gone; its `exited` fails the turn.
             let _ = adapter.commands.send(AdapterCommand::AnswerApproval {
@@ -265,6 +317,294 @@ impl Actor {
         }
         self.settle().await;
         Ok(())
+    }
+
+    /// Sends the answer to an open question to the agent and journals it.
+    async fn answer_question(
+        &mut self,
+        by: Option<UserId>,
+        question_id: QuestionId,
+        answer: Answer,
+        answered_by: Answerer,
+    ) -> Result<()> {
+        let Some((_, open)) = self.questions.remove(&question_id) else {
+            return Ok(());
+        };
+        self.withdraw(&open, RequestRef::Question(question_id.clone()));
+        if let Some(adapter) = &self.adapter {
+            let _ = adapter.commands.send(AdapterCommand::AnswerQuestion {
+                question_id: question_id.clone(),
+                answer: answer.clone(),
+            });
+        }
+        let body = EventBody::QuestionAnswered {
+            question_id,
+            answer,
+            answered_by,
+        };
+        self.record(by, body).await?;
+        self.settle().await;
+        Ok(())
+    }
+
+    /// Applies an `answer` or `escalate` of the primary session `primary`.
+    async fn primary_act(&mut self, primary: SessionId, act: PrimaryAct) -> Result<(), ToolError> {
+        use herder_tasktools::ErrorCode as Tool;
+        let internal = |err: anyhow::Error| ToolError::new(Tool::Internal, format!("{err:#}"));
+        let request = match &act {
+            PrimaryAct::Answer(AnswerInput::Question { question_id, .. }) => {
+                RequestRef::Question(question_id.clone())
+            }
+            PrimaryAct::Answer(AnswerInput::Approval { approval_id, .. }) => {
+                RequestRef::Approval(approval_id.clone())
+            }
+            PrimaryAct::Escalate { request, .. } => request.clone(),
+        };
+        let route = match &request {
+            RequestRef::Question(id) => self.questions.get(id).map(|(_, open)| open.route),
+            RequestRef::Approval(id) => self
+                .approvals
+                .iter()
+                .find(|(approval_id, _)| approval_id == id)
+                .map(|(_, open)| open.route),
+        };
+        match route {
+            None => return Err(self.not_open_to_primary(&request).await),
+            Some(Route::User) => {
+                return Err(ToolError::new(
+                    Tool::NotAllowed,
+                    format!(
+                        "{} waits for the user, who decides it; you cannot answer or \
+                         escalate it",
+                        describe(&request)
+                    ),
+                ));
+            }
+            Some(Route::Primary) => {}
+        }
+        let answered_by = Answerer::Primary {
+            session_id: primary,
+        };
+        match act {
+            PrimaryAct::Answer(AnswerInput::Question {
+                question_id,
+                answer,
+            }) => {
+                let choices = self.questions.get(&question_id).map_or(0, |(n, _)| *n);
+                if let Answer::Choice { index } = answer
+                    && index as usize >= choices
+                {
+                    let message = if choices == 0 {
+                        format!("question {question_id} takes a free-text answer: pass `text`")
+                    } else {
+                        format!(
+                            "question {question_id} has no choice {index}; pass 0 to {}",
+                            choices - 1
+                        )
+                    };
+                    return Err(ToolError::new(Tool::InvalidArguments, message));
+                }
+                self.answer_question(None, question_id, answer, answered_by)
+                    .await
+                    .map_err(internal)
+            }
+            PrimaryAct::Answer(AnswerInput::Approval {
+                approval_id,
+                decision,
+            }) => {
+                let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id)
+                else {
+                    return Ok(());
+                };
+                self.resolve_approval(None, open, decision, answered_by)
+                    .await
+                    .map_err(internal)
+            }
+            PrimaryAct::Escalate { request, note } => {
+                self.escalate(&request, EscalationReason::MarkedByPrimary, note)
+                    .await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Why the primary cannot act on `request`, which is not open: resolved, or never asked.
+    async fn not_open_to_primary(&self, request: &RequestRef) -> ToolError {
+        use herder_tasktools::ErrorCode as Tool;
+        let journal = match self
+            .inner
+            .journal
+            .all(self.session.session_id.clone())
+            .await
+        {
+            Ok(journal) => journal,
+            Err(err) => return ToolError::new(Tool::Internal, format!("{err:#}")),
+        };
+        let asked = journal.iter().any(|event| match (&event.body, request) {
+            (EventBody::ApprovalRequested { approval_id, .. }, RequestRef::Approval(id)) => {
+                approval_id == id
+            }
+            (EventBody::QuestionAsked { question_id, .. }, RequestRef::Question(id)) => {
+                question_id == id
+            }
+            _ => false,
+        });
+        if asked {
+            ToolError::new(
+                Tool::AlreadyResolved,
+                format!(
+                    "{} is already resolved: answered, or its turn ended",
+                    describe(request)
+                ),
+            )
+        } else {
+            ToolError::new(
+                Tool::NotFound,
+                format!("{} does not exist", describe(request)),
+            )
+        }
+    }
+
+    /// Hands `request`, open and routed to the primary session, to the user for `reason`.
+    async fn escalate(
+        &mut self,
+        request: &RequestRef,
+        reason: EscalationReason,
+        note: Option<String>,
+    ) {
+        let open = match request {
+            RequestRef::Question(id) => self.questions.get_mut(id).map(|(_, open)| open),
+            RequestRef::Approval(id) => self
+                .approvals
+                .iter_mut()
+                .find(|(approval_id, _)| approval_id == id)
+                .map(|(_, open)| open),
+        };
+        let Some(open) = open else { return };
+        open.route = Route::User;
+        open.deadline = None;
+        let seen = open.request.clone();
+        let body = match request {
+            RequestRef::Question(id) => EventBody::QuestionEscalated {
+                question_id: id.clone(),
+                reason,
+                note: note.clone(),
+            },
+            RequestRef::Approval(id) => EventBody::ApprovalEscalated {
+                approval_id: id.clone(),
+                reason,
+                note: note.clone(),
+            },
+        };
+        self.log(body).await;
+        if let Some(primary) = &self.session.parent {
+            self.inner
+                .tasks
+                .withdraw(primary, &self.session.session_id, request);
+        }
+        self.notify(seen, reason, note);
+        self.settle().await;
+    }
+
+    /// Hands every request whose time for the primary session ran out to the user.
+    async fn escalate_overdue(&mut self) {
+        let now = Instant::now();
+        let overdue = |open: &Open| open.deadline.is_some_and(|deadline| deadline <= now);
+        let mut requests: Vec<RequestRef> = self
+            .approvals
+            .iter()
+            .filter(|(_, open)| overdue(open))
+            .map(|(id, _)| RequestRef::Approval(id.clone()))
+            .collect();
+        requests.extend(
+            self.questions
+                .iter()
+                .filter(|(_, (_, open))| overdue(open))
+                .map(|(id, _)| RequestRef::Question(id.clone())),
+        );
+        for request in requests {
+            self.escalate(&request, EscalationReason::Timeout, None)
+                .await;
+        }
+    }
+
+    /// When the earliest request routed to the primary session goes to the user.
+    fn next_deadline(&self) -> Option<Instant> {
+        let approvals = self.approvals.iter().map(|(_, open)| open);
+        let questions = self.questions.values().map(|(_, open)| open);
+        approvals
+            .chain(questions)
+            .filter_map(|open| open.deadline)
+            .min()
+    }
+
+    /// Who a new request of this session goes to, and why it skips the primary session.
+    fn route(&self, request: &tasktools::Request, tool_call: Option<&ItemId>) -> Open {
+        let (route, deadline) = match (&self.session.parent, request, tool_call) {
+            (None, ..) => (Route::User, None),
+            (Some(_), tasktools::Request::Approval { .. }, tool_call) => {
+                let within = tool_call
+                    .and_then(|id| self.tool_calls.get(id))
+                    .is_some_and(|(name, input)| {
+                        within_authority(name, input, Path::new(&self.session.worktree))
+                    });
+                if within {
+                    (Route::Primary, Some(Instant::now() + PRIMARY_TIMEOUT))
+                } else {
+                    (Route::User, None)
+                }
+            }
+            (Some(_), tasktools::Request::Question { .. }, _) => {
+                (Route::Primary, Some(Instant::now() + PRIMARY_TIMEOUT))
+            }
+        };
+        Open {
+            route,
+            deadline,
+            request: request.clone(),
+        }
+    }
+
+    /// Puts a child's new request, routed as `open` says, to its primary session, or tells
+    /// the notifier it went straight to the user.
+    fn put(&self, open: &Open) {
+        let Some(primary) = &self.session.parent else {
+            return;
+        };
+        match open.route {
+            Route::Primary => {
+                self.inner
+                    .tasks
+                    .route(primary, &self.session.session_id, &open.request);
+            }
+            Route::User => {
+                let reason = EscalationReason::ExceedsAuthority;
+                self.notify(open.request.clone(), reason, None);
+            }
+        }
+    }
+
+    fn notify(&self, request: tasktools::Request, reason: EscalationReason, note: Option<String>) {
+        let (Some(notifier), Some(primary)) = (self.inner.notifier.get(), &self.session.parent)
+        else {
+            return;
+        };
+        notifier.escalated(&Escalation {
+            primary: primary.clone(),
+            child: self.session.session_id.clone(),
+            request,
+            reason,
+            note,
+        });
+    }
+
+    /// `request`, routed as `open` says, waits for its primary session no more.
+    fn withdraw(&self, open: &Open, request: RequestRef) {
+        if let (Route::Primary, Some(primary)) = (open.route, &self.session.parent) {
+            self.inner
+                .tasks
+                .withdraw(primary, &self.session.session_id, &request);
+        }
     }
 
     /// Why an answer to `approval_id`, which is not open, is refused: already resolved, or
@@ -296,13 +636,15 @@ impl Actor {
     }
 
     /// `needs_you` while an open approval or question waits for a user, `running` once none
-    /// does.
+    /// does; a request routed to the primary session leaves a child `running`.
     async fn settle(&mut self) {
         let for_user = self
             .approvals
             .iter()
-            .any(|(_, route)| *route == Route::User);
-        let status = if for_user || !self.questions.is_empty() {
+            .map(|(_, open)| open)
+            .chain(self.questions.values().map(|(_, open)| open))
+            .any(|open| open.route == Route::User);
+        let status = if for_user {
             SessionStatus::NeedsYou
         } else {
             SessionStatus::Running
@@ -310,12 +652,17 @@ impl Actor {
         self.set_status(status).await;
     }
 
-    /// Journals every open approval as expired: the turn that asked has ended, so no answer
-    /// can reach the agent any more.
-    async fn void_approvals(&mut self) {
-        for (approval_id, _) in std::mem::take(&mut self.approvals) {
+    /// Journals every open approval as expired and drops every open question: the turn that
+    /// asked has ended, so no answer can reach the agent any more.
+    async fn void_requests(&mut self) {
+        for (approval_id, open) in std::mem::take(&mut self.approvals) {
+            self.withdraw(&open, RequestRef::Approval(approval_id.clone()));
             self.log(voided(approval_id)).await;
         }
+        for (question_id, (_, open)) in std::mem::take(&mut self.questions) {
+            self.withdraw(&open, RequestRef::Question(question_id));
+        }
+        self.tool_calls.clear();
     }
 
     async fn archive(&mut self, by: Option<UserId>, force: bool) -> Result<(), ErrorInfo> {
@@ -563,10 +910,17 @@ impl Actor {
                     .delta(&self.session.session_id, &item_id, &text);
             }
             AdapterEvent::ItemCompleted { item } => {
-                if let ItemBody::AssistantMessage { text } = &item.body
-                    && self.turn.as_ref() == Some(&item.turn_id)
-                {
-                    self.last_reply = Some(text.clone());
+                match &item.body {
+                    ItemBody::AssistantMessage { text }
+                        if self.turn.as_ref() == Some(&item.turn_id) =>
+                    {
+                        self.last_reply = Some(text.clone());
+                    }
+                    ItemBody::ToolCall { name, input } if self.session.parent.is_some() => {
+                        self.tool_calls
+                            .insert(item.id.clone(), (name.clone(), input.clone()));
+                    }
+                    _ => {}
                 }
                 self.log(EventBody::ItemAdded { item }).await;
             }
@@ -576,19 +930,25 @@ impl Actor {
                 tool_call_id,
                 summary,
             } => {
-                // Routing to the primary session is P2b.4; until then every request goes to
-                // the user.
-                let routed_to = Route::User;
+                let request = tasktools::Request::Approval {
+                    approval_id: approval_id.clone(),
+                    summary: summary.clone(),
+                };
+                let open = self.route(&request, Some(&tool_call_id));
+                // Journaled before the primary can see it, so an answer finds it asked.
+                let reason = (self.session.parent.is_some() && open.route == Route::User)
+                    .then_some(EscalationReason::ExceedsAuthority);
                 self.log(EventBody::ApprovalRequested {
                     approval_id: approval_id.clone(),
                     turn_id,
                     tool_call_id,
                     summary,
-                    routed_to,
-                    reason: None,
+                    routed_to: open.route,
+                    reason,
                 })
                 .await;
-                self.approvals.push((approval_id, routed_to));
+                self.put(&open);
+                self.approvals.push((approval_id, open));
                 self.settle().await;
             }
             AdapterEvent::QuestionAsked {
@@ -597,17 +957,24 @@ impl Actor {
                 text,
                 choices,
             } => {
-                self.questions.insert(question_id.clone(), choices.len());
+                let request = tasktools::Request::Question {
+                    question_id: question_id.clone(),
+                    text: text.clone(),
+                    choices: choices.clone(),
+                };
+                let open = self.route(&request, None);
                 self.log(EventBody::QuestionAsked {
-                    question_id,
+                    question_id: question_id.clone(),
                     turn_id,
                     text,
-                    choices,
-                    routed_to: Route::User,
+                    choices: choices.clone(),
+                    routed_to: open.route,
                     reason: None,
                 })
                 .await;
-                self.set_status(SessionStatus::NeedsYou).await;
+                self.put(&open);
+                self.questions.insert(question_id, (choices.len(), open));
+                self.settle().await;
             }
             AdapterEvent::UsageReported { windows } => {
                 // Account usage is published by the accounts component, not journaled.
@@ -641,11 +1008,10 @@ impl Actor {
         settled: SessionStatus,
         summary: String,
     ) {
-        self.void_approvals().await;
+        self.void_requests().await;
         self.log(body).await;
         self.record_branches().await;
         self.turn = None;
-        self.questions.clear();
         if self.queue.is_empty() {
             self.set_status(settled).await;
         }
@@ -657,8 +1023,7 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let open = self.turn.take();
-        self.void_approvals().await;
-        self.questions.clear();
+        self.void_requests().await;
         let mut summary = None;
         if let Some(turn_id) = &open {
             let error = error.clone().unwrap_or_else(|| TurnError {
@@ -835,6 +1200,14 @@ pub(super) async fn close_abandoned_turn(
 /// A failed turn's report.
 pub(super) fn failed(error: &TurnError) -> String {
     format!("The turn failed: {}", error.message)
+}
+
+/// `request` for an error message.
+fn describe(request: &RequestRef) -> String {
+    match request {
+        RequestRef::Question(id) => format!("question {id}"),
+        RequestRef::Approval(id) => format!("approval request {id}"),
+    }
 }
 
 /// An approval the daemon closed because no answer can reach the agent any more.

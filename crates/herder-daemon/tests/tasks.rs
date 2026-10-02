@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_adapters::{
@@ -11,12 +11,14 @@ use herder_adapters::{
 };
 use herder_daemon::mcp;
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, ulid_turn_ids,
+    AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
+    ulid_turn_ids,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, Event, EventBody, Item, ItemBody, ItemId,
-    PermissionMode, Provider, SessionHead, SessionId, UserId,
+    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandBody,
+    CommandResult, EscalationReason, Event, EventBody, Item, ItemBody, ItemId, PermissionMode,
+    Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
@@ -27,7 +29,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// A provider whose agent answers every prompt `Done: <prompt>` after a moment, and never
-/// ends a turn on `Hang.`.
+/// ends a turn on `Hang.`. It blocks on a request until it is answered: on `Ask.` it asks a
+/// question with choices A and B, on `Write <path>.` it asks to write the file, and on
+/// `Run <command>.` to run the command.
 struct Echo;
 
 impl Adapter for Echo {
@@ -36,7 +40,22 @@ impl Adapter for Echo {
             let (commands, mut received) = mpsc::unbounded_channel();
             let (events, rx) = mpsc::channel(64);
             tokio::spawn(async move {
+                let reply = |turn_id: TurnId, text: String| {
+                    let item = Item {
+                        id: ItemId::new(format!("item-{turn_id}")),
+                        turn_id: turn_id.clone(),
+                        body: ItemBody::AssistantMessage { text },
+                    };
+                    [
+                        AdapterEvent::ItemCompleted { item },
+                        AdapterEvent::TurnCompleted { turn_id },
+                    ]
+                };
+                // The turn blocked on a request.
+                let mut blocked = None;
+                let mut requests = 0;
                 while let Some(command) = received.recv().await {
+                    let mut out = Vec::new();
                     match command {
                         AdapterCommand::SendPrompt { turn_id, text } => {
                             let started = AdapterEvent::TurnStarted {
@@ -46,19 +65,63 @@ impl Adapter for Echo {
                             if text == "Hang." {
                                 continue;
                             }
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            let item = Item {
-                                id: ItemId::new(format!("item-{turn_id}")),
-                                turn_id: turn_id.clone(),
-                                body: ItemBody::AssistantMessage {
-                                    text: format!("Done: {text}"),
-                                },
+                            let arg = |prefix: &str| {
+                                text.strip_prefix(prefix)
+                                    .map(|arg| arg.trim_end_matches('.').to_owned())
                             };
-                            let _ = events.send(AdapterEvent::ItemCompleted { item }).await;
-                            let _ = events.send(AdapterEvent::TurnCompleted { turn_id }).await;
+                            let tool = match (arg("Write "), arg("Run ")) {
+                                (Some(path), _) => Some(("Write", json!({ "file_path": path }))),
+                                (_, Some(command)) => Some(("Bash", json!({ "command": command }))),
+                                _ => None,
+                            };
+                            requests += 1;
+                            if let Some((name, input)) = tool {
+                                let call = ItemId::new(format!("call-{requests}"));
+                                let item = Item {
+                                    id: call.clone(),
+                                    turn_id: turn_id.clone(),
+                                    body: ItemBody::ToolCall {
+                                        name: name.into(),
+                                        input,
+                                    },
+                                };
+                                out.push(AdapterEvent::ItemCompleted { item });
+                                out.push(AdapterEvent::ApprovalRequested {
+                                    approval_id: ApprovalId::new(format!("approval-{requests}")),
+                                    turn_id: turn_id.clone(),
+                                    tool_call_id: call,
+                                    summary: text,
+                                });
+                                blocked = Some(turn_id);
+                            } else if text == "Ask." {
+                                out.push(AdapterEvent::QuestionAsked {
+                                    question_id: QuestionId::new(format!("question-{requests}")),
+                                    turn_id: turn_id.clone(),
+                                    text: "A or B?".into(),
+                                    choices: vec!["A".into(), "B".into()],
+                                });
+                                blocked = Some(turn_id);
+                            } else {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                                out.extend(reply(turn_id, format!("Done: {text}")));
+                            }
+                        }
+                        AdapterCommand::AnswerQuestion { answer, .. } => {
+                            if let Some(turn_id) = blocked.take() {
+                                let answer = serde_json::to_string(&answer).unwrap();
+                                out.extend(reply(turn_id, format!("Answered: {answer}")));
+                            }
+                        }
+                        AdapterCommand::AnswerApproval { decision, .. } => {
+                            if let Some(turn_id) = blocked.take() {
+                                out.extend(reply(turn_id, format!("Decided: {decision:?}")));
+                            }
                         }
                         AdapterCommand::Shutdown => break,
                         _ => {}
+                    }
+                    for event in out {
+                        let _ = events.send(event).await;
                     }
                 }
                 let _ = events.send(AdapterEvent::Exited { error: None }).await;
@@ -73,6 +136,25 @@ impl Adapter for Echo {
                 events: rx,
             })
         })
+    }
+}
+
+/// Every escalation the notifier was told about.
+#[derive(Default)]
+struct Recorder(Mutex<Vec<Escalation>>);
+
+impl Notifier for Recorder {
+    fn escalated(&self, escalation: &Escalation) {
+        self.0.lock().unwrap().push(escalation.clone());
+    }
+}
+
+impl Recorder {
+    fn taken(&self) -> Vec<(SessionId, EscalationReason, Option<String>)> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+            .into_iter()
+            .map(|escalation| (escalation.child, escalation.reason, escalation.note))
+            .collect()
     }
 }
 
@@ -103,6 +185,7 @@ struct Daemon {
     manager: SessionManager,
     data_dir: PathBuf,
     repo: PathBuf,
+    notifier: Arc<Recorder>,
     shutdown: CancellationToken,
 }
 
@@ -139,6 +222,8 @@ impl Daemon {
                 herder: PathBuf::from("/opt/herder"),
             })
             .unwrap();
+        let notifier = Arc::new(Recorder::default());
+        manager.notify_escalations(notifier.clone()).unwrap();
         let repo = dir.join("app");
         if !repo.exists() {
             std::fs::create_dir(&repo).unwrap();
@@ -149,6 +234,7 @@ impl Daemon {
             manager,
             data_dir,
             repo,
+            notifier,
             shutdown,
         }
     }
@@ -222,6 +308,37 @@ impl Daemon {
 
     async fn until(&self, session_id: &SessionId, matching: fn(&EventBody) -> bool) {
         self.until_n(session_id, 1, matching).await;
+    }
+
+    /// The latest status `session_id` journaled.
+    async fn status(&self, session_id: &SessionId) -> SessionStatus {
+        let journal = self.journal(session_id).await;
+        journal
+            .iter()
+            .rev()
+            .find_map(|event| match event.body {
+                EventBody::SessionStatusChanged { status } => Some(status),
+                _ => None,
+            })
+            .unwrap_or(SessionStatus::Idle)
+    }
+
+    /// Whether `session_id` was ever `needs_you`.
+    async fn ever_needed_you(&self, session_id: &SessionId) -> bool {
+        self.journal(session_id).await.iter().any(|event| {
+            matches!(
+                event.body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::NeedsYou
+                }
+            )
+        })
+    }
+
+    /// Alice answers through a client, as any user can.
+    async fn user_answers(&self, command: CommandBody) {
+        let result = self.manager.handle(alice(), command).await;
+        assert_eq!(result, Ok(CommandResult::Applied));
     }
 
     /// An MCP client for `session`'s CLI, through the shim.
@@ -599,4 +716,350 @@ async fn a_child_turn_cut_short_by_a_restart_is_reported() {
     let report = tools.ok("wait_for", json!({ "timeout_secs": 5 })).await;
     assert_eq!(report["child"], child.as_str());
     assert_eq!(report["status"], "needs_you");
+}
+
+/// The child's last journaled event matching `matching`.
+fn last<T>(journal: &[Event], matching: impl Fn(&Event) -> Option<T>) -> T {
+    journal
+        .iter()
+        .rev()
+        .find_map(matching)
+        .unwrap_or_else(|| panic!("no such event in {journal:#?}"))
+}
+
+#[tokio::test]
+async fn a_primary_answers_its_childrens_questions_and_approvals() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut tools = daemon.connect(&primary);
+    let asks = id(&tools
+        .ok("spawn", json!({ "task": "Ask", "prompt": "Ask." }))
+        .await["child"]);
+    let writes = id(&tools
+        .ok(
+            "spawn",
+            json!({ "task": "Write", "prompt": "Write src/new.rs." }),
+        )
+        .await["child"]);
+
+    // Both requests reach the primary, ids prefixed with their child.
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(event["kind"], "request", "{event}");
+        requests.push(event);
+    }
+    requests.sort_by_key(|event| event["request"]["kind"].as_str().unwrap().to_owned());
+    let (approval, question) = (&requests[0], &requests[1]);
+    assert_eq!(approval["child"], writes.as_str());
+    assert_eq!(
+        approval["request"],
+        json!({
+            "kind": "approval",
+            "approval_id": format!("{writes}/approval-1"),
+            "summary": "Write src/new.rs.",
+        })
+    );
+    assert_eq!(question["child"], asks.as_str());
+    assert_eq!(
+        question["request"],
+        json!({
+            "kind": "question",
+            "question_id": format!("{asks}/question-1"),
+            "text": "A or B?",
+            "choices": ["A", "B"],
+        })
+    );
+    // status lists them as open; the children work on, waiting on the primary.
+    let status = tools.ok("status", json!({})).await;
+    for child in status["children"].as_array().unwrap() {
+        assert_eq!(child["status"], "running", "{child}");
+        assert_eq!(
+            child["open_questions"].as_array().unwrap().len(),
+            1,
+            "{child}"
+        );
+    }
+    let journal = daemon.journal(&asks).await;
+    let routed = last(&journal, |event| match &event.body {
+        EventBody::QuestionAsked {
+            routed_to, reason, ..
+        } => Some((*routed_to, *reason)),
+        _ => None,
+    });
+    assert_eq!(routed, (Route::Primary, None));
+
+    // A wrong choice is the primary's to correct; then each answer unblocks its child.
+    let wrong = json!({ "question_id": format!("{asks}/question-1"), "choice": 2 });
+    assert_eq!(tools.fails("answer", wrong).await, "invalid_arguments");
+    let choose = json!({ "question_id": format!("{asks}/question-1"), "choice": 1 });
+    assert_eq!(tools.ok("answer", choose.clone()).await, json!({}));
+    let allow = json!({ "approval_id": format!("{writes}/approval-1"), "decision": "allow" });
+    assert_eq!(tools.ok("answer", allow.clone()).await, json!({}));
+    let mut reports = BTreeSet::new();
+    for _ in 0..2 {
+        let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(event["kind"], "report", "{event}");
+        reports.insert(event["summary"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(
+        reports,
+        BTreeSet::from([
+            r#"Answered: {"type":"choice","index":1}"#.to_owned(),
+            "Decided: Allow".to_owned(),
+        ])
+    );
+
+    // Journaled as the primary's answers, with no user.
+    let primary_answered = Answerer::Primary {
+        session_id: primary.clone(),
+    };
+    let journal = daemon.journal(&asks).await;
+    let answered = last(&journal, |event| match &event.body {
+        EventBody::QuestionAnswered {
+            answer,
+            answered_by,
+            ..
+        } => Some((event.by.clone(), answer.clone(), answered_by.clone())),
+        _ => None,
+    });
+    assert_eq!(
+        answered,
+        (None, Answer::Choice { index: 1 }, primary_answered.clone())
+    );
+    let journal = daemon.journal(&writes).await;
+    let resolved = last(&journal, |event| match &event.body {
+        EventBody::ApprovalResolved {
+            decision,
+            answered_by,
+            ..
+        } => Some((event.by.clone(), *decision, answered_by.clone())),
+        _ => None,
+    });
+    assert_eq!(resolved, (None, ApprovalOutcome::Allow, primary_answered));
+    // Never the user's: no needs_you, no notification.
+    assert!(!daemon.ever_needed_you(&asks).await);
+    assert!(!daemon.ever_needed_you(&writes).await);
+    assert!(daemon.notifier.taken().is_empty());
+
+    // Answered once; unknown ids and other tasks' children are refused.
+    assert_eq!(tools.fails("answer", choose).await, "already_resolved");
+    assert_eq!(
+        tools.fails("answer", allow.clone()).await,
+        "already_resolved"
+    );
+    let unknown = json!({ "approval_id": format!("{writes}/approval-9"), "decision": "deny" });
+    assert_eq!(tools.fails("answer", unknown).await, "not_found");
+    let bare = json!({ "approval_id": "approval-1", "decision": "deny" });
+    assert_eq!(tools.fails("answer", bare).await, "not_found");
+    let other = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut other_tools = daemon.connect(&other);
+    assert_eq!(other_tools.fails("answer", allow).await, "not_your_child");
+    let escalate = json!({ "question_id": format!("{asks}/question-1") });
+    assert_eq!(
+        other_tools.fails("escalate", escalate).await,
+        "not_your_child"
+    );
+}
+
+#[tokio::test]
+async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::FullAccess).await;
+    let mut tools = daemon.connect(&primary);
+
+    // A command needs full_access, and a write outside the worktree leaves it: both go
+    // straight to the user, and the primary never sees them.
+    for prompt in ["Run cargo test.", "Write ../outside.txt."] {
+        let child = id(&tools
+            .ok("spawn", json!({ "task": "T", "prompt": prompt }))
+            .await["child"]);
+        daemon
+            .until(&child, |body| {
+                matches!(body, EventBody::ApprovalRequested { .. })
+            })
+            .await;
+        let journal = daemon.journal(&child).await;
+        let routed = last(&journal, |event| match &event.body {
+            EventBody::ApprovalRequested {
+                routed_to, reason, ..
+            } => Some((*routed_to, *reason)),
+            _ => None,
+        });
+        assert_eq!(
+            routed,
+            (Route::User, Some(EscalationReason::ExceedsAuthority)),
+            "{prompt}"
+        );
+        assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
+        assert_eq!(
+            daemon.notifier.taken(),
+            [(child.clone(), EscalationReason::ExceedsAuthority, None)]
+        );
+        let wait = json!({ "child": child.as_str(), "timeout_secs": 1 });
+        assert_eq!(
+            tools.ok("wait_for", wait.clone()).await,
+            json!({ "kind": "timeout" })
+        );
+        let status = json!({ "children": [child.as_str()] });
+        assert_eq!(
+            tools.ok("status", status).await["children"][0]["open_questions"],
+            json!([])
+        );
+        let allow = json!({ "approval_id": format!("{child}/approval-1"), "decision": "allow" });
+        assert_eq!(tools.fails("answer", allow).await, "not_allowed");
+
+        daemon
+            .user_answers(CommandBody::AnswerApproval {
+                session_id: child.clone(),
+                approval_id: ApprovalId::new("approval-1"),
+                decision: ApprovalDecision::Deny,
+            })
+            .await;
+        let report = tools.ok("wait_for", wait).await;
+        assert_eq!(report["summary"], "Decided: Deny");
+    }
+
+    // The primary hands a question on, with a note.
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "Ask", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    let question_id = request["request"]["question_id"].clone();
+    assert!(!daemon.ever_needed_you(&child).await);
+    let escalate = json!({ "question_id": question_id, "note": "This is a product call." });
+    assert_eq!(tools.ok("escalate", escalate.clone()).await, json!({}));
+    let journal = daemon.journal(&child).await;
+    let escalated = last(&journal, |event| match &event.body {
+        EventBody::QuestionEscalated {
+            question_id,
+            reason,
+            note,
+        } => Some((question_id.clone(), *reason, note.clone())),
+        _ => None,
+    });
+    let note = Some("This is a product call.".to_owned());
+    assert_eq!(
+        escalated,
+        (
+            QuestionId::new("question-1"),
+            EscalationReason::MarkedByPrimary,
+            note.clone()
+        )
+    );
+    assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
+    assert_eq!(
+        daemon.notifier.taken(),
+        [(child.clone(), EscalationReason::MarkedByPrimary, note)]
+    );
+    // It is the user's now.
+    let choose = json!({ "question_id": question_id, "choice": 0 });
+    assert_eq!(tools.fails("answer", choose).await, "not_allowed");
+    assert_eq!(tools.fails("escalate", escalate).await, "not_allowed");
+    daemon
+        .user_answers(CommandBody::AnswerQuestion {
+            session_id: child.clone(),
+            question_id: QuestionId::new("question-1"),
+            answer: Answer::Text { text: "B".into() },
+        })
+        .await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["summary"], r#"Answered: {"type":"text","text":"B"}"#);
+    assert_eq!(report["status"], "idle");
+}
+
+#[tokio::test]
+async fn a_request_the_primary_leaves_unanswered_goes_to_the_user() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok(
+            "spawn",
+            json!({ "task": "Write", "prompt": "Write notes.md." }),
+        )
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+
+    // Just short of the timeout it still waits for the primary; past it, for the user.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10 * 60 - 1)).await;
+    tokio::time::resume();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!daemon.ever_needed_you(&child).await);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::time::resume();
+    daemon
+        .until(&child, |body| {
+            matches!(
+                body,
+                EventBody::ApprovalEscalated {
+                    reason: EscalationReason::Timeout,
+                    note: None,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
+    assert_eq!(
+        daemon.notifier.taken(),
+        [(child.clone(), EscalationReason::Timeout, None)]
+    );
+    let status = tools.ok("status", json!({})).await;
+    assert_eq!(status["children"][0]["open_questions"], json!([]));
+    let allow = json!({ "approval_id": request["request"]["approval_id"], "decision": "allow" });
+    assert_eq!(tools.fails("answer", allow).await, "not_allowed");
+
+    daemon
+        .user_answers(CommandBody::AnswerApproval {
+            session_id: child.clone(),
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Allow,
+        })
+        .await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["summary"], "Decided: Allow");
+    let journal = daemon.journal(&child).await;
+    let answered_by = last(&journal, |event| match &event.body {
+        EventBody::ApprovalResolved { answered_by, .. } => {
+            Some((event.by.clone(), answered_by.clone()))
+        }
+        _ => None,
+    });
+    assert_eq!(answered_by, (Some(alice()), Answerer::User));
+}
+
+#[tokio::test]
+async fn a_user_answers_a_request_routed_to_the_primary_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "Ask", "prompt": "Ask." }))
+        .await["child"]);
+    daemon
+        .until(&child, |body| {
+            matches!(body, EventBody::QuestionAsked { .. })
+        })
+        .await;
+    daemon
+        .user_answers(CommandBody::AnswerQuestion {
+            session_id: child.clone(),
+            question_id: QuestionId::new("question-1"),
+            answer: Answer::Choice { index: 0 },
+        })
+        .await;
+    // The request left the primary's queue unseen: its next event is the report.
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report", "{report}");
+    let late = json!({ "question_id": format!("{child}/question-1"), "text": "B" });
+    assert_eq!(tools.fails("answer", late).await, "already_resolved");
+    assert!(daemon.notifier.taken().is_empty());
 }

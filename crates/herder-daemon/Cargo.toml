@@ -36,6 +36,7 @@ uuid.workspace = true
 [dev-dependencies]
 herder-client-core.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
