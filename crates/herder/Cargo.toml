@@ -11,9 +11,14 @@ name = "herder"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
 herder-daemon.workspace = true
 herder-tui.workspace = true
+
+[dev-dependencies]
+nix.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
