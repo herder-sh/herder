@@ -1,0 +1,5 @@
+# The account runs out mid-turn: usage hits 100% and the turn fails with limit_reached.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 100.0, "resets_at": "2026-10-02T17:00:00Z"}]}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "limit_reached", "message": "5-hour limit reached, resets 17:00 UTC"}}}
