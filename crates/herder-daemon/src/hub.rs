@@ -11,6 +11,8 @@
 //!   deltas and gets a snapshot of the item once it catches up.
 //! - the session list whenever it changes, sent to every client.
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
+//! - each session's resource usage whenever it changes, sent to every client, and on connect
+//!   for every session with something running ([`crate::resources`]).
 //!
 //! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
 //! its attached clients' outboxes with [`Outbox::terminal_output`].
@@ -21,7 +23,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead, SessionId,
-    Terminal, TerminalId,
+    SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -55,6 +57,8 @@ pub struct Hub {
 struct State {
     /// Items streaming right now, per session, in the order they began.
     items: HashMap<SessionId, Vec<Item>>,
+    /// The latest usage of each session with something running.
+    usage: HashMap<SessionId, SessionUsage>,
     outboxes: Vec<Arc<Outbox>>,
 }
 
@@ -161,8 +165,36 @@ impl Hub {
     /// session list change, and every terminal list change if it is an owner.
     pub(crate) fn connect(&self, outbox: &Arc<Outbox>, role: Role) {
         let mut state = self.lock();
-        outbox.lock().owner = role == Role::Owner;
+        let mut inner = outbox.lock();
+        inner.owner = role == Role::Owner;
+        for (session_id, usage) in &state.usage {
+            inner.push(ServerMessage::SessionResources {
+                session_id: session_id.clone(),
+                usage: usage.clone(),
+            });
+        }
+        drop(inner);
+        outbox.wake();
         state.outboxes.push(Arc::clone(outbox));
+    }
+
+    /// Sends a session's new resource usage to every client. A usage with no processes and no
+    /// containers is sent once and then no longer to clients that connect later.
+    pub(crate) fn session_resources(&self, session_id: &SessionId, usage: SessionUsage) {
+        let mut state = self.lock();
+        if usage.processes == 0 && usage.containers.is_empty() {
+            state.usage.remove(session_id);
+        } else {
+            state.usage.insert(session_id.clone(), usage.clone());
+        }
+        let message = ServerMessage::SessionResources {
+            session_id: session_id.clone(),
+            usage,
+        };
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
     }
 
     /// Sends the new terminal list to every owner.
@@ -785,6 +817,36 @@ mod tests {
         let sessions = ServerMessage::Sessions { sessions: heads(2) };
         assert_eq!(drain(&second), std::slice::from_ref(&sessions));
         assert_eq!(drain(&first)[1], sessions);
+    }
+
+    #[test]
+    fn session_usage_reaches_every_client_and_later_ones_until_it_is_zero() {
+        let hub = Hub::default();
+        let usage = |processes| SessionUsage {
+            cpu_percent: 1.5,
+            memory_bytes: 1024,
+            processes,
+            containers: Vec::new(),
+        };
+        let message = |processes| ServerMessage::SessionResources {
+            session_id: session(),
+            usage: usage(processes),
+        };
+        let member = Arc::new(Outbox::default());
+        hub.connect(&member, Role::Member);
+        hub.session_resources(&session(), usage(3));
+        assert_eq!(drain(&member), [message(3)]);
+
+        let later = Arc::new(Outbox::default());
+        hub.connect(&later, Role::Member);
+        assert_eq!(drain(&later), [message(3)]);
+
+        hub.session_resources(&session(), usage(0));
+        assert_eq!(drain(&member), [message(0)]);
+        assert_eq!(drain(&later), [message(0)]);
+        let last = Arc::new(Outbox::default());
+        hub.connect(&last, Role::Member);
+        assert!(drain(&last).is_empty());
     }
 
     #[test]
