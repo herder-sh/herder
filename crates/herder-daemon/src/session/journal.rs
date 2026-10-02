@@ -9,7 +9,7 @@ use herder_protocol::{
     CommandId, CommandResult, Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead,
     SessionId, SessionStatus, Timestamp, UserId,
 };
-use herder_store::{NewEvent, QueuedPrompt, Session, Store};
+use herder_store::{NativeSession, NewEvent, QueuedPrompt, Session, Store};
 
 use super::EventSink;
 
@@ -171,6 +171,16 @@ impl Journal {
         prompts: Vec<QueuedPrompt>,
     ) -> Result<()> {
         self.with_store(move |store| store.set_queued_prompts(&session_id, &prompts))
+            .await
+    }
+
+    /// Records the CLI session behind a session.
+    pub(super) async fn set_native_session(
+        &self,
+        session_id: SessionId,
+        native: NativeSession,
+    ) -> Result<()> {
+        self.with_store(move |store| store.set_native_session(&session_id, &native))
             .await
     }
 

@@ -8,9 +8,10 @@
 //! The API is synchronous; the daemon calls it from a dedicated thread or `spawn_blocking`.
 //! Appends take `&mut self`, so there is exactly one writer per [`Store`].
 //!
-//! Beside the journal, the store keeps two pieces of daemon state that must survive a restart
-//! and are not projections: the results of accepted commands ([`Store::command_result`]) and
-//! each session's queued prompts ([`Store::queued_prompts`]).
+//! Beside the journal, the store keeps daemon state that must survive a restart and is not a
+//! projection: the results of accepted commands ([`Store::command_result`]), each session's
+//! queued prompts ([`Store::queued_prompts`]) and the vendor CLI session behind each session
+//! ([`Store::native_session`]).
 //!
 //! Reads are forward compatible: a stored body this build cannot decode (an event type from a
 //! newer build, or a known type whose shape changed) is returned as [`EventBody::Unknown`] with
@@ -118,6 +119,17 @@ pub struct QueuedPrompt {
     pub text: String,
     /// Whether it retries a turn that hit a limit, on the account failover moved to.
     pub retry: bool,
+}
+
+/// The vendor CLI's own session behind a herder session, as its adapter reported it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeSession {
+    /// Provider whose CLI ran it.
+    pub provider: Provider,
+    /// Account it ran on, whose config dir holds its transcript.
+    pub account_id: AccountId,
+    /// The CLI's id for it.
+    pub native_id: String,
 }
 
 /// Accepted command results kept; the oldest are forgotten first. A client resends a command
@@ -396,6 +408,45 @@ impl Store {
         }
         drop(insert);
         tx.commit()?;
+        Ok(())
+    }
+
+    /// The CLI session last reported for `session`, if any.
+    pub fn native_session(&self, session: &SessionId) -> Result<Option<NativeSession>> {
+        let found = self
+            .conn
+            .prepare_cached(
+                "SELECT provider, account_id, native_id FROM native_sessions
+                 WHERE session_id = ?1",
+            )?
+            .query_row([session.as_str()], |row| {
+                Ok(NativeSession {
+                    provider: Provider::from(row.get::<_, String>(0)?),
+                    account_id: AccountId::new(row.get::<_, String>(1)?),
+                    native_id: row.get(2)?,
+                })
+            })
+            .optional()?;
+        Ok(found)
+    }
+
+    /// Records `native` as the CLI session behind `session`, replacing any earlier one.
+    pub fn set_native_session(
+        &mut self,
+        session: &SessionId,
+        native: &NativeSession,
+    ) -> Result<()> {
+        self.conn
+            .prepare_cached(
+                "INSERT OR REPLACE INTO native_sessions (session_id, provider, account_id, native_id)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?
+            .execute(params![
+                session.as_str(),
+                native.provider.as_str(),
+                native.account_id.as_str(),
+                native.native_id,
+            ])?;
         Ok(())
     }
 

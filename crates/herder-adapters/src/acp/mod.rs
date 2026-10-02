@@ -33,8 +33,8 @@
 //!
 //! # Not mapped
 //!
-//! - `session/load`: the adapter contract has no provider session id to resume, so every start
-//!   is `session/new` and continuity comes from the seed.
+//! - `session/load`: [`Capabilities::native_resume`] is false, so the daemon never passes
+//!   [`StartRequest::resume`]: every start is `session/new` and continuity comes from the seed.
 //! - Limit windows: ACP has none (`usage_update` is the context window), so
 //!   [`Capabilities::reports_usage`] is false and limits surface only as errors.
 //! - Client file system and terminal capabilities are not offered; agents use their own tools.

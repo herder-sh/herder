@@ -179,6 +179,7 @@ fn request(account: &AccountConfig, dir: PathBuf) -> StartRequest {
         model: None,
         permission_mode: PermissionMode::ReadOnly,
         seed: Vec::new(),
+        resume: None,
         mcp: None,
         launcher: Vec::new(),
     }

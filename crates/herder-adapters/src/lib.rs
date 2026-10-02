@@ -21,7 +21,8 @@
 //! - `ApprovalRequested` follows the `ItemCompleted` of the tool call it names.
 //! - `QuestionAsked` blocks the turn until the daemon sends `AnswerQuestion`. An adapter whose
 //!   CLI cannot ask never sends it, and so never receives `AnswerQuestion`.
-//! - `UsageReported`, `ModelChanged` and `PermissionModeChanged` may come at any time.
+//! - `UsageReported`, `ModelChanged`, `PermissionModeChanged` and `SessionIdentified` may come
+//!   at any time.
 //! - `Exited` is the last event, always sent, after which the channel closes. A turn still open
 //!   when the process dies is first closed with `TurnFailed`.
 //!
@@ -84,6 +85,11 @@ pub struct StartRequest {
     pub permission_mode: PermissionMode,
     /// Transcript to replay as context before the first prompt; empty for a fresh session.
     pub seed: Vec<Item>,
+    /// The CLI's own id of a session to continue natively, as an earlier session reported it
+    /// in [`AdapterEvent::SessionIdentified`]. The CLI looks it up under
+    /// [`StartRequest::config_dir`]; start fails when it cannot find or open it. Only adapters
+    /// with [`Capabilities::native_resume`] are given one.
+    pub resume: Option<String>,
     /// herder's MCP server for this session, which the adapter registers with the CLI as
     /// `herder`, next to the user's own servers; absent when the daemon serves none.
     pub mcp: Option<McpServer>,
@@ -139,6 +145,9 @@ pub struct Capabilities {
     pub native_permission_mode_switch: bool,
     /// Sends [`AdapterEvent::UsageReported`].
     pub reports_usage: bool,
+    /// Sends [`AdapterEvent::SessionIdentified`] and continues a session named in
+    /// [`StartRequest::resume`].
+    pub native_resume: bool,
 }
 
 /// A command from the daemon. The daemon only sends what the session's state allows, such as
@@ -263,6 +272,12 @@ pub enum AdapterEvent {
     PermissionModeChanged {
         /// The new mode.
         mode: PermissionMode,
+    },
+    /// The CLI reported its own id for this session, the one [`StartRequest::resume`] takes;
+    /// sent when it is first known and again whenever it changes.
+    SessionIdentified {
+        /// The id, in the CLI's own form.
+        native_id: String,
     },
     /// The CLI is gone; always the last event.
     Exited {

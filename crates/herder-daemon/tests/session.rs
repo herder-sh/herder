@@ -23,7 +23,7 @@ use herder_protocol::{
     QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UsageWindow,
     UserId,
 };
-use herder_store::Store;
+use herder_store::{NativeSession, Store};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -544,6 +544,29 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             "-: status Idle",
         ]
     );
+}
+
+#[tokio::test]
+async fn the_clis_session_id_is_kept_with_its_account_across_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "identified.jsonl", turns.clone()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    daemon.stop().await;
+
+    let daemon = Daemon::open(dir.path(), "second.jsonl", turns).await;
+    let store = Store::open(dir.path().join("herder.db")).unwrap();
+    assert_eq!(
+        store.native_session(&session).unwrap(),
+        Some(NativeSession {
+            provider: fake(),
+            account_id: account(),
+            native_id: "cli-session-1".into(),
+        })
+    );
+    daemon.stop().await;
 }
 
 #[tokio::test]
