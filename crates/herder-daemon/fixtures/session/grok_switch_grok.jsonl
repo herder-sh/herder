@@ -1,0 +1,8 @@
+# The session moved to Grok continues the task, then switches its model natively.
+{"emit": {"type": "model_changed", "model": "grok-4.5"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Now add a test for it."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "grok-1", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added a test for /health."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "set_model", "model": "grok-4.6"}}
+{"emit": {"type": "model_changed", "model": "grok-4.6"}}

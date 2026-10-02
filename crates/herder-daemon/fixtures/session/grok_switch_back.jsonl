@@ -1,0 +1,5 @@
+# Back on Claude, replayed from the journal, the session finishes the task.
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Commit it."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "claude-2", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Committed."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}

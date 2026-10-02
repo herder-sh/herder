@@ -2225,6 +2225,113 @@ async fn a_switch_without_the_clis_transcript_replays() {
 }
 
 #[tokio::test]
+async fn a_session_moves_to_grok_and_back_to_claude() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["grok_switch_claude.jsonl", "grok_switch_back.jsonl"]);
+    let grok = Scripted::new(&["grok_switch_grok.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, claude.clone()),
+            (Provider::Grok, grok.clone()),
+        ],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("grok-work", Provider::Grok, false),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    let completed = |body: &EventBody| matches!(body, EventBody::TurnCompleted { .. });
+    let applied = Ok(CommandResult::Applied);
+
+    assert!(completed(
+        &daemon.turn(&session, "Add a health check endpoint.").await
+    ));
+    let to_grok = switch_provider(&session, "grok-work", Some("grok-4.5"));
+    assert_eq!(daemon.handle(to_grok).await, applied);
+    assert!(completed(
+        &daemon.turn(&session, "Now add a test for it.").await
+    ));
+    let set_model = CommandBody::SetModel {
+        session_id: session.clone(),
+        model: "grok-4.6".into(),
+    };
+    assert_eq!(daemon.handle(set_model).await, applied);
+    let to_claude = switch_provider(&session, "claude-a", None);
+    assert_eq!(daemon.handle(to_claude).await, applied);
+    assert!(completed(&daemon.turn(&session, "Commit it.").await));
+
+    // Grok ran on its own account's config dir, seeded with the Claude turn, and took the model
+    // switch natively before it was stopped.
+    let [on_grok] = grok.starts().try_into().unwrap();
+    assert_eq!(on_grok.config_dir, Some(dir.path().join("grok-work")));
+    assert_eq!(on_grok.model.as_deref(), Some("grok-4.5"));
+    assert_eq!(
+        seed_texts(&on_grok),
+        [
+            "user: Add a health check endpoint.",
+            "assistant: Added GET /health.",
+        ]
+    );
+    let grok_commands: Vec<_> = grok
+        .commands()
+        .into_iter()
+        .filter(|command| !matches!(command, AdapterCommand::SendPrompt { .. }))
+        .collect();
+    assert_eq!(
+        grok_commands,
+        [
+            AdapterCommand::SetModel {
+                model: "grok-4.6".into()
+            },
+            AdapterCommand::Shutdown,
+        ]
+    );
+    let claude_starts = claude.starts();
+    let [_, back] = claude_starts.as_slice() else {
+        panic!("expected two Claude starts, got {claude_starts:?}");
+    };
+    assert_eq!(back.config_dir, Some(dir.path().join("claude-a")));
+    assert_eq!(back.model, None);
+    assert_eq!(
+        seed_texts(back),
+        [
+            "user: Add a health check endpoint.",
+            "assistant: Added GET /health.",
+            "user: Now add a test for it.",
+            "assistant: Added a test for /health.",
+        ]
+    );
+
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    let switches: Vec<_> = journal
+        .iter()
+        .filter_map(|event| match &event.body {
+            body @ EventBody::ProviderSwitched { .. } => Some(body.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        switches,
+        [
+            EventBody::ProviderSwitched {
+                provider: Provider::Grok,
+                account_id: AccountId::new("grok-work"),
+                model: "grok-4.5".into(),
+            },
+            EventBody::ProviderSwitched {
+                provider: Provider::Claude,
+                account_id: AccountId::new("claude-a"),
+                model: String::new(),
+            },
+        ]
+    );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
 async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
     let dir = tempfile::tempdir().unwrap();
     let fakes = Scripted::new(&["interrupt.jsonl", "second.jsonl"]);
