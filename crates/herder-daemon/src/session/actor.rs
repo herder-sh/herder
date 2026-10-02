@@ -1,13 +1,15 @@
 //! One task per live session: owns the adapter session, applies commands in order, journals
 //! what the agent does.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
+use herder_adapters::{
+    AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest, transcript,
+};
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult,
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId,
@@ -25,7 +27,7 @@ use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
 use super::tasks::Tasks;
-use super::{Inner, error};
+use super::{AccountConfig, Inner, error};
 use crate::handoff;
 use crate::resources::{Permit, Ticket, processes};
 use crate::worktree::{self, checkpoint};
@@ -1243,11 +1245,10 @@ impl Actor {
         }
     }
 
+    /// Starts the session's CLI on its account: resuming the CLI's own session when a
+    /// same-provider account switch carried it over ([`handoff::native`]), else, or when that
+    /// fails, seeded with the journal's transcript.
     async fn start_adapter(&self) -> Result<AdapterSession, TurnError> {
-        let fatal = |message: String| TurnError {
-            class: ErrorClass::Fatal,
-            message,
-        };
         let session = &self.session;
         let account = self
             .inner
@@ -1259,6 +1260,23 @@ impl Actor {
                 session.provider.as_str()
             ))
         })?;
+        let mut env: BTreeMap<String, String> = std::env::vars().collect();
+        // Marks everything the CLI starts as the session's, for archive to find.
+        env.insert(
+            processes::SESSION_ENV.to_owned(),
+            session.session_id.to_string(),
+        );
+        if let Some(native_id) = self.carry_over(account.config_dir.as_deref(), &env).await {
+            let request = self.start_request(&account, env.clone(), Vec::new(), Some(native_id))?;
+            match adapter.start(request).await {
+                Ok(started) => return Ok(started),
+                Err(err) => warn!(
+                    session_id = %session.session_id,
+                    "cannot resume the CLI's own session, replaying the transcript: {}",
+                    err.message
+                ),
+            }
+        }
         let items = self
             .inner
             .journal
@@ -1275,6 +1293,68 @@ impl Actor {
             })
             .collect();
         let seed = handoff::transcript(items, handoff::budget(&session.provider, &session.model));
+        let request = self.start_request(&account, env, seed, None)?;
+        adapter.start(request).await
+    }
+
+    /// The CLI session to resume on the session's account, whose config dir is `to`: the last
+    /// one its provider reported on another account, once its transcript is copied over. `None`
+    /// when there is none or it cannot be carried over; `env` is the CLI's environment.
+    async fn carry_over(
+        &self,
+        to: Option<&Path>,
+        env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        let session = &self.session;
+        let native = match self
+            .inner
+            .journal
+            .native_session(session.session_id.clone())
+            .await
+        {
+            Ok(native) => native?,
+            Err(err) => {
+                warn!(session_id = %session.session_id, "cannot read the CLI's session id: {err:#}");
+                return None;
+            }
+        };
+        if native.provider != session.provider || native.account_id == session.account_id {
+            return None;
+        }
+        let from = self.inner.account(&native.account_id)?;
+        let from = transcript::config_dir(&session.provider, from.config_dir.as_deref(), env)?;
+        let to = transcript::config_dir(&session.provider, to, env)?;
+        let provider = session.provider.clone();
+        let id = native.native_id.clone();
+        let copied = tokio::task::spawn_blocking(move || {
+            handoff::native::carry_over(&provider, &from, &to, &id)
+        })
+        .await;
+        match copied {
+            Ok(Ok(())) => Some(native.native_id),
+            Ok(Err(err)) => {
+                warn!(
+                    session_id = %session.session_id,
+                    "cannot carry the CLI's session over from {}: {err:#}", native.account_id
+                );
+                None
+            }
+            Err(err) => {
+                warn!(session_id = %session.session_id, "the transcript copy panicked: {err}");
+                None
+            }
+        }
+    }
+
+    /// A start request for the session's CLI on `account`, with its own launcher.
+    fn start_request(
+        &self,
+        account: &AccountConfig,
+        env: BTreeMap<String, String>,
+        seed: Vec<Item>,
+        resume: Option<String>,
+    ) -> Result<StartRequest, TurnError> {
+        let session = &self.session;
         let mcp = match self.inner.mcp.get() {
             Some(mcp) => Some(mcp.grant(&session.session_id).map_err(|err| {
                 fatal(format!(
@@ -1290,24 +1370,17 @@ impl Actor {
             }
             None => Vec::new(),
         };
-        let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
-        // Marks everything the CLI starts as the session's, for archive to find.
-        env.insert(
-            processes::SESSION_ENV.to_owned(),
-            session.session_id.to_string(),
-        );
-        let request = StartRequest {
+        Ok(StartRequest {
             config_dir: account.config_dir.clone(),
             env,
             cwd: PathBuf::from(&session.worktree),
             model: Some(session.model.clone()).filter(|model| !model.is_empty()),
             permission_mode: session.permission_mode,
             seed,
-            resume: None,
+            resume,
             mcp,
             launcher,
-        };
-        adapter.start(request).await
+        })
     }
 
     async fn adapter_event(&mut self, event: Option<AdapterEvent>) {
@@ -1843,5 +1916,13 @@ fn voided(approval_id: ApprovalId) -> EventBody {
         approval_id,
         decision: ApprovalOutcome::Expired,
         answered_by: Answerer::User,
+    }
+}
+
+/// A start failure that retrying cannot fix.
+fn fatal(message: String) -> TurnError {
+    TurnError {
+        class: ErrorClass::Fatal,
+        message,
     }
 }

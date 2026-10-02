@@ -219,6 +219,15 @@ impl Journal {
             .await
     }
 
+    /// The CLI session last reported behind a session.
+    pub(super) async fn native_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Option<NativeSession>> {
+        self.with_store(move |store| store.native_session(&session_id))
+            .await
+    }
+
     /// Records the CLI session behind a session.
     pub(super) async fn set_native_session(
         &self,

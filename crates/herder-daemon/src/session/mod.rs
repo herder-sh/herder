@@ -130,7 +130,12 @@
 //! the new account. The switch stops the current CLI, waiting for it to exit, and journals
 //! `account_switched` or `provider_switched` `by` the user; the next prompt starts the target
 //! account's CLI seeded with the journal's transcript ([`crate::handoff`]), the same way a
-//! restart resumes. A child session may only switch to its primary's account or to an account
+//! restart resumes. An account switch resumes the CLI's own session instead, with its full
+//! context and tool state, when its adapter reported the session's id
+//! ([`herder_adapters::AdapterEvent::SessionIdentified`], kept in the store with the account it
+//! ran on): that session's one transcript file is copied into the new account's config dir
+//! ([`crate::handoff::native`]) and the CLI started with [`herder_adapters::StartRequest::resume`].
+//! When the copy or that start fails, the transcript is replayed after all. A child session may only switch to its primary's account or to an account
 //! that opted in to failover: the task's failover chain.
 //!
 //! # Failover
