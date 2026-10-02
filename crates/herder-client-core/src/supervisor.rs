@@ -526,8 +526,11 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Hellos, answers and terminal messages are handled by the connection.
-            ServerMessage::TerminalOutput { .. }
+            // Hellos, answers and terminal messages are handled by the connection; resource
+            // usage is not exposed through the client core yet.
+            ServerMessage::HostResources(_)
+            | ServerMessage::SessionResources { .. }
+            | ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
             | ServerMessage::CommandAccepted { .. }

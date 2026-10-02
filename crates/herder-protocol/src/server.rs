@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Bytes, CommandId, DeviceId, Event, HostId, Item, ItemId, Provider, Seq, SessionId,
-    TerminalId, Timestamp, UserId,
+    AccountId, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item, ItemId, Provider,
+    Seq, SessionId, SessionUsage, TerminalId, Timestamp, UserId,
 };
 
 /// A daemon-to-client message.
@@ -28,6 +28,18 @@ pub enum ServerMessage {
     Terminals {
         /// The open terminals.
         terminals: Vec<Terminal>,
+    },
+    /// The host's load and turn admission; ephemeral, never journaled. Sent after hello, then
+    /// whenever it changes, at most once every two seconds.
+    HostResources(HostResources),
+    /// What one session's processes and containers use; ephemeral, never journaled. Sent after
+    /// hello for every session with something running, then whenever its usage changes, at
+    /// most once every two seconds per session.
+    SessionResources {
+        /// The session.
+        session_id: SessionId,
+        /// Its usage now.
+        usage: SessionUsage,
     },
     /// A durable journal event of a subscribed session.
     Event(Event),

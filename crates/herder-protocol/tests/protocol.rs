@@ -386,9 +386,11 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ));
     }
     messages.extend(task_fixtures());
+    messages.extend(resource_fixtures());
     for status in [
         SessionStatus::Idle,
         SessionStatus::Running,
+        SessionStatus::WaitingForCapacity,
         SessionStatus::NeedsYou,
         SessionStatus::Error,
         SessionStatus::Archived,
@@ -501,6 +503,77 @@ fn server_fixtures() -> Vec<ServerMessage> {
         device_id: DeviceId::new("01J9DEVICE"),
         role: Role::Member,
     }));
+    messages
+}
+
+/// Host and session resource messages, with every constraint and container state.
+fn resource_fixtures() -> Vec<ServerMessage> {
+    let host = |pressure, constraint| {
+        ServerMessage::HostResources(HostResources {
+            cpu_cores: 16,
+            cpu_percent: 62.5,
+            load_1m: 9.25,
+            memory_total_bytes: 64 << 30,
+            memory_available_bytes: 12 << 30,
+            pressure,
+            running_turns: 4,
+            max_turns: 4,
+            waiting_turns: 2,
+            constraint,
+        })
+    };
+    let pressure = || Pressure {
+        cpu_some: 31.5,
+        memory_some: 4.0,
+        memory_full: 0.5,
+        io_some: 12.25,
+    };
+    let mut messages = vec![host(None, None)];
+    for constraint in [
+        Constraint::MaxTurns,
+        Constraint::Memory,
+        Constraint::Load,
+        Constraint::Pressure,
+    ] {
+        messages.push(host(Some(pressure()), Some(constraint)));
+    }
+    let containers = [
+        ContainerState::Created,
+        ContainerState::Running,
+        ContainerState::Paused,
+        ContainerState::Restarting,
+        ContainerState::Removing,
+        ContainerState::Exited,
+        ContainerState::Dead,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, state)| Container {
+        id: format!("4f3c2b1a0e9d{n}"),
+        name: format!("herder-p2c-1-db-{n}"),
+        compose_project: (n % 2 == 0).then(|| "herder-p2c-1".to_owned()),
+        image: "postgres:17".into(),
+        state,
+    })
+    .collect();
+    messages.push(ServerMessage::SessionResources {
+        session_id: SessionId::new("01J9SESSION"),
+        usage: SessionUsage {
+            cpu_percent: 18.75,
+            memory_bytes: 3 << 30,
+            processes: 42,
+            containers,
+        },
+    });
+    messages.push(ServerMessage::SessionResources {
+        session_id: SessionId::new("01J9SESSION"),
+        usage: SessionUsage {
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+            processes: 0,
+            containers: Vec::new(),
+        },
+    });
     messages
 }
 
@@ -930,6 +1003,35 @@ fn optional_fields_may_be_absent() {
             exit_code: None
         }
     );
+}
+
+#[test]
+fn resource_optional_fields_may_be_absent() {
+    let message: ServerMessage = serde_json::from_value(json!({
+        "type": "host_resources",
+        "cpu_cores": 4,
+        "cpu_percent": 10.0,
+        "load_1m": 0.5,
+        "memory_total_bytes": 1024,
+        "memory_available_bytes": 512,
+        "running_turns": 0,
+        "max_turns": 1,
+        "waiting_turns": 0
+    }))
+    .unwrap();
+    let ServerMessage::HostResources(host) = message else {
+        panic!("expected host_resources");
+    };
+    assert_eq!((host.pressure, host.constraint), (None, None));
+
+    let container: Container = serde_json::from_value(json!({
+        "id": "c",
+        "name": "n",
+        "image": "i",
+        "state": "running"
+    }))
+    .unwrap();
+    assert_eq!(container.compose_project, None);
 }
 
 #[test]

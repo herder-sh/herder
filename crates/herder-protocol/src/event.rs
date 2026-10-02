@@ -238,6 +238,10 @@ pub enum SessionStatus {
     Idle,
     /// The agent is working, or waiting for its primary session to answer an approval or question.
     Running,
+    /// A prompt waits for the host to have capacity for another turn; the turn starts, and the
+    /// status becomes `running`, once it does. Survives a daemon restart, and the prompt keeps
+    /// its place in the host's queue.
+    WaitingForCapacity,
     /// Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.
     NeedsYou,
     /// Cannot continue without intervention.

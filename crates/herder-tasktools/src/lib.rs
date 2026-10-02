@@ -76,7 +76,9 @@ impl Tool {
                  does not see your conversation, so `prompt` must say everything it needs. \
                  Returns at once with the child's id and branch while the child works in the \
                  background; call wait_for to get its report. Children cannot spawn children, \
-                 and a task has a limit on children (5 unless the user changed it)."
+                 and a task has a limit on children (5 unless the user changed it). When this \
+                 machine is too loaded for another agent, fails with `host_busy` and \
+                 `retry_after_secs`: keep working or call wait_for, then retry."
             }
             Tool::Send => {
                 "Send a follow-up prompt to a child: a correction, the next step, or a reply to \
@@ -262,6 +264,9 @@ pub enum ErrorCode {
     NotFound,
     /// The question or approval request was already answered, by a user or by the caller.
     AlreadyResolved,
+    /// `spawn` found this host without capacity for another session's agent; retry after
+    /// [`ToolError::retry_after_secs`].
+    HostBusy,
     /// The daemon failed.
     Internal,
 }
@@ -273,6 +278,9 @@ pub struct ToolError {
     pub code: ErrorCode,
     /// What happened and what to do instead, for the agent.
     pub message: String,
+    /// Seconds to wait before calling again; set for [`ErrorCode::HostBusy`] only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u32>,
 }
 
 impl ToolError {
@@ -281,6 +289,16 @@ impl ToolError {
         Self {
             code,
             message: message.into(),
+            retry_after_secs: None,
+        }
+    }
+
+    /// A [`ErrorCode::HostBusy`] error telling the agent to retry after `retry_after_secs`.
+    pub fn host_busy(retry_after_secs: u32, message: impl Into<String>) -> Self {
+        Self {
+            code: ErrorCode::HostBusy,
+            message: message.into(),
+            retry_after_secs: Some(retry_after_secs),
         }
     }
 }
@@ -322,10 +340,15 @@ impl CallToolResult {
 }
 
 impl From<ToolError> for CallToolResult {
-    /// An error result whose text is the error as JSON, `{"code": ..., "message": ...}`.
-    /// It carries no `structuredContent`, which would have to match the tool's `outputSchema`.
+    /// An error result whose text is the error as JSON, `{"code": ..., "message": ...}`, with
+    /// `retry_after_secs` when set. It carries no `structuredContent`, which would have to match
+    /// the tool's `outputSchema`.
     fn from(error: ToolError) -> Self {
-        let text = serde_json::json!({ "code": error.code, "message": error.message }).to_string();
+        let mut json = serde_json::json!({ "code": error.code, "message": error.message });
+        if let Some(secs) = error.retry_after_secs {
+            json["retry_after_secs"] = secs.into();
+        }
+        let text = json.to_string();
         Self {
             content: vec![TextContent { text }],
             structured_content: None,

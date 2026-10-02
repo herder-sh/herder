@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "spawn",
-      "description": "Start a child session to work on part of your task in parallel. The child is a separate agent with its own git worktree and branch of this repository, and it does not see your conversation, so `prompt` must say everything it needs. Returns at once with the child's id and branch while the child works in the background; call wait_for to get its report. Children cannot spawn children, and a task has a limit on children (5 unless the user changed it).",
+      "description": "Start a child session to work on part of your task in parallel. The child is a separate agent with its own git worktree and branch of this repository, and it does not see your conversation, so `prompt` must say everything it needs. Returns at once with the child's id and branch while the child works in the background; call wait_for to get its report. Children cannot spawn children, and a task has a limit on children (5 unless the user changed it). When this machine is too loaded for another agent, fails with `host_busy` and `retry_after_secs`: keep working or call wait_for, then retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -217,7 +217,7 @@
                   }
                 },
                 "status": {
-                  "description": "`running` while it works or waits on you, `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.",
+                  "description": "`running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.",
                   "oneOf": [
                     {
                       "description": "Waiting for a prompt.",
@@ -228,6 +228,11 @@
                       "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
                       "type": "string",
                       "const": "running"
+                    },
+                    {
+                      "description": "A prompt waits for the host to have capacity for another turn; the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+                      "type": "string",
+                      "const": "waiting_for_capacity"
                     },
                     {
                       "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
@@ -321,6 +326,11 @@
                     "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
                     "type": "string",
                     "const": "running"
+                  },
+                  {
+                    "description": "A prompt waits for the host to have capacity for another turn; the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+                    "type": "string",
+                    "const": "waiting_for_capacity"
                   },
                   {
                     "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
