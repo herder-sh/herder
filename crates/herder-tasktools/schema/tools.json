@@ -1,0 +1,543 @@
+{
+  "tools": [
+    {
+      "name": "spawn",
+      "description": "Start a child session to work on part of your task in parallel. The child is a separate agent with its own git worktree and branch of this repository, and it does not see your conversation, so `prompt` must say everything it needs. Returns at once with the child's id and branch while the child works in the background; call wait_for to get its report. Children cannot spawn children, and a task has a limit on children (5 unless the user changed it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "description": "Model, in the provider's own naming. Defaults to yours on your provider, otherwise to that provider's default.",
+            "type": "string"
+          },
+          "permission_mode": {
+            "description": "What the child may do without asking; at most your own mode. Defaults to yours.",
+            "oneOf": [
+              {
+                "description": "Reads only; every write or command is refused.",
+                "type": "string",
+                "const": "read_only"
+              },
+              {
+                "description": "Asks before every write or command.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Edits files freely; asks before commands.",
+                "type": "string",
+                "const": "auto_edit"
+              },
+              {
+                "description": "Does anything without asking.",
+                "type": "string",
+                "const": "full_access"
+              }
+            ]
+          },
+          "prompt": {
+            "description": "Complete instructions for the child: the goal, the files and context it needs, constraints, and what to report back when done. The child sees nothing else of your conversation.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Vendor CLI that runs the child, e.g. \"claude\" or \"codex\"; must be one of this task's providers. Defaults to yours.",
+            "type": "string",
+            "examples": [
+              "claude",
+              "codex",
+              "cursor",
+              "grok",
+              "opencode",
+              "gemini"
+            ]
+          },
+          "task": {
+            "description": "Short label for the child's work, shown to the user in the task tree, e.g. \"Fix the flaky auth tests\".",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "task",
+          "prompt"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "branch": {
+            "description": "Branch the child works on, in this repository.",
+            "type": "string"
+          },
+          "child": {
+            "description": "The new child; pass it to send, status and wait_for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "child",
+          "branch"
+        ]
+      }
+    },
+    {
+      "name": "send",
+      "description": "Send a follow-up prompt to a child: a correction, the next step, or a reply to its report. An idle child starts its next turn on it at once; a working child gets it after its current turn ends, in the order sent, and `queued` is then true. Either way its report comes through wait_for. To unblock a child waiting on a question or approval, use answer instead.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "description": "The child, as returned by spawn.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The message, as a prompt to the child.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "child",
+          "text"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "queued": {
+            "description": "True when the message waits behind the child's running turn; false when the child started a turn on it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ]
+      }
+    },
+    {
+      "name": "status",
+      "description": "Snapshot of your children: each one's task, branch, status, latest report, and the questions and approval requests waiting for your answer. Returns at once; use wait_for to block until something changes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "description": "Children to report on. Defaults to all of yours.",
+            "type": "array",
+            "items": {
+              "description": "Identifies a session; a ULID string, opaque to receivers.",
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "children": {
+            "description": "One entry per child, oldest first.",
+            "type": "array",
+            "items": {
+              "description": "Where one child stands.",
+              "type": "object",
+              "properties": {
+                "branch": {
+                  "description": "Branch the child works on, in this repository.",
+                  "type": "string"
+                },
+                "child": {
+                  "description": "The child.",
+                  "type": "string"
+                },
+                "last_report": {
+                  "description": "Summary of its latest finished turn; absent before the first one ends.",
+                  "type": "string"
+                },
+                "open_questions": {
+                  "description": "Its questions and approval requests waiting for your answer.",
+                  "type": "array",
+                  "items": {
+                    "description": "A child's question or approval request that waits for an answer.",
+                    "oneOf": [
+                      {
+                        "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                        "type": "object",
+                        "properties": {
+                          "choices": {
+                            "description": "Answers to pick from by position; empty for a free-text answer.",
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "kind": {
+                            "type": "string",
+                            "const": "question"
+                          },
+                          "question_id": {
+                            "description": "The question.",
+                            "type": "string"
+                          },
+                          "text": {
+                            "description": "The question, as Markdown.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "question_id",
+                          "text",
+                          "choices"
+                        ]
+                      },
+                      {
+                        "description": "The child wants to run a tool call it may not run unasked. Answer with `approval_id` and `decision`.",
+                        "type": "object",
+                        "properties": {
+                          "approval_id": {
+                            "description": "The request.",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "const": "approval"
+                          },
+                          "summary": {
+                            "description": "What the child wants to do.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "approval_id",
+                          "summary"
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "status": {
+                  "description": "`running` while it works or waits on you, `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.",
+                  "oneOf": [
+                    {
+                      "description": "Waiting for a prompt.",
+                      "type": "string",
+                      "const": "idle"
+                    },
+                    {
+                      "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
+                      "type": "string",
+                      "const": "running"
+                    },
+                    {
+                      "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
+                      "type": "string",
+                      "const": "needs_you"
+                    },
+                    {
+                      "description": "Cannot continue without intervention.",
+                      "type": "string",
+                      "const": "error"
+                    },
+                    {
+                      "description": "Put away by a user; read-only.",
+                      "type": "string",
+                      "const": "archived"
+                    },
+                    {
+                      "description": "Handed off to another host; read-only here.",
+                      "type": "string",
+                      "const": "moved"
+                    }
+                  ]
+                },
+                "task": {
+                  "description": "The child's task label.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "child",
+                "task",
+                "branch",
+                "status",
+                "open_questions"
+              ]
+            }
+          }
+        },
+        "required": [
+          "children"
+        ]
+      }
+    },
+    {
+      "name": "wait_for",
+      "description": "Block until a child needs you: it finished a turn (`report`), or it asked a question or requested an approval that waits for your answer (`request`). Returns the oldest such event that no earlier wait_for returned, at once if one is already waiting; each event is returned once. Pass `child` to wait for that child only, or omit it to wait for any. Returns `timeout` when `timeout_secs` pass first, and `idle` at once when no awaited child is working and nothing waits for you.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "child": {
+            "description": "Wait for this child only. Omit to wait for any of yours.",
+            "type": "string"
+          },
+          "timeout_secs": {
+            "description": "Longest wait, in seconds.",
+            "type": "integer",
+            "format": "uint32",
+            "maximum": 600,
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "timeout_secs"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "oneOf": [
+          {
+            "description": "A child finished a turn and is idle again, or stopped on an error.",
+            "type": "object",
+            "properties": {
+              "child": {
+                "description": "The child.",
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "report"
+              },
+              "status": {
+                "description": "The child's status now.",
+                "oneOf": [
+                  {
+                    "description": "Waiting for a prompt.",
+                    "type": "string",
+                    "const": "idle"
+                  },
+                  {
+                    "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
+                    "type": "string",
+                    "const": "running"
+                  },
+                  {
+                    "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
+                    "type": "string",
+                    "const": "needs_you"
+                  },
+                  {
+                    "description": "Cannot continue without intervention.",
+                    "type": "string",
+                    "const": "error"
+                  },
+                  {
+                    "description": "Put away by a user; read-only.",
+                    "type": "string",
+                    "const": "archived"
+                  },
+                  {
+                    "description": "Handed off to another host; read-only here.",
+                    "type": "string",
+                    "const": "moved"
+                  }
+                ]
+              },
+              "summary": {
+                "description": "The child's final message of that turn, or what went wrong.",
+                "type": "string"
+              },
+              "turn_id": {
+                "description": "The turn that ended.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "child",
+              "turn_id",
+              "summary",
+              "status"
+            ]
+          },
+          {
+            "description": "A child is blocked on a question or approval request waiting for your answer.",
+            "type": "object",
+            "properties": {
+              "child": {
+                "description": "The child.",
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "const": "request"
+              },
+              "request": {
+                "description": "What it waits for.",
+                "oneOf": [
+                  {
+                    "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                    "type": "object",
+                    "properties": {
+                      "choices": {
+                        "description": "Answers to pick from by position; empty for a free-text answer.",
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "kind": {
+                        "type": "string",
+                        "const": "question"
+                      },
+                      "question_id": {
+                        "description": "The question.",
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "The question, as Markdown.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "question_id",
+                      "text",
+                      "choices"
+                    ]
+                  },
+                  {
+                    "description": "The child wants to run a tool call it may not run unasked. Answer with `approval_id` and `decision`.",
+                    "type": "object",
+                    "properties": {
+                      "approval_id": {
+                        "description": "The request.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "const": "approval"
+                      },
+                      "summary": {
+                        "description": "What the child wants to do.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "approval_id",
+                      "summary"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "child",
+              "request"
+            ]
+          },
+          {
+            "description": "Nothing happened within `timeout_secs`; your children are still working.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "timeout"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "description": "No awaited child is working and nothing waits for you, so nothing would happen.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "idle"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "answer",
+      "description": "Answer a question or approval request that a child put to you, unblocking it. For a question pass `question_id` with `text`, or `choice` when it lists choices; for an approval pass `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "description": "The approval request to decide. Pass it with `decision`.",
+            "type": "string"
+          },
+          "choice": {
+            "description": "Position of the chosen answer in the question's `choices`, from 0.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "decision": {
+            "description": "`allow` runs the tool call once, `deny` refuses it.",
+            "oneOf": [
+              {
+                "description": "Run the tool call once.",
+                "type": "string",
+                "const": "allow"
+              },
+              {
+                "description": "Refuse the tool call.",
+                "type": "string",
+                "const": "deny"
+              }
+            ]
+          },
+          "question_id": {
+            "description": "The question to answer. Pass it with `text` or `choice`.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Free-text answer to the question.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      }
+    },
+    {
+      "name": "escalate",
+      "description": "Hand a question or approval request that a child put to you over to the user, when the decision is theirs rather than yours: product or scope choices, credentials, anything destructive or outside the task. The child stays blocked until the user answers. Pass `question_id` or `approval_id`, and a `note` with what the user should know to decide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "description": "The approval request to hand over.",
+            "type": "string"
+          },
+          "note": {
+            "description": "What the user should know to decide: your view, the options, the risk.",
+            "type": "string"
+          },
+          "question_id": {
+            "description": "The question to hand over.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object"
+      }
+    }
+  ]
+}

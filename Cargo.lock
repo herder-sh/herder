@@ -732,6 +732,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "herder-tasktools"
+version = "0.0.0"
+dependencies = [
+ "herder-protocol",
+ "jsonschema",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "herder-tui"
 version = "0.0.0"
 

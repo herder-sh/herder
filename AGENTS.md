@@ -29,6 +29,7 @@ repo in parallel; these rules keep that safe. Follow them exactly.
 | `herder-store`       | SQLite append-only event journal and projections             |
 | `herder-adapters`    | Provider adapter trait, vendor adapters, fake adapter        |
 | `herder-daemon`      | Daemon runtime, WebSocket server, sessions                   |
+| `herder-tasktools`   | MCP tool definitions agents use to run multi-agent tasks     |
 | `herder-client-core` | Shared client core for the TUI and native apps               |
 | `herder-tui`         | ratatui client                                               |
 | `herder`             | The single binary: `herder daemon`, bare `herder` = TUI      |

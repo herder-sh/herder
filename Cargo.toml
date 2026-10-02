@@ -26,6 +26,7 @@ herder-client-core = { path = "crates/herder-client-core" }
 herder-daemon = { path = "crates/herder-daemon" }
 herder-protocol = { path = "crates/herder-protocol" }
 herder-store = { path = "crates/herder-store" }
+herder-tasktools = { path = "crates/herder-tasktools" }
 herder-tui = { path = "crates/herder-tui" }
 jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
