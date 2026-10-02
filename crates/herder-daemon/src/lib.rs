@@ -6,6 +6,7 @@ pub mod data_dir;
 pub mod hub;
 pub mod logging;
 pub mod session;
+pub mod terminal;
 pub mod worktree;
 pub mod ws;
 
@@ -74,11 +75,15 @@ pub async fn serve(
         .with_context(|| format!("opening the journal {}", store_path.display()))?;
     let auth = Arc::new(auth::Auth::open(data_dir.root())?);
     let hub = Arc::new(Hub::default());
+    let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
     let setup = session::Setup {
         store,
         adapters,
         accounts,
-        sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+        sink: Arc::new(terminal::KillOnArchive {
+            next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            terminals: terminals.clone(),
+        }),
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
@@ -103,9 +108,10 @@ pub async fn serve(
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
-    ws::Server::new(tls, auth, hub, sessions, host)
+    ws::Server::new(tls, auth, hub, sessions, terminals.clone(), host)
         .run(listener, shutdown)
         .await;
+    terminals.close_all();
     info!("herder daemon stopped");
     Ok(())
 }

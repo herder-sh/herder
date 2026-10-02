@@ -81,6 +81,7 @@ pub(super) async fn run<B: Backend>(
         debug!(%peer, "connection failed: {err:#}");
     }
     shared.hub.disconnect(&outbox);
+    shared.terminals.disconnect(&outbox);
     outbox.finish();
     let _ = writer.await;
     debug!(%peer, "connection closed");
@@ -169,7 +170,7 @@ async fn read<B: Backend>(
         device_id: identity.device_id.clone(),
         role: identity.role,
     }));
-    shared.hub.connect(outbox);
+    shared.hub.connect(outbox, identity.role);
     match shared.backend.sessions().await {
         Ok(sessions) => shared.hub.initial_sessions(outbox, sessions),
         Err(err) => {
@@ -177,6 +178,9 @@ async fn read<B: Backend>(
             error(outbox, ErrorCode::Internal, "cannot list sessions");
         }
     }
+    shared
+        .hub
+        .initial_terminals(outbox, shared.terminals.list());
     for cursor in hello.resume {
         subscribe(shared, outbox, cursor).await;
     }
@@ -202,7 +206,8 @@ async fn read<B: Backend>(
                 let apply = {
                     let shared = Arc::clone(shared);
                     let identity = identity.clone();
-                    async move { shared.backend.command(&identity, body).await }
+                    let outbox = Arc::clone(outbox);
+                    async move { shared.apply(&identity, &outbox, body).await }
                 };
                 outbox.push(match shared.commands.apply(key, apply).await {
                     Ok(result) => ServerMessage::CommandAccepted {

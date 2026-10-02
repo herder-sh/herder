@@ -1013,3 +1013,27 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
 }
+
+#[tokio::test]
+async fn terminals_get_the_worktree_until_the_session_is_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let EventBody::SessionCreated { worktree, .. } = &daemon.journal(&session).await[0].body else {
+        panic!("expected session_created");
+    };
+    assert_eq!(
+        daemon.manager.worktree(&session).await.unwrap(),
+        PathBuf::from(worktree)
+    );
+    let missing = SessionId::new("missing");
+    let error = daemon.manager.worktree(&missing).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
+    daemon
+        .manager
+        .archive(alice(), session.clone(), false)
+        .await
+        .unwrap();
+    let error = daemon.manager.worktree(&session).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+}

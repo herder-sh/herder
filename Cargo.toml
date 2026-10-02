@@ -31,6 +31,7 @@ herder-tui = { path = "crates/herder-tui" }
 jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
 nix = { version = "0.31", features = ["hostname", "net", "signal"] }
+portable-pty = "0.9"
 proptest = "1"
 qrcode = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
