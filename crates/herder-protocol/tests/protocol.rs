@@ -127,6 +127,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             number: 42,
         }),
+        command(CommandBody::ComposeDown {
+            session_id: session_id(),
+            project: "app".into(),
+        }),
         command(CommandBody::OpenTerminal {
             session_id: session_id(),
             cols: 120,

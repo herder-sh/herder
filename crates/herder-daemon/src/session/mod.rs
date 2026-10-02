@@ -90,6 +90,9 @@
 //! as `host_busy` while memory, load or pressure binds. A daemon restart loses waiting prompts
 //! like every queued prompt, so a session left `waiting_for_capacity` settles `idle`.
 //!
+//! Once [`SessionManager::track_containers`] runs, owners can bring down a Compose project
+//! that one of a session's tracked containers belongs to.
+//!
 //! # Questions
 //!
 //! A question the agent asks is journaled as `question_asked`, routed like an approval request
@@ -153,7 +156,7 @@ use herder_protocol::{
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 use actor::{Actor, Request, SessionCommand, Switch};
 pub use failover::FailoverConfig;
@@ -165,7 +168,7 @@ use tasks::{TaskTools, Tasks};
 use crate::mcp::{self, Mcp};
 use crate::projects::{self, ProjectsConfig};
 use crate::prs::{self, PrTracker};
-use crate::resources::{Admission, Scopes};
+use crate::resources::{Admission, Docker, Scopes};
 use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees};
 
@@ -281,6 +284,8 @@ struct Inner {
     notifier: OnceLock<Arc<dyn Notifier>>,
     /// The scopes sessions' CLIs run in, once set.
     scopes: OnceLock<Arc<Scopes>>,
+    /// The containers sessions started, once tracked.
+    docker: OnceLock<Arc<Docker>>,
     /// Every account's limit windows.
     usage: Usage,
     /// Asks the usage poller, once started, to refresh accounts not read lately.
@@ -370,6 +375,7 @@ impl SessionManager {
                 usage: Usage::default(),
                 refresh_usage: Arc::new(Notify::new()),
                 admission: OnceLock::new(),
+                docker: OnceLock::new(),
                 failover: OnceLock::new(),
                 limits: Limits::default(),
                 projects: OnceLock::new(),
@@ -447,6 +453,10 @@ impl SessionManager {
             CommandBody::UnlinkPr { session_id, number } => {
                 return self.prs()?.unlink(by, session_id, number).await;
             }
+            CommandBody::ComposeDown {
+                session_id,
+                project,
+            } => return self.compose_down(&session_id, &project).await,
             CommandBody::SwitchAccount {
                 session_id,
                 account_id,
@@ -523,6 +533,15 @@ impl SessionManager {
             .map_err(|_| anyhow::anyhow!("resources are limited already"))
     }
 
+    /// Lets owners bring down the Compose projects `docker` tracks for sessions; once per
+    /// manager. Without it, `compose_down` is unsupported.
+    pub fn track_containers(&self, docker: Arc<Docker>) -> anyhow::Result<()> {
+        self.inner
+            .docker
+            .set(docker)
+            .map_err(|_| anyhow::anyhow!("containers are tracked already"))
+    }
+
     /// Starts every turn from now on only once `admission` admits it; once per manager.
     /// Without it, turns start as soon as their session is free.
     pub fn admit_turns(&self, admission: Arc<Admission>) -> anyhow::Result<()> {
@@ -570,6 +589,36 @@ impl SessionManager {
             .notifier
             .set(notifier)
             .map_err(|_| anyhow::anyhow!("escalations have a notifier already"))
+    }
+
+    /// Brings down Compose project `project`, if one of `session_id`'s tracked containers
+    /// belongs to it.
+    async fn compose_down(
+        &self,
+        session_id: &SessionId,
+        project: &str,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let docker = self
+            .inner
+            .docker
+            .get()
+            .ok_or_else(|| error(ErrorCode::Unsupported, "containers are not tracked here"))?;
+        let tracked = docker
+            .containers(session_id)
+            .iter()
+            .any(|container| container.compose_project.as_deref() == Some(project));
+        if !tracked {
+            return Err(error(
+                ErrorCode::NotFound,
+                format!("session {session_id} has no containers of compose project {project}"),
+            ));
+        }
+        docker.compose_down(project).await.map_err(|err| {
+            warn!(session_id = %session_id, project, "{err:#}");
+            error(ErrorCode::Internal, format!("{err:#}"))
+        })?;
+        info!(session_id = %session_id, project, "brought the compose project down");
+        Ok(CommandResult::Applied)
     }
 
     fn prs(&self) -> Result<&PrTracker, ErrorInfo> {

@@ -28,6 +28,8 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
             .collect(),
         accounts: Vec::new(),
         terminals: Vec::new(),
+        resources: None,
+        session_usage: Default::default(),
     }
 }
 

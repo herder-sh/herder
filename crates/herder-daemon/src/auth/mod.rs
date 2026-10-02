@@ -325,7 +325,7 @@ impl Auth {
 }
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// are for owners only.
+/// and bringing down containers are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -338,6 +338,11 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     );
     if terminal && identity.role != Role::Owner {
         return Err(forbidden("terminals are for the daemon's owners only"));
+    }
+    if matches!(command, CommandBody::ComposeDown { .. }) && identity.role != Role::Owner {
+        return Err(forbidden(
+            "bringing down containers is for the daemon's owners only",
+        ));
     }
     Ok(())
 }

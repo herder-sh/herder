@@ -159,6 +159,14 @@ pub enum CommandBody {
         /// Number of the pull request in the session's repository.
         number: u64,
     },
+    /// Stop and remove the containers and networks of a Compose project among the session's
+    /// tracked containers; owners only.
+    ComposeDown {
+        /// Target session.
+        session_id: SessionId,
+        /// Compose project of one of the session's containers.
+        project: String,
+    },
     /// Open a shell in the session's worktree and attach to it; owners only.
     OpenTerminal {
         /// Target session.

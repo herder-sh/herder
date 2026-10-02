@@ -1,6 +1,6 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
-//! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, and an
-//! account login.
+//! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
+//! account login, and resource figures.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -23,8 +23,9 @@ use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, ItemBody,
-    PermissionMode, Provider, Role, SessionId, SessionStatus, TerminalPurpose, TurnId,
+    AccountId, CommandBody, CommandResult, Constraint, Container, ContainerState, ErrorCode, Event,
+    EventBody, HostId, HostResources, ItemBody, PermissionMode, Provider, Role, SessionId,
+    SessionStatus, SessionUsage, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -70,6 +71,7 @@ struct Daemon {
     addr: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
+    hub: Arc<Hub>,
 }
 
 impl Daemon {
@@ -130,21 +132,22 @@ impl Daemon {
             let server = Server::new(
                 tls,
                 Arc::clone(&auth),
-                hub,
+                Arc::clone(&hub),
                 sessions,
                 terminals,
                 logins,
                 host,
             );
-            started.send((addr, fingerprint, auth)).ok().unwrap();
+            started.send((addr, fingerprint, auth, hub)).ok().unwrap();
             server.run(listener, shutdown).await;
         });
-        let (addr, fingerprint, auth) = ready.await.unwrap();
+        let (addr, fingerprint, auth, hub) = ready.await.unwrap();
         Self {
             runtime: Some(runtime),
             addr,
             fingerprint,
             auth,
+            hub,
         }
     }
 
@@ -726,4 +729,85 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     let saved = std::fs::read_to_string(daemon_dir.join("daemon.toml")).unwrap();
     assert!(saved.contains("id = \"codex-2\""), "{saved}");
     daemon.kill().await;
+}
+
+fn host_resources(running_turns: u32) -> HostResources {
+    HostResources {
+        cpu_cores: 8,
+        cpu_percent: 42.5,
+        load_1m: 3.2,
+        memory_total_bytes: 16 << 30,
+        memory_available_bytes: 6 << 30,
+        pressure: None,
+        running_turns,
+        max_turns: 4,
+        waiting_turns: 1,
+        constraint: (running_turns == 4).then_some(Constraint::MaxTurns),
+    }
+}
+
+/// Waits until the first machine's view satisfies `wanted`.
+async fn wait_machine(client: &Client, wanted: impl Fn(&herder_client_core::Machine) -> bool) {
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while !client.machines().first().is_some_and(&wanted) {
+            changes.next().await.unwrap();
+        }
+    })
+    .await
+    .expect("the machine never got there");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_and_session_resources_stay_current_while_connected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    // Figures from before the client connects reach it after hello.
+    daemon.hub.host_resources(host_resources(3));
+    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    client.pair(daemon.pairing_link()).await.unwrap();
+    wait_machine(&client, |m| m.resources == Some(host_resources(3))).await;
+
+    // Later figures replace them.
+    daemon.hub.host_resources(host_resources(4));
+    wait_machine(&client, |m| m.resources == Some(host_resources(4))).await;
+    let session = SessionId::new("s1");
+    let usage = SessionUsage {
+        cpu_percent: 12.0,
+        memory_bytes: 512 << 20,
+        processes: 3,
+        containers: vec![Container {
+            id: "c1".into(),
+            name: "app-db-1".into(),
+            compose_project: Some("app".into()),
+            image: "postgres:16".into(),
+            state: ContainerState::Running,
+        }],
+    };
+    daemon.hub.session_resources(&session, usage.clone());
+    wait_machine(&client, |m| m.session_usage.get(&session) == Some(&usage)).await;
+    // A session whose processes and containers are gone leaves the map.
+    let idle = SessionUsage {
+        cpu_percent: 0.0,
+        memory_bytes: 0,
+        processes: 0,
+        containers: Vec::new(),
+    };
+    daemon.hub.session_resources(&session, idle);
+    wait_machine(&client, |m| m.session_usage.is_empty()).await;
+
+    // Live figures go with the connection.
+    daemon.hub.session_resources(&session, usage);
+    wait_machine(&client, |m| !m.session_usage.is_empty()).await;
+    daemon.kill().await;
+    wait_machine(&client, |m| {
+        !connected(&m.connection) && m.resources.is_none() && m.session_usage.is_empty()
+    })
+    .await;
 }

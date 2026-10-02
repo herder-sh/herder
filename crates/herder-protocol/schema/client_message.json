@@ -504,6 +504,29 @@
           ]
         },
         {
+          "description": "Stop and remove the containers and networks of a Compose project among the session's\ntracked containers; owners only.",
+          "type": "object",
+          "properties": {
+            "project": {
+              "description": "Compose project of one of the session's containers.",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "compose_down"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "project"
+          ]
+        },
+        {
           "description": "Open a shell in the session's worktree and attach to it; owners only.",
           "type": "object",
           "properties": {

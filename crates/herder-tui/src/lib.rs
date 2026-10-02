@@ -208,7 +208,11 @@ fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
 fn pair(client: &Client, link: String, tx: mpsc::UnboundedSender<Msg>) {
     let client = client.clone();
     tokio::spawn(async move {
-        let result = client.pair(link).await.map_err(|err| err.to_string());
+        let result = client
+            .pair(link)
+            .await
+            .map(Box::new)
+            .map_err(|err| err.to_string());
         let _ = tx.send(Msg::Paired(result));
     });
 }
