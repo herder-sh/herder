@@ -59,6 +59,14 @@ pub enum Action {
     Inbox(InboxAction),
     /// Fold or unfold the selected task's children.
     Fold,
+    /// Show the accounts screen.
+    OpenAccounts,
+    /// Input to the accounts screen.
+    Accounts(crate::account_screen::Input),
+    /// Open the switch dialog of the open or selected session.
+    OpenSwitch,
+    /// Input to the switch dialog.
+    Switch(crate::switch::Input),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -82,6 +90,12 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(panel) = &app.machine_panel {
         return crate::machines::for_key(key, panel);
+    }
+    if let Some(screen) = &app.account_screen {
+        return crate::account_screen::for_key(key, screen);
+    }
+    if let Some(switch) = &app.switch {
+        return crate::switch::for_key(key, switch);
     }
     if app.terminals.is_some() {
         let action = match key.code {
@@ -146,6 +160,10 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('a') => Action::AddMachine,
         KeyCode::Char('t') => Action::Terminals,
         KeyCode::Char('z') if app.focus == Focus::Sessions => Action::Fold,
+        KeyCode::Char('A') => Action::OpenAccounts,
+        KeyCode::Char('s') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
+            Action::OpenSwitch
+        }
         _ => return None,
     };
     Some(action)
@@ -176,6 +194,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("m", "machines: connections and fingerprints"),
     ("a", "add a machine (or paste its link)"),
     ("t", "terminals of the selected session (owners)"),
+    ("s", "switch the session's account, provider or model"),
+    ("A", "accounts: usage and limits; n adds one"),
     ("z", "fold or unfold the selected task's children"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (

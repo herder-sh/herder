@@ -203,19 +203,7 @@ pub enum Input {
 pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if panel.account.is_some() {
-        let input = match key.code {
-            KeyCode::Esc => Input::Close,
-            KeyCode::Enter => Input::Submit,
-            KeyCode::Tab | KeyCode::Down => Input::Down,
-            KeyCode::BackTab | KeyCode::Up => Input::Up,
-            KeyCode::Left => Input::Left,
-            KeyCode::Right => Input::Right,
-            KeyCode::Backspace => Input::Backspace,
-            KeyCode::Char('u') if ctrl => Input::Clear,
-            KeyCode::Char(c) if !ctrl => Input::Char(c),
-            _ => return None,
-        };
-        return Some(Action::Machines(input));
+        return accounts::input_for_key(key).map(Action::Machines);
     }
     let input = match &panel.add {
         Some(AddMachine {
@@ -276,38 +264,17 @@ impl App {
             return Vec::new();
         };
         if let Some(account) = &mut panel.account {
-            match input {
-                Input::Close => panel.account = None,
-                Input::Submit => {
-                    if let Some(new) = account.submit() {
-                        let host_id = account.host_id.clone();
-                        self.machine_panel = None;
-                        return vec![Effect::AttachTerminal {
-                            host_id,
-                            target: Target::Login(new),
-                        }];
-                    }
+            match account.input(input) {
+                accounts::Outcome::Open => {}
+                accounts::Outcome::Closed => panel.account = None,
+                accounts::Outcome::Login(new) => {
+                    let host_id = account.host_id.clone();
+                    self.machine_panel = None;
+                    return vec![Effect::AttachTerminal {
+                        host_id,
+                        target: Target::Login(new),
+                    }];
                 }
-                Input::Up | Input::Down => account.focus = account.focus.next(input == Input::Down),
-                Input::Left | Input::Right if account.focus == accounts::Field::Provider => {
-                    account.cycle(input == Input::Right);
-                }
-                Input::Char(c) => match account.field() {
-                    Some(field) => field.push(c),
-                    None if c == ' ' => account.cycle(true),
-                    None => {}
-                },
-                Input::Backspace => {
-                    if let Some(field) = account.field() {
-                        field.pop();
-                    }
-                }
-                Input::Clear => {
-                    if let Some(field) = account.field() {
-                        field.clear();
-                    }
-                }
-                _ => {}
             }
             return Vec::new();
         }

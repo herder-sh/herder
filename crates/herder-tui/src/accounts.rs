@@ -2,10 +2,13 @@
 //! provider's own login runs on the machine in a terminal attached here.
 //!
 //! herder only relays that terminal. The account is added once the login exits successfully,
-//! and shows in the machine's account list.
+//! and shows in the machine's account list. The accounts screen opens the same dialog.
 
 use herder_client_core::NewAccount;
 use herder_protocol::{AccountId, HostId, Provider};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+use crate::machines::Input;
 
 /// The providers whose logins the daemon runs, in the dialog's order.
 pub const PROVIDERS: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Cursor];
@@ -114,6 +117,70 @@ impl AddAccount {
             label: optional(&self.label),
             config_dir: optional(&self.config_dir),
         })
+    }
+}
+
+/// The input a key is to the dialog.
+pub(crate) fn input_for_key(key: KeyEvent) -> Option<Input> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let input = match key.code {
+        KeyCode::Esc => Input::Close,
+        KeyCode::Enter => Input::Submit,
+        KeyCode::Tab | KeyCode::Down => Input::Down,
+        KeyCode::BackTab | KeyCode::Up => Input::Up,
+        KeyCode::Left => Input::Left,
+        KeyCode::Right => Input::Right,
+        KeyCode::Backspace => Input::Backspace,
+        KeyCode::Char('u') if ctrl => Input::Clear,
+        KeyCode::Char(c) if !ctrl => Input::Char(c),
+        _ => return None,
+    };
+    Some(input)
+}
+
+/// What an input did to the dialog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// The dialog stays open.
+    Open,
+    /// The user cancelled it.
+    Closed,
+    /// The form is complete: run this account's login.
+    Login(NewAccount),
+}
+
+impl AddAccount {
+    /// Carries out one input.
+    pub(crate) fn input(&mut self, input: Input) -> Outcome {
+        match input {
+            Input::Close => return Outcome::Closed,
+            Input::Submit => {
+                if let Some(new) = self.submit() {
+                    return Outcome::Login(new);
+                }
+            }
+            Input::Up | Input::Down => self.focus = self.focus.next(input == Input::Down),
+            Input::Left | Input::Right if self.focus == Field::Provider => {
+                self.cycle(input == Input::Right);
+            }
+            Input::Char(c) => match self.field() {
+                Some(field) => field.push(c),
+                None if c == ' ' => self.cycle(true),
+                None => {}
+            },
+            Input::Backspace => {
+                if let Some(field) = self.field() {
+                    field.pop();
+                }
+            }
+            Input::Clear => {
+                if let Some(field) = self.field() {
+                    field.clear();
+                }
+            }
+            _ => {}
+        }
+        Outcome::Open
     }
 }
 

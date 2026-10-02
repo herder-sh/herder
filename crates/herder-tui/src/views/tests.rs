@@ -539,3 +539,63 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
     resize(&mut terminal, &mut app, 45, 40);
     assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 45, 40));
 }
+
+/// [`fake::tree`] whose machine has three accounts, two with usage, beside a disconnected
+/// machine with none; `s2` and `s3` run on `claude-main`.
+fn with_accounts() -> App {
+    use herder_protocol::{Provider, Timestamp, UsageWindow};
+
+    // Half a minute past each reset time, so the countdown reads the same while the test runs.
+    let window = |name: &str, used_percent: f64, secs: i64| UsageWindow {
+        window: name.into(),
+        used_percent,
+        resets_at: Some(Timestamp::from_second(Timestamp::now().as_second() + secs + 30).unwrap()),
+    };
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut main = fake::account("claude-main", "Main");
+    main.usage = vec![
+        window("five_hour", 42.0, 2 * 3600 + 13 * 60),
+        window("seven_day", 74.0, 5 * 86400 + 3 * 3600),
+        window("seven_day_fable", 93.0, 5 * 86400 + 3 * 3600),
+    ];
+    let mut codex = fake::account("codex", "codex");
+    codex.provider = Provider::Codex;
+    codex.usage = vec![
+        window("five_hour", 8.0, 40 * 60),
+        window("weekly", 20.0, 86400),
+    ];
+    machines[0].accounts = vec![main, fake::account("claude-work", "Work"), codex];
+    let mut laptop = fake::machine("h2", "laptop", &[]);
+    laptop.connection = ConnectionState::Disconnected {
+        error: "connection refused".into(),
+    };
+    machines.push(laptop);
+    app.update(Msg::Machines(machines));
+    app
+}
+
+#[test]
+fn the_accounts_screen_on_narrow_and_wide_screens() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    narrow_and_wide("accounts", &mut app);
+}
+
+#[test]
+fn the_add_account_dialog_over_the_accounts_screen() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    press(&mut app, KeyCode::Char('n'));
+    insta::assert_snapshot!(render(&mut app, 45, 40).backend());
+}
+
+#[test]
+fn the_switch_dialog_on_narrow_and_wide_screens() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('s'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    narrow_and_wide("switch", &mut app);
+}

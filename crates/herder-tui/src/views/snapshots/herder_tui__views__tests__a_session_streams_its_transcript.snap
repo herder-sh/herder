@@ -1,8 +1,9 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 91
 expression: "render(&mut app, 100, 30).backend()"
 ---
-"┌ sessions ─────────────────────┐┌ app · herder/api needs you ────────────────── claude-opus · ask ┐"
+"┌ sessions ─────────────────────┐┌ app · herder/api needs you ──── claude-main · claude-opus · ask ┐"
 "│● box (4)                      ││you                                                              │"
 "│ needs you ▾ app · herder/… (2)││  Add a health endpoint and test it.                             │"
 "│ running   └ write the tests   ││                                                                 │"

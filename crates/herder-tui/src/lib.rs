@@ -11,6 +11,7 @@
 //!
 //! Everything network-related goes through [`herder_client_core::Client`].
 
+mod account_screen;
 mod accounts;
 mod action;
 mod app;
@@ -21,6 +22,7 @@ mod inbox;
 mod machines;
 mod prs;
 mod session;
+mod switch;
 mod terminal;
 mod views;
 

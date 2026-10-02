@@ -4,7 +4,7 @@
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, EscalationReason, Event, EventBody,
-    HostId, Item, ItemBody, PermissionMode, PullRequest, QuestionId, Route, SessionId,
+    HostId, Item, ItemBody, PermissionMode, Provider, PullRequest, QuestionId, Route, SessionId,
     SessionStatus, Timestamp, TurnId,
 };
 
@@ -42,6 +42,8 @@ pub struct Session {
     pub streaming: Vec<Item>,
     /// Account it runs on.
     pub account_id: Option<AccountId>,
+    /// Provider of that account.
+    pub provider: Option<Provider>,
     /// Current permission mode.
     pub permission_mode: PermissionMode,
     /// The turn running now, from its start to its end.
@@ -134,6 +136,7 @@ impl Session {
             entries: Vec::new(),
             streaming: Vec::new(),
             account_id: None,
+            provider: None,
             permission_mode: PermissionMode::Ask,
             turn: None,
             approvals: Vec::new(),
@@ -198,11 +201,13 @@ impl Session {
                 model,
                 parent,
                 task,
+                provider,
                 account_id,
                 permission_mode,
                 ..
             } => {
                 self.account_id = Some(account_id);
+                self.provider = Some(provider);
                 self.permission_mode = permission_mode;
                 self.repo = repo;
                 self.branch = branch;
@@ -372,14 +377,29 @@ impl Session {
                 self.model = model;
                 Some(notice(text, Tone::Info))
             }
-            EventBody::AccountSwitched { account_id } => Some(notice(
-                format!("account switched to {account_id}"),
-                Tone::Info,
-            )),
+            // A switch nobody asked for is a failover from an account that hit its limit.
+            EventBody::AccountSwitched { account_id } => {
+                let text = match event.by {
+                    Some(_) => format!("account switched to {account_id}"),
+                    None => {
+                        format!("failed over to account {account_id}: the last one hit its limit")
+                    }
+                };
+                self.account_id = Some(account_id);
+                Some(notice(text, Tone::Info))
+            }
             EventBody::ProviderSwitched {
-                provider, model, ..
+                provider,
+                account_id,
+                model,
             } => {
-                let text = format!("switched to {} ({model})", provider.as_str());
+                let to = format!("{} ({model}, account {account_id})", provider.as_str());
+                let text = match event.by {
+                    Some(_) => format!("switched to {to}"),
+                    None => format!("failed over to {to}: the last account hit its limit"),
+                };
+                self.account_id = Some(account_id);
+                self.provider = Some(provider);
                 self.model = model;
                 Some(notice(text, Tone::Info))
             }
@@ -642,5 +662,48 @@ mod tests {
                 tone: Tone::Info,
             })
         );
+    }
+
+    #[test]
+    fn a_switch_nobody_asked_for_is_a_failover() {
+        let mut session = Session::new(SessionId::new("s1"));
+        let mut asked = update(
+            "s1",
+            1,
+            vec![
+                created("herder/t", None, None),
+                EventBody::AccountSwitched {
+                    account_id: AccountId::new("claude-work"),
+                },
+            ],
+            vec![],
+        );
+        asked.events[1].by = Some(herder_protocol::UserId::new("ann"));
+        session.apply(asked);
+        session.apply(update(
+            "s1",
+            3,
+            vec![EventBody::AccountSwitched {
+                account_id: AccountId::new("claude-spare"),
+            }],
+            vec![],
+        ));
+        let notices: Vec<&str> = session
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Notice { text, .. } => Some(text.as_str()),
+                Entry::Item(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                "account switched to claude-work",
+                "failed over to account claude-spare: the last one hit its limit",
+            ]
+        );
+        assert_eq!(session.account_id, Some(AccountId::new("claude-spare")));
+        assert_eq!(session.provider, Some(herder_protocol::Provider::Claude));
     }
 }
