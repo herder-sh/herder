@@ -209,3 +209,89 @@ fn pair_mints_a_code_from_the_running_daemon() {
     sigterm(&child);
     assert_eq!(wait_with_timeout(&mut child).code(), Some(0));
 }
+
+fn connect(client_config: &Path, link: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_herder"))
+        .arg("connect")
+        .arg(link)
+        .env("XDG_CONFIG_HOME", client_config)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn connect_pairs_this_device_with_two_daemons() {
+    let tmp = tempfile::tempdir().unwrap();
+    let client_config = tmp.path().join("client");
+    let mut daemons = Vec::new();
+    for name in ["one", "two"] {
+        let dir = tmp.path().join(name);
+        std::fs::create_dir(&dir).unwrap();
+        let config = write_config(&dir);
+        let mut child = spawn(&config);
+        let lines = stderr_lines(&mut child);
+        wait_for_line(&lines, "herder daemon started");
+        // Keep reading its log, or the daemon blocks once the pipe fills.
+        daemons.push((config, child, lines));
+    }
+
+    let mut fingerprints = Vec::new();
+    for (config, ..) in &daemons {
+        let output = pair(config, &["--user", "alice"]);
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(stdout.contains("herder connect"), "{stdout}");
+        let link = stdout
+            .lines()
+            .find(|line| line.starts_with("herder://pair?"))
+            .unwrap();
+        let fingerprint = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("fingerprint  "))
+            .unwrap()
+            .to_owned();
+
+        let output = connect(&client_config, link);
+        let out = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{out}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(out.starts_with("paired with "), "{out}");
+        assert!(
+            out.contains(&format!("fingerprint  {fingerprint}")),
+            "{out}"
+        );
+
+        // The code works once.
+        let output = connect(&client_config, link);
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("pairing failed"), "{stderr}");
+
+        let output = pair(config, &["--list"]);
+        let devices = String::from_utf8_lossy(&output.stdout);
+        assert!(devices.contains("herder-cli/"), "{devices}");
+        fingerprints.push(fingerprint);
+    }
+
+    // Both machines are in this device's profile, each with its own pinned certificate.
+    let profile: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(client_config.join("herder/machines.json")).unwrap())
+            .unwrap();
+    let pinned: Vec<&str> = profile["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|machine| machine["fingerprint"].as_str().unwrap())
+        .collect();
+    assert_eq!(pinned, fingerprints);
+
+    let output = connect(&client_config, "https://example.com");
+    assert_eq!(output.status.code(), Some(1));
+    for (_, child, _) in &mut daemons {
+        sigterm(child);
+        assert_eq!(wait_with_timeout(child).code(), Some(0));
+    }
+}
