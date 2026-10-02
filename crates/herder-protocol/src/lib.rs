@@ -14,6 +14,7 @@ mod bytes;
 mod client;
 mod event;
 mod ids;
+mod project;
 mod resources;
 mod server;
 mod types;
@@ -29,6 +30,7 @@ pub use ids::{
     AccountId, ApprovalId, CommandId, DeviceId, HostId, ItemId, QuestionId, SessionId, TerminalId,
     TurnId, UserId,
 };
+pub use project::{Project, ProjectId};
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
     Account, CommandResult, ErrorCode, ErrorInfo, Role, ServerHello, ServerMessage, SessionHead,

@@ -18,7 +18,7 @@
       ]
     },
     {
-      "description": "Every session on this daemon; sent after hello and whenever a session is created.",
+      "description": "Every session on this daemon; sent after hello, whenever a session is created and\nwhenever a session's project changes.",
       "type": "object",
       "properties": {
         "sessions": {
@@ -36,6 +36,27 @@
       "required": [
         "type",
         "sessions"
+      ]
+    },
+    {
+      "description": "Every project with a clone on this daemon's host; sent after hello and whenever any of\nit changes. Clients merge the lists of all their daemons by `project_id`.",
+      "type": "object",
+      "properties": {
+        "projects": {
+          "description": "The projects.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Project"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "projects"
+        }
+      },
+      "required": [
+        "type",
+        "projects"
       ]
     },
     {
@@ -1703,6 +1724,54 @@
         "io_some"
       ]
     },
+    "Project": {
+      "description": "A project as one daemon sees it: its clones on that daemon's host and its settings there.",
+      "type": "object",
+      "properties": {
+        "default_account": {
+          "description": "Account new sessions of the project use on this host when none is chosen; absent when\nnone is configured.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccountId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "Display name: the configured name, else the last segment of the id.",
+          "type": "string"
+        },
+        "paths": {
+          "description": "Absolute paths of the project's clones on this host.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_id": {
+          "description": "The project.",
+          "$ref": "#/$defs/ProjectId"
+        },
+        "setup_command": {
+          "description": "Shell command run in each new worktree of the project before its session starts;\nabsent when none is configured.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "project_id",
+        "name",
+        "paths"
+      ]
+    },
+    "ProjectId": {
+      "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
+      "type": "string"
+    },
     "Provider": {
       "description": "Vendor CLI that runs a session. Open set: accept names not listed in `examples`.",
       "type": "string",
@@ -1868,6 +1937,17 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "project_id": {
+          "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent only from a daemon that predates projects.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "session_id": {
           "description": "The session.",

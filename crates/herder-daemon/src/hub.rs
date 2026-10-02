@@ -772,6 +772,7 @@ mod tests {
             vec![SessionHead {
                 session_id: session(),
                 head_seq: seq,
+                project_id: None,
             }]
         };
         let first = Arc::new(Outbox::default());

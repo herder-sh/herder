@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item, ItemId, Provider,
-    Seq, SessionId, SessionUsage, TerminalId, Timestamp, UserId,
+    AccountId, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item, ItemId, Project,
+    ProjectId, Provider, Seq, SessionId, SessionUsage, TerminalId, Timestamp, UserId,
 };
 
 /// A daemon-to-client message.
@@ -14,10 +14,17 @@ use crate::{
 pub enum ServerMessage {
     /// First message on every connection, answering the client's hello.
     Hello(ServerHello),
-    /// Every session on this daemon; sent after hello and whenever a session is created.
+    /// Every session on this daemon; sent after hello, whenever a session is created and
+    /// whenever a session's project changes.
     Sessions {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
+    },
+    /// Every project with a clone on this daemon's host; sent after hello and whenever any of
+    /// it changes. Clients merge the lists of all their daemons by `project_id`.
+    Projects {
+        /// The projects.
+        projects: Vec<Project>,
     },
     /// Every account on this daemon with its usage; sent after hello and whenever any of it changes.
     Accounts {
@@ -134,6 +141,10 @@ pub struct SessionHead {
     pub session_id: SessionId,
     /// Seq of its latest event.
     pub head_seq: Seq,
+    /// Project of the session's repository, as resolved under the daemon's current config;
+    /// absent only from a daemon that predates projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<ProjectId>,
 }
 
 /// A provider login on this host, used through its own config dir.
