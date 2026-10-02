@@ -100,7 +100,7 @@ impl AgentProfile {
     /// plus the config dir variables when the account has a config dir, and the launch
     /// variables. Stderr is discarded.
     pub fn command(&self, request: &StartRequest) -> Command {
-        let mut command = Command::new(&self.program);
+        let mut command = request.command(&self.program);
         command.args(&self.args);
         if let (Some(flag), Some(model)) = (&self.model_flag, &request.model) {
             command.args([flag, model]);
@@ -141,6 +141,7 @@ mod tests {
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         }
     }
 
@@ -211,5 +212,17 @@ mod tests {
         let mut vars = env(&command);
         vars.sort();
         assert_eq!(vars, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
+    }
+
+    #[test]
+    fn command_runs_behind_the_launcher_and_directly_without_one() {
+        let grok = AgentProfile::grok();
+        let launched = StartRequest {
+            launcher: crate::testing::launcher(),
+            ..request(Some("grok-4.5"))
+        };
+        let direct = grok.command(&request(Some("grok-4.5")));
+        assert_eq!(direct.as_std().get_program(), "grok");
+        crate::testing::assert_behind_launcher(&direct, &grok.command(&launched));
     }
 }

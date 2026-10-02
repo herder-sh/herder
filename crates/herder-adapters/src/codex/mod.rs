@@ -96,7 +96,7 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 /// The `codex app-server` command for `request`: its environment is exactly the request's plus
 /// `CODEX_HOME` when the account has a config dir, in the session's worktree.
 pub fn command(program: &std::path::Path, request: &StartRequest) -> Command {
-    let mut command = Command::new(program);
+    let mut command = request.command(program);
     command
         .arg("app-server")
         .env_clear()
@@ -268,6 +268,7 @@ mod tests {
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         };
         let command = command(std::path::Path::new("codex"), &request);
         let command = command.as_std();
@@ -301,9 +302,32 @@ mod tests {
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         };
         let command = command(std::path::Path::new("codex"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
         assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
+    }
+
+    #[test]
+    fn command_runs_behind_the_launcher_and_directly_without_one() {
+        let direct = StartRequest {
+            config_dir: Some(PathBuf::from("/accounts/work/codex")),
+            env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            mcp: None,
+            launcher: Vec::new(),
+        };
+        let launched = StartRequest {
+            launcher: crate::testing::launcher(),
+            ..direct.clone()
+        };
+        let program = std::path::Path::new("codex");
+        let direct = command(program, &direct);
+        assert_eq!(direct.as_std().get_program(), "codex");
+        crate::testing::assert_behind_launcher(&direct, &command(program, &launched));
     }
 }

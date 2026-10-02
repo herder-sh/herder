@@ -31,6 +31,7 @@
 //! mints [`ItemId`]s, [`ApprovalId`]s and [`QuestionId`]s, unique within the session.
 
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -40,6 +41,7 @@ use herder_protocol::{
     TurnId, UsageWindow,
 };
 use serde::{Deserialize, Serialize};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 pub mod acp;
@@ -85,6 +87,25 @@ pub struct StartRequest {
     /// herder's MCP server for this session, which the adapter registers with the CLI as
     /// `herder`, next to the user's own servers; absent when the daemon serves none.
     pub mcp: Option<McpServer>,
+    /// Program and arguments the CLI is run through, such as `systemd-run --scope ... --`: the
+    /// CLI's own program and arguments follow it. Empty runs the CLI directly. A replayed
+    /// fixture ignores it.
+    pub launcher: Vec<OsString>,
+}
+
+impl StartRequest {
+    /// A command that runs `program` behind [`StartRequest::launcher`]; the caller appends the
+    /// CLI's arguments and sets everything else.
+    pub(crate) fn command(&self, program: impl AsRef<OsStr>) -> Command {
+        match self.launcher.split_first() {
+            Some((launcher, args)) => {
+                let mut command = Command::new(launcher);
+                command.args(args).arg(program);
+                command
+            }
+            None => Command::new(program),
+        }
+    }
 }
 
 /// A stdio MCP server: the command the CLI spawns, speaking MCP on its stdin and stdout. It
@@ -249,4 +270,36 @@ pub enum AdapterEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<TurnError>,
     },
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::ffi::{OsStr, OsString};
+
+    use tokio::process::Command;
+
+    /// The launcher the adapter tests run their CLI behind.
+    pub(crate) fn launcher() -> Vec<OsString> {
+        ["systemd-run", "--user", "--scope", "--"]
+            .map(OsString::from)
+            .to_vec()
+    }
+
+    /// Asserts that `launched` is `direct` run behind [`launcher`]: its argv is the launcher,
+    /// then `direct`'s program and arguments, with the same environment and working directory.
+    pub(crate) fn assert_behind_launcher(direct: &Command, launched: &Command) {
+        let (direct, launched) = (direct.as_std(), launched.as_std());
+        let argv = |command: &std::process::Command| -> Vec<OsString> {
+            std::iter::once(command.get_program())
+                .chain(command.get_args())
+                .map(OsStr::to_owned)
+                .collect()
+        };
+        assert_eq!(argv(launched), [launcher(), argv(direct)].concat());
+        assert_eq!(
+            launched.get_envs().collect::<Vec<_>>(),
+            direct.get_envs().collect::<Vec<_>>()
+        );
+        assert_eq!(launched.get_current_dir(), direct.get_current_dir());
+    }
 }

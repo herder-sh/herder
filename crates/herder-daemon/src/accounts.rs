@@ -126,6 +126,7 @@ mod tests {
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         };
         let adapter = adapters.get(&account.provider).unwrap();
         // The stand-in exits at once, so the start fails; only its environment matters.

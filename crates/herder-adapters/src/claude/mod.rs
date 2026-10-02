@@ -144,7 +144,7 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 /// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree, with
 /// herder's MCP server registered.
 pub fn command(program: &Path, request: &StartRequest) -> Command {
-    let mut command = Command::new(program);
+    let mut command = request.command(program);
     command
         .args([
             "-p",
@@ -387,6 +387,7 @@ mod tests {
             permission_mode: PermissionMode::AutoEdit,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         };
         let command = command(Path::new("claude"), &request);
         let command = command.as_std();
@@ -436,6 +437,7 @@ mod tests {
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
             mcp: None,
+            launcher: Vec::new(),
         };
         let command = command(Path::new("claude"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
@@ -455,6 +457,7 @@ mod tests {
                 command: PathBuf::from("/usr/bin/herder"),
                 args: vec!["mcp".into(), "--session".into(), "s1".into()],
             }),
+            launcher: Vec::new(),
         };
         let command = command(Path::new("claude"), &request);
         let args: Vec<_> = command
@@ -479,5 +482,27 @@ mod tests {
             })
         );
         assert_eq!(&args[at + 2..], ["--allowedTools", "mcp__herder"]);
+    }
+
+    #[test]
+    fn command_runs_behind_the_launcher_and_directly_without_one() {
+        let direct = StartRequest {
+            config_dir: Some(PathBuf::from("/accounts/work/claude")),
+            env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: Some("sonnet".into()),
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            mcp: None,
+            launcher: Vec::new(),
+        };
+        let launched = StartRequest {
+            launcher: crate::testing::launcher(),
+            ..direct.clone()
+        };
+        let program = Path::new("/usr/bin/claude");
+        let direct = command(program, &direct);
+        assert_eq!(direct.as_std().get_program(), program);
+        crate::testing::assert_behind_launcher(&direct, &command(program, &launched));
     }
 }
