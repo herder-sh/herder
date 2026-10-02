@@ -172,13 +172,29 @@ pub struct UsageWindow {
     pub resets_at: Option<Timestamp>,
 }
 
-/// An open shell in a session's worktree.
+/// An open terminal on this host.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Terminal {
     /// The terminal.
     pub terminal_id: TerminalId,
-    /// Session whose worktree the shell runs in.
-    pub session_id: SessionId,
+    /// What the terminal runs.
+    pub purpose: TerminalPurpose,
+}
+
+/// What a terminal runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TerminalPurpose {
+    /// A shell in a session's worktree.
+    Shell {
+        /// Session whose worktree the shell runs in.
+        session_id: SessionId,
+    },
+    /// A provider's own login for an account being added.
+    Login {
+        /// The account being added.
+        account_id: AccountId,
+    },
 }
 
 /// What an accepted command produced.
@@ -192,7 +208,8 @@ pub enum CommandResult {
         /// The new session.
         session_id: SessionId,
     },
-    /// A terminal was opened and this connection attached to it.
+    /// A terminal was opened, by `open_terminal` or `add_account`, and this connection
+    /// attached to it.
     TerminalOpened {
         /// The new terminal.
         terminal_id: TerminalId,

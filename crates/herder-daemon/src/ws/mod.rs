@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, CommandBody, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq,
-    SessionHead, SessionId, UserId,
+    SessionHead, SessionId, TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +28,7 @@ pub use tls::{Tls, fingerprint};
 use crate::auth::Auth;
 use crate::hub::Hub;
 use crate::hub::Outbox;
+use crate::login::{Logins, NewAccount};
 use crate::session::SessionManager;
 use crate::terminal::Terminals;
 use commands::Commands;
@@ -132,6 +133,7 @@ struct Shared<B> {
     hub: Arc<Hub>,
     backend: B,
     terminals: Terminals,
+    logins: Logins,
     commands: Commands,
     host: Host,
 }
@@ -156,6 +158,33 @@ impl<B: Backend> Shared<B> {
                 let terminal_id = terminals.open(session_id, &cwd, cols, rows, outbox)?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
+            CommandBody::AddAccount {
+                account_id,
+                provider,
+                label: _,
+                config_dir,
+                cols,
+                rows,
+            } => {
+                let logging_in: Vec<_> = terminals
+                    .list()
+                    .into_iter()
+                    .filter_map(|terminal| match terminal.purpose {
+                        TerminalPurpose::Login { account_id } => Some(account_id),
+                        TerminalPurpose::Shell { .. } => None,
+                    })
+                    .collect();
+                let account = NewAccount {
+                    account_id: &account_id,
+                    provider: &provider,
+                    config_dir: config_dir.as_deref(),
+                };
+                let command =
+                    self.logins
+                        .command(&account, &self.backend.accounts(), &logging_in)?;
+                let terminal_id = terminals.open_login(account_id, command, cols, rows, outbox)?;
+                return Ok(CommandResult::TerminalOpened { terminal_id });
+            }
             CommandBody::AttachTerminal { terminal_id } => {
                 terminals.attach(&terminal_id, outbox)?
             }
@@ -177,14 +206,15 @@ impl<B: Backend> Shared<B> {
 }
 
 impl<B: Backend> Server<B> {
-    /// A server for `backend` and `terminals`, whose events reach clients through `hub`; `auth`
-    /// decides who may connect.
+    /// A server for `backend` and `terminals`, adding accounts through `logins`, whose events
+    /// reach clients through `hub`; `auth` decides who may connect.
     pub fn new(
         tls: Tls,
         auth: Arc<Auth>,
         hub: Arc<Hub>,
         backend: B,
         terminals: Terminals,
+        logins: Logins,
         host: Host,
     ) -> Self {
         Self {
@@ -194,6 +224,7 @@ impl<B: Backend> Server<B> {
                 hub,
                 backend,
                 terminals,
+                logins,
                 commands: Commands::default(),
                 host,
             }),

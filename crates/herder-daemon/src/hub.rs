@@ -727,7 +727,7 @@ impl Inner {
 
 #[cfg(test)]
 mod tests {
-    use herder_protocol::TurnId;
+    use herder_protocol::{TerminalPurpose, TurnId};
 
     use super::*;
 
@@ -1039,7 +1039,9 @@ mod tests {
         hub.connect(&member, Role::Member);
         let terminals = vec![Terminal {
             terminal_id: TerminalId::new("t1"),
-            session_id: session(),
+            purpose: TerminalPurpose::Shell {
+                session_id: session(),
+            },
         }];
         hub.terminals_changed(&terminals);
         hub.initial_terminals(&member, Vec::new());

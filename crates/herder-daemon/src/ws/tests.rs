@@ -13,7 +13,7 @@ use herder_protocol::{
     Account, AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
     Cursor, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
     PROTOCOL_VERSION, PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
-    SessionId, Terminal, TurnId,
+    SessionId, Terminal, TerminalPurpose, TurnId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use super::{Backend, Host, Identity, Server, Tls};
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
+use crate::login::Logins;
 use crate::session::EventSink;
 use crate::terminal::Terminals;
 
@@ -170,6 +171,7 @@ impl Daemon {
             Arc::clone(&hub),
             backend,
             terminals,
+            Logins::default(),
             host,
         );
         tokio::spawn(server.run(listener, shutdown.clone()));
@@ -881,7 +883,9 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     };
     let listed = Terminal {
         terminal_id: terminal_id.clone(),
-        session_id: session.clone(),
+        purpose: TerminalPurpose::Shell {
+            session_id: session.clone(),
+        },
     };
     assert_eq!(terminals, std::slice::from_ref(&listed));
     let input = |line: &str| CommandBody::TerminalInput {

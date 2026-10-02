@@ -324,11 +324,13 @@ impl Auth {
     }
 }
 
-/// Refuses commands the identity's role does not allow: terminals are for owners only.
+/// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
+/// are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
         CommandBody::OpenTerminal { .. }
+            | CommandBody::AddAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }

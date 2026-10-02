@@ -132,6 +132,14 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::AddAccount {
+            account_id: AccountId::new("claude-work"),
+            provider: Provider::Claude,
+            label: Some("Work".into()),
+            config_dir: Some("~/.claude-work".into()),
+            cols: 120,
+            rows: 40,
+        }),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
         }),
@@ -365,10 +373,20 @@ fn server_fixtures() -> Vec<ServerMessage> {
             },
         ),
         ServerMessage::Terminals {
-            terminals: vec![Terminal {
-                terminal_id: terminal_id(),
-                session_id: session_id(),
-            }],
+            terminals: vec![
+                Terminal {
+                    terminal_id: terminal_id(),
+                    purpose: TerminalPurpose::Shell {
+                        session_id: session_id(),
+                    },
+                },
+                Terminal {
+                    terminal_id: TerminalId::new("01J9TERMINAL2"),
+                    purpose: TerminalPurpose::Login {
+                        account_id: AccountId::new("claude-work"),
+                    },
+                },
+            ],
         },
     ];
     for (by, decision) in [
@@ -1108,4 +1126,41 @@ fn unknown_provider_keeps_its_name() {
 fn invalid_base64_is_rejected() {
     let result: Result<Bytes, _> = serde_json::from_value(json!("not base64!"));
     assert!(result.is_err());
+}
+
+#[test]
+fn add_account_may_omit_label_and_config_dir() {
+    let body: CommandBody = serde_json::from_value(json!({
+        "type": "add_account",
+        "account_id": "codex-2",
+        "provider": "codex",
+        "cols": 80,
+        "rows": 24
+    }))
+    .unwrap();
+    assert_eq!(
+        body,
+        CommandBody::AddAccount {
+            account_id: AccountId::new("codex-2"),
+            provider: Provider::Codex,
+            label: None,
+            config_dir: None,
+            cols: 80,
+            rows: 24,
+        }
+    );
+}
+
+#[test]
+fn terminal_purpose_is_tagged() {
+    let terminal = Terminal {
+        terminal_id: TerminalId::new("t"),
+        purpose: TerminalPurpose::Login {
+            account_id: AccountId::new("a"),
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&terminal).unwrap(),
+        json!({"terminal_id": "t", "purpose": {"type": "login", "account_id": "a"}})
+    );
 }

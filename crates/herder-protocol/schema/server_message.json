@@ -525,7 +525,7 @@
           ]
         },
         {
-          "description": "A terminal was opened and this connection attached to it.",
+          "description": "A terminal was opened, by `open_terminal` or `add_account`, and this connection\nattached to it.",
           "type": "object",
           "properties": {
             "terminal_id": {
@@ -2040,12 +2040,12 @@
       ]
     },
     "Terminal": {
-      "description": "An open shell in a session's worktree.",
+      "description": "An open terminal on this host.",
       "type": "object",
       "properties": {
-        "session_id": {
-          "description": "Session whose worktree the shell runs in.",
-          "$ref": "#/$defs/SessionId"
+        "purpose": {
+          "description": "What the terminal runs.",
+          "$ref": "#/$defs/TerminalPurpose"
         },
         "terminal_id": {
           "description": "The terminal.",
@@ -2054,12 +2054,53 @@
       },
       "required": [
         "terminal_id",
-        "session_id"
+        "purpose"
       ]
     },
     "TerminalId": {
       "description": "Identifies a terminal on a host; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "TerminalPurpose": {
+      "description": "What a terminal runs.",
+      "oneOf": [
+        {
+          "description": "A shell in a session's worktree.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "Session whose worktree the shell runs in.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "shell"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        },
+        {
+          "description": "A provider's own login for an account being added.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "The account being added.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "type": {
+              "type": "string",
+              "const": "login"
+            }
+          },
+          "required": [
+            "type",
+            "account_id"
+          ]
+        }
+      ]
     },
     "TurnError": {
       "description": "Why a turn failed.",
