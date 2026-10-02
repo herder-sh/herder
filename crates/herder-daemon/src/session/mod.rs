@@ -17,15 +17,23 @@
 //!
 //! # Status
 //!
-//! `idle` → `running` when a turn starts; `needs_you` while an approval is pending or after a
-//! failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
+//! `idle` → `running` when a turn starts; `needs_you` while an approval or a question is
+//! pending or after a failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
 //! nothing queued. Every change is journaled as `session_status_changed`.
 //!
 //! # Worktrees and archive
 //!
-//! Creating a session adds its worktree and branch ([`crate::worktree`]).
-//! [`SessionManager::archive`] removes the worktree, keeps its branches and journals the
-//! `archived` status; an archived session takes no further commands.
+//! Creating a session adds its worktree and branch ([`crate::worktree`]). Every other branch
+//! checked out in the worktree is journaled as `branch_checked_out` when a turn ends and before
+//! the worktree is removed, so the session keeps owning it once the worktree, and the reflog it
+//! was read from, are gone. `archive_session` ([`SessionManager::archive`]) removes the
+//! worktree, keeps its branches and journals the `archived` status; an archived session takes
+//! no further commands.
+//!
+//! # Questions
+//!
+//! A question the agent asks is journaled as `question_asked`, routed to the user, and blocks
+//! the turn until an `answer_question` command answers it.
 //!
 //! # Restart
 //!
@@ -212,8 +220,21 @@ impl SessionManager {
                     decision,
                 },
             ),
-            CommandBody::AnswerQuestion { .. }
-            | CommandBody::SwitchAccount { .. }
+            CommandBody::AnswerQuestion {
+                session_id,
+                question_id,
+                answer,
+            } => (
+                session_id,
+                Request::AnswerQuestion {
+                    question_id,
+                    answer,
+                },
+            ),
+            CommandBody::ArchiveSession { session_id, force } => {
+                return self.archive(by, session_id, force).await;
+            }
+            CommandBody::SwitchAccount { .. }
             | CommandBody::SwitchProvider { .. }
             | CommandBody::LinkPr { .. }
             | CommandBody::UnlinkPr { .. }
@@ -243,19 +264,28 @@ impl SessionManager {
         self.send(session_id, by, Request::Archive { force }).await
     }
 
-    /// Every branch `session_id`'s worktree has had checked out, its own first; only its own
-    /// once archived.
+    /// Every branch `session_id` owns, its own first, in the order first checked out: the
+    /// journaled ones, then any its worktree has checked out since the last turn ended.
     pub async fn branches(&self, session_id: &SessionId) -> Result<Vec<String>, ErrorInfo> {
-        let session = self
-            .inner
-            .journal
+        let journal = &self.inner.journal;
+        let session = journal
             .session(session_id.clone())
             .await
             .map_err(internal)?
             .ok_or_else(|| not_found(session_id))?;
-        worktree::branches(Path::new(&session.worktree), &session.branch)
+        let mut owned = journal
+            .branches(session_id.clone())
             .await
-            .map_err(worktree_error)
+            .map_err(internal)?;
+        let checked_out = worktree::branches(Path::new(&session.worktree), &session.branch)
+            .await
+            .map_err(worktree_error)?;
+        for branch in checked_out {
+            if !owned.contains(&branch) {
+                owned.push(branch);
+            }
+        }
+        Ok(owned)
     }
 
     /// Every session with its latest seq, ordered by session id.

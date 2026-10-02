@@ -367,6 +367,8 @@ impl Session {
                     .await;
                 }
             }
+            // This adapter never sends `QuestionAsked`, so there is nothing to answer.
+            AdapterCommand::AnswerQuestion { .. } => {}
             // Handled by `run`, which owns stopping.
             AdapterCommand::Shutdown => {}
         }

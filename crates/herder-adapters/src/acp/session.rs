@@ -413,6 +413,8 @@ impl Session {
                     self.rpc.respond(approval.request, answer).await;
                 }
             }
+            // This adapter never sends `QuestionAsked`, so there is nothing to answer.
+            AdapterCommand::AnswerQuestion { .. } => {}
             // Handled by `run`.
             AdapterCommand::Shutdown => {}
         }

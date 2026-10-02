@@ -1,8 +1,8 @@
 //! SQLite append-only event journal and the projections derived from it.
 //!
 //! One [`Store`] owns the daemon's database file. Every durable [`Event`] is appended to the
-//! journal, and the read models it affects (the [`Session`] row and the session's tracked pull
-//! requests) are updated in the same transaction, so a projection is never ahead of, or behind,
+//! journal, and the read models it affects (the [`Session`] row, the session's tracked pull
+//! requests and the branches it owns) are updated in the same transaction, so a projection is never ahead of, or behind,
 //! the journal.
 //!
 //! The API is synchronous; the daemon calls it from a dedicated thread or `spawn_blocking`.
@@ -278,6 +278,16 @@ impl Store {
                 mergeable: get_tag(row, 6)?,
             })
         })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every branch the session has owned, in the order first seen: the branch it was created
+    /// on, then each one a `branch_checked_out` named. Kept after the worktree is removed.
+    pub fn session_branches(&self, session: &SessionId) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT branch FROM session_branches WHERE session_id = ?1 ORDER BY first_seen_seq",
+        )?;
+        let rows = stmt.query_map([session.as_str()], |row| row.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }

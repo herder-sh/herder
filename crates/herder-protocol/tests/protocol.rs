@@ -88,6 +88,14 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             text: "Fix the build".into(),
         }),
+        command(CommandBody::ArchiveSession {
+            session_id: session_id(),
+            force: false,
+        }),
+        command(CommandBody::ArchiveSession {
+            session_id: session_id(),
+            force: true,
+        }),
         command(CommandBody::Interrupt {
             session_id: session_id(),
         }),
@@ -333,6 +341,13 @@ fn server_fixtures() -> Vec<ServerMessage> {
             },
         ),
         event(16, owner, EventBody::PrUnlinked { number: 42 }),
+        event(
+            17,
+            None,
+            EventBody::BranchCheckedOut {
+                branch: "herder/spike".into(),
+            },
+        ),
         ServerMessage::Terminals {
             terminals: vec![Terminal {
                 terminal_id: terminal_id(),

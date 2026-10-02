@@ -228,6 +228,29 @@
           ]
         },
         {
+          "description": "Archive a session: remove its worktree, keep its branches, and make it read-only.",
+          "type": "object",
+          "properties": {
+            "force": {
+              "description": "Remove the worktree even when it has uncommitted or untracked changes.",
+              "type": "boolean"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "archive_session"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "force"
+          ]
+        },
+        {
           "description": "Start a turn with a prompt.",
           "type": "object",
           "properties": {

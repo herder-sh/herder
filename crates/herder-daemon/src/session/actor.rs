@@ -1,7 +1,7 @@
 //! One task per live session: owns the adapter session, applies commands in order, journals
 //! what the agent does.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::Result;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
-    Answerer, ApprovalDecision, ApprovalId, CommandResult, ErrorClass, ErrorCode, ErrorInfo,
-    EventBody, Item, ItemBody, ItemId, PermissionMode, Route, SessionStatus, TurnError, TurnId,
-    UserId,
+    Answer, Answerer, ApprovalDecision, ApprovalId, CommandResult, ErrorClass, ErrorCode,
+    ErrorInfo, EventBody, Item, ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionStatus,
+    TurnError, TurnId, UserId,
 };
 use herder_store::Session;
 use tokio::sync::{mpsc, oneshot};
@@ -20,6 +20,7 @@ use tracing::{debug, warn};
 
 use super::journal::Journal;
 use super::{Inner, error};
+use crate::worktree;
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
@@ -49,6 +50,11 @@ pub(super) enum Request {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     },
+    /// Passed to the adapter as given. Routing questions to the primary session is P2b.4.
+    AnswerQuestion {
+        question_id: QuestionId,
+        answer: Answer,
+    },
     /// Removes the worktree, keeping its branches, and makes the session read-only.
     Archive {
         force: bool,
@@ -66,6 +72,8 @@ pub(super) struct Actor {
     queue: VecDeque<(UserId, String)>,
     /// Approval requests of the running turn not yet answered.
     approvals: HashSet<ApprovalId>,
+    /// Questions of the running turn not yet answered, with how many choices each offers.
+    questions: HashMap<QuestionId, usize>,
 }
 
 enum Next {
@@ -83,6 +91,7 @@ impl Actor {
             turn: None,
             queue: VecDeque::new(),
             approvals: HashSet::new(),
+            questions: HashMap::new(),
         }
     }
 
@@ -189,9 +198,40 @@ impl Actor {
                     answered_by: Answerer::User,
                 };
                 self.record(Some(by), body).await.map_err(super::internal)?;
-                if self.approvals.is_empty() {
-                    self.set_status(SessionStatus::Running).await;
+                self.unblocked().await;
+            }
+            Request::AnswerQuestion {
+                question_id,
+                answer,
+            } => {
+                let Some(&choices) = self.questions.get(&question_id) else {
+                    return Err(error(
+                        ErrorCode::NotFound,
+                        format!("question {question_id} is not pending"),
+                    ));
+                };
+                if let Answer::Choice { index } = answer
+                    && index as usize >= choices
+                {
+                    return Err(error(
+                        ErrorCode::BadRequest,
+                        format!("question {question_id} has no choice {index}"),
+                    ));
                 }
+                self.questions.remove(&question_id);
+                if let Some(adapter) = &self.adapter {
+                    let _ = adapter.commands.send(AdapterCommand::AnswerQuestion {
+                        question_id: question_id.clone(),
+                        answer: answer.clone(),
+                    });
+                }
+                let body = EventBody::QuestionAnswered {
+                    question_id,
+                    answer,
+                    answered_by: Answerer::User,
+                };
+                self.record(Some(by), body).await.map_err(super::internal)?;
+                self.unblocked().await;
             }
             Request::Archive { force } => self.archive(by, force).await?,
         }
@@ -205,6 +245,8 @@ impl Actor {
                 "a turn is running; interrupt it before archiving",
             ));
         }
+        // The reflog goes with the worktree: journal what it knows first.
+        self.record_branches().await;
         let session = &self.session;
         self.inner
             .worktrees
@@ -224,6 +266,44 @@ impl Actor {
             .map_err(super::internal)?;
         self.session.status = status;
         Ok(())
+    }
+
+    /// Back to `running` once nothing of the turn waits for a user.
+    async fn unblocked(&mut self) {
+        if self.approvals.is_empty() && self.questions.is_empty() {
+            self.set_status(SessionStatus::Running).await;
+        }
+    }
+
+    /// Journals each branch the worktree has had checked out that the session does not own
+    /// yet, in the order first checked out. A failure is logged: the next call catches up.
+    async fn record_branches(&self) {
+        let session = &self.session;
+        let checked_out =
+            match worktree::branches(Path::new(&session.worktree), &session.branch).await {
+                Ok(branches) => branches,
+                Err(err) => {
+                    warn!(session_id = %session.session_id, "cannot list branches: {err}");
+                    return;
+                }
+            };
+        let owned = match self
+            .inner
+            .journal
+            .branches(session.session_id.clone())
+            .await
+        {
+            Ok(owned) => owned,
+            Err(err) => {
+                warn!(session_id = %session.session_id, "cannot read branches: {err:#}");
+                return;
+            }
+        };
+        for branch in checked_out {
+            if !owned.contains(&branch) {
+                self.log(EventBody::BranchCheckedOut { branch }).await;
+            }
+        }
     }
 
     /// Prepares a setting change: sends `command` when the running adapter applies it natively,
@@ -385,6 +465,24 @@ impl Actor {
                 .await;
                 self.set_status(SessionStatus::NeedsYou).await;
             }
+            AdapterEvent::QuestionAsked {
+                question_id,
+                turn_id,
+                text,
+                choices,
+            } => {
+                self.questions.insert(question_id.clone(), choices.len());
+                self.log(EventBody::QuestionAsked {
+                    question_id,
+                    turn_id,
+                    text,
+                    choices,
+                    routed_to: Route::User,
+                    reason: None,
+                })
+                .await;
+                self.set_status(SessionStatus::NeedsYou).await;
+            }
             AdapterEvent::UsageReported { windows } => {
                 // Account usage is published by the accounts component, not journaled.
                 debug!(session_id = %self.session.session_id, ?windows, "usage reported");
@@ -412,8 +510,10 @@ impl Actor {
     /// on `settled`.
     async fn turn_ended(&mut self, body: EventBody, settled: SessionStatus) {
         self.log(body).await;
+        self.record_branches().await;
         self.turn = None;
         self.approvals.clear();
+        self.questions.clear();
         if self.queue.is_empty() {
             self.set_status(settled).await;
         } else {
@@ -426,6 +526,7 @@ impl Actor {
         self.adapter = None;
         let open = self.turn.take();
         self.approvals.clear();
+        self.questions.clear();
         if let Some(turn_id) = &open {
             let error = error.clone().unwrap_or_else(|| TurnError {
                 class: ErrorClass::Transient,
@@ -433,6 +534,7 @@ impl Actor {
             });
             let turn_id = turn_id.clone();
             self.log(EventBody::TurnFailed { turn_id, error }).await;
+            self.record_branches().await;
         }
         if !self.queue.is_empty() {
             self.start_next().await;

@@ -56,6 +56,13 @@ pub enum EventBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<String>,
     },
+    /// The session's worktree had a branch checked out that the session had not had before.
+    /// The session owns it from then on, including after its worktree is removed. The branch
+    /// in `session_created` is the session's first and gets no event of its own.
+    BranchCheckedOut {
+        /// The branch, as a short name such as `herder/1a2b3c4d`.
+        branch: String,
+    },
     /// The session's status changed.
     SessionStatusChanged {
         /// New status.

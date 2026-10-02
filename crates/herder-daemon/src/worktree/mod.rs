@@ -23,7 +23,8 @@
 //! [`branches`] lists every branch the worktree has had checked out, read from the worktree's
 //! own `HEAD` reflog, which git writes on every checkout, switch and rename, whoever ran it
 //! and whenever. It lives in the worktree's admin dir, so it survives daemon restarts and goes
-//! away with the worktree.
+//! away with the worktree; the session manager journals each new branch as `branch_checked_out`
+//! at turn end and before removal, so the session keeps it.
 //!
 //! # Removal
 //!

@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, TurnError,
-    TurnId, UsageWindow,
+    Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
+    QuestionId, TurnError, TurnId, UsageWindow,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -190,6 +190,83 @@ async fn approval_blocks_the_turn_until_answered() {
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);
+}
+
+/// Starts `question.jsonl` and reads up to its question.
+async fn asked() -> AdapterSession {
+    let mut session = start(fixture("question.jsonl")).await;
+    session.commands.send(prompt("Add a migration.")).unwrap();
+    let events = until(&mut session, |event| {
+        matches!(event, AdapterEvent::QuestionAsked { .. })
+    })
+    .await;
+    assert_eq!(
+        events,
+        [
+            AdapterEvent::TurnStarted { turn_id: turn() },
+            AdapterEvent::QuestionAsked {
+                question_id: QuestionId::new("question-1"),
+                turn_id: turn(),
+                text: "Which database should the migration target?".into(),
+                choices: vec!["SQLite".into(), "Postgres".into()],
+            },
+        ]
+    );
+    session
+}
+
+#[tokio::test]
+async fn question_blocks_the_turn_until_answered() {
+    let mut session = asked().await;
+
+    // Nothing more arrives while the question is open.
+    let waited =
+        tokio::time::timeout(std::time::Duration::from_millis(50), session.events.recv()).await;
+    assert!(waited.is_err(), "event before the answer: {waited:?}");
+
+    session
+        .commands
+        .send(AdapterCommand::AnswerQuestion {
+            question_id: QuestionId::new("question-1"),
+            answer: Answer::Choice { index: 0 },
+        })
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(
+        events,
+        [
+            AdapterEvent::ItemCompleted {
+                item: item(
+                    "item-1",
+                    ItemBody::AssistantMessage {
+                        text: "Added a SQLite migration.".into()
+                    }
+                )
+            },
+            AdapterEvent::TurnCompleted { turn_id: turn() },
+        ]
+    );
+    assert_eq!(shutdown(session).await, [clean_exit()]);
+}
+
+#[tokio::test]
+async fn a_different_answer_is_a_script_mismatch() {
+    let mut session = asked().await;
+    session
+        .commands
+        .send(AdapterCommand::AnswerQuestion {
+            question_id: QuestionId::new("question-1"),
+            answer: Answer::Text {
+                text: "Postgres".into(),
+            },
+        })
+        .unwrap();
+    let events = until(&mut session, |_| true).await;
+    let [AdapterEvent::Exited { error: Some(error) }] = events.as_slice() else {
+        panic!("expected a fatal exit, got {events:?}");
+    };
+    assert_eq!(error.class, ErrorClass::Fatal);
+    assert!(error.message.contains("line 5"), "{}", error.message);
 }
 
 #[tokio::test]

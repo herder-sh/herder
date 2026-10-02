@@ -10,9 +10,9 @@ use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, ApprovalDecision, ApprovalId, CommandBody, CommandResult, ErrorClass, ErrorCode,
-    Event, EventBody, Item, ItemBody, ItemId, PermissionMode, Provider, SessionHead, SessionId,
-    SessionStatus, TurnId, UserId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, CommandResult, ErrorClass,
+    ErrorCode, Event, EventBody, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId,
+    SessionHead, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -262,6 +262,17 @@ fn describe(events: &[Event]) -> Vec<String> {
                     decision,
                     ..
                 } => format!("approval_resolved {approval_id} {decision:?}"),
+                EventBody::QuestionAsked {
+                    question_id,
+                    routed_to,
+                    ..
+                } => format!("question_asked {question_id} {routed_to:?}"),
+                EventBody::QuestionAnswered {
+                    question_id,
+                    answer,
+                    ..
+                } => format!("question_answered {question_id} {answer:?}"),
+                EventBody::BranchCheckedOut { branch } => format!("branch_checked_out {branch}"),
                 EventBody::ModelSwitched { model } => format!("model_switched {model}"),
                 other => format!("{other:?}"),
             };
@@ -519,6 +530,117 @@ async fn approval_is_journaled_and_its_answer_reaches_the_adapter() {
 }
 
 #[tokio::test]
+async fn question_is_journaled_for_the_user_and_its_answer_reaches_the_adapter() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "question.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Add a migration.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+
+    let answer = |question_id: &str, answer: Answer| CommandBody::AnswerQuestion {
+        session_id: session.clone(),
+        question_id: QuestionId::new(question_id),
+        answer,
+    };
+    let unknown = daemon
+        .manager
+        .handle(bob(), answer("question-9", Answer::Choice { index: 0 }))
+        .await;
+    assert_eq!(unknown.unwrap_err().code, ErrorCode::NotFound);
+    let no_such_choice = daemon
+        .manager
+        .handle(bob(), answer("question-1", Answer::Choice { index: 2 }))
+        .await;
+    assert_eq!(no_such_choice.unwrap_err().code, ErrorCode::BadRequest);
+    let result = daemon
+        .manager
+        .handle(bob(), answer("question-1", Answer::Choice { index: 1 }))
+        .await;
+    assert_eq!(result.unwrap(), CommandResult::Applied);
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        describe(&journal),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "alice: user turn-1 Add a migration.",
+            "-: turn_started turn-1",
+            "-: question_asked question-1 User",
+            "-: status NeedsYou",
+            "bob: question_answered question-1 Choice { index: 1 }",
+            "-: status Running",
+            "-: assistant turn-1 Done.",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+        ]
+    );
+    let EventBody::QuestionAsked { text, choices, .. } = &journal[4].body else {
+        panic!("expected question_asked");
+    };
+    assert_eq!(
+        (text.as_str(), choices.as_slice()),
+        (
+            "Which database?",
+            &["SQLite".to_owned(), "Postgres".to_owned()][..]
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_branch_checked_out_during_a_session_is_journaled_when_the_turn_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "two_prompts.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let EventBody::SessionCreated {
+        worktree, branch, ..
+    } = &daemon.journal(&session).await[0].body
+    else {
+        panic!("expected session_created");
+    };
+    let (worktree, branch) = (PathBuf::from(worktree), branch.clone());
+    // Seen live before any turn ends, and not journaled yet.
+    git(&worktree, &["checkout", "--quiet", "-b", "spike"]);
+    git(&worktree, &["checkout", "--quiet", &branch]);
+    assert_eq!(
+        daemon.manager.branches(&session).await.unwrap(),
+        [branch.clone(), "spike".to_owned()]
+    );
+
+    daemon.prompt(alice(), &session, "Second.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let journal = describe(&daemon.journal(&session).await);
+    let tail = &journal[journal.len() - 4..];
+    assert_eq!(
+        tail,
+        [
+            "-: assistant turn-2 Two.",
+            "-: turn_completed turn-2",
+            "-: branch_checked_out spike",
+            "-: status Idle",
+        ]
+    );
+    // Once only: archiving reads the reflog again and finds nothing new.
+    let archive = CommandBody::ArchiveSession {
+        session_id: session.clone(),
+        force: false,
+    };
+    daemon.manager.handle(alice(), archive).await.unwrap();
+    let journal = describe(&daemon.journal(&session).await);
+    assert_eq!(journal.last().unwrap(), "alice: status Archived");
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|line| line.contains("branch_checked_out"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
@@ -639,11 +761,23 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     assert!(worktree.is_dir());
 
     std::fs::remove_file(worktree.join("draft.txt")).unwrap();
-    let result = daemon.manager.archive(bob(), session.clone(), false).await;
+    let archive = CommandBody::ArchiveSession {
+        session_id: session.clone(),
+        force: false,
+    };
+    let result = daemon.manager.handle(bob(), archive).await;
     assert_eq!(result, Ok(CommandResult::Applied));
     let events = daemon.until_status(SessionStatus::Archived).await;
-    assert_eq!(describe(&events).last().unwrap(), "bob: status Archived");
+    assert_eq!(
+        describe(&events)[events.len() - 2..],
+        ["-: branch_checked_out side", "bob: status Archived"]
+    );
     assert!(!worktree.exists());
+    // The session still owns both once the worktree and its reflog are gone.
+    assert_eq!(
+        daemon.manager.branches(&session).await.unwrap(),
+        [branch.clone(), "side".to_owned()]
+    );
     let branches = git(&daemon.repo, &["branch", "--format=%(refname:short)"]);
     assert!(branches.lines().any(|line| line == branch), "{branches}");
     assert!(branches.lines().any(|line| line == "side"), "{branches}");

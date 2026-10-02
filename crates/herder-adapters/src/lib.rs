@@ -13,11 +13,14 @@
 //!
 //! # Event order
 //!
-//! - A turn is [`AdapterEvent::TurnStarted`], then any items and approval requests of that turn,
-//!   then exactly one of `TurnCompleted`, `TurnInterrupted` or `TurnFailed`. One turn at a time.
+//! - A turn is [`AdapterEvent::TurnStarted`], then any items, approval requests and questions of
+//!   that turn, then exactly one of `TurnCompleted`, `TurnInterrupted` or `TurnFailed`. One turn
+//!   at a time. A turn's end voids its pending approvals and questions.
 //! - A streamed item is `ItemStarted`, then `ItemDelta`s, then `ItemCompleted` with its final
 //!   body. An item that does not stream is a lone `ItemCompleted`.
 //! - `ApprovalRequested` follows the `ItemCompleted` of the tool call it names.
+//! - `QuestionAsked` blocks the turn until the daemon sends `AnswerQuestion`. An adapter whose
+//!   CLI cannot ask never sends it, and so never receives `AnswerQuestion`.
 //! - `UsageReported`, `ModelChanged` and `PermissionModeChanged` may come at any time.
 //! - `Exited` is the last event, always sent, after which the channel closes. A turn still open
 //!   when the process dies is first closed with `TurnFailed`.
@@ -25,7 +28,7 @@
 //! # Ids
 //!
 //! The daemon mints [`TurnId`]s and passes them in [`AdapterCommand::SendPrompt`]. The adapter
-//! mints [`ItemId`]s and [`ApprovalId`]s, unique within the session.
+//! mints [`ItemId`]s, [`ApprovalId`]s and [`QuestionId`]s, unique within the session.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -33,7 +36,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, Item, ItemId, PermissionMode, TurnError, TurnId, UsageWindow,
+    Answer, ApprovalDecision, ApprovalId, Item, ItemId, PermissionMode, QuestionId, TurnError,
+    TurnId, UsageWindow,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -133,6 +137,13 @@ pub enum AdapterCommand {
         /// The answer.
         decision: ApprovalDecision,
     },
+    /// Answer a pending question; sent only for a question the adapter asked.
+    AnswerQuestion {
+        /// The question.
+        question_id: QuestionId,
+        /// The answer; a `choice` indexes the question's `choices`.
+        answer: Answer,
+    },
     /// Stop the CLI; answered by `Exited`.
     Shutdown,
 }
@@ -190,6 +201,18 @@ pub enum AdapterEvent {
         tool_call_id: ItemId,
         /// One-line description of what the agent wants to do.
         summary: String,
+    },
+    /// The agent is blocked until the daemon sends `AnswerQuestion`, such as Claude's
+    /// `AskUserQuestion` tool.
+    QuestionAsked {
+        /// The question, minted by the adapter.
+        question_id: QuestionId,
+        /// Turn that is blocked.
+        turn_id: TurnId,
+        /// The question, as Markdown.
+        text: String,
+        /// Answers to pick from; empty for a free-text answer.
+        choices: Vec<String>,
     },
     /// The provider reported the account's limit windows.
     UsageReported {
