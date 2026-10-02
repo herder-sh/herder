@@ -18,8 +18,8 @@
 //!
 //! # Resources
 //!
-//! The `[resources]` table sets the limits every session's CLI runs under; see
-//! [`ResourcesConfig`] for its keys and defaults.
+//! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
+//! are admitted within; see [`ResourcesConfig`] for its keys and defaults.
 //!
 //! `config_dir` is handed to the CLI as its config dir variable (`CLAUDE_CONFIG_DIR`,
 //! `CODEX_HOME`, ...); without one the variable is not set and the CLI uses its default. It may
@@ -413,6 +413,10 @@ mod tests {
             cpu_weight = 200
             child_cpu_weight = 20
             nice = 5
+            max_turns = 2
+            min_memory_available_mib = 1024
+            max_memory_pressure = 30
+            max_load_percent = 200
             "#,
         );
         let config = Config::load_with_env(Some(&path), env(&[])).unwrap();
@@ -434,6 +438,10 @@ mod tests {
                     cpu_weight: 200,
                     child_cpu_weight: 20,
                     nice: 5,
+                    max_turns: Some(2),
+                    min_memory_available_mib: 1024,
+                    max_memory_pressure: 30,
+                    max_load_percent: 200,
                 },
             }
         );
@@ -474,6 +482,9 @@ mod tests {
             ("memory_high_percent = 101", "memory_high_percent"),
             ("child_cpu_weight = 0", "child_cpu_weight"),
             ("nice = 20", "nice"),
+            ("max_turns = 0", "max_turns"),
+            ("max_memory_pressure = 0", "max_memory_pressure"),
+            ("max_load_percent = 0", "max_load_percent"),
         ] {
             let path = write(tmp.path(), &format!("[resources]\n{text}\n"));
             let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();

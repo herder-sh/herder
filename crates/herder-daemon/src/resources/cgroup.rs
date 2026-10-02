@@ -81,9 +81,14 @@ pub(super) fn zero() -> SessionUsage {
 
 /// `MemTotal` of `/proc/meminfo`, in bytes.
 pub(super) fn mem_total(meminfo: &str) -> Option<u64> {
+    self::meminfo(meminfo, "MemTotal:")
+}
+
+/// The field starting with `key` of `/proc/meminfo`, in bytes.
+pub(super) fn meminfo(meminfo: &str, key: &str) -> Option<u64> {
     let kib: u64 = meminfo
         .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))?
+        .find_map(|line| line.strip_prefix(key))?
         .trim()
         .strip_suffix("kB")?
         .trim()

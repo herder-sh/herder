@@ -25,6 +25,7 @@ use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::tasks::Tasks;
 use super::{Inner, error};
+use crate::resources::{Permit, Ticket};
 use crate::{handoff, worktree};
 
 /// How long a stopping session waits for its CLI to exit.
@@ -113,6 +114,10 @@ pub(super) struct Actor {
     adapter: Option<AdapterSession>,
     /// The turn the adapter is running.
     turn: Option<TurnId>,
+    /// The host's admission of the running turn, or of the next one while it waits to start.
+    permit: Option<Permit>,
+    /// Where the next turn's permit arrives while the host has no room for it.
+    waiting: Option<oneshot::Receiver<Permit>>,
     /// Prompts waiting for the running turn to end, oldest first.
     queue: VecDeque<(Option<UserId>, String)>,
     /// The latest assistant message of the running turn: a child's report when it ends.
@@ -128,6 +133,8 @@ pub(super) struct Actor {
 enum Next {
     Command(SessionCommand),
     Adapter(Option<AdapterEvent>),
+    /// The host admitted the next turn; an error means its permit was withdrawn.
+    Admitted(Result<Permit, oneshot::error::RecvError>),
     /// A request routed to the primary session ran out of time.
     Overdue,
     Stop,
@@ -140,6 +147,8 @@ impl Actor {
             session,
             adapter: None,
             turn: None,
+            permit: None,
+            waiting: None,
             queue: VecDeque::new(),
             last_reply: None,
             approvals: Vec::new(),
@@ -162,9 +171,16 @@ impl Actor {
                         None => std::future::pending().await,
                     }
                 };
+                let (adapter, waiting) = (&mut self.adapter, &mut self.waiting);
                 let adapter_event = async {
-                    match self.adapter.as_mut() {
+                    match adapter.as_mut() {
                         Some(adapter) => adapter.events.recv().await,
+                        None => std::future::pending().await,
+                    }
+                };
+                let admitted = async {
+                    match waiting.as_mut() {
+                        Some(waiting) => waiting.await,
                         None => std::future::pending().await,
                     }
                 };
@@ -172,6 +188,7 @@ impl Actor {
                     () = shutdown.cancelled() => Next::Stop,
                     command = commands.recv() => command.map_or(Next::Stop, Next::Command),
                     event = adapter_event => Next::Adapter(event),
+                    permit = admitted => Next::Admitted(permit),
                     () = overdue => Next::Overdue,
                 }
             };
@@ -186,6 +203,15 @@ impl Actor {
                     self.start_next().await;
                 }
                 Next::Adapter(event) => self.adapter_event(event).await,
+                Next::Admitted(permit) => {
+                    self.waiting = None;
+                    self.permit = permit.ok();
+                    self.start_next().await;
+                    if self.turn.is_none() {
+                        // Nothing was left to start with it.
+                        self.permit = None;
+                    }
+                }
                 Next::Overdue => self.escalate_overdue().await,
                 Next::Stop => {
                     if let Some(adapter) = self.adapter.take() {
@@ -720,6 +746,10 @@ impl Actor {
             .await
             .map_err(super::internal)?;
         self.session.status = status;
+        // Prompts waiting for capacity can never run now.
+        self.queue.clear();
+        self.waiting = None;
+        self.permit = None;
         Ok(())
     }
 
@@ -874,9 +904,14 @@ impl Actor {
         Ok(())
     }
 
-    /// Starts queued prompts while no turn runs, starting the adapter when it is not running.
+    /// Starts queued prompts while no turn runs and the host admits them, starting the adapter
+    /// when it is not running; `waiting_for_capacity` while the host has no room.
     async fn start_next(&mut self) {
-        while self.turn.is_none() {
+        while self.turn.is_none() && !self.queue.is_empty() {
+            if !self.admitted() {
+                self.set_status(SessionStatus::WaitingForCapacity).await;
+                return;
+            }
             let Some((by, text)) = self.queue.pop_front() else {
                 return;
             };
@@ -897,6 +932,7 @@ impl Actor {
                             error,
                         })
                         .await;
+                        self.permit = None;
                         if self.queue.is_empty() {
                             self.set_status(SessionStatus::NeedsYou).await;
                         }
@@ -915,6 +951,30 @@ impl Actor {
             }
             self.turn = Some(turn_id);
             self.last_reply = None;
+        }
+    }
+
+    /// Whether the next turn may start: it holds a permit or the host grants one now. Otherwise
+    /// the turn waits in the host's line, and its permit arrives in the actor's loop.
+    fn admitted(&mut self) -> bool {
+        if self.waiting.is_some() {
+            return false;
+        }
+        if self.permit.is_some() {
+            return true;
+        }
+        let Some(admission) = self.inner.admission.get() else {
+            return true;
+        };
+        match admission.request(&self.session.session_id) {
+            Ticket::Admitted(permit) => {
+                self.permit = Some(permit);
+                true
+            }
+            Ticket::Waiting(waiting) => {
+                self.waiting = Some(waiting);
+                false
+            }
         }
     }
 
@@ -1130,6 +1190,8 @@ impl Actor {
         self.log(body).await;
         self.record_branches().await;
         self.turn = None;
+        // The next turn asks again, behind every turn already waiting.
+        self.permit = None;
         if self.queue.is_empty() {
             self.set_status(settled).await;
         }
@@ -1141,6 +1203,7 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let open = self.turn.take();
+        self.permit = None;
         self.void_requests().await;
         let mut summary = None;
         if let Some(turn_id) = &open {
@@ -1289,7 +1352,14 @@ pub(super) async fn close_abandoned_turn(
             journal.record(id.clone(), None, body).await?;
             (SessionStatus::NeedsYou, Some((turn_id, summary)))
         }
-        None if session.status == SessionStatus::Running => (SessionStatus::Idle, None),
+        // A prompt waiting for capacity was in memory only.
+        None if matches!(
+            session.status,
+            SessionStatus::Running | SessionStatus::WaitingForCapacity
+        ) =>
+        {
+            (SessionStatus::Idle, None)
+        }
         None => return Ok(()),
     };
     if status != session.status {

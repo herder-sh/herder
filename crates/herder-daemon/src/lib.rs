@@ -107,6 +107,24 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         async move { scopes.run_sampler(&hub, shutdown).await }
     });
+    let admission = Arc::new(resources::Admission::new(
+        config.resources.budget(resources::cores()),
+        Box::new(resources::ProcHost::default()),
+    ));
+    sessions.admit_turns(Arc::clone(&admission))?;
+    let budget = admission.budget();
+    info!(
+        max_turns = budget.max_turns,
+        min_memory_available = budget.min_memory_available,
+        max_memory_pressure = budget.max_memory_pressure,
+        max_load = budget.max_load,
+        "agent turns are admitted within this host's capacity"
+    );
+    tokio::spawn({
+        let hub = Arc::clone(&hub);
+        let shutdown = shutdown.clone();
+        async move { admission.run(&hub, shutdown).await }
+    });
     let herder = herder_binary()?;
     sessions.serve_mcp(
         mcp::Config {

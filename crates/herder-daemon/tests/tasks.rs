@@ -10,6 +10,7 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_daemon::mcp;
+use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
     TaskLimits, ulid_turn_ids,
@@ -617,6 +618,106 @@ async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
     daemon.manager.handle(alice(), archive).await.unwrap();
     tools.ok("spawn", spawn.clone()).await;
     assert_eq!(tools.fails("spawn", spawn).await, "limit_exceeded");
+}
+
+/// A host with `GIB`s of memory available, which the test changes.
+struct FakeHost(Arc<Mutex<u64>>);
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+impl ReadHost for FakeHost {
+    fn read(&self) -> anyhow::Result<Reading> {
+        Ok(Reading {
+            memory_total: 16 * GIB,
+            memory_available: *self.0.lock().unwrap() * GIB,
+            load_1m: 0.5,
+            cpu_percent: 10.0,
+            pressure: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn spawn_on_a_busy_host_is_refused_with_a_retry_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let available = Arc::new(Mutex::new(8));
+    let config = ResourcesConfig::default();
+    let admission = Admission::new(config.budget(8), Box::new(FakeHost(available.clone())));
+    daemon.manager.admit_turns(Arc::new(admission)).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+
+    *available.lock().unwrap() = 1;
+    let refused = tools.call("spawn", spawn.clone()).await;
+    assert!(refused.is_error, "{refused:?}");
+    let error: Value = serde_json::from_str(&refused.content[0].text).unwrap();
+    assert_eq!(error["code"], "host_busy");
+    assert_eq!(error["retry_after_secs"], 30);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("less than 2048 MiB"), "{message}");
+    let status = tools.ok("status", json!({})).await;
+    assert!(status["children"].as_array().unwrap().is_empty());
+
+    *available.lock().unwrap() = 8;
+    tools.ok("spawn", spawn).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report");
+}
+
+#[tokio::test]
+async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let config = ResourcesConfig {
+        max_turns: Some(1),
+        ..ResourcesConfig::default()
+    };
+    let host = FakeHost(Arc::new(Mutex::new(8)));
+    let admission = Arc::new(Admission::new(config.budget(8), Box::new(host)));
+    daemon.manager.admit_turns(admission.clone()).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    // The primary's turn runs on, holding the only slot, while it calls the task tools.
+    let prompt = CommandBody::SendPrompt {
+        session_id: primary.clone(),
+        text: "Hang.".into(),
+    };
+    daemon.manager.handle(alice(), prompt).await.unwrap();
+    daemon
+        .until_n(&primary, 2, |body| {
+            matches!(body, EventBody::TurnStarted { .. })
+        })
+        .await;
+    let mut tools = daemon.connect(&primary);
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+
+    // Only the turn limit binds, so the spawn succeeds and the child's turn waits.
+    let child = id(&tools.ok("spawn", spawn.clone()).await["child"]);
+    daemon
+        .until(&child, |body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity
+                }
+            )
+        })
+        .await;
+    assert_eq!(admission.resources().waiting_turns, 1);
+
+    // Waiting for the child lends it the primary's slot; the primary takes it back after.
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report", "{report}");
+    assert_eq!(report["summary"], "Done: Do it.");
+    let host = admission.resources();
+    assert_eq!((host.running_turns, host.waiting_turns), (1, 0));
+
+    // The primary goes on with its task the same way.
+    tools.ok("spawn", spawn).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["summary"], "Done: Do it.", "{report}");
+    assert_eq!(admission.resources().running_turns, 1);
 }
 
 #[tokio::test]

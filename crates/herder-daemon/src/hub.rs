@@ -14,6 +14,8 @@
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
 //! - each session's resource usage whenever it changes, sent to every client, and on connect
 //!   for every session with something running ([`crate::resources`]).
+//! - the host's resources and turns whenever they change, sent to every client, and the latest
+//!   on connect ([`crate::resources::admission`]).
 //!
 //! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
 //! its attached clients' outboxes with [`Outbox::terminal_output`].
@@ -23,8 +25,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead,
-    SessionId, SessionUsage, Terminal, TerminalId,
+    Account, Event, EventBody, HostResources, Item, ItemBody, ItemId, Role, Seq, ServerMessage,
+    SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -60,6 +62,8 @@ struct State {
     items: HashMap<SessionId, Vec<Item>>,
     /// The latest usage of each session with something running.
     usage: HashMap<SessionId, SessionUsage>,
+    /// The host's latest resources.
+    host: Option<HostResources>,
     outboxes: Vec<Arc<Outbox>>,
 }
 
@@ -182,6 +186,9 @@ impl Hub {
         let mut state = self.lock();
         let mut inner = outbox.lock();
         inner.owner = role == Role::Owner;
+        if let Some(host) = &state.host {
+            inner.push(ServerMessage::HostResources(host.clone()));
+        }
         for (session_id, usage) in &state.usage {
             inner.push(ServerMessage::SessionResources {
                 session_id: session_id.clone(),
@@ -206,6 +213,17 @@ impl Hub {
             session_id: session_id.clone(),
             usage,
         };
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends the host's new resources to every client, and to clients that connect later.
+    pub(crate) fn host_resources(&self, resources: HostResources) {
+        let mut state = self.lock();
+        state.host = Some(resources.clone());
+        let message = ServerMessage::HostResources(resources);
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();
@@ -915,6 +933,33 @@ mod tests {
                 changed
             ]
         );
+    }
+
+    #[test]
+    fn host_resources_reach_every_client_and_the_latest_later_ones() {
+        let hub = Hub::default();
+        let host = |running_turns| HostResources {
+            cpu_cores: 4,
+            cpu_percent: 12.5,
+            load_1m: 1.0,
+            memory_total_bytes: 8 << 30,
+            memory_available_bytes: 4 << 30,
+            pressure: None,
+            running_turns,
+            max_turns: 1,
+            waiting_turns: 0,
+            constraint: None,
+        };
+        let member = Arc::new(Outbox::default());
+        hub.connect(&member, Role::Member);
+        hub.host_resources(host(0));
+        hub.host_resources(host(1));
+        let message = |running| ServerMessage::HostResources(host(running));
+        assert_eq!(drain(&member), [message(0), message(1)]);
+
+        let later = Arc::new(Outbox::default());
+        hub.connect(&later, Role::Member);
+        assert_eq!(drain(&later), [message(1)]);
     }
 
     #[test]

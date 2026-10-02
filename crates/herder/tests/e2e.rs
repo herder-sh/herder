@@ -209,6 +209,7 @@ impl Client {
         self.ws.send(Message::text(text)).await.unwrap();
     }
 
+    /// The next message, skipping resource figures, which arrive whenever they change.
     async fn recv(&mut self) -> ServerMessage {
         loop {
             let frame = tokio::time::timeout(TIMEOUT, self.ws.next())
@@ -218,6 +219,9 @@ impl Client {
                 .unwrap();
             if let Message::Text(text) = frame {
                 let message = serde_json::from_str(&text).unwrap();
+                if resources(&message) {
+                    continue;
+                }
                 self.view.apply(&message);
                 return message;
             }
@@ -298,7 +302,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     std::fs::write(
         &config_path,
         format!(
-            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n",
+            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n# Admission by the turn limit only, whatever the CI host's cores and load.\n[resources]\nmax_turns = 8\nmin_memory_available_mib = 0\nmax_memory_pressure = 100\nmax_load_percent = 10000\n",
             data_dir.to_str().unwrap()
         ),
     )
@@ -511,4 +515,12 @@ fn assistant_reply(events: &[Event]) -> (ItemId, String) {
             _ => None,
         })
         .expect("no assistant reply")
+}
+
+/// Whether `message` is a host's or session's resource figures.
+fn resources(message: &ServerMessage) -> bool {
+    matches!(
+        message,
+        ServerMessage::HostResources(_) | ServerMessage::SessionResources { .. }
+    )
 }
