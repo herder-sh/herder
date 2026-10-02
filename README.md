@@ -8,6 +8,19 @@ Android, all built on one shared Rust client core.
 
 **Status:** pre-alpha, under construction. Nothing works yet.
 
+## Install
+
+On Linux (x86_64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/herder-sh/herder/main/install.sh | sh
+herder service install   # run the daemon now and at every boot (systemd user service)
+herder update            # replace herder with the latest release
+```
+
+The script installs a static binary to `~/.local/bin/herder` after checking its sha256.
+Set `HERDER_VERSION=1.2.3` to install a specific release.
+
 ## Build and test
 
 Requires Rust (the toolchain is pinned in `rust-toolchain.toml`).
