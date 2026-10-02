@@ -38,6 +38,7 @@ use herder_protocol::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+pub mod acp;
 pub mod codex;
 pub mod fake;
 pub mod fixture;
