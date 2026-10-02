@@ -35,18 +35,29 @@
 //! drops before the daemon answers, it is resent with the same id on the next one, and the
 //! daemon applies an id once. The daemon remembers ids in memory only, so a command whose
 //! answer was lost to a daemon restart can apply twice.
+//!
+//! # Terminals
+//!
+//! [`Client::open_terminal`] and [`Client::attach_terminal`] return a [`TerminalStream`]: the
+//! terminal's output, starting with the daemon's scrollback, then its exit. The daemon attaches
+//! terminals per connection, so each new connection re-attaches every stream and replays the
+//! scrollback after a [`TerminalEvent::Reattached`]. Input and resizes are best effort: sent
+//! once if connected, dropped otherwise, except that the latest size is re-sent on re-attach.
+//! Dropping the stream detaches. Terminals are owner-only; for a member both calls fail with
+//! [`Error::Rejected`] carrying `forbidden`.
 
 pub mod auth;
 mod cache;
 mod profile;
 mod supervisor;
+mod terminal;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use herder_protocol::{
     Account, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo, Event, HostId,
-    Item, PROTOCOL_VERSION, Role, SessionHead, SessionId, Terminal,
+    Item, PROTOCOL_VERSION, Role, SessionHead, SessionId, Terminal, TerminalId,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -54,6 +65,7 @@ use tokio_util::sync::CancellationToken;
 use auth::{DeviceKey, PairingUri};
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
+pub use terminal::{TerminalEvent, TerminalStream};
 
 /// Why a client call failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -279,10 +291,37 @@ impl Client {
     ) -> Result<CommandResult, Error> {
         let machine = self.machine(host_id)?;
         let command = Command {
-            id: CommandId::new(ulid::Ulid::new().to_string()),
+            id: new_command_id(),
             body: command,
         };
         machine.send(command).await?.map_err(Error::Rejected)
+    }
+
+    /// Opens a shell of `cols` by `rows` in a session's worktree and streams it, however long
+    /// it takes to connect; owners only.
+    pub async fn open_terminal(
+        &self,
+        host_id: &HostId,
+        session_id: &SessionId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(host_id)?
+            .open_terminal(session_id.clone(), cols, rows)
+            .await
+    }
+
+    /// Attaches to an open terminal and streams it, however long it takes to connect; owners
+    /// only. One stream per terminal per client: a second attach fails until the first stream
+    /// is dropped.
+    pub async fn attach_terminal(
+        &self,
+        host_id: &HostId,
+        terminal_id: &TerminalId,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(host_id)?
+            .attach_terminal(terminal_id.clone())
+            .await
     }
 
     fn machine(&self, host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
@@ -329,4 +368,9 @@ impl Changes {
             changed = changed.changed() => changed.ok(),
         }
     }
+}
+
+/// A fresh command id.
+pub(crate) fn new_command_id() -> CommandId {
+    CommandId::new(ulid::Ulid::new().to_string())
 }

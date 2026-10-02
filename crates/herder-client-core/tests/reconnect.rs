@@ -1,5 +1,5 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
-//! turn, and a daemon killed and restarted mid-turn.
+//! turn, a daemon killed and restarted mid-turn, and a terminal across a cut connection.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -9,19 +9,22 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::auth::PairingUri;
-use herder_client_core::{Client, ConnectionState, Error, SessionSubscription, SessionUpdate};
+use herder_client_core::{
+    Client, ConnectionState, Error, SessionSubscription, SessionUpdate, TerminalEvent,
+    TerminalStream,
+};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
-use herder_daemon::terminal::{self, Terminals};
+use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, ItemBody,
-    PermissionMode, Provider, SessionId, SessionStatus, TurnId,
+    PermissionMode, Provider, Role, SessionId, SessionStatus, TurnId,
 };
 use herder_store::Store;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -93,7 +96,7 @@ impl Daemon {
                 id: HostId::new("host-1"),
                 name: "test-host".into(),
             };
-            let terminals = Terminals::new(Arc::clone(&hub), terminal::login_shell());
+            let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
             let server = Server::new(tls, Arc::clone(&auth), hub, sessions, terminals, host);
             started.send((addr, fingerprint, auth)).ok().unwrap();
             server.run(listener, shutdown).await;
@@ -109,9 +112,14 @@ impl Daemon {
 
     /// A pairing link with a fresh code, as `herder pair` prints it.
     fn pairing_link(&self) -> String {
-        let code = self.auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        self.pairing_link_via("alice", self.addr)
+    }
+
+    /// A pairing link for `user` that names `addr` as the daemon's address.
+    fn pairing_link_via(&self, user: &str, addr: SocketAddr) -> String {
+        let code = self.auth.mint(user, None, PAIRING_TTL).unwrap().code;
         PairingUri {
-            hosts: vec![self.addr.to_string()],
+            hosts: vec![addr.to_string()],
             fingerprint: self.fingerprint.clone(),
             code,
         }
@@ -392,4 +400,167 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
         )
         .await;
     assert!(matches!(unknown, Err(Error::UnknownMachine(_))));
+}
+
+/// A TCP relay to the daemon whose connections can be cut, as a network drop would, while the
+/// daemon and its terminals keep running.
+struct Relay {
+    addr: SocketAddr,
+    cut: tokio::sync::watch::Sender<u64>,
+}
+
+impl Relay {
+    async fn start(target: SocketAddr) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cut = tokio::sync::watch::Sender::new(0);
+        let cuts = cut.clone();
+        tokio::spawn(async move {
+            while let Ok((mut inbound, _)) = listener.accept().await {
+                let mut cut = cuts.subscribe();
+                tokio::spawn(async move {
+                    let mut outbound = TcpStream::connect(target).await.unwrap();
+                    tokio::select! {
+                        _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound) => {}
+                        _ = cut.changed() => {}
+                    }
+                });
+            }
+        });
+        Self { addr, cut }
+    }
+
+    /// Drops every connection through the relay now.
+    fn cut(&self) {
+        self.cut.send_modify(|version| *version += 1);
+    }
+}
+
+/// What a terminal stream delivered: its events, and its output so far as text.
+#[derive(Default)]
+struct Screen {
+    events: Vec<TerminalEvent>,
+    text: String,
+}
+
+impl Screen {
+    /// Reads events until the output holds `wanted`.
+    async fn read_until(&mut self, stream: &TerminalStream, wanted: &str) {
+        while !self.text.contains(wanted) {
+            let event = tokio::time::timeout(TIMEOUT, stream.next())
+                .await
+                .unwrap_or_else(|_| panic!("no {wanted:?} in time; got {:?}", self.text))
+                .expect("the stream ended");
+            if let TerminalEvent::Output(data) = &event {
+                self.text.push_str(&String::from_utf8_lossy(data));
+            }
+            self.events.push(event);
+        }
+    }
+}
+
+async fn next_event(stream: &TerminalStream) -> Option<TerminalEvent> {
+    tokio::time::timeout(TIMEOUT, stream.next())
+        .await
+        .expect("no terminal event in time")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    let host = client
+        .pair(daemon.pairing_link_via("alice", relay.addr))
+        .await
+        .unwrap()
+        .host_id;
+    let created = client
+        .send(
+            &host,
+            CommandBody::CreateSession {
+                repo,
+                branch: None,
+                account_id: account(),
+                model: None,
+                permission_mode: PermissionMode::Ask,
+            },
+        )
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a session, got {created:?}");
+    };
+
+    let stream = client
+        .open_terminal(&host, &session_id, 80, 24)
+        .await
+        .unwrap();
+    let terminal_id = stream.terminal_id();
+    let mut screen = Screen::default();
+    stream.input(b"printf 'he%s\\n' llo\n".to_vec());
+    screen.read_until(&stream, "hello").await;
+    assert!(!screen.events.contains(&TerminalEvent::Reattached));
+
+    // Another owner client attaches and gets the scrollback; a member gets nothing.
+    let other = Client::open(tmp.path().join("other"), "herder-test/0".into()).unwrap();
+    other.pair(daemon.pairing_link()).await.unwrap();
+    let watcher = other.attach_terminal(&host, &terminal_id).await.unwrap();
+    Screen::default().read_until(&watcher, "hello").await;
+    let err = other.attach_terminal(&host, &terminal_id).await.err();
+    assert!(matches!(err, Some(Error::Local(_))), "{err:?}");
+    drop(watcher);
+    let member = Client::open(tmp.path().join("member"), "herder-test/0".into()).unwrap();
+    member
+        .pair(daemon.pairing_link_via("bob", daemon.addr))
+        .await
+        .unwrap();
+    wait_connection(&member, connected).await;
+    assert_eq!(member.machines()[0].role, Some(Role::Member));
+    for refused in [
+        member.attach_terminal(&host, &terminal_id).await.err(),
+        member.open_terminal(&host, &session_id, 80, 24).await.err(),
+    ] {
+        assert!(
+            matches!(&refused, Some(Error::Rejected(info)) if info.code == ErrorCode::Forbidden),
+            "{refused:?}"
+        );
+    }
+
+    // The connection drops; a resize made meanwhile lands once the stream re-attaches.
+    relay.cut();
+    wait_connection(&client, |state| {
+        matches!(state, ConnectionState::Disconnected { .. })
+    })
+    .await;
+    stream.resize(100, 30);
+    // Output sent before the cut may still be queued; the replayed scrollback follows the mark.
+    while next_event(&stream).await != Some(TerminalEvent::Reattached) {}
+    let mut after = Screen::default();
+    after.read_until(&stream, "hello").await;
+    stream.input(b"stty size\n".to_vec());
+    after.read_until(&stream, "30 100").await;
+
+    // Exiting the shell delivers its code and ends the stream.
+    stream.input(b"exit 7\n".to_vec());
+    loop {
+        match next_event(&stream).await {
+            Some(TerminalEvent::Output(_)) => {}
+            Some(event) => {
+                assert_eq!(event, TerminalEvent::Closed { exit_code: Some(7) });
+                break;
+            }
+            None => panic!("the stream ended without its exit"),
+        }
+    }
+    assert_eq!(next_event(&stream).await, None);
+    daemon.kill().await;
 }

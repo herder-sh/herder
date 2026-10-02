@@ -1,6 +1,10 @@
 //! One task per machine owns its connection: it connects, resumes every wanted session from the
 //! cache's cursor, feeds what the daemon sends into the cache, dispatches commands, and on any
 //! failure waits out a capped, jittered exponential backoff before trying again.
+//!
+//! Terminal attachments belong to a connection on the daemon, so the task re-attaches every
+//! terminal this client holds a stream for on each new connection, with fresh command ids (a
+//! resent id would be answered from the daemon's memory without attaching anything).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,8 +14,8 @@ use anyhow::{Context, anyhow, bail};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientHello, ClientMessage, Command, CommandId, CommandResult, Cursor, ErrorInfo,
-    PROTOCOL_VERSION, Role, ServerHello, ServerMessage, SessionId,
+    ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
+    PROTOCOL_VERSION, Role, ServerHello, ServerMessage, SessionId, TerminalId,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -29,7 +33,8 @@ use tracing::{debug, warn};
 use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
 use crate::profile::SavedMachine;
-use crate::{ConnectionState, Error, Machine, SessionUpdate};
+use crate::terminal::{TerminalEvent, TerminalStream};
+use crate::{ConnectionState, Error, Machine, SessionUpdate, new_command_id};
 
 /// Time one address gets for TCP, TLS, the WebSocket upgrade and the hellos.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -59,6 +64,16 @@ enum Op {
     Unsubscribe(SessionId),
     /// Send a command and report the daemon's answer.
     Command(Command, oneshot::Sender<Answer>),
+    /// Open a terminal: a command whose answer registers a stream feeding `events`.
+    Open(
+        Command,
+        oneshot::Sender<Answer>,
+        mpsc::UnboundedSender<TerminalEvent>,
+    ),
+    /// A stream was added for this terminal; attach it, unless a new connection already did.
+    Attach(TerminalId),
+    /// Send a terminal command once if connected, ignoring its answer: input, resize, detach.
+    Once(CommandBody),
 }
 
 /// A machine's supervisor: the state its task maintains, and the handle the client drives it
@@ -70,7 +85,7 @@ pub(crate) struct Supervisor {
     changed: Arc<watch::Sender<u64>>,
     ops: mpsc::UnboundedSender<Op>,
     wake: Notify,
-    stop: CancellationToken,
+    pub(crate) stop: CancellationToken,
 }
 
 #[derive(Default)]
@@ -83,6 +98,20 @@ struct State {
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
+    /// Terminals this client holds a stream for; each new connection re-attaches them.
+    streams: HashMap<TerminalId, Attached>,
+}
+
+/// A terminal with a [`TerminalStream`].
+struct Attached {
+    events: mpsc::UnboundedSender<TerminalEvent>,
+    /// The latest size asked for, sent again after every re-attach.
+    size: Option<(u16, u16)>,
+    /// Whether an attach went out on some connection, so the next one is a re-attach.
+    sent: bool,
+    /// Answers the first attach, for [`Supervisor::attach_terminal`]; `None` once answered,
+    /// and for a terminal this client opened.
+    ready: Option<oneshot::Sender<Result<(), ErrorInfo>>>,
 }
 
 struct Log {
@@ -161,6 +190,236 @@ impl Supervisor {
         tokio::select! {
             () = self.stop.cancelled() => Err(Error::Closed),
             answer = answer => answer.map_err(|_| Error::Closed),
+        }
+    }
+
+    /// Opens a shell in `session_id`'s worktree and streams it, once a connection is up. An
+    /// open lost to a dropped connection is resent with the same id, so it opens one shell.
+    pub(crate) async fn open_terminal(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        let (events, receiver) = mpsc::unbounded_channel();
+        let (reply, answer) = oneshot::channel();
+        let command = Command {
+            id: new_command_id(),
+            body: CommandBody::OpenTerminal {
+                session_id,
+                cols,
+                rows,
+            },
+        };
+        self.ops
+            .send(Op::Open(command, reply, events))
+            .map_err(|_| Error::Closed)?;
+        let answer = tokio::select! {
+            () = self.stop.cancelled() => return Err(Error::Closed),
+            answer = answer => answer.map_err(|_| Error::Closed)?,
+        };
+        match answer.map_err(Error::Rejected)? {
+            CommandResult::TerminalOpened { terminal_id } => Ok(TerminalStream {
+                supervisor: Arc::clone(self),
+                terminal_id,
+                events: tokio::sync::Mutex::new(receiver),
+            }),
+            other => Err(Error::Local(format!(
+                "the daemon answered a terminal open with {other:?}"
+            ))),
+        }
+    }
+
+    /// Attaches to `terminal_id` and streams it, once a connection is up; one stream per
+    /// terminal per client.
+    pub(crate) async fn attach_terminal(
+        self: &Arc<Self>,
+        terminal_id: TerminalId,
+    ) -> Result<TerminalStream, Error> {
+        let (events, receiver) = mpsc::unbounded_channel();
+        let (ready, answer) = oneshot::channel();
+        {
+            let mut state = self.lock();
+            if state.streams.contains_key(&terminal_id) {
+                return Err(Error::Local(format!(
+                    "terminal {terminal_id} is already attached on this client"
+                )));
+            }
+            let attached = Attached {
+                events,
+                size: None,
+                sent: false,
+                ready: Some(ready),
+            };
+            state.streams.insert(terminal_id.clone(), attached);
+        }
+        // Dropped on failure, which forgets the stream and detaches.
+        let stream = TerminalStream {
+            supervisor: Arc::clone(self),
+            terminal_id: terminal_id.clone(),
+            events: tokio::sync::Mutex::new(receiver),
+        };
+        self.ops
+            .send(Op::Attach(terminal_id))
+            .map_err(|_| Error::Closed)?;
+        tokio::select! {
+            () = self.stop.cancelled() => Err(Error::Closed),
+            answer = answer => answer.map_err(|_| Error::Closed)?.map_err(Error::Rejected),
+        }?;
+        Ok(stream)
+    }
+
+    /// Sends `body` for a streamed terminal if connected; see [`Op::Once`].
+    pub(crate) fn terminal_once(&self, terminal_id: &TerminalId, body: CommandBody) {
+        if self.lock().streams.contains_key(terminal_id) {
+            let _ = self.ops.send(Op::Once(body));
+        }
+    }
+
+    /// Remembers a streamed terminal's size and sends it if connected.
+    pub(crate) fn terminal_resize(&self, terminal_id: &TerminalId, cols: u16, rows: u16) {
+        let mut state = self.lock();
+        let Some(attached) = state.streams.get_mut(terminal_id) else {
+            return;
+        };
+        attached.size = Some((cols, rows));
+        let _ = self.ops.send(Op::Once(CommandBody::ResizeTerminal {
+            terminal_id: terminal_id.clone(),
+            cols,
+            rows,
+        }));
+    }
+
+    /// Forgets a terminal's stream and detaches from it, if it is still open.
+    pub(crate) fn terminal_dropped(&self, terminal_id: &TerminalId) {
+        if self.lock().streams.remove(terminal_id).is_some() {
+            let _ = self.ops.send(Op::Once(CommandBody::DetachTerminal {
+                terminal_id: terminal_id.clone(),
+            }));
+        }
+    }
+
+    /// The attach for each streamed terminal, and its latest size, on a new connection;
+    /// streams attached on an earlier one are told their scrollback is coming again.
+    fn reattach(&self, attaching: &mut HashMap<CommandId, TerminalId>) -> Vec<ClientMessage> {
+        let mut state = self.lock();
+        let mut messages = Vec::new();
+        for (terminal_id, attached) in &mut state.streams {
+            if attached.sent {
+                let _ = attached.events.send(TerminalEvent::Reattached);
+            }
+            attached.sent = true;
+            messages.push(attach(terminal_id, attaching));
+            if let Some((cols, rows)) = attached.size {
+                messages.push(once(CommandBody::ResizeTerminal {
+                    terminal_id: terminal_id.clone(),
+                    cols,
+                    rows,
+                }));
+            }
+        }
+        messages
+    }
+
+    /// The attach for a stream just added, unless a new connection already sent one.
+    fn first_attach(
+        &self,
+        terminal_id: &TerminalId,
+        attaching: &mut HashMap<CommandId, TerminalId>,
+    ) -> Option<ClientMessage> {
+        let mut state = self.lock();
+        let attached = state.streams.get_mut(terminal_id)?;
+        if attached.sent {
+            return None;
+        }
+        attached.sent = true;
+        Some(attach(terminal_id, attaching))
+    }
+
+    /// Settles the daemon's answer to an attach: a refused one ends the stream.
+    fn attach_answered(&self, terminal_id: &TerminalId, result: Result<(), ErrorInfo>) {
+        let mut state = self.lock();
+        match result {
+            Ok(()) => {
+                if let Some(ready) = state
+                    .streams
+                    .get_mut(terminal_id)
+                    .and_then(|attached| attached.ready.take())
+                {
+                    let _ = ready.send(Ok(()));
+                }
+            }
+            Err(error) => {
+                let Some(mut attached) = state.streams.remove(terminal_id) else {
+                    return;
+                };
+                match attached.ready.take() {
+                    Some(ready) => {
+                        let _ = ready.send(Err(error));
+                    }
+                    // The shell exited while this client was away; its exit code went with
+                    // the old connection.
+                    None => {
+                        let _ = attached
+                            .events
+                            .send(TerminalEvent::Closed { exit_code: None });
+                    }
+                }
+            }
+        }
+    }
+
+    /// Registers the stream of a terminal this client opened, handing it what the terminal
+    /// sent before the open was answered; `false` if the shell already exited.
+    fn opened(
+        &self,
+        terminal_id: TerminalId,
+        events: mpsc::UnboundedSender<TerminalEvent>,
+        size: Option<(u16, u16)>,
+        early: Vec<TerminalEvent>,
+    ) -> bool {
+        let mut closed = false;
+        for event in early {
+            closed |= matches!(event, TerminalEvent::Closed { .. });
+            let _ = events.send(event);
+        }
+        if !closed {
+            let attached = Attached {
+                events,
+                size,
+                sent: true,
+                ready: None,
+            };
+            self.lock().streams.insert(terminal_id, attached);
+        }
+        !closed
+    }
+
+    /// Routes a terminal's output or exit to its stream. Without one, it is kept in `early`
+    /// while an open is in flight, as it may be the new terminal's.
+    fn terminal_event(
+        &self,
+        terminal_id: TerminalId,
+        event: TerminalEvent,
+        early: &mut HashMap<TerminalId, Vec<TerminalEvent>>,
+        opening: bool,
+    ) {
+        let mut state = self.lock();
+        if let TerminalEvent::Closed { .. } = event {
+            if let Some(mut attached) = state.streams.remove(&terminal_id) {
+                // An attach still waiting for its answer hands out the stream, ended.
+                if let Some(ready) = attached.ready.take() {
+                    let _ = ready.send(Ok(()));
+                }
+                let _ = attached.events.send(event);
+                return;
+            }
+        } else if let Some(attached) = state.streams.get(&terminal_id) {
+            let _ = attached.events.send(event);
+            return;
+        }
+        if opening {
+            early.entry(terminal_id).or_default().push(event);
         }
     }
 
@@ -267,8 +526,7 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Terminal output and exits have no consumer yet; hellos and answers are handled
-            // by the connection.
+            // Hellos, answers and terminal messages are handled by the connection.
             ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
@@ -358,6 +616,8 @@ impl Drop for Subscription {
 struct Pending {
     command: Command,
     reply: oneshot::Sender<Answer>,
+    /// For a terminal open: where the new terminal's events go.
+    open: Option<mpsc::UnboundedSender<TerminalEvent>>,
 }
 
 /// Why a connection ended.
@@ -413,9 +673,19 @@ async fn run(
                     break;
                 }
                 op = ops.recv() => match op {
-                    Some(Op::Command(command, reply)) => pending.push(Pending { command, reply }),
-                    // The next hello resumes whatever is wanted by then.
-                    Some(Op::Subscribe(_) | Op::Unsubscribe(_)) => {}
+                    Some(Op::Command(command, reply)) => pending.push(Pending {
+                        command,
+                        reply,
+                        open: None,
+                    }),
+                    Some(Op::Open(command, reply, events)) => pending.push(Pending {
+                        command,
+                        reply,
+                        open: Some(events),
+                    }),
+                    // The next hello resumes whatever is wanted by then, and the next
+                    // connection attaches every stream; terminal commands are best effort.
+                    Some(Op::Subscribe(_) | Op::Unsubscribe(_) | Op::Attach(_) | Op::Once(_)) => {}
                     None => return,
                 },
             }
@@ -431,9 +701,20 @@ async fn serve(
     pending: &mut Vec<Pending>,
 ) -> Ended {
     let (mut sink, mut stream) = ws.split();
+    // Attaches in flight on this connection, by command id.
+    let mut attaching = HashMap::new();
+    // Terminal events with no stream yet, kept while an open is in flight.
+    let mut early = HashMap::new();
     pending.retain(|command| !command.reply.is_closed());
-    for command in pending.iter() {
-        let message = ClientMessage::Command(command.command.clone());
+    let resent = pending
+        .iter()
+        .map(|command| ClientMessage::Command(command.command.clone()));
+    let messages: Vec<_> = supervisor
+        .reattach(&mut attaching)
+        .into_iter()
+        .chain(resent)
+        .collect();
+    for message in messages {
         if let Err(error) = write(&mut sink, encode(&message)).await {
             return Ended::Lost(error);
         }
@@ -471,9 +752,21 @@ async fn serve(
                     }
                     Some(Op::Command(command, reply)) => {
                         let message = ClientMessage::Command(command.clone());
-                        pending.push(Pending { command, reply });
+                        pending.push(Pending { command, reply, open: None });
                         message
                     }
+                    Some(Op::Open(command, reply, events)) => {
+                        let message = ClientMessage::Command(command.clone());
+                        pending.push(Pending { command, reply, open: Some(events) });
+                        message
+                    }
+                    Some(Op::Attach(terminal_id)) => {
+                        match supervisor.first_attach(&terminal_id, &mut attaching) {
+                            Some(message) => message,
+                            None => continue,
+                        }
+                    }
+                    Some(Op::Once(body)) => once(body),
                 };
                 if let Err(error) = write(&mut sink, encode(&message)).await {
                     return Ended::Lost(error);
@@ -502,14 +795,62 @@ async fn serve(
                 continue;
             }
         };
-        match message {
+        let reply = match message {
             ServerMessage::CommandAccepted { command_id, result } => {
-                answer(pending, &command_id, Ok(result));
+                if let Some(terminal_id) = attaching.remove(&command_id) {
+                    supervisor.attach_answered(&terminal_id, Ok(()));
+                    continue;
+                }
+                answered(
+                    supervisor,
+                    pending,
+                    &command_id,
+                    Ok(result),
+                    &mut early,
+                    &mut attaching,
+                )
             }
             ServerMessage::CommandRejected { command_id, error } => {
-                answer(pending, &command_id, Err(error));
+                if let Some(terminal_id) = attaching.remove(&command_id) {
+                    supervisor.attach_answered(&terminal_id, Err(error));
+                    continue;
+                }
+                answered(
+                    supervisor,
+                    pending,
+                    &command_id,
+                    Err(error),
+                    &mut early,
+                    &mut attaching,
+                )
             }
-            message => supervisor.apply(message),
+            ServerMessage::TerminalOutput { terminal_id, data } => {
+                let opening = pending.iter().any(|command| command.open.is_some());
+                let event = TerminalEvent::Output(data.0);
+                supervisor.terminal_event(terminal_id, event, &mut early, opening);
+                None
+            }
+            ServerMessage::TerminalClosed {
+                terminal_id,
+                exit_code,
+            } => {
+                let opening = pending.iter().any(|command| command.open.is_some());
+                let event = TerminalEvent::Closed { exit_code };
+                supervisor.terminal_event(terminal_id, event, &mut early, opening);
+                None
+            }
+            message => {
+                supervisor.apply(message);
+                None
+            }
+        };
+        if !pending.iter().any(|command| command.open.is_some()) {
+            early.clear();
+        }
+        if let Some(message) = reply
+            && let Err(error) = write(&mut sink, encode(&message)).await
+        {
+            return Ended::Lost(error);
         }
     }
 }
@@ -525,10 +866,62 @@ async fn write(sink: &mut SplitSink<Ws, Message>, message: Message) -> Result<()
         .map_err(|err| format!("writing to the daemon: {err}"))
 }
 
-fn answer(pending: &mut Vec<Pending>, command_id: &CommandId, result: Answer) {
-    if let Some(index) = pending.iter().position(|p| p.command.id == *command_id) {
-        let _ = pending.swap_remove(index).reply.send(result);
+/// Hands the daemon's answer to the command waiting for it. An answered terminal open gets its
+/// stream registered and returns the attach to send: on the connection that sent the open the
+/// daemon attached it already and ignores a second attach, and after a resend it did not.
+fn answered(
+    supervisor: &Supervisor,
+    pending: &mut Vec<Pending>,
+    command_id: &CommandId,
+    result: Answer,
+    early: &mut HashMap<TerminalId, Vec<TerminalEvent>>,
+    attaching: &mut HashMap<CommandId, TerminalId>,
+) -> Option<ClientMessage> {
+    let index = pending.iter().position(|p| p.command.id == *command_id)?;
+    let Pending {
+        command,
+        reply,
+        open,
+    } = pending.swap_remove(index);
+    let mut message = None;
+    if let (Some(events), Ok(CommandResult::TerminalOpened { terminal_id })) = (open, &result) {
+        let size = match command.body {
+            CommandBody::OpenTerminal { cols, rows, .. } => Some((cols, rows)),
+            _ => None,
+        };
+        let early = early.remove(terminal_id).unwrap_or_default();
+        if supervisor.opened(terminal_id.clone(), events, size, early) {
+            message = Some(attach(terminal_id, attaching));
+        }
     }
+    if let Err(Ok(CommandResult::TerminalOpened { terminal_id })) = reply.send(result) {
+        // Nobody waits for the stream any more.
+        supervisor.terminal_dropped(&terminal_id);
+    }
+    message
+}
+
+/// An attach of `terminal_id` with a fresh id, recorded in `attaching`.
+fn attach(
+    terminal_id: &TerminalId,
+    attaching: &mut HashMap<CommandId, TerminalId>,
+) -> ClientMessage {
+    let id = new_command_id();
+    attaching.insert(id.clone(), terminal_id.clone());
+    ClientMessage::Command(Command {
+        id,
+        body: CommandBody::AttachTerminal {
+            terminal_id: terminal_id.clone(),
+        },
+    })
+}
+
+/// `body` as a command with a fresh id, whose answer nobody waits for.
+fn once(body: CommandBody) -> ClientMessage {
+    ClientMessage::Command(Command {
+        id: new_command_id(),
+        body,
+    })
 }
 
 /// Connects to the first of `saved`'s addresses that answers, as `device`, and exchanges hellos.
