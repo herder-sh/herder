@@ -61,7 +61,8 @@
 //!
 //! ```toml
 //! [projects]
-//! roots = ["~/Projects"] # scanned 3 levels deep; none by default
+//! roots = ["~/Projects"]   # scanned 3 levels deep; none by default
+//! setup_timeout_secs = 600 # how long a setup command may run; 10 minutes by default
 //!
 //! [[project]]
 //! name = "herder"                  # the last segment of the id when absent
@@ -76,6 +77,9 @@
 //! ```
 //!
 //! An entry needs `remotes` or `paths`. No remote or path may appear in two entries.
+//!
+//! `setup_command` runs with `sh -c` once in every new session worktree of the project, in the
+//! session's resource scope, before the agent's first turn; see [`crate::session`].
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -187,6 +191,7 @@ impl Default for ConfigFile {
 #[serde(default, deny_unknown_fields)]
 struct ProjectsFile {
     roots: Vec<PathBuf>,
+    setup_timeout_secs: Option<u64>,
 }
 
 /// One `[[project]]` entry as written.
@@ -342,7 +347,16 @@ fn resolve_projects(
             })
         })
         .collect::<Result<_>>()?;
-    Ok(ProjectsConfig { roots, entries })
+    let setup_timeout = match table.setup_timeout_secs {
+        Some(0) => bail!("projects.setup_timeout_secs must be at least 1"),
+        Some(secs) => std::time::Duration::from_secs(secs),
+        None => crate::projects::SETUP_TIMEOUT,
+    };
+    Ok(ProjectsConfig {
+        roots,
+        setup_timeout,
+        entries,
+    })
 }
 
 /// Appends an `[[accounts]]` entry for `account` to the config file at `path`, creating the
@@ -953,6 +967,7 @@ mod tests {
 
             [projects]
             roots = ["~/Projects", "/srv/src"]
+            setup_timeout_secs = 90
 
             [[project]]
             name = "herder"
@@ -970,6 +985,7 @@ mod tests {
             config.projects,
             ProjectsConfig {
                 roots: vec![home.path().join("Projects"), PathBuf::from("/srv/src")],
+                setup_timeout: std::time::Duration::from_secs(90),
                 entries: vec![
                     ProjectEntry {
                         name: Some("herder".to_owned()),
@@ -1021,6 +1037,10 @@ mod tests {
             ),
             ("[projects]\nroots = [\"rel\"]\n", "projects.roots"),
             ("[projects]\ndepth = 2\n", "unknown field `depth`"),
+            (
+                "[projects]\nsetup_timeout_secs = 0\n",
+                "projects.setup_timeout_secs must be at least 1",
+            ),
             (
                 "[[project]]\npaths = [\"/a\"]\nid = \"x\"\n",
                 "unknown field `id`",

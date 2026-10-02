@@ -294,6 +294,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
                     paths: vec![declared.clone()],
                     ..ProjectEntry::default()
                 }],
+                ..ProjectsConfig::default()
             },
             hub: Arc::clone(&hub),
             sessions,

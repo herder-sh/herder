@@ -106,6 +106,7 @@ pub async fn serve(
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    sessions.set_up_worktrees(host.id.clone(), config.projects.clone())?;
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),

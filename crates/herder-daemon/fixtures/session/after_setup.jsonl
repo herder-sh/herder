@@ -1,0 +1,9 @@
+# Two turns after the setup command took the session's first turn id.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "First."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "One."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Second."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Two."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}

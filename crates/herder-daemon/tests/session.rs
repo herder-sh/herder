@@ -8,6 +8,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
+use herder_daemon::projects::{ProjectEntry, ProjectsConfig};
 use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup, TaskLimits,
@@ -17,8 +18,8 @@ use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     CommandBody, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody,
-    Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId,
-    SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
+    HostId, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId,
+    SessionStatus, Timestamp, TurnError, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -2452,4 +2453,185 @@ async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback
         ]
     );
     daemon.shutdown.cancel();
+}
+
+/// Gives `daemon`'s repo the setup command `command`, which may run for `timeout`.
+fn set_up_with(daemon: &Daemon, command: &str, timeout: Duration) {
+    let projects = ProjectsConfig {
+        setup_timeout: timeout,
+        entries: vec![ProjectEntry {
+            paths: vec![daemon.repo.clone()],
+            setup_command: Some(command.to_owned()),
+            ..ProjectEntry::default()
+        }],
+        ..ProjectsConfig::default()
+    };
+    daemon
+        .manager
+        .set_up_worktrees(HostId::new("host-1"), projects)
+        .unwrap();
+}
+
+/// The error the session's failed turn journaled.
+fn turn_error(events: &[Event]) -> TurnError {
+    events
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::TurnFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no turn failed: {:#?}", describe(events)))
+}
+
+#[tokio::test]
+async fn a_new_worktree_runs_its_setup_command_once_before_the_first_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
+    set_up_with(
+        &daemon,
+        "echo ran >> .setup-runs; echo ready; echo warn >&2",
+        Duration::from_secs(60),
+    );
+    let session = daemon.create().await;
+    // Sent while the setup runs: it waits for it.
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    daemon.prompt(alice(), &session, "Second.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        describe(&journal),
+        vec![
+            "alice: session_created",
+            "-: status Running",
+            "-: turn_started turn-1",
+            "-: tool_call herder_setup",
+            "-: tool_result ready\nwarn\n",
+            "-: turn_completed turn-1",
+            "alice: user turn-2 First.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 One.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+            "-: status Running",
+            "alice: user turn-3 Second.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 Two.",
+            "-: turn_completed turn-3",
+            "-: status Idle",
+        ]
+    );
+    let call = journal
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::ToolCall { input, .. } => Some(input.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        call,
+        serde_json::json!({ "command": "echo ran >> .setup-runs; echo ready; echo warn >&2" })
+    );
+    let worktree = daemon.manager.worktree(&session).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(worktree.join(".setup-runs")).unwrap(),
+        "ran\n"
+    );
+    assert_eq!(daemon.starts.lock().unwrap().len(), 1);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_failing_setup_command_marks_the_session_error_and_blocks_the_first_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
+    set_up_with(
+        &daemon,
+        "echo missing .env; exit 2",
+        Duration::from_secs(60),
+    );
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    let events = daemon.until_status(SessionStatus::Error).await;
+
+    assert_eq!(
+        turn_error(&events),
+        TurnError {
+            class: ErrorClass::Fatal,
+            message: "the setup command `echo missing .env; exit 2` failed (exit status: 2):\n\
+                      missing .env"
+                .to_owned(),
+        }
+    );
+    let result = events.iter().find_map(|event| match &event.body {
+        EventBody::ItemAdded { item } => match &item.body {
+            ItemBody::ToolResult { is_error, .. } => Some(*is_error),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(result, Some(true));
+    // The prompt sent during the setup never reached an agent.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    let journal = daemon.journal(&session).await;
+    assert!(
+        !describe(&journal)
+            .iter()
+            .any(|line| line.contains("First.")),
+        "{:#?}",
+        describe(&journal)
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_setup_command_past_its_timeout_is_killed_and_fails_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
+    set_up_with(
+        &daemon,
+        "echo installing; sleep 30",
+        Duration::from_millis(300),
+    );
+    let started = std::time::Instant::now();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    let events = daemon.until_status(SessionStatus::Error).await;
+
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        turn_error(&events).message,
+        "the setup command `echo installing; sleep 30` timed out after 300 ms:\ninstalling"
+    );
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_running_setup_command_blocks_archive_and_stops_on_interrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
+    set_up_with(&daemon, "sleep 30", Duration::from_secs(60));
+    let session = daemon.create().await;
+
+    let archive = daemon.manager.archive(alice(), session.clone(), true).await;
+    assert_eq!(archive.unwrap_err().code, ErrorCode::Conflict);
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    assert_eq!(
+        daemon.manager.handle(alice(), interrupt).await.unwrap(),
+        CommandResult::Applied
+    );
+    let events = daemon.until_status(SessionStatus::Error).await;
+    assert_eq!(
+        turn_error(&events).message,
+        "the setup command `sleep 30` was interrupted"
+    );
+    daemon.stop().await;
 }
