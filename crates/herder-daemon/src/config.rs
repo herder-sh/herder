@@ -80,6 +80,20 @@
 //!
 //! `setup_command` runs with `sh -c` once in every new session worktree of the project, in the
 //! session's resource scope, before the agent's first turn; see [`crate::session`].
+//!
+//! # Vault
+//!
+//! `mode = "vault"` (or `herder daemon --vault`) runs the daemon as a vault: it runs no
+//! sessions and keeps the journals hosts replicate to it; see [`crate::vault`]. The default,
+//! `mode = "host"`, runs sessions. A host replicates every session to the vault its `[vault]`
+//! table names, paired the way a client pairs with a daemon:
+//!
+//! ```toml
+//! [vault]
+//! address = "vault.example.com:7447"
+//! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
+//! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
+//! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -122,6 +136,34 @@ pub struct Config {
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
     pub projects: ProjectsConfig,
+    /// Whether this daemon runs sessions or is the vault.
+    pub mode: Mode,
+    /// The vault a host replicates its sessions to, if any.
+    pub vault: Option<VaultConfig>,
+}
+
+/// What a daemon runs as.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Runs sessions for clients.
+    #[default]
+    Host,
+    /// Keeps the journals hosts replicate to it; see [`crate::vault`].
+    Vault,
+}
+
+/// The `[vault]` table: where a host replicates to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultConfig {
+    /// The vault's address, as `host:port`.
+    pub address: String,
+    /// SHA-256 of the vault's TLS certificate, lowercase hex.
+    pub fingerprint: String,
+    /// One-time code from `herder pair` on the vault, for the first connection.
+    #[serde(default)]
+    pub pairing_code: Option<String>,
 }
 
 /// Logging settings: the `[log]` table.
@@ -167,6 +209,8 @@ struct ConfigFile {
     resources: ResourcesConfig,
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
+    mode: Mode,
+    vault: Option<VaultConfig>,
 }
 
 impl Default for ConfigFile {
@@ -182,6 +226,8 @@ impl Default for ConfigFile {
             resources: ResourcesConfig::default(),
             projects: ProjectsFile::default(),
             project: Vec::new(),
+            mode: Mode::default(),
+            vault: None,
         }
     }
 }
@@ -261,6 +307,17 @@ impl Config {
         }
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
+        if let Some(vault) = &file.vault {
+            ensure!(
+                file.mode == Mode::Host,
+                "a vault does not replicate to another vault; remove the [vault] table"
+            );
+            ensure!(
+                vault.fingerprint.len() == 64
+                    && vault.fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
+                "vault.fingerprint must be the 64 hex digits `herder pair` prints"
+            );
+        }
         Ok(Self {
             path,
             listen: file.listen,
@@ -272,6 +329,11 @@ impl Config {
             failover: file.failover,
             resources: file.resources,
             projects,
+            mode: file.mode,
+            vault: file.vault.map(|vault| VaultConfig {
+                fingerprint: vault.fingerprint.to_ascii_lowercase(),
+                ..vault
+            }),
         })
     }
 }
@@ -729,8 +791,56 @@ mod tests {
                     max_load_percent: 200,
                 },
                 projects: ProjectsConfig::default(),
+                mode: Mode::Host,
+                vault: None,
             }
         );
+    }
+
+    #[test]
+    fn vault_mode_and_a_hosts_vault_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "mode = \"vault\"\n").unwrap();
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!((config.mode, config.vault), (Mode::Vault, None));
+
+        let fingerprint = "AB".repeat(32);
+        std::fs::write(
+            &path,
+            format!(
+                "[vault]\naddress = \"vault:7447\"\nfingerprint = \"{fingerprint}\"\n\
+                 pairing_code = \"ABCDE-FGHJK\"\n"
+            ),
+        )
+        .unwrap();
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(config.mode, Mode::Host);
+        assert_eq!(
+            config.vault,
+            Some(VaultConfig {
+                address: "vault:7447".into(),
+                fingerprint: "ab".repeat(32),
+                pairing_code: Some("ABCDE-FGHJK".into()),
+            })
+        );
+
+        std::fs::write(
+            &path,
+            "[vault]\naddress = \"vault:7447\"\nfingerprint = \"abc\"\n",
+        )
+        .unwrap();
+        let err = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap_err();
+        assert!(format!("{err:#}").contains("vault.fingerprint"), "{err:#}");
+
+        std::fs::write(
+            &path,
+            format!(
+                "mode = \"vault\"\n[vault]\naddress = \"v:1\"\nfingerprint = \"{fingerprint}\"\n"
+            ),
+        )
+        .unwrap();
+        assert!(Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).is_err());
     }
 
     #[test]

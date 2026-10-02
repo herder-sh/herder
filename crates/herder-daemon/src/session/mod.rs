@@ -169,8 +169,8 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemId, Project, ProjectId, Provider, SessionHead, SessionId,
-    SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
+    EventBody, HostId, Item, ItemId, JournalRecord, Project, ProjectId, Provider, Seq, SessionHead,
+    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -920,6 +920,25 @@ impl SessionManager {
                 "name the repository by exactly one of `repo` and `project_id`",
             )),
         }
+    }
+
+    /// Up to `limit` events of `session_id` after `after_seq`, exactly as stored; for
+    /// replicating to the vault.
+    pub async fn read_records_since(
+        &self,
+        session_id: &SessionId,
+        after_seq: Seq,
+        limit: usize,
+    ) -> anyhow::Result<Vec<JournalRecord>> {
+        self.inner
+            .journal
+            .records_since(session_id.clone(), after_seq, limit)
+            .await
+    }
+
+    /// Every session as the vault's fleet index lists it, ordered by session id.
+    pub async fn summaries(&self, host: &HostId) -> anyhow::Result<Vec<SessionSummary>> {
+        self.inner.journal.summaries(host).await
     }
 
     /// Creates a session with its worktree; returns its id and branch.

@@ -1,0 +1,20 @@
+# A minimal herder image: one static musl binary on an empty base.
+#
+#   podman build -f deploy/Containerfile -t herder:dev .
+#
+# Run from the repository root; the build context is the whole workspace.
+
+FROM docker.io/library/rust:1.97-alpine AS build
+# ring compiles C; on Alpine the toolchain links against musl, so the binary is static.
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked -p herder \
+    && strip target/release/herder
+
+FROM scratch
+COPY --from=build /src/target/release/herder /herder
+# No shell or user database in the image; run as an unprivileged uid.
+USER 65532:65532
+ENTRYPOINT ["/herder"]
+CMD ["daemon", "--vault"]

@@ -10,6 +10,7 @@ repository.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 herder-adapters.workspace = true
+herder-client-core.workspace = true
 herder-protocol.workspace = true
 herder-store.workspace = true
 herder-tasktools.workspace = true
@@ -18,6 +19,7 @@ nix.workspace = true
 portable-pty.workspace = true
 rcgen.workspace = true
 ring.workspace = true
+rusqlite.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,7 +36,6 @@ ulid.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-herder-client-core.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 

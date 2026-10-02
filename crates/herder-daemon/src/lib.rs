@@ -15,6 +15,7 @@ pub mod resources;
 pub mod session;
 pub mod terminal;
 pub mod usage;
+pub mod vault;
 pub mod worktree;
 pub mod ws;
 
@@ -52,6 +53,9 @@ pub fn run(config: Config) -> Result<()> {
                 }
                 token.cancel();
             });
+            if config.mode == config::Mode::Vault {
+                return vault::serve(&config, shutdown).await;
+            }
             let adapters = accounts::adapters(&config.binaries);
             let probes = accounts::probes(&config.binaries);
             serve(&config, adapters, probes, config.accounts.clone(), shutdown).await
@@ -91,17 +95,25 @@ pub async fn serve(
     let hub = Arc::new(Hub::default());
     let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
     let sessions_changed = Arc::new(tokio::sync::Notify::new());
+    let mut sink: Arc<dyn session::EventSink> = Arc::new(terminal::KillOnArchive {
+        next: Arc::new(projects::OnSessionsChanged {
+            next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            notify: Arc::clone(&sessions_changed),
+        }),
+        terminals: terminals.clone(),
+    });
+    let journal_grew = Arc::new(tokio::sync::Notify::new());
+    if config.vault.is_some() {
+        sink = Arc::new(vault::WakeOnEvent {
+            next: sink,
+            notify: Arc::clone(&journal_grew),
+        });
+    }
     let setup = session::Setup {
         store,
         adapters,
         accounts,
-        sink: Arc::new(terminal::KillOnArchive {
-            next: Arc::new(projects::OnSessionsChanged {
-                next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
-                notify: Arc::clone(&sessions_changed),
-            }),
-            terminals: terminals.clone(),
-        }),
+        sink,
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
@@ -112,6 +124,16 @@ pub async fn serve(
         keep: worktree::checkpoint::KEEP,
         push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
     })?;
+    if let Some(vault) = &config.vault {
+        let replicator = vault::Replicator {
+            vault: vault.clone(),
+            device: vault::Replicator::device_key(data_dir.root())?,
+            host: host.clone(),
+            sessions: sessions.clone(),
+            changed: journal_grew,
+        };
+        tokio::spawn(replicator.run(shutdown.clone()));
+    }
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),
@@ -225,7 +247,7 @@ fn herder_binary() -> Result<std::path::PathBuf> {
 }
 
 /// This machine's host name, for display.
-fn host_name() -> String {
+pub(crate) fn host_name() -> String {
     nix::unistd::gethostname()
         .ok()
         .and_then(|name| name.into_string().ok())
@@ -250,6 +272,8 @@ mod tests {
             failover: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
+            mode: config::Mode::Host,
+            vault: None,
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

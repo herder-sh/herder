@@ -1,0 +1,115 @@
+# The herder vault: one replica keeping every host's replicated sessions on a volume.
+#
+#   kubectl apply -n herder -f deploy/vault.yaml
+#
+# Replace the image with the one you built from deploy/Containerfile.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: herder-vault
+  labels:
+    app.kubernetes.io/name: herder-vault
+data:
+  daemon.toml: |
+    mode = "vault"
+    listen = "0.0.0.0:7447"
+    # A subdirectory, so the vault creates it private to itself.
+    data_dir = "/data/herder"
+
+    [log]
+    format = "json"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: herder-vault
+  labels:
+    app.kubernetes.io/name: herder-vault
+spec:
+  # Hosts connect from outside the cluster. Use NodePort, or ClusterIP behind your own TCP
+  # ingress, if the cluster has no load balancer. TLS ends at the vault, not at a proxy:
+  # hosts pin its certificate and present their device key.
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: herder-vault
+  ports:
+    - name: replication
+      port: 7447
+      targetPort: replication
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: herder-vault
+  labels:
+    app.kubernetes.io/name: herder-vault
+spec:
+  # One writer: the data dir is locked by a single daemon and the database is SQLite.
+  replicas: 1
+  serviceName: herder-vault
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: herder-vault
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: herder-vault
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vault
+          image: ghcr.io/herder-sh/herder:latest
+          args: ["daemon", "--vault"]
+          env:
+            # `herder pair` run in the pod finds the data dir through the same config.
+            - name: HERDER_CONFIG
+              value: /etc/herder/daemon.toml
+          ports:
+            - name: replication
+              containerPort: 7447
+          readinessProbe:
+            tcpSocket:
+              port: replication
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: replication
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/herder
+              readOnly: true
+      # Lets the daemon finish its last transaction and close connections on SIGTERM.
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: herder-vault
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
