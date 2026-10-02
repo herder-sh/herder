@@ -267,6 +267,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            mcp: None,
         };
         let command = command(std::path::Path::new("codex"), &request);
         let command = command.as_std();
@@ -299,6 +300,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            mcp: None,
         };
         let command = command(std::path::Path::new("codex"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();

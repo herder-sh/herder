@@ -82,6 +82,19 @@ pub struct StartRequest {
     pub permission_mode: PermissionMode,
     /// Transcript to replay as context before the first prompt; empty for a fresh session.
     pub seed: Vec<Item>,
+    /// herder's MCP server for this session, which the adapter registers with the CLI as
+    /// `herder`, next to the user's own servers; absent when the daemon serves none.
+    pub mcp: Option<McpServer>,
+}
+
+/// A stdio MCP server: the command the CLI spawns, speaking MCP on its stdin and stdout. It
+/// carries no secret, so it is safe on a command line.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServer {
+    /// The executable.
+    pub command: PathBuf,
+    /// Its arguments.
+    pub args: Vec<String>,
 }
 
 /// A running session of a vendor CLI.

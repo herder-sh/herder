@@ -739,6 +739,7 @@ dependencies = [
  "herder-client-core",
  "herder-protocol",
  "herder-store",
+ "herder-tasktools",
  "jiff",
  "nix 0.31.3",
  "portable-pty",
@@ -2234,6 +2235,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "libc",
  "pin-project-lite",
  "tokio",
 ]
