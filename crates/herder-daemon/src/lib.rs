@@ -1,5 +1,6 @@
 //! Daemon runtime: the WebSocket server and the agent sessions it hosts.
 
+pub mod auth;
 pub mod config;
 pub mod data_dir;
 pub mod hub;
@@ -57,6 +58,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let store_path = data_dir.root().join("db/herder.db");
     let store = herder_store::Store::open(&store_path)
         .with_context(|| format!("opening the journal {}", store_path.display()))?;
+    let auth = Arc::new(auth::Auth::open(data_dir.root())?);
     let hub = Arc::new(Hub::default());
     // Adapters register here as they land (Claude: P1.6), accounts with the accounts
     // component.
@@ -72,6 +74,16 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
+    let control = auth::control::bind(data_dir.root())?;
+    tokio::spawn(auth::control::serve(
+        control,
+        Arc::clone(&auth),
+        auth::control::Daemon {
+            fingerprint: tls.fingerprint().to_owned(),
+            listen: listener.local_addr()?,
+        },
+        shutdown.clone(),
+    ));
     info!(
         host_id = %data_dir.host_id(),
         data_dir = %data_dir.root().display(),
@@ -79,7 +91,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
-    ws::Server::new(tls, hub, sessions, host)
+    ws::Server::new(tls, auth, hub, sessions, host)
         .run(listener, shutdown)
         .await;
     info!("herder daemon stopped");
@@ -116,5 +128,6 @@ mod tests {
         assert!(tmp.path().join("data/host-id").is_file());
         assert!(tmp.path().join("data/db/herder.db").is_file());
         assert!(tmp.path().join("data/tls/cert.pem").is_file());
+        assert!(tmp.path().join("data/control.sock").exists());
     }
 }
