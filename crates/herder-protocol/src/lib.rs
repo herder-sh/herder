@@ -15,6 +15,7 @@ mod client;
 mod event;
 mod ids;
 mod project;
+pub mod replication;
 mod resources;
 mod server;
 mod types;
@@ -31,6 +32,11 @@ pub use ids::{
     TurnId, UserId,
 };
 pub use project::{Project, ProjectId};
+pub use replication::{
+    Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION,
+    RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode, SessionSummary, VaultHello,
+    VaultMessage,
+};
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
     Account, CommandResult, ErrorCode, ErrorInfo, Role, ServerHello, ServerMessage, SessionHead,
@@ -55,4 +61,14 @@ pub fn client_schema() -> schemars::Schema {
 /// JSON Schema for every message the daemon sends.
 pub fn server_schema() -> schemars::Schema {
     schemars::schema_for!(ServerMessage)
+}
+
+/// JSON Schema for every message a host sends the vault.
+pub fn host_schema() -> schemars::Schema {
+    schemars::schema_for!(HostMessage)
+}
+
+/// JSON Schema for every message the vault sends a host.
+pub fn vault_schema() -> schemars::Schema {
+    schemars::schema_for!(VaultMessage)
 }
