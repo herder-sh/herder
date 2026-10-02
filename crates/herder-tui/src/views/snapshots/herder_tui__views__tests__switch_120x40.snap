@@ -1,8 +1,8 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 418
 expression: "render(app, width, height).backend()"
 ---
+" ‹ back  box › app · herder/api                                                                              inbox 0  + "
 "┌ sessions ────────────────────────────┐┌ app · herder/api needs you ──────────────────────── Main · claude-opus · ask ┐"
 "│● box (4)                             ││                                                                              │"
 "│ needs you ▾ app · herder/api (2)     ││                                                                              │"
@@ -29,7 +29,6 @@ expression: "render(app, width, height).backend()"
 "│                       │ Moves to codex between turns, replaying the transcript there.        │                       │"
 "│                       │                                                                      │                       │"
 "│                       └─────────── Enter switch  j/k account  m model  Esc close ────────────┘                       │"
-"│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"

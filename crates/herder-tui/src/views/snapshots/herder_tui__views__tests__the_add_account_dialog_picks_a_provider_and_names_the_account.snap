@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 90, 20).backend()"
 ---
+" ‹ back  herder                                                                inbox 0  + "
 "┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                          │"
 "│ needs you ▾ app · herd… (2)││                                                          │"
@@ -18,7 +19,6 @@ expression: "render(&mut app, 90, 20).backend()"
 "│ │ The account is added once the login succeeds. Ctrl-] d detaches.                   │ │"
 "│ │                                                                                    │ │"
 "│ └───────────────── Enter log in  Tab field  ←→ provider  Esc cancel ─────────────────┘ │"
-"│                            ││                                                          │"
 "│                            ││                                                          │"
 "└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
 " ● box connected                                                           ? help  q quit "

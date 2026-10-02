@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 110, 14).backend()"
 ---
+" herder                                                                                            inbox 0  + "
 "┌ sessions ────────────────────────┐┌ pull requests · every session ─────────────────────────────────────────┐"
 "│● box (4)                         ││box · app · herder/api  needs you                                       │"
 "│ needs you ▾ app · h… (2) #7✓ #9✗!││  #7 open   ✓ ci  ✓ approved ✓ merge    Add a health endpoint  fix-7    │"
@@ -9,7 +10,6 @@ expression: "render(&mut app, 110, 14).backend()"
 "│ error     └ document it          ││                                                                        │"
 "│ idle      app · herder/fix-login ││box · write the tests  running                                          │"
 "│                                  ││  #8 merged ✓ ci                        Test the health endpoint  fix-8 │"
-"│                                  ││                                                                        │"
 "│                                  ││                                                                        │"
 "│                                  ││                                                                        │"
 "│                                  ││                                                                        │"

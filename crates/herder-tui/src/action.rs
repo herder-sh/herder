@@ -207,6 +207,12 @@ pub const HELP: &[(&str, &str)] = &[
         "in the inbox: type an answer / open its session",
     ),
     ("Ctrl-] d", "detach from an attached terminal"),
+    ("tap, swipe", "open, press the buttons, scroll"),
+    (
+        ":mouse off / on",
+        "give the mouse to the terminal, or take it",
+    ),
+    ("Shift-drag", "select text while herder has the mouse"),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),
 ];

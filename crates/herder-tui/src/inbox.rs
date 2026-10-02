@@ -196,7 +196,7 @@ impl App {
     }
 
     /// The selected request, while the inbox has focus.
-    fn selected_request(&self) -> Option<Waiting<'_>> {
+    pub(crate) fn selected_request(&self) -> Option<Waiting<'_>> {
         if self.focus != Focus::Inbox {
             return None;
         }
@@ -205,7 +205,7 @@ impl App {
         list.into_iter().nth(at)
     }
 
-    fn select_request(&mut self, at: usize) {
+    pub(crate) fn select_request(&mut self, at: usize) {
         let list = self.waiting();
         let at = at.min(list.len().saturating_sub(1));
         let selected = list.get(at).map(Waiting::request);

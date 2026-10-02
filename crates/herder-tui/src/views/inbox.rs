@@ -3,20 +3,21 @@
 //! being typed.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, ListState};
 
 use crate::app::{App, Focus};
 use crate::inbox::{Waiting, What};
+use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::session::reason_text;
 
 /// Marks the selected request.
 const MARK: &str = "▶ ";
 
 /// `compact`, on a narrow screen, keeps the hints short.
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut Hits) {
     let (list_area, answer_area) = match app.inbox.answer {
         Some(_) => {
             let [list, answer] =
@@ -53,6 +54,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
         .enumerate()
         .map(|(at, waiting)| ListItem::new(entry(app, waiting, width, at + 1 < list_len)))
         .collect();
+    let heights: Vec<usize> = items.iter().map(ListItem::height).collect();
     let mut state = ListState::default();
     state.select(Some(app.inbox_index(&waiting)));
     let task = waiting
@@ -64,6 +66,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
         .highlight_symbol(MARK)
         .highlight_style(Style::new().add_modifier(Modifier::BOLD));
     frame.render_stateful_widget(list, list_area, &mut state);
+    hits.wheel(list_area, Wheel::Keys);
+    hits.list(
+        list_area.inner(Margin::new(1, 1)),
+        state.offset(),
+        &heights,
+        |at| Some(Click::Row(Rows::Inbox, at)),
+    );
     if let (Some(area), Some(answer)) = (answer_area, &mut app.inbox.answer) {
         answer.set_cursor_style(Style::new().add_modifier(Modifier::REVERSED));
         answer.set_block(

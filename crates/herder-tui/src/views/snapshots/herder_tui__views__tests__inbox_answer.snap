@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 110, 20).backend()"
 ---
+" herder                                                                                            inbox 2  + "
 "┌ sessions ────────────────────────┐┌ inbox · 2 waiting on you ──────────────────────────────────────────────┐"
 "│● box (4)                         ││▶ question box · app · herder/api › write the tests                     │"
 "│ needs you ▾ app · herder/… (2) !1││    Which port should the server use?                                   │"
@@ -12,7 +13,6 @@ expression: "render(&mut app, 110, 20).backend()"
 "│                                  ││                                                                        │"
 "│                                  ││  approval box · app · herder/fix-login                                 │"
 "│                                  ││    Bash: cargo publish                                                 │"
-"│                                  ││                                                                        │"
 "│                                  ││                                                                        │"
 "│                                  ││                                                                        │"
 "│                                  ││                                                                        │"

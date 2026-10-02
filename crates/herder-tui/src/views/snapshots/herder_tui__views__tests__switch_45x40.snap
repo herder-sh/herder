@@ -1,10 +1,9 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 418
 expression: "render(app, width, height).backend()"
 ---
-"┌ box › app · api ──────────────────────────┐"
-"│                                           │"
+" ‹ back  box › app · api          inbox 0  + "
+"┌───────────────────────────────────────────┐"
 "│                                           │"
 "│                                           │"
 "│                                           │"
@@ -37,9 +36,9 @@ expression: "render(app, width, height).backend()"
 "│                                           │"
 "│                                           │"
 "│                                           │"
-"│                                           │"
 "└───────────────────────────────────────────┘"
 "┌ message ──────────────────────────────────┐"
 "│ Write a prompt…                           │"
 "└─────────────────────────────── i to write ┘"
+" ⏎ switch   esc close                        "
 " ● box  ✗ laptop                      ? help "

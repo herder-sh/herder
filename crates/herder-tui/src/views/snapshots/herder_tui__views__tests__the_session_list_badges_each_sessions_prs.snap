@@ -2,13 +2,13 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
+" herder                                                              inbox 0  + "
 "┌ sessions ──────────────────┐┌────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                │"
 "│ needs you ▾ a… (2) #7✓ #9✗!││                                                │"
 "│ running   └ write the t… #8││                                                │"
 "│ error     └ document it    ││       Select a session and press Enter.        │"
 "│ idle      app · herder/fix…││                                                │"
-"│                            ││                                                │"
 "│                            ││                                                │"
 "└────────────────────────────┘└────────────────────────────────────────────────┘"
 " ● box connected                                                 ? help  q quit "

@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 90, 20).backend()"
 ---
+" ‹ back  herder                                                                inbox 0  + "
 "┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                          │"
 "│ needs you ▾ app · herd… (2)││                                                          │"
@@ -18,7 +19,6 @@ expression: "render(&mut app, 90, 20).backend()"
 "│ │   addresses    127.0.0.1:7447                                                      │ │"
 "│ │   fingerprint  abababababababababababababababababababababababababababababababab    │ │"
 "│ └───── a add machine  n add account  e rename  d forget  r reconnect  Esc close ─────┘ │"
-"│                            ││                                                          │"
 "│                            ││                                                          │"
 "└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
 " ● box connected  ✗ laptop connection refused                              ? help  q quit "

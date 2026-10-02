@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(app, width, height).backend()"
 ---
+" ‹ back  herder                   inbox 0  + "
 "┌ pull requests · by project ───────────────┐"
 "│◆ app                                      │"
 "│  laptop · app · herder/cache  running     │"
@@ -38,7 +39,6 @@ expression: "render(app, width, height).backend()"
 "│                                           │"
 "│                                           │"
 "│                                           │"
-"│                                           │"
-"│                                           │"
 "└────────── Enter open · l session · ⌫ back ┘"
+" ⏎ open   l session   x unlink               "
 " ● box  ● laptop                      ? help "

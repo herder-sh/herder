@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 90, 20).backend()"
 ---
-"                                                                                          "
+" ‹ back  herder                                                                inbox 0  + "
 "                                                                                          "
 "                                                                                          "
 "  ┌ add a machine ─────────────────────────────────────────────────────────────────────┐  "

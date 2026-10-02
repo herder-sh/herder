@@ -1,15 +1,14 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 97
 expression: "render(&mut app, 100, 12).backend()"
 ---
+" box › app · herder/api                                                                  inbox 0  + "
 "┌ sessions ─────────────────────┐┌ app · herder/api needs you ──── claude-main · claude-opus · ask ┐"
-"│● box (4)                      ││  ```rust                                                        │"
-"│ needs you ▾ app · herder/… (2)││  fn health() {}                                                 │"
-"│ running   └ write the tests   ││  ```                                                            │"
-"│ error     └ document it       ││                                                                 │"
-"│ idle      app · herder/fix-lo…││assistant …                                                      │"
-"│                               ││  Now the docs: the endpoint is▌                                 │"
+"│● box (4)                      ││  fn health() {}                                                 │"
+"│ needs you ▾ app · herder/… (2)││  ```                                                            │"
+"│ running   └ write the tests   ││                                                                 │"
+"│ error     └ document it       ││assistant …                                                      │"
+"│ idle      app · herder/fix-lo…││  Now the docs: the endpoint is▌                                 │"
 "│                               │└─────────────────────────────────────────────────────────────────┘"
 "│                               │┌ message ────────────────────────────────────────────────────────┐"
 "│                               ││ Write a prompt…                                                 │"

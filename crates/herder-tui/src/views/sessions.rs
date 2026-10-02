@@ -7,18 +7,19 @@
 use herder_client_core::ConnectionState;
 use herder_protocol::SessionStatus;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem};
 
 use crate::app::{App, Focus, Row};
+use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::projects::Grouping;
 
 /// Width of the status label column.
 const BADGE: usize = 9;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut Hits) {
     let rows = app.rows();
     // Inside the borders.
     let width = usize::from(area.width.saturating_sub(2));
@@ -44,6 +45,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
     let selected = app.selected_index(&rows);
     app.list.select(selected);
     frame.render_stateful_widget(list, area, &mut app.list);
+    hits.wheel(area, Wheel::Sessions);
+    hits.list(
+        area.inner(Margin::new(1, 1)),
+        app.list.offset(),
+        &vec![1; rows.len()],
+        |at| Some(Click::Row(Rows::Sessions, at)),
+    );
 }
 
 fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {

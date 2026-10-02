@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 100, 10).backend()"
 ---
+" herder                                                                                  inbox 0  + "
 "┌ sessions ─────────────────────┐┌─────────────────────────────────────────────────────────────────┐"
 "│● box (4)                      ││                                                                 │"
 "│ needs you ▾ app · herder/… (2)││                                                                 │"
@@ -9,6 +10,5 @@ expression: "render(&mut app, 100, 10).backend()"
 "│ error     └ document it       ││                Select a session and press Enter.                │"
 "│ idle      app · herder/fix-lo…││                                                                 │"
 "│✗ laptop (0)                   ││                                                                 │"
-"│◌ ci (0)                       ││                                                                 │"
 "└───────────────────────────────┘└─────────────────────────────────────────────────────────────────┘"
 " ● box connected  ✗ laptop connection refused  ◌ ci connecting                       ? help  q quit "

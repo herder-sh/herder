@@ -2,10 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 45, 40).backend()"
 ---
-"┌ box › app · api ──────────────────────────┐"
+" ‹ back  box › app · api          inbox 1  + "
+"┌───────────────────────────────────────────┐"
 "│  · approval needed: Bash: rm -rf target   │"
-"│                                           │"
-"│                                           │"
 "│                                           │"
 "│                                           │"
 "│                                           │"
@@ -41,4 +40,5 @@ expression: "render(&mut app, 45, 40).backend()"
 "┌ message · queues behind the turn ─────────┐"
 "│ Write a prompt…                           │"
 "└───────────────────── Enter send · ⌫ leave ┘"
+" y allow   n deny   ⏎ send   ^c stop         "
 " 1 waiting · I  ● box                 ? help "

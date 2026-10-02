@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragra
 
 use crate::account_screen::{self, AccountScreen, Pick};
 use crate::app::App;
+use crate::mouse::{Click, Hits, List as Rows};
 
 /// The widest a usage bar gets.
 const BAR: usize = 30;
@@ -22,7 +23,13 @@ const FAILOVER: &str = "A session whose account hits a limit moves to an account
                         unless sessions are pinned. All are set in the machine's daemon config \
                         (failover = true per account, [failover] pin and providers).";
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, screen: &AccountScreen) {
+pub(super) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    screen: &AccountScreen,
+    hits: &mut Hits,
+) {
     let narrow = area.width < super::NARROW;
     let keys = if narrow {
         " n add  r reconnect  Esc close "
@@ -56,7 +63,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, screen: &AccountScr
     let selected = screen.selected(&rows);
     let width = usize::from(list.width);
     let now = Timestamp::now();
-    let items: Vec<ListItem> = rows
+    // Each item with its row.
+    let items: Vec<(usize, ListItem)> = rows
         .iter()
         .enumerate()
         .filter_map(|(at, pick)| {
@@ -75,11 +83,19 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, screen: &AccountScr
                     account_text(app, machine, account, chosen, width, now)
                 }
             };
-            Some(ListItem::new(text))
+            Some((at, ListItem::new(text)))
         })
         .collect();
+    let heights: Vec<usize> = items.iter().map(|(_, item)| item.height()).collect();
+    let (picks, items): (Vec<usize>, Vec<ListItem>) = items.into_iter().unzip();
+    let selected = selected.and_then(|at| picks.iter().position(|pick| *pick == at));
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(List::new(items), list, &mut state);
+    if screen.adding.is_none() {
+        hits.list(list, state.offset(), &heights, |at| {
+            Some(Click::Row(Rows::Accounts, picks[at]))
+        });
+    }
     frame.render_widget(Paragraph::new(footer), footer_area);
 
     if let Some(adding) = &screen.adding {

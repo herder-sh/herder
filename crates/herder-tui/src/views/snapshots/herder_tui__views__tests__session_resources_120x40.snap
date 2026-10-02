@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(app, width, height).backend()"
 ---
+" box › app · herder/api                                                                                      inbox 0  + "
 "┌ sessions ────────────────────────────┐┌ resources ───────────────────────────────────────────────────────────────────┐"
 "│● box (4) cpu  42% mem  62%           ││ waiting for capacity · 4/4 turns, the turn cap binds                         │"
 "│ waiting   ▾ app · herder/api (2)     ││ cpu 12% · mem 768 MiB · 3 processes                                          │"
@@ -10,7 +11,6 @@ expression: "render(app, width, height).backend()"
 "│ idle      app · herder/fix-login     ││ :down brings app down                                                        │"
 "│                                      │└──────────────────────────────────────────────────────────────────────────────┘"
 "│                                      │┌ app · herder/api waiting ─────────────────── claude-main · claude-opus · ask ┐"
-"│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"

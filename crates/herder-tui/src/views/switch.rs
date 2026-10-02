@@ -10,10 +10,11 @@ use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 
 use crate::account_screen;
 use crate::app::App;
+use crate::mouse::{Click, Hits, List as Rows};
 use crate::session::Session;
 use crate::switch::{self, Kind};
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let Some(switch) = &app.switch else {
         return;
     };
@@ -21,6 +22,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         return;
     };
     let accounts = app.accounts_of(&switch.session);
+    let accounts_len = accounts.len();
     let current = session
         .account_id
         .as_ref()
@@ -48,6 +50,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .map(|account| account.label.chars().count())
         .max()
         .unwrap_or(0);
+    let first_account = lines.len();
     for (at, account) in accounts.iter().enumerate() {
         lines.push(account_line(
             session,
@@ -110,8 +113,14 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .padding(Padding::uniform(1));
     let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX);
     let area = super::centered(area, width, height);
+    let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
+    let first_account = inner.y + u16::try_from(first_account).unwrap_or(u16::MAX);
+    let rows = Rect::new(inner.x, first_account, inner.width, inner.height).intersection(inner);
+    hits.list(rows, 0, &vec![1; accounts_len], |at| {
+        Some(Click::Row(Rows::Switch, at))
+    });
 }
 
 /// An account to pick: its label, provider and busiest window, marked if the session is on it.
