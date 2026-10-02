@@ -1562,9 +1562,13 @@ impl Actor {
                 message: "the agent exited during the turn".to_owned(),
             });
             summary = Some(failed(&error));
-            let turn_id = turn_id.clone();
-            self.log(EventBody::TurnFailed { turn_id, error }).await;
+            self.log(EventBody::TurnFailed {
+                turn_id: turn_id.clone(),
+                error,
+            })
+            .await;
             self.record_branches().await;
+            self.checkpoint(turn_id).await;
         }
         if self.queue.is_empty() {
             if error.is_some() {
