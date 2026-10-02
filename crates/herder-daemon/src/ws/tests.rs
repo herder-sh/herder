@@ -10,22 +10,23 @@ use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
-    PermissionMode, Provider, Seq, ServerHello, ServerMessage, SessionHead, SessionId, TurnId,
+    PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId,
+    TurnId,
 };
 use herder_store::{NewEvent, Store};
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::WebPkiSupportedAlgorithms;
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::pki_types::ServerName;
 use tokio::net::{TcpSocket, TcpStream};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Identity, Server, Tls};
+use crate::auth::client::{DeviceKey, client_config};
+use crate::auth::{Auth, PAIRING_CODE_HEADER, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::session::EventSink;
 
@@ -87,6 +88,9 @@ impl Backend for TestBackend {
 struct Daemon {
     addr: SocketAddr,
     fingerprint: String,
+    auth: Arc<Auth>,
+    /// A device paired as the owner.
+    owner: DeviceKey,
     hub: Arc<Hub>,
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
@@ -115,11 +119,23 @@ impl Daemon {
             name: "localhost".into(),
         };
         let fingerprint = tls.fingerprint().to_owned();
-        let server = Server::new(tls, Arc::clone(&hub), backend, host);
+        let auth = Arc::new(Auth::open(tmp.path()).unwrap());
+        let owner = DeviceKey::generate().unwrap();
+        let code = auth.mint("owner", None, PAIRING_TTL).unwrap().code;
+        auth.authenticate(
+            &owner.fingerprint(),
+            Some(&code),
+            "test",
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let server = Server::new(tls, Arc::clone(&auth), Arc::clone(&hub), backend, host);
         tokio::spawn(server.run(listener, shutdown.clone()));
         Arc::new(Self {
             addr,
             fingerprint,
+            auth,
+            owner,
             hub,
             store,
             commands,
@@ -164,8 +180,18 @@ impl Daemon {
         session
     }
 
+    /// A client on the owner's device.
     async fn client(&self) -> Client {
-        Client::connect(self.addr, &self.fingerprint, None).await
+        Client::connect(self.addr, &self.fingerprint, &self.owner, None, None)
+            .await
+            .unwrap()
+    }
+
+    /// A client on `device`, sending `code` if given.
+    async fn client_on(&self, device: &DeviceKey, code: Option<&str>) -> Client {
+        Client::connect(self.addr, &self.fingerprint, device, code, None)
+            .await
+            .unwrap()
     }
 }
 
@@ -186,54 +212,6 @@ fn message(id: &str, text: &str) -> Item {
 fn added(id: &str, text: &str) -> EventBody {
     EventBody::ItemAdded {
         item: message(id, text),
-    }
-}
-
-/// Accepts exactly the certificate with the pinned fingerprint, as paired clients will.
-#[derive(Debug)]
-struct Pinned {
-    fingerprint: String,
-    algorithms: WebPkiSupportedAlgorithms,
-}
-
-impl ServerCertVerifier for Pinned {
-    fn verify_server_cert(
-        &self,
-        end_entity: &CertificateDer<'_>,
-        _: &[CertificateDer<'_>],
-        _: &ServerName<'_>,
-        _: &[u8],
-        _: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        if super::fingerprint(end_entity) == self.fingerprint {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General(
-                "certificate fingerprint mismatch".into(),
-            ))
-        }
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.algorithms.supported_schemes()
     }
 }
 
@@ -292,20 +270,17 @@ struct Client {
 }
 
 impl Client {
-    /// Connects over TLS, pinning `fingerprint`; `recv_buffer` shrinks the socket's receive
-    /// buffer so a client that stops reading pushes back on the server sooner.
-    async fn connect(addr: SocketAddr, fingerprint: &str, recv_buffer: Option<u32>) -> Self {
-        let provider = rustls::crypto::ring::default_provider();
-        let verifier = Pinned {
-            fingerprint: fingerprint.to_owned(),
-            algorithms: provider.signature_verification_algorithms,
-        };
-        let config = ClientConfig::builder_with_provider(Arc::new(provider))
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_no_client_auth();
+    /// Connects over TLS as `device`, pinning `fingerprint` and sending `code` if given;
+    /// `recv_buffer` shrinks the socket's receive buffer so a client that stops reading pushes
+    /// back on the server sooner. Fails when the TLS handshake does.
+    async fn connect(
+        addr: SocketAddr,
+        fingerprint: &str,
+        device: &DeviceKey,
+        code: Option<&str>,
+        recv_buffer: Option<u32>,
+    ) -> std::io::Result<Self> {
+        let config = client_config(fingerprint, device).unwrap();
         let socket = TcpSocket::new_v4().unwrap();
         if let Some(size) = recv_buffer {
             socket.set_recv_buffer_size(size).unwrap();
@@ -313,22 +288,24 @@ impl Client {
         let tcp = socket.connect(addr).await.unwrap();
         let tls = TlsConnector::from(Arc::new(config))
             .connect(ServerName::try_from("localhost").unwrap(), tcp)
-            .await
-            .unwrap();
+            .await?;
         let ws_config = WebSocketConfig::default()
             .max_message_size(None)
             .max_frame_size(None);
-        let (ws, _) = tokio_tungstenite::client_async_with_config(
-            format!("wss://localhost:{}/", addr.port()),
-            tls,
-            Some(ws_config),
-        )
-        .await
-        .unwrap();
-        Self {
+        let mut request = format!("wss://localhost:{}/", addr.port())
+            .into_client_request()
+            .unwrap();
+        if let Some(code) = code {
+            let headers = request.headers_mut();
+            headers.insert(PAIRING_CODE_HEADER, code.parse().unwrap());
+        }
+        let (ws, _) = tokio_tungstenite::client_async_with_config(request, tls, Some(ws_config))
+            .await
+            .unwrap();
+        Ok(Self {
             ws,
             view: View::default(),
-        }
+        })
     }
 
     async fn send(&mut self, message: &ClientMessage) {
@@ -537,7 +514,15 @@ async fn a_throttled_client_never_builds_a_backlog_and_converges() {
     let session = daemon.create_session("s1");
     let mut fast = daemon.client().await;
     fast.hello(vec![cursor(&session, 0)]).await;
-    let mut slow = Client::connect(daemon.addr, &daemon.fingerprint, Some(4096)).await;
+    let mut slow = Client::connect(
+        daemon.addr,
+        &daemon.fingerprint,
+        &daemon.owner,
+        None,
+        Some(4096),
+    )
+    .await
+    .unwrap();
     slow.hello(vec![cursor(&session, 0)]).await;
     fast.read_until(|view| view.last_seq() == 1).await;
     slow.read_until(|view| view.last_seq() == 1).await;
@@ -632,4 +617,176 @@ async fn a_client_resumes_from_its_cursor_after_a_disconnect() {
     daemon.append(&session, added("i15", "x"));
     client.read_until(|view| view.last_seq() == 17).await;
     assert_eq!(client.view.events.len(), 11);
+}
+
+/// Says hello and expects the daemon to refuse the device and close the connection.
+async fn refused(mut client: Client) -> ErrorInfo {
+    client
+        .send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "test".into(),
+            resume: Vec::new(),
+        }))
+        .await;
+    let ServerMessage::Error { error } = client.recv().await else {
+        panic!("expected the device to be refused");
+    };
+    assert!(
+        client.try_recv().await.is_none(),
+        "the connection stayed open"
+    );
+    error
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_pairs_with_a_code_and_is_known_afterwards() {
+    let daemon = Daemon::start().await;
+    let pairing = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap();
+    assert_eq!(pairing.role, Role::Member);
+    let device = DeviceKey::generate().unwrap();
+    let paired = daemon
+        .client_on(&device, Some(&pairing.code.to_lowercase()))
+        .await
+        .hello(Vec::new())
+        .await;
+    assert_eq!(paired.role, Role::Member);
+
+    // Later connections need no code: the device key is enough.
+    let again = daemon
+        .client_on(&device, None)
+        .await
+        .hello(Vec::new())
+        .await;
+    assert_eq!(
+        (&again.user_id, &again.device_id, again.role),
+        (&paired.user_id, &paired.device_id, Role::Member)
+    );
+    let owner = daemon.client().await.hello(Vec::new()).await;
+    assert_eq!(owner.role, Role::Owner);
+    assert_ne!(owner.user_id, paired.user_id);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unpaired_device_is_refused() {
+    let daemon = Daemon::start().await;
+    let stranger = DeviceKey::generate().unwrap();
+    let error = refused(daemon.client_on(&stranger, None).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert!(error.message.contains("not paired"), "{}", error.message);
+    let error = refused(daemon.client_on(&stranger, Some("NOPE0-NOPE0")).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_expired_code_is_refused() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, Duration::ZERO).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let error = refused(daemon.client_on(&device, Some(&code)).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert!(error.message.contains("expired"), "{}", error.message);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_code_pairs_one_device_only() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let first = DeviceKey::generate().unwrap();
+    daemon
+        .client_on(&first, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await;
+    let second = DeviceKey::generate().unwrap();
+    let error = refused(daemon.client_on(&second, Some(&code)).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(daemon.auth.devices().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pinned_client_rejects_a_changed_certificate() {
+    let daemon = Daemon::start().await;
+    let other = tempfile::tempdir().unwrap();
+    let replaced = Tls::load_or_create(other.path(), "localhost").unwrap();
+    let err = Client::connect(
+        daemon.addr,
+        replaced.fingerprint(),
+        &daemon.owner,
+        None,
+        None,
+    )
+    .await
+    .err()
+    .expect("the handshake succeeded against an unpinned certificate");
+    let err = err.to_string();
+    assert!(
+        err.contains(&format!("fingerprint is {}", daemon.fingerprint)),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminals_are_for_owners_only() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let open = |id: &str| {
+        ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body: CommandBody::OpenTerminal {
+                session_id: session.clone(),
+                cols: 80,
+                rows: 24,
+            },
+        })
+    };
+    member.send(&open("c1")).await;
+    let ServerMessage::CommandRejected { error, .. } = member.recv().await else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+    // Members still drive sessions.
+    member
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("c2"),
+            body: CommandBody::SendPrompt {
+                session_id: session.clone(),
+                text: "hi".into(),
+            },
+        }))
+        .await;
+    assert!(matches!(
+        member.recv().await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+
+    // The owner's terminal command reaches the backend.
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    owner.send(&open("c3")).await;
+    let ServerMessage::CommandRejected { error, .. } = owner.recv().await else {
+        panic!("expected the test backend's rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_a_device_disconnects_and_refuses_it() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut client = daemon.client_on(&device, Some(&code)).await;
+    let hello = client.hello(Vec::new()).await;
+    assert!(daemon.auth.revoke(&hello.device_id).unwrap());
+    assert!(
+        client.try_recv().await.is_none(),
+        "the connection stayed open"
+    );
+    let error = refused(daemon.client_on(&device, None).await).await;
+    assert_eq!(error.code, ErrorCode::Forbidden);
 }

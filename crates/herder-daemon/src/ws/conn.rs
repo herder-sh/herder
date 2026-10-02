@@ -9,19 +9,21 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientHello, ClientMessage, Command, Cursor, DeviceId, ErrorCode, ErrorInfo, EventBody,
-    PROTOCOL_VERSION, Role, ServerHello, ServerMessage, UserId,
+    ClientMessage, Command, Cursor, ErrorCode, ErrorInfo, EventBody, PROTOCOL_VERSION, ServerHello,
+    ServerMessage,
 };
 use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{Backend, Identity, Shared};
+use super::{Backend, Shared, fingerprint};
+use crate::auth::{self, PAIRING_CODE_HEADER};
 use crate::hub::{Outbox, OutboxState};
 
 /// Time a client gets for the TLS and WebSocket handshakes, and again for its hello.
@@ -36,6 +38,14 @@ const REPLAY_PAGE: usize = 256;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
+/// What the client presented before its hello.
+struct Credentials {
+    /// Fingerprint of its device certificate.
+    device: String,
+    /// Pairing code from the upgrade request, sent by a device that is not paired yet.
+    pairing_code: Option<String>,
+}
+
 pub(super) async fn run<B: Backend>(
     stream: TcpStream,
     peer: SocketAddr,
@@ -49,7 +59,7 @@ pub(super) async fn run<B: Backend>(
         () = cancel.cancelled() => return,
         ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared)) => ws,
     };
-    let ws = match ws {
+    let (ws, credentials) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => {
             debug!(%peer, "handshake failed: {err:#}");
@@ -65,7 +75,7 @@ pub(super) async fn run<B: Backend>(
     let writer = tokio::spawn(write(sink, Arc::clone(&outbox), cancel.clone()));
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
-        result = read(stream, &shared, &outbox) => result,
+        result = read(stream, &shared, &outbox, &credentials, &cancel) => result,
     };
     if let Err(err) = result {
         debug!(%peer, "connection failed: {err:#}");
@@ -76,9 +86,35 @@ pub(super) async fn run<B: Backend>(
     debug!(%peer, "connection closed");
 }
 
-async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<Ws> {
+async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, Credentials)> {
     let tls = shared.tls.acceptor().accept(stream).await?;
-    Ok(tokio_tungstenite::accept_async(tls).await?)
+    // The verifier makes a client certificate mandatory; this only guards against a change there.
+    let device = tls
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .map(|cert| fingerprint(cert))
+        .context("the client sent no device certificate")?;
+    let mut pairing_code = None;
+    // tungstenite's handshake callback fixes the error type; this closure never fails.
+    #[allow(clippy::result_large_err)]
+    let ws = tokio_tungstenite::accept_hdr_async(tls, |request: &Request, response: Response| {
+        pairing_code = request
+            .headers()
+            .get(PAIRING_CODE_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        Ok(response)
+    })
+    .await?;
+    Ok((
+        ws,
+        Credentials {
+            device,
+            pairing_code,
+        },
+    ))
 }
 
 /// Handles the client's messages until it closes the connection.
@@ -86,6 +122,8 @@ async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
+    credentials: &Credentials,
+    cancel: &CancellationToken,
 ) -> Result<()> {
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream))
         .await
@@ -105,8 +143,24 @@ async fn read<B: Backend>(
             ),
         );
     }
-    let identity = authenticate(&hello);
-    info!(client = %hello.client, user_id = %identity.user_id, "client connected");
+    let identity = match shared.auth.authenticate(
+        &credentials.device,
+        credentials.pairing_code.as_deref(),
+        &hello.client,
+        cancel,
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            outbox.push(ServerMessage::Error { error });
+            bail!("device {} refused", credentials.device);
+        }
+    };
+    info!(
+        client = %hello.client,
+        user_id = %identity.user_id,
+        device_id = %identity.device_id,
+        "client connected"
+    );
     outbox.push(ServerMessage::Hello(ServerHello {
         protocol_version: PROTOCOL_VERSION,
         host_id: shared.host.id.clone(),
@@ -137,6 +191,13 @@ async fn read<B: Backend>(
                 shared.hub.unsubscribe(outbox, &session_id);
             }
             Ok(ClientMessage::Command(Command { id, body })) => {
+                if let Err(error) = auth::authorize(&identity, &body) {
+                    outbox.push(ServerMessage::CommandRejected {
+                        command_id: id,
+                        error,
+                    });
+                    continue;
+                }
                 let key = (identity.user_id.clone(), id.clone());
                 let apply = {
                     let shared = Arc::clone(shared);
@@ -158,18 +219,6 @@ async fn read<B: Backend>(
         }
     }
     Ok(())
-}
-
-/// Decides who the connection acts as.
-///
-/// P1.3 (pairing) authenticates the device here, before anything else is sent, and refuses the
-/// connection when it fails. Until then every connection is the daemon's owner.
-fn authenticate(_hello: &ClientHello) -> Identity {
-    Identity {
-        user_id: UserId::new("owner"),
-        device_id: DeviceId::new("unpaired"),
-        role: Role::Owner,
-    }
 }
 
 /// The next client message: `Some(Err)` describes a frame that is not one.

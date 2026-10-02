@@ -1,6 +1,7 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
 mod dev;
+mod pair;
 mod service;
 mod update;
 
@@ -28,6 +29,8 @@ enum Command {
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Pair a device with the daemon running on this machine, or list and revoke devices.
+    Pair(pair::Args),
     /// Manage the systemd user service that runs the daemon at boot.
     Service {
         #[command(subcommand)]
@@ -55,6 +58,7 @@ enum Command {
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Some(Command::Daemon { config }) => daemon(config).map(|()| ExitCode::SUCCESS),
+        Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Update {
             version,
@@ -118,6 +122,25 @@ mod tests {
                 matches!(cli.command, Some(Command::Service { .. })),
                 "{action}"
             );
+        }
+    }
+
+    #[test]
+    fn parses_pair_flags() {
+        let cli = Cli::try_parse_from(["herder", "pair", "--user", "bob", "--role", "member"]);
+        assert!(matches!(cli.unwrap().command, Some(Command::Pair(_))));
+        for args in [
+            &["herder", "pair", "--list"][..],
+            &["herder", "pair", "--revoke", "01J"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
+        for args in [
+            &["herder", "pair", "--list", "--revoke", "01J"][..],
+            &["herder", "pair", "--list", "--user", "bob"],
+            &["herder", "pair", "--role", "admin"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }
     }
 

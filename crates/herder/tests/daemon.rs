@@ -153,3 +153,59 @@ fn unknown_config_key_fails_to_start() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field"));
 }
+
+fn pair(config: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_herder"))
+        .args(["pair", "--config"])
+        .arg(config)
+        .args(args)
+        .env_remove("HERDER_CONFIG")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn pair_mints_a_code_from_the_running_daemon() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = write_config(tmp.path());
+
+    let output = pair(&config, &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("is it running?"), "{stderr}");
+
+    let mut child = spawn(&config);
+    let lines = stderr_lines(&mut child);
+    let started = wait_for_line(&lines, "herder daemon started");
+    let started: serde_json::Value = serde_json::from_str(&started).unwrap();
+    let fingerprint = started["fields"]["tls_fingerprint"].as_str().unwrap();
+
+    let output = pair(&config, &["--user", "alice"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("as alice (owner)"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("fingerprint  {fingerprint}")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("address      127.0.0.1:"), "{stdout}");
+    assert!(
+        stdout.contains("herder://pair?host=127.0.0.1%3A"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains('▀') || stdout.contains('▄'),
+        "no QR code: {stdout}"
+    );
+
+    let output = pair(&config, &["--user", "bob", "--role", "member"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("first user"));
+    let output = pair(&config, &["--list"]);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("no paired devices"));
+    let output = pair(&config, &["--revoke", "nope"]);
+    assert_eq!(output.status.code(), Some(1));
+
+    sigterm(&child);
+    assert_eq!(wait_with_timeout(&mut child).code(), Some(0));
+}

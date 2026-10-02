@@ -18,6 +18,7 @@ herder-adapters.workspace = true
 herder-daemon.workspace = true
 herder-protocol.workspace = true
 herder-tui.workspace = true
+qrcode.workspace = true
 semver.workspace = true
 sha2.workspace = true
 tar.workspace = true
@@ -27,6 +28,7 @@ ureq.workspace = true
 
 [dev-dependencies]
 nix.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
