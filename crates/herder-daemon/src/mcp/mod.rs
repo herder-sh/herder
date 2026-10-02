@@ -39,7 +39,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use herder_adapters::McpServer;
 use herder_protocol::SessionId;
-use herder_tasktools::{CallToolResult, ErrorCode, StatusOutput, ToolCall, ToolError};
+use herder_tasktools::{CallToolResult, ToolCall};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -66,8 +66,6 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// The herder binary the CLI runs as the shim.
     pub herder: PathBuf,
-    /// Runs the tool calls.
-    pub tools: Arc<dyn ToolHandler>,
 }
 
 /// Runs task tool calls.
@@ -80,30 +78,6 @@ pub trait ToolHandler: Send + Sync + 'static {
 /// What [`ToolHandler::call`] returns.
 pub type ToolFuture = Pin<Box<dyn Future<Output = CallToolResult> + Send>>;
 
-/// The tools as far as they are built: `status` reports no children, since none can be
-/// spawned yet, and every other tool fails saying it is not implemented.
-pub struct Unimplemented;
-
-impl ToolHandler for Unimplemented {
-    fn call(&self, _caller: SessionId, call: ToolCall) -> ToolFuture {
-        let result = match call {
-            ToolCall::Status(_) => CallToolResult::success(&StatusOutput {
-                children: Vec::new(),
-            })
-            .unwrap_or_else(|err| ToolError::new(ErrorCode::Internal, err.to_string()).into()),
-            call => ToolError::new(
-                ErrorCode::Internal,
-                format!(
-                    "not implemented: this herder cannot run `{}` yet",
-                    call.tool().name()
-                ),
-            )
-            .into(),
-        };
-        Box::pin(std::future::ready(result))
-    }
-}
-
 /// The running MCP server: grants sessions their tokens and serves their shims.
 pub struct Mcp {
     data_dir: PathBuf,
@@ -115,8 +89,13 @@ pub struct Mcp {
 
 impl Mcp {
     /// Binds the socket, replacing a stale one, clears tokens left by an earlier daemon, and
-    /// serves shims until `shutdown`. The caller holds the data-dir lock.
-    pub fn start(config: Config, shutdown: CancellationToken) -> Result<Arc<Self>> {
+    /// serves shims, running their calls on `tools`, until `shutdown`. The caller holds the
+    /// data-dir lock.
+    pub fn start(
+        config: Config,
+        tools: Arc<dyn ToolHandler>,
+        shutdown: CancellationToken,
+    ) -> Result<Arc<Self>> {
         let tokens = config.data_dir.join(TOKENS);
         match std::fs::remove_dir_all(&tokens) {
             Ok(()) => {}
@@ -138,7 +117,7 @@ impl Mcp {
         let mcp = Arc::new(Self {
             data_dir: config.data_dir,
             herder: config.herder,
-            tools: config.tools,
+            tools,
             grants: Mutex::new(HashMap::new()),
         });
         tokio::spawn(serve(listener, Arc::clone(&mcp), shutdown));

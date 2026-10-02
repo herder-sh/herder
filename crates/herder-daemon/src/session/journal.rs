@@ -86,6 +86,11 @@ impl Journal {
             .await
     }
 
+    /// Every child session of `parent`'s task, ordered by session id.
+    pub(crate) async fn children(&self, parent: SessionId) -> Result<Vec<Session>> {
+        self.with_store(move |store| store.children(&parent)).await
+    }
+
     pub(crate) async fn sessions(&self) -> Result<Vec<Session>> {
         self.with_store(|store| store.sessions()).await
     }

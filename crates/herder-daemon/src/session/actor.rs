@@ -14,28 +14,33 @@ use herder_protocol::{
     SessionStatus, TurnError, TurnId, UserId,
 };
 use herder_store::Session;
+use herder_tasktools::WaitForOutput;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::journal::Journal;
+use super::tasks::Tasks;
 use super::{Inner, error};
 use crate::{handoff, worktree};
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
 
-/// A command for one session, from the user `by`, answered on `reply`.
+/// A command for one session, from the user `by` (`None` for the primary session's agent),
+/// answered on `reply`.
 pub(super) struct SessionCommand {
-    pub(super) by: UserId,
+    pub(super) by: Option<UserId>,
     pub(super) request: Request,
     pub(super) reply: oneshot::Sender<Result<CommandResult, ErrorInfo>>,
 }
 
 /// What a session command asks for.
 pub(super) enum Request {
+    /// Queues a prompt; `queued` learns whether it waits behind a running turn.
     SendPrompt {
         text: String,
+        queued: Option<oneshot::Sender<bool>>,
     },
     Interrupt,
     SetModel {
@@ -68,7 +73,9 @@ pub(super) struct Actor {
     /// The turn the adapter is running.
     turn: Option<TurnId>,
     /// Prompts waiting for the running turn to end, oldest first.
-    queue: VecDeque<(UserId, String)>,
+    queue: VecDeque<(Option<UserId>, String)>,
+    /// The latest assistant message of the running turn: a child's report when it ends.
+    last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first, with who each is
     /// put to.
     approvals: Vec<(ApprovalId, Route)>,
@@ -90,6 +97,7 @@ impl Actor {
             adapter: None,
             turn: None,
             queue: VecDeque::new(),
+            last_reply: None,
             approvals: Vec::new(),
             questions: HashMap::new(),
         }
@@ -117,6 +125,9 @@ impl Actor {
             match next {
                 Next::Command(command) => {
                     let result = self.apply(command.by, command.request).await;
+                    // Before the reply, so a `wait_for` after `spawn` or `send` sees the child
+                    // working.
+                    self.sync_working();
                     // The client may be gone; the command still applied.
                     let _ = command.reply.send(result);
                     self.start_next().await;
@@ -132,7 +143,11 @@ impl Actor {
         }
     }
 
-    async fn apply(&mut self, by: UserId, request: Request) -> Result<CommandResult, ErrorInfo> {
+    async fn apply(
+        &mut self,
+        by: Option<UserId>,
+        request: Request,
+    ) -> Result<CommandResult, ErrorInfo> {
         if self.session.status == SessionStatus::Archived {
             return Err(error(
                 ErrorCode::Conflict,
@@ -140,8 +155,12 @@ impl Actor {
             ));
         }
         match request {
-            Request::SendPrompt { text } => {
+            Request::SendPrompt { text, queued } => {
+                let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back((by, text));
+                if let Some(queued) = queued {
+                    let _ = queued.send(busy);
+                }
             }
             Request::Interrupt => match (&self.turn, &self.adapter) {
                 (Some(_), Some(adapter)) => {
@@ -156,7 +175,7 @@ impl Actor {
                     };
                     self.change(|caps| caps.native_model_switch, command)?;
                     self.record(
-                        Some(by),
+                        by,
                         EventBody::ModelSwitched {
                             model: model.clone(),
                         },
@@ -170,7 +189,7 @@ impl Actor {
                 if mode != self.session.permission_mode {
                     let command = AdapterCommand::SetPermissionMode { mode };
                     self.change(|caps| caps.native_permission_mode_switch, command)?;
-                    self.record(Some(by), EventBody::PermissionModeChanged { mode })
+                    self.record(by, EventBody::PermissionModeChanged { mode })
                         .await
                         .map_err(super::internal)?;
                     self.session.permission_mode = mode;
@@ -210,7 +229,7 @@ impl Actor {
                     answer,
                     answered_by: Answerer::User,
                 };
-                self.record(Some(by), body).await.map_err(super::internal)?;
+                self.record(by, body).await.map_err(super::internal)?;
                 self.settle().await;
             }
             Request::Archive { force } => self.archive(by, force).await?,
@@ -223,7 +242,7 @@ impl Actor {
     /// while the approval is open.
     async fn answer_approval(
         &mut self,
-        by: UserId,
+        by: Option<UserId>,
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     ) -> Result<(), ErrorInfo> {
@@ -235,7 +254,7 @@ impl Actor {
             decision: decision.into(),
             answered_by: Answerer::User,
         };
-        self.record(Some(by), body).await.map_err(super::internal)?;
+        self.record(by, body).await.map_err(super::internal)?;
         self.approvals.remove(open);
         if let Some(adapter) = &self.adapter {
             // A closed channel means the CLI is gone; its `exited` fails the turn.
@@ -299,7 +318,7 @@ impl Actor {
         }
     }
 
-    async fn archive(&mut self, by: UserId, force: bool) -> Result<(), ErrorInfo> {
+    async fn archive(&mut self, by: Option<UserId>, force: bool) -> Result<(), ErrorInfo> {
         if self.turn.is_some() {
             return Err(error(
                 ErrorCode::Conflict,
@@ -334,7 +353,7 @@ impl Actor {
             mcp.revoke(&self.session.session_id);
         }
         let status = SessionStatus::Archived;
-        self.record(Some(by), EventBody::SessionStatusChanged { status })
+        self.record(by, EventBody::SessionStatusChanged { status })
             .await
             .map_err(super::internal)?;
         self.session.status = status;
@@ -415,10 +434,16 @@ impl Actor {
                             turn_id: turn_id.clone(),
                         })
                         .await;
-                        self.log(EventBody::TurnFailed { turn_id, error }).await;
+                        let summary = failed(&error);
+                        self.log(EventBody::TurnFailed {
+                            turn_id: turn_id.clone(),
+                            error,
+                        })
+                        .await;
                         if self.queue.is_empty() {
                             self.set_status(SessionStatus::NeedsYou).await;
                         }
+                        self.report(turn_id, summary).await;
                         continue;
                     }
                 }
@@ -432,6 +457,7 @@ impl Actor {
                 });
             }
             self.turn = Some(turn_id);
+            self.last_reply = None;
         }
     }
 
@@ -497,16 +523,32 @@ impl Actor {
                 self.log(EventBody::TurnStarted { turn_id }).await;
             }
             AdapterEvent::TurnCompleted { turn_id } => {
-                self.turn_ended(EventBody::TurnCompleted { turn_id }, SessionStatus::Idle)
+                let summary = self
+                    .last_reply
+                    .take()
+                    .unwrap_or_else(|| "The turn ended without a final message.".to_owned());
+                let body = EventBody::TurnCompleted {
+                    turn_id: turn_id.clone(),
+                };
+                self.turn_ended(turn_id, body, SessionStatus::Idle, summary)
                     .await;
             }
             AdapterEvent::TurnInterrupted { turn_id } => {
-                self.turn_ended(EventBody::TurnInterrupted { turn_id }, SessionStatus::Idle)
+                let body = EventBody::TurnInterrupted {
+                    turn_id: turn_id.clone(),
+                };
+                let summary = "The turn was interrupted.".to_owned();
+                self.turn_ended(turn_id, body, SessionStatus::Idle, summary)
                     .await;
             }
             AdapterEvent::TurnFailed { turn_id, error } => {
-                let body = EventBody::TurnFailed { turn_id, error };
-                self.turn_ended(body, SessionStatus::NeedsYou).await;
+                let summary = failed(&error);
+                let body = EventBody::TurnFailed {
+                    turn_id: turn_id.clone(),
+                    error,
+                };
+                self.turn_ended(turn_id, body, SessionStatus::NeedsYou, summary)
+                    .await;
             }
             AdapterEvent::ItemStarted { item } => {
                 self.inner
@@ -521,6 +563,11 @@ impl Actor {
                     .delta(&self.session.session_id, &item_id, &text);
             }
             AdapterEvent::ItemCompleted { item } => {
+                if let ItemBody::AssistantMessage { text } = &item.body
+                    && self.turn.as_ref() == Some(&item.turn_id)
+                {
+                    self.last_reply = Some(text.clone());
+                }
                 self.log(EventBody::ItemAdded { item }).await;
             }
             AdapterEvent::ApprovalRequested {
@@ -585,9 +632,15 @@ impl Actor {
         }
     }
 
-    /// Journals the end of the running turn, then starts the next queued prompt or settles
-    /// on `settled`.
-    async fn turn_ended(&mut self, body: EventBody, settled: SessionStatus) {
+    /// Journals the end of the running turn and reports it as `summary`, then starts the next
+    /// queued prompt or settles on `settled`.
+    async fn turn_ended(
+        &mut self,
+        turn_id: TurnId,
+        body: EventBody,
+        settled: SessionStatus,
+        summary: String,
+    ) {
         self.void_approvals().await;
         self.log(body).await;
         self.record_branches().await;
@@ -595,9 +648,9 @@ impl Actor {
         self.questions.clear();
         if self.queue.is_empty() {
             self.set_status(settled).await;
-        } else {
-            self.start_next().await;
         }
+        self.report(turn_id, summary).await;
+        self.start_next().await;
     }
 
     /// The CLI is gone: fails a turn it left open; the next prompt starts it again.
@@ -606,31 +659,72 @@ impl Actor {
         let open = self.turn.take();
         self.void_approvals().await;
         self.questions.clear();
+        let mut summary = None;
         if let Some(turn_id) = &open {
             let error = error.clone().unwrap_or_else(|| TurnError {
                 class: ErrorClass::Transient,
                 message: "the agent exited during the turn".to_owned(),
             });
+            summary = Some(failed(&error));
             let turn_id = turn_id.clone();
             self.log(EventBody::TurnFailed { turn_id, error }).await;
             self.record_branches().await;
         }
-        if !self.queue.is_empty() {
-            self.start_next().await;
-        } else if error.is_some() {
-            self.set_status(SessionStatus::Error).await;
-        } else if open.is_some() {
-            self.set_status(SessionStatus::NeedsYou).await;
+        if self.queue.is_empty() {
+            if error.is_some() {
+                self.set_status(SessionStatus::Error).await;
+            } else if open.is_some() {
+                self.set_status(SessionStatus::NeedsYou).await;
+            }
+        }
+        if let (Some(turn_id), Some(summary)) = (open, summary) {
+            self.report(turn_id, summary).await;
+        }
+        self.start_next().await;
+    }
+
+    /// A child's turn ended: journals `child_reported` in its primary session and hands the
+    /// report to the primary's `wait_for`. Nothing for a top-level session.
+    async fn report(&mut self, turn_id: TurnId, summary: String) {
+        let Some(parent) = self.session.parent.clone() else {
+            return;
+        };
+        let child = self.session.session_id.clone();
+        let body = EventBody::ChildReported {
+            child_session_id: child.clone(),
+            turn_id: turn_id.clone(),
+            summary: summary.clone(),
+        };
+        if let Err(err) = self.inner.journal.record(parent.clone(), None, body).await {
+            warn!(session_id = %child, "cannot journal a report to {parent}: {err:#}");
+        }
+        let output = WaitForOutput::Report {
+            child: child.clone(),
+            turn_id,
+            summary,
+            status: self.session.status,
+        };
+        let working = self.turn.is_some() || !self.queue.is_empty();
+        self.inner.tasks.report(&parent, &child, output, working);
+    }
+
+    /// Tells the task registry whether this child has a turn running or a prompt queued.
+    fn sync_working(&self) {
+        if let Some(parent) = &self.session.parent {
+            let working = self.turn.is_some() || !self.queue.is_empty();
+            self.inner
+                .tasks
+                .set_working(parent, &self.session.session_id, working);
         }
     }
 
-    async fn user_message(&mut self, by: UserId, turn_id: &TurnId, text: String) {
+    async fn user_message(&mut self, by: Option<UserId>, turn_id: &TurnId, text: String) {
         let item = Item {
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::UserMessage { text },
         };
-        if let Err(err) = self.record(Some(by), EventBody::ItemAdded { item }).await {
+        if let Err(err) = self.record(by, EventBody::ItemAdded { item }).await {
             warn!(session_id = %self.session.session_id, "cannot journal a prompt: {err:#}");
         }
     }
@@ -670,7 +764,13 @@ async fn stop(mut adapter: AdapterSession) {
 /// An open approval expires, not left open: the CLI that asked is gone with the old daemon,
 /// so no answer can reach it, and the next turn starts a new CLI that asks afresh if it still
 /// needs to.
-pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -> Result<()> {
+///
+/// A child reports the closed turn to its primary session, as for any turn's end.
+pub(super) async fn close_abandoned_turn(
+    journal: &Journal,
+    tasks: &Tasks,
+    session: &Session,
+) -> Result<()> {
     let mut open = None;
     let mut approvals = Vec::new();
     for event in journal.all(session.session_id.clone()).await? {
@@ -692,18 +792,21 @@ pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -
             .record(id.clone(), None, voided(approval_id))
             .await?;
     }
-    let status = match open {
+    let (status, report) = match open {
         Some(turn_id) => {
             let error = TurnError {
                 class: ErrorClass::Transient,
                 message: "the daemon stopped during this turn".to_owned(),
             };
-            journal
-                .record(id.clone(), None, EventBody::TurnFailed { turn_id, error })
-                .await?;
-            SessionStatus::NeedsYou
+            let summary = failed(&error);
+            let body = EventBody::TurnFailed {
+                turn_id: turn_id.clone(),
+                error,
+            };
+            journal.record(id.clone(), None, body).await?;
+            (SessionStatus::NeedsYou, Some((turn_id, summary)))
         }
-        None if session.status == SessionStatus::Running => SessionStatus::Idle,
+        None if session.status == SessionStatus::Running => (SessionStatus::Idle, None),
         None => return Ok(()),
     };
     if status != session.status {
@@ -711,7 +814,27 @@ pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -
             .record(id.clone(), None, EventBody::SessionStatusChanged { status })
             .await?;
     }
+    if let (Some(parent), Some((turn_id, summary))) = (&session.parent, report) {
+        let body = EventBody::ChildReported {
+            child_session_id: id.clone(),
+            turn_id: turn_id.clone(),
+            summary: summary.clone(),
+        };
+        journal.record(parent.clone(), None, body).await?;
+        let output = WaitForOutput::Report {
+            child: id.clone(),
+            turn_id,
+            summary,
+            status,
+        };
+        tasks.report(parent, id, output, false);
+    }
     Ok(())
+}
+
+/// A failed turn's report.
+pub(super) fn failed(error: &TurnError) -> String {
+    format!("The turn failed: {}", error.message)
 }
 
 /// An approval the daemon closed because no answer can reach the agent any more.

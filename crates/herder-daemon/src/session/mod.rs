@@ -54,6 +54,11 @@
 //! token for herder's MCP server ([`crate::mcp`]) and registers that server with the CLI;
 //! archive withdraws it.
 //!
+//! # Tasks
+//!
+//! Through the MCP server's task tools a session becomes a task's primary and spawns child
+//! sessions; each child's turn ends with a report to the primary ([`tasks`]).
+//!
 //! # Questions
 //!
 //! A question the agent asks is journaled as `question_asked`, routed to the user, and blocks
@@ -69,6 +74,7 @@
 
 mod actor;
 pub(crate) mod journal;
+mod tasks;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -86,6 +92,7 @@ use tracing::warn;
 
 use actor::{Actor, Request, SessionCommand};
 use journal::Journal;
+use tasks::{TaskTools, Tasks};
 
 use crate::mcp::{self, Mcp};
 use crate::prs::{self, PrTracker};
@@ -181,6 +188,8 @@ struct Inner {
     prs: OnceLock<Arc<PrTracker>>,
     /// herder's MCP server, once started.
     mcp: OnceLock<Arc<Mcp>>,
+    /// Children's reports waiting for their primaries.
+    tasks: Tasks,
     shutdown: CancellationToken,
 }
 
@@ -189,12 +198,13 @@ impl SessionManager {
     /// their adapters once `shutdown` is cancelled.
     pub async fn open(setup: Setup, shutdown: CancellationToken) -> anyhow::Result<Self> {
         let journal = Journal::new(setup.store, setup.sink);
+        let tasks = Tasks::default();
         for session in journal.sessions().await? {
             if matches!(
                 session.status,
                 SessionStatus::Running | SessionStatus::NeedsYou
             ) {
-                actor::close_abandoned_turn(&journal, &session).await?;
+                actor::close_abandoned_turn(&journal, &tasks, &session).await?;
             }
         }
         Ok(Self {
@@ -207,6 +217,7 @@ impl SessionManager {
                 actors: Mutex::new(HashMap::new()),
                 prs: OnceLock::new(),
                 mcp: OnceLock::new(),
+                tasks,
                 shutdown,
             }),
         })
@@ -234,11 +245,14 @@ impl SessionManager {
                     account_id,
                     model,
                     permission_mode,
+                    parent: None,
+                    task: None,
                 };
-                return self.create(by, request).await;
+                let (session_id, _) = self.create_session(Some(by), request).await?;
+                return Ok(CommandResult::SessionCreated { session_id });
             }
             CommandBody::SendPrompt { session_id, text } => {
-                (session_id, Request::SendPrompt { text })
+                (session_id, Request::SendPrompt { text, queued: None })
             }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
             CommandBody::SetModel { session_id, model } => {
@@ -291,7 +305,7 @@ impl SessionManager {
                 ));
             }
         };
-        self.send(session_id, by, request).await
+        self.send(session_id, Some(by), request).await
     }
 
     /// Starts pull request tracking ([`crate::prs`]) for every session, until the manager's
@@ -307,14 +321,20 @@ impl SessionManager {
         Ok(tracker)
     }
 
-    /// Starts herder's MCP server ([`crate::mcp`]) until the manager's shutdown, and registers
-    /// it with every session's CLI from its next start; once per manager.
+    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]) until the
+    /// manager's shutdown, and registers it with every session's CLI from its next start; once
+    /// per manager.
     pub fn serve_mcp(&self, config: mcp::Config) -> anyhow::Result<()> {
         let inner = &self.inner;
         if inner.mcp.get().is_some() {
             anyhow::bail!("the MCP server runs already");
         }
-        let _ = inner.mcp.set(Mcp::start(config, inner.shutdown.clone())?);
+        let tools = Arc::new(TaskTools {
+            inner: Arc::downgrade(inner),
+        });
+        let _ = inner
+            .mcp
+            .set(Mcp::start(config, tools, inner.shutdown.clone())?);
         Ok(())
     }
 
@@ -336,7 +356,8 @@ impl SessionManager {
         session_id: SessionId,
         force: bool,
     ) -> Result<CommandResult, ErrorInfo> {
-        self.send(session_id, by, Request::Archive { force }).await
+        self.send(session_id, Some(by), Request::Archive { force })
+            .await
     }
 
     /// Every branch `session_id` owns, its own first, in the order first checked out: the
@@ -407,7 +428,12 @@ impl SessionManager {
             .await
     }
 
-    async fn create(&self, by: UserId, request: CreateRequest) -> Result<CommandResult, ErrorInfo> {
+    /// Creates a session with its worktree; returns its id and branch.
+    async fn create_session(
+        &self,
+        by: Option<UserId>,
+        request: CreateRequest,
+    ) -> Result<(SessionId, String), ErrorInfo> {
         let inner = &self.inner;
         let account = inner.accounts.get(&request.account_id).ok_or_else(|| {
             error(
@@ -434,18 +460,18 @@ impl SessionManager {
         let body = EventBody::SessionCreated {
             repo: request.repo,
             worktree: worktree.path.to_string_lossy().into_owned(),
-            branch: worktree.branch,
+            branch: worktree.branch.clone(),
             provider: account.provider.clone(),
             account_id: request.account_id,
             // Empty until the adapter reports the provider's default.
             model: request.model.unwrap_or_default(),
             permission_mode: request.permission_mode,
-            parent: None,
-            task: None,
+            parent: request.parent,
+            task: request.task,
         };
         inner
             .journal
-            .record(session_id.clone(), Some(by), body)
+            .record(session_id.clone(), by, body)
             .await
             .map_err(internal)?;
         if let Some(prs) = inner.prs.get() {
@@ -455,13 +481,26 @@ impl SessionManager {
             Ok(heads) => inner.journal.sink().sessions_changed(&heads),
             Err(err) => warn!("cannot list sessions after creating {session_id}: {err:#}"),
         }
-        Ok(CommandResult::SessionCreated { session_id })
+        Ok((session_id, worktree.branch))
+    }
+
+    /// Sends `session_id` a prompt from its primary's agent; returns whether it waits behind a
+    /// running turn.
+    async fn prompt(&self, session_id: &SessionId, text: String) -> Result<bool, ErrorInfo> {
+        let (queued, busy) = oneshot::channel();
+        let request = Request::SendPrompt {
+            text,
+            queued: Some(queued),
+        };
+        self.send(session_id.clone(), None, request).await?;
+        busy.await
+            .map_err(|_| error(ErrorCode::Internal, "the session stopped"))
     }
 
     async fn send(
         &self,
         session_id: SessionId,
-        by: UserId,
+        by: Option<UserId>,
         request: Request,
     ) -> Result<CommandResult, ErrorInfo> {
         let (reply, answer) = oneshot::channel();
@@ -499,13 +538,17 @@ impl SessionManager {
     }
 }
 
-/// A `create_session` command.
+/// A `create_session` command, or a `spawn`.
 struct CreateRequest {
     repo: String,
     branch: Option<String>,
     account_id: AccountId,
     model: Option<String>,
     permission_mode: herder_protocol::PermissionMode,
+    /// The primary session, for a child.
+    parent: Option<SessionId>,
+    /// The child's task label.
+    task: Option<String>,
 }
 
 fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {
