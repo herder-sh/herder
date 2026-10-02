@@ -69,6 +69,12 @@ impl Journal {
             .await
     }
 
+    /// Every branch the session owns, in the order first seen.
+    pub(super) async fn branches(&self, session_id: SessionId) -> Result<Vec<String>> {
+        self.with_store(move |store| store.session_branches(&session_id))
+            .await
+    }
+
     pub(super) async fn sessions(&self) -> Result<Vec<Session>> {
         self.with_store(|store| store.sessions()).await
     }

@@ -1,0 +1,7 @@
+# The agent asks a question with two choices; the turn continues once it is answered.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Add a migration."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "question_asked", "question_id": "question-1", "turn_id": "turn-1", "text": "Which database?", "choices": ["SQLite", "Postgres"]}}
+{"expect": {"type": "answer_question", "question_id": "question-1", "answer": {"type": "choice", "index": 1}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Done."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

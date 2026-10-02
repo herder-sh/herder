@@ -94,10 +94,25 @@ fn new_event(session: &SessionId, second: i64, body: EventBody) -> NewEvent {
     }
 }
 
+fn checked_out(branch: &str) -> EventBody {
+    EventBody::BranchCheckedOut {
+        branch: branch.into(),
+    }
+}
+
+/// The projections of one session.
+#[derive(Debug, PartialEq)]
+struct Projections {
+    session: Option<Session>,
+    prs: Vec<PullRequest>,
+    branches: Vec<String>,
+}
+
 /// The projections, recomputed from scratch by folding a session's journal.
-fn fold(events: &[Event]) -> (Option<Session>, Vec<PullRequest>) {
+fn fold(events: &[Event]) -> Projections {
     let mut session: Option<Session> = None;
     let mut prs = BTreeMap::new();
+    let mut branches: Vec<String> = Vec::new();
     for event in events {
         if let EventBody::SessionCreated {
             repo,
@@ -126,6 +141,7 @@ fn fold(events: &[Event]) -> (Option<Session>, Vec<PullRequest>) {
                 last_seq: 0,
                 updated_at: event.at,
             });
+            branches.push(branch.clone());
         }
         let s = session.as_mut().expect("first event creates the session");
         s.last_seq = event.seq;
@@ -155,10 +171,17 @@ fn fold(events: &[Event]) -> (Option<Session>, Vec<PullRequest>) {
             EventBody::PrUnlinked { number } => {
                 prs.remove(number);
             }
+            EventBody::BranchCheckedOut { branch } if !branches.contains(branch) => {
+                branches.push(branch.clone());
+            }
             _ => {}
         }
     }
-    (session, prs.into_values().collect())
+    Projections {
+        session,
+        prs: prs.into_values().collect(),
+        branches,
+    }
 }
 
 /// Asserts that the session's projections equal a fold of its journal.
@@ -166,16 +189,18 @@ fn assert_projections_match_journal(store: &Store, session: &SessionId) {
     let journal = store.read_since(session, 0, usize::MAX).unwrap();
     let latest = store.latest_seq(session).unwrap();
     assert_eq!(journal.len() as u64, latest, "journal is gap-free from 1");
-    let (expected_session, expected_prs) = fold(&journal);
-    let projected = store.session(session).unwrap();
-    if let Some(projected) = &projected {
+    let projected = Projections {
+        session: store.session(session).unwrap(),
+        prs: store.session_prs(session).unwrap(),
+        branches: store.session_branches(session).unwrap(),
+    };
+    if let Some(projected) = &projected.session {
         assert_eq!(
             projected.last_seq, latest,
             "projection seq equals journal seq"
         );
     }
-    assert_eq!(projected, expected_session);
-    assert_eq!(store.session_prs(session).unwrap(), expected_prs);
+    assert_eq!(projected, fold(&journal));
 }
 
 #[test]
@@ -220,6 +245,10 @@ fn append_assigns_seqs_and_updates_projections() {
             pr: pr(8, PrState::Merged),
         },
         message("hello".into()),
+        checked_out("spike"),
+        // Already owned, the created branch included: journaled, but listed once.
+        checked_out("feature"),
+        checked_out("spike"),
     ];
     for (i, body) in bodies.into_iter().enumerate() {
         let event = store.append(new_event(&s, i as i64 + 1, body)).unwrap();
@@ -232,9 +261,10 @@ fn append_assigns_seqs_and_updates_projections() {
     assert_eq!(session.account_id, AccountId::new("acct-2"));
     assert_eq!(session.model, "m2");
     assert_eq!(session.permission_mode, PermissionMode::FullAccess);
-    assert_eq!(session.last_seq, 11);
-    assert_eq!(session.updated_at, at(10));
+    assert_eq!(session.last_seq, 14);
+    assert_eq!(session.updated_at, at(13));
     assert_eq!(store.session_prs(&s).unwrap(), vec![pr(7, PrState::Open)]);
+    assert_eq!(store.session_branches(&s).unwrap(), ["feature", "spike"]);
     assert_eq!(store.sessions().unwrap(), vec![session]);
     assert_projections_match_journal(&store, &s);
 }
@@ -326,6 +356,41 @@ fn a_child_needs_an_existing_parent() {
     assert!(matches!(err, Err(Error::UnknownParent(id)) if id == child));
     assert_eq!(store.latest_seq(&child).unwrap(), 0);
     assert_eq!(store.session(&child).unwrap(), None);
+}
+
+#[test]
+fn branches_are_per_session_and_outlive_a_status_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    let (a, b) = (SessionId::new("a"), SessionId::new("b"));
+    store.append(new_event(&a, 0, created())).unwrap();
+    store.append(new_event(&b, 1, created())).unwrap();
+    store
+        .append(new_event(&a, 2, checked_out("fix/login")))
+        .unwrap();
+    let archived = EventBody::SessionStatusChanged {
+        status: SessionStatus::Archived,
+    };
+    store.append(new_event(&a, 3, archived)).unwrap();
+
+    assert_eq!(
+        store.session_branches(&a).unwrap(),
+        ["feature", "fix/login"]
+    );
+    assert_eq!(store.session_branches(&b).unwrap(), ["feature"]);
+    assert!(
+        store
+            .session_branches(&SessionId::new("missing"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        store.append(new_event(&SessionId::new("missing"), 4, checked_out("x"))),
+        Err(Error::UnknownSession(_))
+    ));
+    for s in [&a, &b] {
+        assert_projections_match_journal(&store, s);
+    }
 }
 
 #[test]
@@ -429,25 +494,42 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 2);
+    assert_eq!(version(&path), 3);
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 2);
+    assert_eq!(version(&path), 3);
+    drop(store);
+
+    // Back to the v2 schema, as a build before session branches left it; reopening migrates
+    // it and backfills each session's created branch.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TABLE session_branches; PRAGMA user_version = 2;")
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(version(&path), 3);
+    assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
+    store
+        .append(new_event(&s, 1, checked_out("spike")))
+        .unwrap();
+    assert_projections_match_journal(&store, &s);
     drop(store);
 
     // Back to the v1 schema, as a build before task trees left it; reopening migrates it.
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP INDEX sessions_parent;
+            "DROP TABLE session_branches;
+             DROP INDEX sessions_parent;
              ALTER TABLE sessions DROP COLUMN parent;
              ALTER TABLE sessions DROP COLUMN task;
              PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 2);
+    assert_eq!(version(&path), 3);
+    assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
     let child = SessionId::new("s2");
@@ -459,13 +541,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
 }
@@ -487,6 +569,7 @@ fn body_strategy() -> impl Strategy<Value = EventBody> {
             pr: pr(n, PrState::Merged)
         }),
         (1u64..4).prop_map(|number| EventBody::PrUnlinked { number }),
+        prop_oneof![Just("feature"), Just("spike"), Just("fix/login")].prop_map(checked_out),
     ]
 }
 
@@ -574,7 +657,7 @@ fn crash_child() {
     }
     for i in 1.. {
         let s = &sessions[i as usize % sessions.len()];
-        let body = match i % 5 {
+        let body = match i % 6 {
             0 => EventBody::PrLinked {
                 pr: pr(i as u64 % 3, PrState::Open),
             },
@@ -587,6 +670,7 @@ fn crash_child() {
             3 => EventBody::ModelSwitched {
                 model: format!("m{i}"),
             },
+            4 => checked_out(&format!("b{}", i % 7)),
             _ => message("x".repeat(i as usize % 4096)),
         };
         let event = store.append(new_event(s, i, body)).unwrap();

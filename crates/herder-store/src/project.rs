@@ -5,7 +5,7 @@ use rusqlite::{Transaction, params};
 
 use crate::{Result, tag};
 
-/// Applies `event` to the `sessions` and `session_prs` read models.
+/// Applies `event` to the `sessions`, `session_prs` and `session_branches` read models.
 pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
     let id = event.session_id.as_str();
     match &event.body {
@@ -40,7 +40,9 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 event.seq,
                 event.at,
             ])?;
+            add_branch(tx, id, branch, event.seq)?;
         }
+        EventBody::BranchCheckedOut { branch } => add_branch(tx, id, branch, event.seq)?,
         EventBody::SessionStatusChanged { status } => {
             tx.prepare_cached("UPDATE sessions SET status = ?2 WHERE session_id = ?1")?
                 .execute(params![id, tag(status)?])?;
@@ -114,6 +116,16 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
     }
     tx.prepare_cached("UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE session_id = ?1")?
         .execute(params![id, event.seq, event.at])?;
+    Ok(())
+}
+
+/// Records that the session owns `branch`; a branch it already owns keeps its first seq.
+fn add_branch(tx: &Transaction<'_>, session_id: &str, branch: &str, seq: u64) -> Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO session_branches (session_id, branch, first_seen_seq) VALUES (?1, ?2, ?3)
+         ON CONFLICT (session_id, branch) DO NOTHING",
+    )?
+    .execute(params![session_id, branch, seq])?;
     Ok(())
 }
 

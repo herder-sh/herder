@@ -290,6 +290,8 @@ impl Session {
                     self.answer(&request_id, permission).await;
                 }
             }
+            // `AskUserQuestion` is still denied, so no `QuestionAsked` is pending to answer.
+            AdapterCommand::AnswerQuestion { .. } => {}
             // Handled by `run`, which owns stopping.
             AdapterCommand::Shutdown => {}
         }

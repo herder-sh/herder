@@ -13,7 +13,8 @@
 //!
 //! Any other command, at any point, is a script mismatch: the fake emits `exited` with a
 //! `fatal` error naming the script line, the expected and the received command, and stops.
-//! Waiting for `answer_approval` is how a script holds an approval round-trip open.
+//! Waiting for `answer_approval` or `answer_question` is how a script holds an approval or a
+//! question round-trip open.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;

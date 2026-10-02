@@ -669,6 +669,24 @@
           ]
         },
         {
+          "description": "The session's worktree had a branch checked out that the session had not had before.\nThe session owns it from then on, including after its worktree is removed. The branch\nin `session_created` is the session's first and gets no event of its own.",
+          "type": "object",
+          "properties": {
+            "branch": {
+              "description": "The branch, as a short name such as `herder/1a2b3c4d`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "branch_checked_out"
+            }
+          },
+          "required": [
+            "type",
+            "branch"
+          ]
+        },
+        {
           "description": "The session's status changed.",
           "type": "object",
           "properties": {

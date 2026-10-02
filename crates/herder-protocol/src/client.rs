@@ -73,6 +73,13 @@ pub enum CommandBody {
         /// Starting permission mode.
         permission_mode: PermissionMode,
     },
+    /// Archive a session: remove its worktree, keep its branches, and make it read-only.
+    ArchiveSession {
+        /// Target session.
+        session_id: SessionId,
+        /// Remove the worktree even when it has uncommitted or untracked changes.
+        force: bool,
+    },
     /// Start a turn with a prompt.
     SendPrompt {
         /// Target session.

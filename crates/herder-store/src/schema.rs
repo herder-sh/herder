@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -53,6 +53,20 @@ const V2: &str = "
 ALTER TABLE sessions ADD COLUMN parent TEXT;
 ALTER TABLE sessions ADD COLUMN task TEXT;
 CREATE INDEX sessions_parent ON sessions (parent);
+";
+
+/// Every branch a session has owned, with the seq of the event that first named it: the
+/// branch of `session_created`, then each `branch_checked_out`. Backfilled from `sessions`,
+/// whose rows are always created at seq 1.
+const V3: &str = "
+CREATE TABLE session_branches (
+    session_id     TEXT    NOT NULL,
+    branch         TEXT    NOT NULL,
+    first_seen_seq INTEGER NOT NULL,
+    PRIMARY KEY (session_id, branch)
+) STRICT;
+INSERT INTO session_branches (session_id, branch, first_seen_seq)
+    SELECT session_id, branch, 1 FROM sessions;
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
