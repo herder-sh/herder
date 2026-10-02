@@ -84,7 +84,7 @@ pub struct ChildStatus {
     pub task: String,
     /// Branch the child works on, in this repository.
     pub branch: String,
-    /// `running` while it works or waits on you, `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.
+    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.
     pub status: SessionStatus,
     /// Summary of its latest finished turn; absent before the first one ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]

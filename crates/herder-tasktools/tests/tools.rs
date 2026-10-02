@@ -419,6 +419,7 @@ fn tool_errors_carry_stable_codes() {
         (ErrorCode::NotYourChild, "not_your_child"),
         (ErrorCode::NotFound, "not_found"),
         (ErrorCode::AlreadyResolved, "already_resolved"),
+        (ErrorCode::HostBusy, "host_busy"),
         (ErrorCode::Internal, "internal"),
     ];
     for (code, wire) in codes {
@@ -438,4 +439,29 @@ fn tool_errors_carry_stable_codes() {
             "isError": true
         })
     );
+}
+
+#[test]
+fn host_busy_carries_its_retry_hint() {
+    let error = ToolError::host_busy(30, "this machine is at capacity");
+    assert_eq!(error.code, ErrorCode::HostBusy);
+    assert_eq!(error.retry_after_secs, Some(30));
+    assert_eq!(
+        serde_json::to_value(CallToolResult::from(error.clone())).unwrap(),
+        json!({
+            "content": [{
+                "type": "text",
+                "text": r#"{"code":"host_busy","message":"this machine is at capacity","retry_after_secs":30}"#
+            }],
+            "isError": true
+        })
+    );
+    let back: ToolError = serde_json::from_value(
+        json!({ "code": "host_busy", "message": "this machine is at capacity", "retry_after_secs": 30 }),
+    )
+    .unwrap();
+    assert_eq!(back, error);
+    let plain: ToolError =
+        serde_json::from_value(json!({ "code": "internal", "message": "no" })).unwrap();
+    assert_eq!(plain.retry_after_secs, None);
 }

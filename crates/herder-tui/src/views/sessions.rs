@@ -100,6 +100,7 @@ pub(super) fn badge(status: SessionStatus) -> (&'static str, Style) {
     match status {
         SessionStatus::Idle => ("idle", super::dim()),
         SessionStatus::Running => ("running", color(Color::Yellow)),
+        SessionStatus::WaitingForCapacity => ("waiting", color(Color::Blue)),
         SessionStatus::NeedsYou => (
             "needs you",
             color(Color::Magenta).add_modifier(Modifier::BOLD),

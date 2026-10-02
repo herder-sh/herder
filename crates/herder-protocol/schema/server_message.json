@@ -81,6 +81,43 @@
       ]
     },
     {
+      "description": "The host's load and turn admission; ephemeral, never journaled. Sent after hello, then\nwhenever it changes, at most once every two seconds.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "host_resources"
+        }
+      },
+      "$ref": "#/$defs/HostResources",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "What one session's processes and containers use; ephemeral, never journaled. Sent after\nhello for every session with something running, then whenever its usage changes, at\nmost once every two seconds per session.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "type": {
+          "type": "string",
+          "const": "session_resources"
+        },
+        "usage": {
+          "description": "Its usage now.",
+          "$ref": "#/$defs/SessionUsage"
+        }
+      },
+      "required": [
+        "type",
+        "session_id",
+        "usage"
+      ]
+    },
+    {
       "description": "A durable journal event of a subscribed session.",
       "type": "object",
       "properties": {
@@ -483,6 +520,106 @@
             "type",
             "terminal_id"
           ]
+        }
+      ]
+    },
+    "Constraint": {
+      "description": "Why a host starts no more turns for now.",
+      "oneOf": [
+        {
+          "description": "`max_turns` turns already run.",
+          "type": "string",
+          "const": "max_turns"
+        },
+        {
+          "description": "Too little memory is available.",
+          "type": "string",
+          "const": "memory"
+        },
+        {
+          "description": "The load average is too high for the cores.",
+          "type": "string",
+          "const": "load"
+        },
+        {
+          "description": "Tasks stall too often on CPU, memory or I/O.",
+          "type": "string",
+          "const": "pressure"
+        }
+      ]
+    },
+    "Container": {
+      "description": "A Docker container tracked for a session.",
+      "type": "object",
+      "properties": {
+        "compose_project": {
+          "description": "Compose project the container belongs to; absent when Compose did not start it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Docker's container id.",
+          "type": "string"
+        },
+        "image": {
+          "description": "Image the container runs, as named when it started.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Container name, without Docker's leading slash.",
+          "type": "string"
+        },
+        "state": {
+          "description": "Lifecycle state.",
+          "$ref": "#/$defs/ContainerState"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "image",
+        "state"
+      ]
+    },
+    "ContainerState": {
+      "description": "Lifecycle state of a Docker container, in Docker's naming.",
+      "oneOf": [
+        {
+          "description": "Created, never started.",
+          "type": "string",
+          "const": "created"
+        },
+        {
+          "description": "Running.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "Paused.",
+          "type": "string",
+          "const": "paused"
+        },
+        {
+          "description": "Restarting under its restart policy.",
+          "type": "string",
+          "const": "restarting"
+        },
+        {
+          "description": "Being removed.",
+          "type": "string",
+          "const": "removing"
+        },
+        {
+          "description": "Stopped.",
+          "type": "string",
+          "const": "exited"
+        },
+        {
+          "description": "Failed to stop or be removed cleanly.",
+          "type": "string",
+          "const": "dead"
         }
       ]
     },
@@ -1244,6 +1381,90 @@
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "HostResources": {
+      "description": "Load and admission state of the daemon's host.",
+      "type": "object",
+      "properties": {
+        "constraint": {
+          "description": "What keeps the host from starting another turn now; absent while it would start one.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Constraint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cpu_cores": {
+          "description": "Logical CPU cores.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cpu_percent": {
+          "description": "Share of all cores busy over the last sample, from 0 to 100.",
+          "type": "number",
+          "format": "double"
+        },
+        "load_1m": {
+          "description": "One-minute load average.",
+          "type": "number",
+          "format": "double"
+        },
+        "max_turns": {
+          "description": "Most turns the host runs at once; further turns wait for capacity.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memory_available_bytes": {
+          "description": "Memory available to new work without swapping, as the kernel estimates it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "memory_total_bytes": {
+          "description": "Physical memory.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pressure": {
+          "description": "Pressure stall information; absent when the kernel does not report it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pressure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "running_turns": {
+          "description": "Turns running on this host now.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "waiting_turns": {
+          "description": "Turns waiting for capacity, in sessions whose status is `waiting_for_capacity`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cpu_cores",
+        "cpu_percent",
+        "load_1m",
+        "memory_total_bytes",
+        "memory_available_bytes",
+        "running_turns",
+        "max_turns",
+        "waiting_turns"
+      ]
+    },
     "Item": {
       "description": "One entry of the transcript.",
       "type": "object",
@@ -1450,6 +1671,38 @@
         }
       ]
     },
+    "Pressure": {
+      "description": "Share of the last 10 seconds in which tasks stalled on a resource, each from 0 to 100.",
+      "type": "object",
+      "properties": {
+        "cpu_some": {
+          "description": "Some tasks waited for CPU.",
+          "type": "number",
+          "format": "double"
+        },
+        "io_some": {
+          "description": "Some tasks waited for I/O.",
+          "type": "number",
+          "format": "double"
+        },
+        "memory_full": {
+          "description": "Every non-idle task waited for memory at once; the sign of a machine about to freeze.",
+          "type": "number",
+          "format": "double"
+        },
+        "memory_some": {
+          "description": "Some tasks waited for memory.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "cpu_some",
+        "memory_some",
+        "memory_full",
+        "io_some"
+      ]
+    },
     "Provider": {
       "description": "Vendor CLI that runs a session. Open set: accept names not listed in `examples`.",
       "type": "string",
@@ -1644,6 +1897,11 @@
           "const": "running"
         },
         {
+          "description": "A prompt waits for the host to have capacity for another turn; the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+          "type": "string",
+          "const": "waiting_for_capacity"
+        },
+        {
           "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
           "type": "string",
           "const": "needs_you"
@@ -1663,6 +1921,42 @@
           "type": "string",
           "const": "moved"
         }
+      ]
+    },
+    "SessionUsage": {
+      "description": "What one session's processes and containers use.\n\nA session with nothing running gets one message with no processes and no containers, and\nno more until something starts.",
+      "type": "object",
+      "properties": {
+        "containers": {
+          "description": "Docker containers started from the session's worktree.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Container"
+          }
+        },
+        "cpu_percent": {
+          "description": "Share of the host's total CPU used by the session's processes, from 0 to 100.",
+          "type": "number",
+          "format": "double"
+        },
+        "memory_bytes": {
+          "description": "Memory used by the session's processes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "processes": {
+          "description": "Processes the session runs: its agent and everything the agent started.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cpu_percent",
+        "memory_bytes",
+        "processes",
+        "containers"
       ]
     },
     "Terminal": {
