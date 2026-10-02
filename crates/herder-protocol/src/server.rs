@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Bytes, CommandId, DeviceId, Event, HostId, Item, ItemId, Provider, Seq, SessionId,
-    TerminalId, UserId,
+    TerminalId, Timestamp, UserId,
 };
 
 /// A daemon-to-client message.
@@ -19,10 +19,15 @@ pub enum ServerMessage {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
     },
-    /// Every account on this daemon; sent after hello and whenever the set changes.
+    /// Every account on this daemon with its usage; sent after hello and whenever any of it changes.
     Accounts {
         /// The accounts.
         accounts: Vec<Account>,
+    },
+    /// Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.
+    Terminals {
+        /// The open terminals.
+        terminals: Vec<Terminal>,
     },
     /// A durable journal event of a subscribed session.
     Event(Event),
@@ -111,7 +116,7 @@ pub struct SessionHead {
 }
 
 /// A provider login on this host, used through its own config dir.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
     /// The account.
     pub account_id: AccountId,
@@ -119,6 +124,29 @@ pub struct Account {
     pub provider: Provider,
     /// Display label chosen by the owner.
     pub label: String,
+    /// Every limit window the provider last reported; empty until it reports one.
+    pub usage: Vec<UsageWindow>,
+}
+
+/// Usage of one provider limit window, such as a five-hour or weekly limit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct UsageWindow {
+    /// Window name, in the provider's own naming.
+    pub window: String,
+    /// Share of the window's limit used, from 0 to 100.
+    pub used_percent: f64,
+    /// When the window resets; absent when the provider does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<Timestamp>,
+}
+
+/// An open shell in a session's worktree.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Terminal {
+    /// The terminal.
+    pub terminal_id: TerminalId,
+    /// Session whose worktree the shell runs in.
+    pub session_id: SessionId,
 }
 
 /// What an accepted command produced.

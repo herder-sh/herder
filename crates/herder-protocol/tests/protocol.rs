@@ -317,48 +317,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
             },
         ),
         event(16, owner, EventBody::PrUnlinked { number: 42 }),
-        event(
-            17,
-            None,
-            EventBody::UsageUpdated {
-                account_id: account_id(),
-                windows: vec![
-                    UsageWindow {
-                        window: "five_hour".into(),
-                        used_percent: 37.5,
-                        resets_at: Some(at()),
-                    },
-                    UsageWindow {
-                        window: "weekly".into(),
-                        used_percent: 2.0,
-                        resets_at: None,
-                    },
-                ],
-            },
-        ),
-        event(
-            18,
-            owner,
-            EventBody::TerminalOpened {
+        ServerMessage::Terminals {
+            terminals: vec![Terminal {
                 terminal_id: terminal_id(),
-            },
-        ),
-        event(
-            19,
-            None,
-            EventBody::TerminalClosed {
-                terminal_id: terminal_id(),
-                exit_code: Some(0),
-            },
-        ),
-        event(
-            20,
-            None,
-            EventBody::TerminalClosed {
-                terminal_id: terminal_id(),
-                exit_code: None,
-            },
-        ),
+                session_id: session_id(),
+            }],
+        },
     ];
     for (seq, decision) in [(7, ApprovalDecision::Allow), (7, ApprovalDecision::Deny)] {
         messages.push(event(
@@ -378,7 +342,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         SessionStatus::Archived,
         SessionStatus::Moved,
     ] {
-        messages.push(event(21, None, EventBody::SessionStatusChanged { status }));
+        messages.push(event(17, None, EventBody::SessionStatusChanged { status }));
     }
     for class in [
         ErrorClass::LimitReached,
@@ -387,7 +351,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ErrorClass::Fatal,
     ] {
         messages.push(event(
-            22,
+            18,
             None,
             EventBody::TurnFailed {
                 turn_id: turn_id(),
@@ -404,7 +368,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         PermissionMode::AutoEdit,
         PermissionMode::FullAccess,
     ] {
-        messages.push(event(23, owner, EventBody::PermissionModeChanged { mode }));
+        messages.push(event(19, owner, EventBody::PermissionModeChanged { mode }));
     }
     let pr_states = [
         pr(
@@ -427,7 +391,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ),
     ];
     for pr in pr_states {
-        messages.push(event(24, None, EventBody::PrUpdated { pr }));
+        messages.push(event(20, None, EventBody::PrUpdated { pr }));
     }
     messages.push(ServerMessage::Accounts {
         accounts: [
@@ -444,6 +408,18 @@ fn server_fixtures() -> Vec<ServerMessage> {
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             provider,
+            usage: vec![
+                UsageWindow {
+                    window: "five_hour".into(),
+                    used_percent: 37.5,
+                    resets_at: Some(at()),
+                },
+                UsageWindow {
+                    window: "weekly".into(),
+                    used_percent: 2.0,
+                    resets_at: None,
+                },
+            ],
         })
         .collect(),
     });

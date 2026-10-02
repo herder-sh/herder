@@ -21,7 +21,7 @@ pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
 pub use event::{
     ApprovalDecision, CiStatus, ErrorClass, Event, EventBody, Item, ItemBody, Mergeable, PrState,
-    PullRequest, ReviewStatus, SessionStatus, TurnError, UsageWindow,
+    PullRequest, ReviewStatus, SessionStatus, TurnError,
 };
 pub use ids::{
     AccountId, ApprovalId, CommandId, DeviceId, HostId, ItemId, SessionId, TerminalId, TurnId,
@@ -29,6 +29,7 @@ pub use ids::{
 };
 pub use server::{
     Account, CommandResult, ErrorCode, ErrorInfo, Role, ServerHello, ServerMessage, SessionHead,
+    Terminal, UsageWindow,
 };
 pub use types::{PermissionMode, Provider};
 

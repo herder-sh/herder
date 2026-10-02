@@ -39,7 +39,7 @@
       ]
     },
     {
-      "description": "Every account on this daemon; sent after hello and whenever the set changes.",
+      "description": "Every account on this daemon with its usage; sent after hello and whenever any of it changes.",
       "type": "object",
       "properties": {
         "accounts": {
@@ -57,6 +57,27 @@
       "required": [
         "type",
         "accounts"
+      ]
+    },
+    {
+      "description": "Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.",
+      "type": "object",
+      "properties": {
+        "terminals": {
+          "description": "The open terminals.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Terminal"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "terminals"
+        }
+      },
+      "required": [
+        "type",
+        "terminals"
       ]
     },
     {
@@ -228,12 +249,20 @@
         "provider": {
           "description": "Provider the account belongs to.",
           "$ref": "#/$defs/Provider"
+        },
+        "usage": {
+          "description": "Every limit window the provider last reported; empty until it reports one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UsageWindow"
+          }
         }
       },
       "required": [
         "account_id",
         "provider",
-        "label"
+        "label",
+        "usage"
       ]
     },
     "AccountId": {
@@ -454,7 +483,7 @@
           ]
         },
         "seq": {
-          "description": "Position in the session's journal; gap-free, but members never receive terminal events.",
+          "description": "Position in the session's journal, gap-free from 1.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -827,76 +856,6 @@
           "required": [
             "type",
             "number"
-          ]
-        },
-        {
-          "description": "The provider reported how much of an account's limits are used.",
-          "type": "object",
-          "properties": {
-            "account_id": {
-              "description": "Account the usage belongs to.",
-              "$ref": "#/$defs/AccountId"
-            },
-            "type": {
-              "type": "string",
-              "const": "usage_updated"
-            },
-            "windows": {
-              "description": "Every limit window the provider reported.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/UsageWindow"
-              }
-            }
-          },
-          "required": [
-            "type",
-            "account_id",
-            "windows"
-          ]
-        },
-        {
-          "description": "An owner opened a shell in the session's worktree.",
-          "type": "object",
-          "properties": {
-            "terminal_id": {
-              "description": "The new terminal.",
-              "$ref": "#/$defs/TerminalId"
-            },
-            "type": {
-              "type": "string",
-              "const": "terminal_opened"
-            }
-          },
-          "required": [
-            "type",
-            "terminal_id"
-          ]
-        },
-        {
-          "description": "A terminal's shell exited.",
-          "type": "object",
-          "properties": {
-            "exit_code": {
-              "description": "Shell exit code; absent when killed by a signal.",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "int32"
-            },
-            "terminal_id": {
-              "description": "The closed terminal.",
-              "$ref": "#/$defs/TerminalId"
-            },
-            "type": {
-              "type": "string",
-              "const": "terminal_closed"
-            }
-          },
-          "required": [
-            "type",
-            "terminal_id"
           ]
         }
       ]
@@ -1305,6 +1264,24 @@
           "type": "string",
           "const": "moved"
         }
+      ]
+    },
+    "Terminal": {
+      "description": "An open shell in a session's worktree.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Session whose worktree the shell runs in.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "terminal_id": {
+          "description": "The terminal.",
+          "$ref": "#/$defs/TerminalId"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "session_id"
       ]
     },
     "TerminalId": {

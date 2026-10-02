@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalId, ItemId, PermissionMode, Provider, Seq, SessionId, TerminalId, Timestamp,
-    TurnId, UserId,
+    AccountId, ApprovalId, ItemId, PermissionMode, Provider, Seq, SessionId, Timestamp, TurnId,
+    UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -13,7 +13,7 @@ use crate::{
 pub struct Event {
     /// Session whose journal holds this event.
     pub session_id: SessionId,
-    /// Position in the session's journal; gap-free, but members never receive terminal events.
+    /// Position in the session's journal, gap-free from 1.
     pub seq: Seq,
     /// When the daemon recorded the event.
     pub at: Timestamp,
@@ -133,26 +133,6 @@ pub enum EventBody {
     PrUnlinked {
         /// Number of the pull request in the session's repository.
         number: u64,
-    },
-    /// The provider reported how much of an account's limits are used.
-    UsageUpdated {
-        /// Account the usage belongs to.
-        account_id: AccountId,
-        /// Every limit window the provider reported.
-        windows: Vec<UsageWindow>,
-    },
-    /// An owner opened a shell in the session's worktree.
-    TerminalOpened {
-        /// The new terminal.
-        terminal_id: TerminalId,
-    },
-    /// A terminal's shell exited.
-    TerminalClosed {
-        /// The closed terminal.
-        terminal_id: TerminalId,
-        /// Shell exit code; absent when killed by a signal.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
     },
     /// An event type newer than this build; skip it.
     #[serde(other, skip_serializing)]
@@ -338,16 +318,4 @@ pub enum Mergeable {
     Conflicting,
     /// GitHub has not computed it yet.
     Unknown,
-}
-
-/// Usage of one provider limit window, such as a five-hour or weekly limit.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct UsageWindow {
-    /// Window name, in the provider's own naming.
-    pub window: String,
-    /// Share of the window's limit used, from 0 to 100.
-    pub used_percent: f64,
-    /// When the window resets; absent when the provider does not say.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resets_at: Option<Timestamp>,
 }
