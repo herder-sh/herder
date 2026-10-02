@@ -20,9 +20,9 @@ use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, Wak
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
-    AccountId, CommandBody, ErrorCode, EventBody, HostHello, HostId, HostMessage, JournalRecord,
-    PermissionMode, Provider, REPLICATION_VERSION, SessionId, SessionStatus, SessionSummary,
-    Timestamp, TurnId, UserId, VaultMessage,
+    AccountId, CommandBody, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
+    JournalRecord, PermissionMode, Provider, REPLICATION_VERSION, SessionId, SessionStatus,
+    SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -421,17 +421,23 @@ async fn machine_when(client: &Client, ready: impl Fn(&Machine) -> bool) -> Mach
     }
 }
 
-/// The seqs of the next `count` events the subscription delivers.
-async fn seqs(sub: &SessionSubscription, count: usize) -> Vec<u64> {
-    let mut seqs = Vec::new();
-    while seqs.len() < count {
+/// The next `count` events the subscription delivers; an update may carry none.
+async fn events(sub: &SessionSubscription, count: usize) -> Vec<Event> {
+    let mut events = Vec::new();
+    while events.len() < count {
         let update = tokio::time::timeout(TIMEOUT, sub.next())
             .await
             .unwrap()
             .unwrap();
-        seqs.extend(update.events.iter().map(|event| event.seq));
+        events.extend(update.events);
     }
-    seqs
+    events
+}
+
+/// The seqs of the next `count` events the subscription delivers.
+async fn seqs(sub: &SessionSubscription, count: usize) -> Vec<u64> {
+    let events = events(sub, count).await;
+    events.iter().map(|event| event.seq).collect()
 }
 
 /// The refusal of a prompt to `session` sent through the vault.
@@ -488,13 +494,10 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         .unwrap();
     assert_eq!(seqs(&sub, 4).await, [1, 2, 3, 4]);
     host.switch_model("s1", "live").await;
-    let update = tokio::time::timeout(TIMEOUT, sub.next())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(update.events.len(), 1);
+    let live = events(&sub, 1).await;
+    assert_eq!(live.len(), 1);
     assert_eq!(
-        update.events[0].body,
+        live[0].body,
         EventBody::ModelSwitched {
             model: "live".into()
         }
