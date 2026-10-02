@@ -186,7 +186,8 @@ async fn read<B: Backend>(
                     let shared = Arc::clone(shared);
                     let identity = identity.clone();
                     let outbox = Arc::clone(outbox);
-                    async move { shared.apply(&identity, &outbox, body).await }
+                    let id = id.clone();
+                    async move { shared.apply(&identity, &outbox, &id, body).await }
                 };
                 outbox.push(match shared.commands.apply(key, apply).await {
                     Ok(result) => ServerMessage::CommandAccepted {

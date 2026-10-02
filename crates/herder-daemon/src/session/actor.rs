@@ -13,7 +13,7 @@ use herder_protocol::{
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId,
     PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
 };
-use herder_store::Session;
+use herder_store::{QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -109,6 +109,7 @@ pub(super) enum PrimaryAct {
 }
 
 /// A prompt waiting for its turn, or the running turn's.
+#[derive(Clone, PartialEq)]
 struct Prompt {
     by: Option<UserId>,
     text: String,
@@ -160,6 +161,11 @@ pub(super) struct Actor {
     tool_calls: HashMap<ItemId, (String, Value)>,
     /// The setup command, while it runs.
     setup: Option<SetUp>,
+    /// Whether the worktree's setup failed, or was cut short by a restart, and has not
+    /// succeeded since: it runs again before the next prompt starts the agent.
+    needs_setup: bool,
+    /// The queue as last saved to the store.
+    saved: Vec<QueuedPrompt>,
 }
 
 enum Next {
@@ -190,6 +196,64 @@ impl Actor {
             questions: HashMap::new(),
             tool_calls: HashMap::new(),
             setup: None,
+            needs_setup: false,
+            saved: Vec::new(),
+        }
+    }
+
+    /// Picks up what a previous daemon left: the prompts it had queued, and whether the
+    /// worktree's setup is still to succeed. The queued prompts start as the host admits them.
+    async fn restore(&mut self) {
+        let journal = &self.inner.journal;
+        let session_id = self.session.session_id.clone();
+        match journal.all(session_id.clone()).await {
+            Ok(events) => self.needs_setup = setup_unfinished(&events),
+            Err(err) => warn!(%session_id, "cannot read the journal: {err:#}"),
+        }
+        match journal.queued_prompts(session_id.clone()).await {
+            Ok(saved) => {
+                self.queue = saved
+                    .iter()
+                    .map(|prompt| Prompt {
+                        by: prompt.by.clone(),
+                        text: prompt.text.clone(),
+                        retry: prompt.retry,
+                    })
+                    .collect();
+                self.saved = saved;
+            }
+            Err(err) => warn!(%session_id, "cannot read the queued prompts: {err:#}"),
+        }
+        if self.session.status == SessionStatus::Archived {
+            self.queue.clear();
+        }
+        self.save_queue().await;
+        self.start_next().await;
+    }
+
+    /// Saves the queue to the store when it changed, so it survives a restart.
+    async fn save_queue(&mut self) {
+        let queue: Vec<QueuedPrompt> = self
+            .queue
+            .iter()
+            .map(|prompt| QueuedPrompt {
+                by: prompt.by.clone(),
+                text: prompt.text.clone(),
+                retry: prompt.retry,
+            })
+            .collect();
+        if queue == self.saved {
+            return;
+        }
+        let session_id = self.session.session_id.clone();
+        match self
+            .inner
+            .journal
+            .set_queued_prompts(session_id.clone(), queue.clone())
+            .await
+        {
+            Ok(()) => self.saved = queue,
+            Err(err) => warn!(%session_id, "cannot save the queued prompts: {err:#}"),
         }
     }
 
@@ -198,6 +262,7 @@ impl Actor {
         mut commands: mpsc::UnboundedReceiver<SessionCommand>,
         shutdown: CancellationToken,
     ) {
+        self.restore().await;
         loop {
             let next = {
                 let deadline = self.next_deadline();
@@ -239,6 +304,8 @@ impl Actor {
             match next {
                 Next::Command(command) => {
                     let result = self.apply(command.by, command.request).await;
+                    // Before the reply, so an accepted prompt survives a restart.
+                    self.save_queue().await;
                     // Before the reply, so a `wait_for` after `spawn` or `send` sees the child
                     // working.
                     self.sync_working();
@@ -259,6 +326,7 @@ impl Actor {
                 Next::Overdue => self.escalate_overdue().await,
                 Next::SetUp(outcome) => self.set_up_ended(outcome).await,
                 Next::Stop => {
+                    self.save_queue().await;
                     if let Some(setup) = self.setup.take() {
                         setup.cancel.cancel();
                     }
@@ -268,6 +336,7 @@ impl Actor {
                     return;
                 }
             }
+            self.save_queue().await;
         }
     }
 
@@ -971,6 +1040,17 @@ impl Actor {
     /// when it is not running; `waiting_for_capacity` while the host has no room.
     async fn start_next(&mut self) {
         while self.turn.is_none() && self.setup.is_none() && !self.queue.is_empty() {
+            if self.needs_setup && self.adapter.is_none() {
+                match self
+                    .inner
+                    .setup_command(Path::new(&self.session.repo))
+                    .await
+                {
+                    Some((command, timeout)) => return self.set_up(command, timeout).await,
+                    // The project has no setup command any more.
+                    None => self.needs_setup = false,
+                }
+            }
             if !self.admitted() {
                 self.set_status(SessionStatus::WaitingForCapacity).await;
                 return;
@@ -978,6 +1058,8 @@ impl Actor {
             let Some(prompt) = self.queue.pop_front() else {
                 return;
             };
+            // Before the prompt is journaled, so a restart never runs it twice.
+            self.save_queue().await;
             let Prompt { by, text, retry } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
@@ -1069,7 +1151,8 @@ impl Actor {
 
     /// Journals how the setup command ended. Success lets queued prompts start; a failure
     /// leaves the session `error` with the output's tail and drops the prompts queued behind
-    /// it, which were meant for a worktree that is not set up.
+    /// it, which were meant for a worktree that is not set up. The next prompt runs it again
+    /// before it starts the agent.
     async fn set_up_ended(&mut self, outcome: Result<Outcome, oneshot::error::RecvError>) {
         let Some(setup) = self.setup.take() else {
             return;
@@ -1090,6 +1173,7 @@ impl Actor {
         };
         self.log(EventBody::ItemAdded { item: result }).await;
         let turn_id = setup.turn_id;
+        self.needs_setup = message.is_some();
         let Some(message) = message else {
             self.log(EventBody::TurnCompleted { turn_id }).await;
             if self.queue.is_empty() {
@@ -1233,13 +1317,25 @@ impl Actor {
                 if error.class == ErrorClass::LimitReached {
                     return self.limit_reached(turn_id, error).await;
                 }
+                let mut settled = SessionStatus::NeedsYou;
+                let error = match self.out_of_memory(&error).await {
+                    Some(oom) => {
+                        // The CLI is dying: the next prompt starts a new one, seeded with the
+                        // transcript, instead of reaching this one.
+                        if let Some(adapter) = self.adapter.take() {
+                            tokio::spawn(stop(adapter));
+                        }
+                        settled = SessionStatus::Error;
+                        oom
+                    }
+                    None => error,
+                };
                 let summary = failed(&error);
                 let body = EventBody::TurnFailed {
                     turn_id: turn_id.clone(),
                     error,
                 };
-                self.turn_ended(turn_id, body, SessionStatus::NeedsYou, summary)
-                    .await;
+                self.turn_ended(turn_id, body, settled, summary).await;
             }
             AdapterEvent::ItemStarted { item } => {
                 self.inner
@@ -1424,9 +1520,14 @@ impl Actor {
         self.start_next().await;
     }
 
-    /// The CLI is gone: fails a turn it left open; the next prompt starts it again.
+    /// The CLI is gone: fails a turn it left open; the next prompt starts it again, seeded with
+    /// the transcript.
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
+        let error = match error {
+            Some(error) => Some(self.out_of_memory(&error).await.unwrap_or(error)),
+            None => None,
+        };
         self.prompt = None;
         let open = self.turn.take();
         self.permit = None;
@@ -1453,6 +1554,33 @@ impl Actor {
             self.report(turn_id, summary).await;
         }
         self.start_next().await;
+    }
+
+    /// The error to journal instead of `error`, when the CLI failed because the kernel's OOM
+    /// killer killed a process in its scope: `error` names neither, as the CLI only saw a
+    /// signal.
+    async fn out_of_memory(&self, error: &TurnError) -> Option<TurnError> {
+        if error.class != ErrorClass::Fatal {
+            return None;
+        }
+        let scopes = self.inner.scopes.get()?;
+        if !scopes.oom_killed(&self.session.session_id).await {
+            return None;
+        }
+        let limit = scopes.limits(self.session.parent.is_some()).memory_max / (1024 * 1024);
+        warn!(
+            session_id = %self.session.session_id,
+            "the agent CLI failed after an OOM kill in its scope: {}", error.message
+        );
+        Some(TurnError {
+            class: ErrorClass::Fatal,
+            message: format!(
+                "the agent ran out of memory: the kernel killed it, or a process it ran, at its \
+                 session's {limit} MiB limit ({}). The next prompt restarts the agent from the \
+                 session's transcript",
+                error.message
+            ),
+        })
     }
 
     /// A child's turn ended: journals `child_reported` in its primary session and hands the
@@ -1578,12 +1706,15 @@ pub(super) async fn close_abandoned_turn(
             journal.record(id.clone(), None, body).await?;
             (SessionStatus::NeedsYou, Some((turn_id, summary)))
         }
-        // A prompt waiting for capacity was in memory only.
         None if matches!(
             session.status,
             SessionStatus::Running | SessionStatus::WaitingForCapacity
         ) =>
         {
+            // Queued prompts start again once the manager resumes; their status is theirs.
+            if !journal.queued_prompts(id.clone()).await?.is_empty() {
+                return Ok(());
+            }
             (SessionStatus::Idle, None)
         }
         None => return Ok(()),
@@ -1609,6 +1740,28 @@ pub(super) async fn close_abandoned_turn(
         tasks.report(parent, id, output, false);
     }
     Ok(())
+}
+
+/// Whether the latest setup command in `journal` has not succeeded: it failed, or its turn was
+/// closed by a restart.
+fn setup_unfinished(journal: &[herder_protocol::Event]) -> bool {
+    let mut unfinished = None;
+    for event in journal {
+        match &event.body {
+            EventBody::ItemAdded { item } => {
+                if let ItemBody::ToolCall { name, .. } = &item.body
+                    && name == SETUP_TOOL
+                {
+                    unfinished = Some(item.turn_id.clone());
+                }
+            }
+            EventBody::TurnCompleted { turn_id } if unfinished.as_ref() == Some(turn_id) => {
+                unfinished = None;
+            }
+            _ => {}
+        }
+    }
+    unfinished.is_some()
 }
 
 /// A failed turn's report.

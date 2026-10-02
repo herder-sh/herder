@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -67,6 +67,28 @@ CREATE TABLE session_branches (
 ) STRICT;
 INSERT INTO session_branches (session_id, branch, first_seen_seq)
     SELECT session_id, branch, 1 FROM sessions;
+";
+
+/// Daemon state that must outlive a restart but is not part of any journal: the result of
+/// each accepted command, by user and command id, so a resend is not applied twice; and each
+/// session's prompts still waiting for their turn, in order. Neither is a projection.
+const V4: &str = "
+CREATE TABLE command_results (
+    n          INTEGER NOT NULL PRIMARY KEY,
+    user_id    TEXT    NOT NULL,
+    command_id TEXT    NOT NULL,
+    result     TEXT    NOT NULL,
+    UNIQUE (user_id, command_id)
+) STRICT;
+
+CREATE TABLE queued_prompts (
+    session_id TEXT    NOT NULL,
+    position   INTEGER NOT NULL,
+    by         TEXT,
+    text       TEXT    NOT NULL,
+    retry      INTEGER NOT NULL,
+    PRIMARY KEY (session_id, position)
+) STRICT;
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

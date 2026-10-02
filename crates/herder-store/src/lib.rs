@@ -8,6 +8,10 @@
 //! The API is synchronous; the daemon calls it from a dedicated thread or `spawn_blocking`.
 //! Appends take `&mut self`, so there is exactly one writer per [`Store`].
 //!
+//! Beside the journal, the store keeps two pieces of daemon state that must survive a restart
+//! and are not projections: the results of accepted commands ([`Store::command_result`]) and
+//! each session's queued prompts ([`Store::queued_prompts`]).
+//!
 //! Reads are forward compatible: a stored body this build cannot decode (an event type from a
 //! newer build, or a known type whose shape changed) is returned as [`EventBody::Unknown`] with
 //! its real `seq`, so cursors stay gap-free and callers skip it. `Unknown` never serializes, so
@@ -19,8 +23,8 @@ mod schema;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Event, EventBody, PermissionMode, Provider, PullRequest, Seq, SessionId,
-    SessionStatus, Timestamp, UserId,
+    AccountId, CommandId, CommandResult, Event, EventBody, PermissionMode, Provider, PullRequest,
+    Seq, SessionId, SessionStatus, Timestamp, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -104,6 +108,21 @@ pub struct Session {
     /// `at` of the latest event.
     pub updated_at: Timestamp,
 }
+
+/// A prompt waiting for its session's next turn.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedPrompt {
+    /// User who sent it; `None` when the primary session's agent did.
+    pub by: Option<UserId>,
+    /// Prompt text.
+    pub text: String,
+    /// Whether it retries a turn that hit a limit, on the account failover moved to.
+    pub retry: bool,
+}
+
+/// Accepted command results kept; the oldest are forgotten first. A client resends a command
+/// only until it reconnects, so only recent ids matter.
+pub const COMMAND_RESULTS_KEPT: i64 = 4096;
 
 /// The daemon's event journal and projections, in one SQLite file.
 #[derive(Debug)]
@@ -288,6 +307,103 @@ impl Store {
             "SELECT branch FROM session_branches WHERE session_id = ?1 ORDER BY first_seen_seq",
         )?;
         let rows = stmt.query_map([session.as_str()], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+impl Store {
+    /// The result `user`'s command `command_id` was accepted with, if it was and is still kept.
+    /// A result this build cannot decode reads as none.
+    pub fn command_result(
+        &self,
+        user: &UserId,
+        command_id: &CommandId,
+    ) -> Result<Option<CommandResult>> {
+        let result: Option<String> = self
+            .conn
+            .prepare_cached(
+                "SELECT result FROM command_results WHERE user_id = ?1 AND command_id = ?2",
+            )?
+            .query_row([user.as_str(), command_id.as_str()], |row| row.get(0))
+            .optional()?;
+        Ok(result.and_then(|result| serde_json::from_str(&result).ok()))
+    }
+
+    /// Records that `user`'s command `command_id` was accepted with `result`, forgetting the
+    /// oldest results past [`COMMAND_RESULTS_KEPT`].
+    pub fn record_command_result(
+        &mut self,
+        user: &UserId,
+        command_id: &CommandId,
+        result: &CommandResult,
+    ) -> Result<()> {
+        let result = serde_json::to_string(result)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.prepare_cached(
+            "INSERT OR REPLACE INTO command_results (user_id, command_id, result)
+             VALUES (?1, ?2, ?3)",
+        )?
+        .execute(params![user.as_str(), command_id.as_str(), result])?;
+        tx.prepare_cached(
+            "DELETE FROM command_results WHERE n <= (SELECT MAX(n) FROM command_results) - ?1",
+        )?
+        .execute([COMMAND_RESULTS_KEPT])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The prompts queued in `session`, oldest first.
+    pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT by, text, retry FROM queued_prompts WHERE session_id = ?1 ORDER BY position",
+        )?;
+        let rows = stmt.query_map([session.as_str()], |row| {
+            Ok(QueuedPrompt {
+                by: row.get::<_, Option<String>>(0)?.map(UserId::new),
+                text: row.get(1)?,
+                retry: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Replaces the prompts queued in `session` with `prompts`, oldest first.
+    pub fn set_queued_prompts(
+        &mut self,
+        session: &SessionId,
+        prompts: &[QueuedPrompt],
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.prepare_cached("DELETE FROM queued_prompts WHERE session_id = ?1")?
+            .execute([session.as_str()])?;
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO queued_prompts (session_id, position, by, text, retry)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for (position, prompt) in prompts.iter().enumerate() {
+            insert.execute(params![
+                session.as_str(),
+                clamp(position),
+                prompt.by.as_ref().map(UserId::as_str),
+                prompt.text,
+                prompt.retry,
+            ])?;
+        }
+        drop(insert);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every session with a prompt queued, ordered by session id.
+    pub fn sessions_with_queued_prompts(&self) -> Result<Vec<SessionId>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT DISTINCT session_id FROM queued_prompts ORDER BY session_id")?;
+        let rows = stmt.query_map([], |row| Ok(SessionId::new(row.get::<_, String>(0)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 }

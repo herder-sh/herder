@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, CommandBody, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq,
+    Account, CommandBody, CommandId, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq,
     SessionHead, SessionId, TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
@@ -63,11 +63,13 @@ pub trait Backend: Send + Sync + 'static {
         limit: usize,
     ) -> impl Future<Output = anyhow::Result<Vec<Event>>> + Send;
 
-    /// Applies a command for `identity`; an error rejects it with nothing changed. Each
-    /// command id reaches here once, unless it was rejected.
+    /// Applies `identity`'s command `command_id`; an error rejects it with nothing changed.
+    /// Each command id reaches here once per daemon, unless it was rejected; an id accepted
+    /// before a restart must be answered with its first result, not applied again.
     fn command(
         &self,
         identity: &Identity,
+        command_id: &CommandId,
         command: CommandBody,
     ) -> impl Future<Output = Result<CommandResult, ErrorInfo>> + Send;
 
@@ -103,9 +105,11 @@ impl Backend for SessionManager {
     async fn command(
         &self,
         identity: &Identity,
+        command_id: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
-        self.handle(identity.user_id.clone(), command).await
+        self.handle_once(identity.user_id.clone(), command_id.clone(), command)
+            .await
     }
 
     async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
@@ -139,12 +143,13 @@ struct Shared<B> {
 }
 
 impl<B: Backend> Shared<B> {
-    /// Applies a command from the connection with `outbox`: terminal commands here, as they act
-    /// on the connection, the rest in the backend.
+    /// Applies command `command_id` from the connection with `outbox`: terminal commands here,
+    /// as they act on the connection and die with the daemon, the rest in the backend.
     async fn apply(
         &self,
         identity: &Identity,
         outbox: &Arc<Outbox>,
+        command_id: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
         let terminals = &self.terminals;
@@ -206,7 +211,7 @@ impl<B: Backend> Shared<B> {
             CommandBody::TerminalInput { terminal_id, data } => {
                 terminals.input(&terminal_id, outbox, data.0).await?;
             }
-            command => return self.backend.command(identity, command).await,
+            command => return self.backend.command(identity, command_id, command).await,
         }
         Ok(CommandResult::Applied)
     }

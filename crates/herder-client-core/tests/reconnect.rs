@@ -16,7 +16,7 @@ use herder_client_core::{
     TerminalStream,
 };
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::login::{LoginProgram, Logins};
+use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
@@ -57,6 +57,10 @@ echo "Logged in"
         program: PathBuf::from("/bin/sh"),
         args: vec!["-c".into(), script.into()],
         config_env: vec!["FAKE_CONFIG_DIR".into()],
+        status: LoginStatus {
+            args: vec!["-c".into(), r#"[ -e "$FAKE_CONFIG_DIR/logged-in" ]"#.into()],
+            logged_in_field: None,
+        },
     }
 }
 

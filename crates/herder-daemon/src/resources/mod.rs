@@ -29,6 +29,11 @@
 //! [`ServerMessage::SessionResources`](herder_protocol::ServerMessage::SessionResources)
 //! through the [`Hub`] when it changed; once neither is left, it publishes one zero usage.
 //!
+//! When a session's CLI fails, [`Scopes::oom_killed`] says whether the kernel's OOM killer
+//! killed a process in its scope: from the scope's `memory.events` while the scope lives, else
+//! from the entry systemd journals for the unit as the kill happens, since a scope whose last
+//! process died is gone at once.
+//!
 //! Archiving a session stops what it left running ([`Scopes::stop`], [`processes`]); its
 //! containers stay up and listed, for the user to bring down.
 //!
@@ -47,6 +52,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use futures_util::future::BoxFuture;
 use herder_protocol::{Container, SessionId, SessionUsage};
 use serde::Deserialize;
 use tokio::process::Command;
@@ -64,6 +70,14 @@ pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long a launched scope may take to appear before it is forgotten: its CLI never started.
 const APPEAR_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How many times, [`JOURNAL_RETRY`] apart, a gone scope's journal is read for an OOM kill
+/// systemd may not have written yet.
+const JOURNAL_TRIES: u32 = 3;
+const JOURNAL_RETRY: Duration = Duration::from_millis(200);
+
+/// systemd's `MESSAGE_ID` for "The kernel OOM killer killed some processes in this unit".
+const UNIT_OOM_MESSAGE_ID: &str = "fe6faa94e7774663a0da52717891d8ef";
 
 /// How long the startup probe may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -274,13 +288,27 @@ pub fn unit_name(session: &SessionId, n: u64) -> String {
     format!("herder-{session}-{n}.scope")
 }
 
+/// Whether the kernel's OOM killer killed a process in the scope unit it is given.
+pub type OomCheck = Box<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sync>;
+
 /// Every session's current scope, and whether scopes are used at all.
-#[derive(Debug)]
 pub struct Scopes {
     config: ResourcesConfig,
     host: Host,
     on: bool,
     state: Mutex<State>,
+    oom: OomCheck,
+}
+
+impl std::fmt::Debug for Scopes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Scopes")
+            .field("config", &self.config)
+            .field("host", &self.host)
+            .field("on", &self.on)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -319,7 +347,13 @@ impl Scopes {
                 scopes: HashMap::new(),
                 published: HashMap::new(),
             }),
+            oom: Box::new(|unit| Box::pin(systemd_oom_killed(unit))),
         }
+    }
+
+    /// These scopes, telling OOM kills with `check` instead of asking systemd.
+    pub fn with_oom_check(self, check: OomCheck) -> Self {
+        Self { oom: check, ..self }
     }
 
     /// Reads the host and probes once for a systemd user session that can run scopes. Without
@@ -396,6 +430,15 @@ impl Scopes {
             .scopes
             .get(session)
             .map(|live| live.unit.clone())
+    }
+
+    /// Whether the kernel's OOM killer killed a process in `session`'s latest scope; false
+    /// with limits off.
+    pub async fn oom_killed(&self, session: &SessionId) -> bool {
+        match self.unit(session) {
+            Some(unit) => (self.oom)(unit).await,
+            None => false,
+        }
     }
 
     /// The pids of `session`'s live processes: those in its scopes, or with limits off,
@@ -546,6 +589,49 @@ async fn probe() -> Result<(), String> {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
+
+/// Whether the kernel's OOM killer killed a process in `unit`: its cgroup's count while it
+/// exists, else systemd's journal entry for the unit.
+async fn systemd_oom_killed(unit: String) -> bool {
+    if let Some(dir) = cgroup_of(&unit).await
+        && let Ok(events) = tokio::fs::read_to_string(dir.join("memory.events")).await
+    {
+        return oom_kills(&events) > 0;
+    }
+    for attempt in 0..JOURNAL_TRIES {
+        if attempt > 0 {
+            tokio::time::sleep(JOURNAL_RETRY).await;
+        }
+        if journaled_oom(&unit).await {
+            return true;
+        }
+    }
+    false
+}
+
+/// The `oom_kill` count of a cgroup's `memory.events`.
+fn oom_kills(memory_events: &str) -> u64 {
+    memory_events
+        .lines()
+        .find_map(|line| line.strip_prefix("oom_kill "))
+        .and_then(|count| count.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Whether systemd journaled an OOM kill in `unit`.
+async fn journaled_oom(unit: &str) -> bool {
+    let output = Command::new("journalctl")
+        .args(["--user", "--quiet", "--no-pager", "--output=cat"])
+        .arg(format!("--unit={unit}"))
+        .arg(format!("MESSAGE_ID={UNIT_OOM_MESSAGE_ID}"))
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match tokio::time::timeout(PROBE_TIMEOUT, output).await {
+        Ok(Ok(output)) => output.status.success() && !output.stdout.trim_ascii().is_empty(),
+        _ => false,
     }
 }
 
