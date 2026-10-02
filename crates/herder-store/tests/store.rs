@@ -30,6 +30,36 @@ fn created() -> EventBody {
         account_id: AccountId::new("acct-1"),
         model: "opus".into(),
         permission_mode: PermissionMode::Ask,
+        parent: None,
+        task: None,
+    }
+}
+
+/// `session_created` of a child session of `parent`'s task.
+fn child_created(parent: &SessionId, task: &str) -> EventBody {
+    let EventBody::SessionCreated {
+        repo,
+        worktree,
+        branch,
+        provider,
+        account_id,
+        model,
+        permission_mode,
+        ..
+    } = created()
+    else {
+        unreachable!()
+    };
+    EventBody::SessionCreated {
+        repo,
+        worktree: format!("{worktree}-{task}"),
+        branch: format!("{branch}-{task}"),
+        provider,
+        account_id,
+        model,
+        permission_mode,
+        parent: Some(parent.clone()),
+        task: Some(task.into()),
     }
 }
 
@@ -77,6 +107,8 @@ fn fold(events: &[Event]) -> (Option<Session>, Vec<PullRequest>) {
             account_id,
             model,
             permission_mode,
+            parent,
+            task,
         } = &event.body
         {
             session = Some(Session {
@@ -88,6 +120,8 @@ fn fold(events: &[Event]) -> (Option<Session>, Vec<PullRequest>) {
                 account_id: account_id.clone(),
                 model: model.clone(),
                 permission_mode: *permission_mode,
+                parent: parent.clone(),
+                task: task.clone(),
                 status: SessionStatus::Idle,
                 last_seq: 0,
                 updated_at: event.at,
@@ -206,6 +240,95 @@ fn append_assigns_seqs_and_updates_projections() {
 }
 
 #[test]
+fn children_list_a_task_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    let primary = SessionId::new("primary");
+    let other = SessionId::new("other");
+    let (api, docs) = (SessionId::new("child-api"), SessionId::new("child-docs"));
+
+    store.append(new_event(&primary, 0, created())).unwrap();
+    store.append(new_event(&other, 0, created())).unwrap();
+    for (second, (child, task)) in [(&docs, "docs"), (&api, "api")].into_iter().enumerate() {
+        let second = second as i64 * 2 + 1;
+        store
+            .append(new_event(child, second, child_created(&primary, task)))
+            .unwrap();
+        store
+            .append(new_event(
+                &primary,
+                second + 1,
+                EventBody::ChildSpawned {
+                    child_session_id: child.clone(),
+                    task: task.into(),
+                },
+            ))
+            .unwrap();
+    }
+    store
+        .append(new_event(
+            &primary,
+            5,
+            EventBody::ChildReported {
+                child_session_id: api.clone(),
+                turn_id: TurnId::new("turn"),
+                summary: "Done.".into(),
+            },
+        ))
+        .unwrap();
+
+    let children = store.children(&primary).unwrap();
+    let tree: Vec<_> = children
+        .iter()
+        .map(|c| (c.session_id.as_str(), c.parent.as_ref(), c.task.as_deref()))
+        .collect();
+    assert_eq!(
+        tree,
+        [
+            ("child-api", Some(&primary), Some("api")),
+            ("child-docs", Some(&primary), Some("docs")),
+        ]
+    );
+    assert_eq!(children[0], store.session(&api).unwrap().unwrap());
+    assert!(store.children(&other).unwrap().is_empty());
+    assert!(store.children(&api).unwrap().is_empty());
+
+    let listed: Vec<_> = store
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.session_id, s.parent))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (api.clone(), Some(primary.clone())),
+            (docs.clone(), Some(primary.clone())),
+            (other, None),
+            (primary.clone(), None),
+        ]
+    );
+    for s in [&primary, &api, &docs] {
+        assert_projections_match_journal(&store, s);
+    }
+}
+
+#[test]
+fn a_child_needs_an_existing_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    let child = SessionId::new("child");
+    let missing = SessionId::new("missing");
+
+    let err = store.append(new_event(&child, 0, child_created(&missing, "t")));
+    assert!(matches!(err, Err(Error::UnknownParent(id)) if id == missing));
+    let err = store.append(new_event(&child, 0, child_created(&child, "t")));
+    assert!(matches!(err, Err(Error::UnknownParent(id)) if id == child));
+    assert_eq!(store.latest_seq(&child).unwrap(), 0);
+    assert_eq!(store.session(&child).unwrap(), None);
+}
+
+#[test]
 fn append_rejects_invalid_events_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(dir.path().join("herder.db")).unwrap();
@@ -306,22 +429,43 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 1);
+    assert_eq!(version(&path), 2);
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 1);
+    assert_eq!(version(&path), 2);
+    drop(store);
+
+    // Back to the v1 schema, as a build before task trees left it; reopening migrates it.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX sessions_parent;
+             ALTER TABLE sessions DROP COLUMN parent;
+             ALTER TABLE sessions DROP COLUMN task;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(version(&path), 2);
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!((session.parent, session.task), (None, None));
+    let child = SessionId::new("s2");
+    store
+        .append(new_event(&child, 1, child_created(&s, "t")))
+        .unwrap();
+    assert_eq!(store.children(&s).unwrap().len(), 1);
     drop(store);
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     ));
 }
@@ -357,10 +501,15 @@ proptest! {
     ) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+        // s0 is a primary session; s1 and s2 are children of its task.
         let sessions: Vec<_> = (0..3).map(|i| SessionId::new(format!("s{i}"))).collect();
         let mut journals: Vec<Vec<Event>> = vec![Vec::new(); 3];
         for (i, s) in sessions.iter().enumerate() {
-            journals[i].push(store.append(new_event(s, 0, created())).unwrap());
+            let body = match i {
+                0 => created(),
+                _ => child_created(&sessions[0], &format!("t{i}")),
+            };
+            journals[i].push(store.append(new_event(s, 0, body)).unwrap());
         }
         for (second, (i, body, by_user)) in ops.into_iter().enumerate() {
             let mut event = new_event(&sessions[i], second as i64 + 1, body);
@@ -401,6 +550,13 @@ proptest! {
             prop_assert_eq!(&backward, journal);
             assert_projections_match_journal(&store, s);
         }
+        let children: Vec<_> = store
+            .children(&sessions[0])
+            .unwrap()
+            .into_iter()
+            .map(|c| c.session_id)
+            .collect();
+        prop_assert_eq!(children, &sessions[1..]);
     }
 }
 

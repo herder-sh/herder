@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalId, ItemId, PermissionMode, Provider, Seq, SessionId, Timestamp, TurnId,
-    UserId,
+    AccountId, ApprovalId, ItemId, PermissionMode, Provider, QuestionId, Seq, SessionId, Timestamp,
+    TurnId, UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -25,6 +25,11 @@ pub struct Event {
 }
 
 /// What a durable event records.
+///
+/// A task is a primary session that spawns child sessions. Each child is a full session with
+/// its own journal; the primary's journal records `child_spawned` and `child_reported`. A
+/// child's approvals and questions are journaled in the child's own journal, whoever answers
+/// them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventBody {
@@ -44,6 +49,12 @@ pub enum EventBody {
         model: String,
         /// Starting permission mode.
         permission_mode: PermissionMode,
+        /// Primary session of the task this session is a child of; absent for a top-level session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<SessionId>,
+        /// Short label of the session's task, shown in the task tree.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
     },
     /// The session's status changed.
     SessionStatusChanged {
@@ -77,7 +88,7 @@ pub enum EventBody {
         /// The item, in its final form.
         item: Item,
     },
-    /// The agent is blocked until a user allows or denies a tool call.
+    /// The agent is blocked until someone allows or denies a tool call.
     ApprovalRequested {
         /// The request, answered by this id.
         approval_id: ApprovalId,
@@ -87,13 +98,77 @@ pub enum EventBody {
         tool_call_id: ItemId,
         /// One-line description of what the agent wants to do.
         summary: String,
+        /// Who is asked first; a user can always answer, whatever the route.
+        #[serde(default)]
+        routed_to: Route,
+        /// Why a child's request went straight to the user; absent when it follows the default route.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<EscalationReason>,
     },
-    /// A user answered an approval request.
+    /// A request routed to the primary session now waits for the user.
+    ApprovalEscalated {
+        /// The escalated request.
+        approval_id: ApprovalId,
+        /// Why it was escalated.
+        reason: EscalationReason,
+    },
+    /// A user or the primary session answered an approval request.
     ApprovalResolved {
         /// The answered request.
         approval_id: ApprovalId,
         /// The answer.
         decision: ApprovalDecision,
+        /// Who answered; `by` names the user when it is a user.
+        #[serde(default)]
+        answered_by: Answerer,
+    },
+    /// The agent is blocked until someone answers a question; cleared when its turn ends.
+    QuestionAsked {
+        /// The question, answered by this id.
+        question_id: QuestionId,
+        /// Turn that is blocked.
+        turn_id: TurnId,
+        /// The question, as Markdown.
+        text: String,
+        /// Answers to pick from; empty for a free-text answer.
+        choices: Vec<String>,
+        /// Who is asked first; a user can always answer, whatever the route.
+        routed_to: Route,
+        /// Why a child's question went straight to the user; absent when it follows the default route.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<EscalationReason>,
+    },
+    /// A question routed to the primary session now waits for the user.
+    QuestionEscalated {
+        /// The escalated question.
+        question_id: QuestionId,
+        /// Why it was escalated.
+        reason: EscalationReason,
+    },
+    /// A user or the primary session answered a question.
+    QuestionAnswered {
+        /// The answered question.
+        question_id: QuestionId,
+        /// The answer.
+        answer: Answer,
+        /// Who answered; `by` names the user when it is a user.
+        answered_by: Answerer,
+    },
+    /// This session spawned a child session for part of its task.
+    ChildSpawned {
+        /// The child, whose `session_created` names this session as its parent.
+        child_session_id: SessionId,
+        /// Short label of the child's task.
+        task: String,
+    },
+    /// A child session finished a turn and reported back.
+    ChildReported {
+        /// The child.
+        child_session_id: SessionId,
+        /// The child's turn that ended.
+        turn_id: TurnId,
+        /// The child's final assistant message of that turn, or a short status when it failed.
+        summary: String,
     },
     /// The model changed within the same provider.
     ModelSwitched {
@@ -146,9 +221,9 @@ pub enum EventBody {
 pub enum SessionStatus {
     /// Waiting for a prompt.
     Idle,
-    /// The agent is working.
+    /// The agent is working, or waiting for its primary session to answer an approval or question.
     Running,
-    /// Blocked on a user: an approval, or a failed turn to act on.
+    /// Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.
     NeedsYou,
     /// Cannot continue without intervention.
     Error,
@@ -237,7 +312,7 @@ pub enum ItemBody {
     Unknown,
 }
 
-/// A user's answer to an approval request.
+/// An answer to an approval request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
@@ -245,6 +320,59 @@ pub enum ApprovalDecision {
     Allow,
     /// Refuse the tool call.
     Deny,
+}
+
+/// Who an approval request or question is put to first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// The primary session of the asking child's task.
+    Primary,
+    /// A user.
+    #[default]
+    User,
+}
+
+/// Why a child's approval request or question goes to the user instead of its primary session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EscalationReason {
+    /// The primary session marked it as the user's decision.
+    MarkedByPrimary,
+    /// It exceeds what the primary session may decide.
+    ExceedsAuthority,
+    /// The primary session did not answer in time.
+    Timeout,
+}
+
+/// Who answered an approval request or question.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Answerer {
+    /// A user, named by the event's `by`.
+    #[default]
+    User,
+    /// The primary session of the asking child's task.
+    Primary {
+        /// The primary session.
+        session_id: SessionId,
+    },
+}
+
+/// An answer to a question.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Answer {
+    /// A free-text answer.
+    Text {
+        /// Answer text.
+        text: String,
+    },
+    /// One of the question's choices.
+    Choice {
+        /// Position of the choice in the question's `choices`, from 0.
+        index: u32,
+    },
 }
 
 /// A GitHub pull request tracked for a session.

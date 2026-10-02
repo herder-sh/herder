@@ -50,6 +50,9 @@ pub enum Error {
     /// A `session_created` event was appended to a session that already has events.
     #[error("session {0} already exists")]
     SessionExists(SessionId),
+    /// A `session_created` event names a parent session that does not exist.
+    #[error("parent session {0} does not exist")]
+    UnknownParent(SessionId),
     /// The event cannot be stored, such as one with an `Unknown` body or status.
     #[error("cannot encode event: {0}")]
     Encode(#[from] serde_json::Error),
@@ -90,6 +93,10 @@ pub struct Session {
     pub model: String,
     /// Current permission mode.
     pub permission_mode: PermissionMode,
+    /// Primary session of the task this session is a child of; `None` for a top-level session.
+    pub parent: Option<SessionId>,
+    /// Short label of the session's task, shown in the task tree.
+    pub task: Option<String>,
     /// Current status; `Idle` until the first status change.
     pub status: SessionStatus,
     /// Seq of the latest event, equal to [`Store::latest_seq`].
@@ -127,7 +134,8 @@ impl Store {
     /// Appends an event to its session's journal at the next seq and updates the projections,
     /// in one transaction; returns the event as stored.
     ///
-    /// A session's first event must be `session_created`, and only its first.
+    /// A session's first event must be `session_created`, and only its first; the parent it
+    /// names, if any, must already exist.
     pub fn append(&mut self, event: NewEvent) -> Result<Event> {
         let body = serde_json::to_value(&event.body)?;
         let event_type = match body.get("type") {
@@ -148,6 +156,14 @@ impl Store {
         }
         if !creates && latest == 0 {
             return Err(Error::UnknownSession(event.session_id));
+        }
+        if let EventBody::SessionCreated {
+            parent: Some(parent),
+            ..
+        } = &event.body
+            && latest_seq(&tx, parent)? == 0
+        {
+            return Err(Error::UnknownParent(parent.clone()));
         }
         let stored = Event {
             session_id: event.session_id,
@@ -236,6 +252,15 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every child session of `parent`'s task, ordered by session id.
+    pub fn children(&self, parent: &SessionId) -> Result<Vec<Session>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "{SESSION_SELECT} WHERE parent = ?1 ORDER BY session_id"
+        ))?;
+        let rows = stmt.query_map([parent.as_str()], read_session)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Pull requests tracked for the session, ordered by number.
     pub fn session_prs(&self, session: &SessionId) -> Result<Vec<PullRequest>> {
         let mut stmt = self.conn.prepare_cached(
@@ -258,7 +283,7 @@ impl Store {
 }
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,
-    model, permission_mode, status, last_seq, updated_at FROM sessions";
+    model, permission_mode, parent, task, status, last_seq, updated_at FROM sessions";
 
 fn latest_seq(conn: &Connection, session: &SessionId) -> Result<Seq> {
     let max: Option<Seq> = conn
@@ -288,9 +313,11 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         account_id: AccountId::new(row.get::<_, String>(5)?),
         model: row.get(6)?,
         permission_mode: get_tag(row, 7)?,
-        status: get_tag(row, 8)?,
-        last_seq: row.get(9)?,
-        updated_at: row.get(10)?,
+        parent: row.get::<_, Option<String>>(8)?.map(SessionId::new),
+        task: row.get(9)?,
+        status: get_tag(row, 10)?,
+        last_seq: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 

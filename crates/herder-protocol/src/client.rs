@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, Seq, SessionId,
-    TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, QuestionId,
+    Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -99,7 +99,7 @@ pub enum CommandBody {
         /// New permission mode.
         mode: PermissionMode,
     },
-    /// Answer a pending approval request.
+    /// Answer a pending approval request as the user, whoever it is routed to.
     AnswerApproval {
         /// Target session.
         session_id: SessionId,
@@ -107,6 +107,15 @@ pub enum CommandBody {
         approval_id: ApprovalId,
         /// The answer.
         decision: ApprovalDecision,
+    },
+    /// Answer a pending question as the user, whoever it is routed to.
+    AnswerQuestion {
+        /// Session that asked.
+        session_id: SessionId,
+        /// Question to answer.
+        question_id: QuestionId,
+        /// The answer.
+        answer: Answer,
     },
     /// Move to another account of the same provider.
     SwitchAccount {

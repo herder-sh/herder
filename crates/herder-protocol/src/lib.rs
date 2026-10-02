@@ -20,12 +20,12 @@ mod types;
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
 pub use event::{
-    ApprovalDecision, CiStatus, ErrorClass, Event, EventBody, Item, ItemBody, Mergeable, PrState,
-    PullRequest, ReviewStatus, SessionStatus, TurnError,
+    Answer, Answerer, ApprovalDecision, CiStatus, ErrorClass, EscalationReason, Event, EventBody,
+    Item, ItemBody, Mergeable, PrState, PullRequest, ReviewStatus, Route, SessionStatus, TurnError,
 };
 pub use ids::{
-    AccountId, ApprovalId, CommandId, DeviceId, HostId, ItemId, SessionId, TerminalId, TurnId,
-    UserId,
+    AccountId, ApprovalId, CommandId, DeviceId, HostId, ItemId, QuestionId, SessionId, TerminalId,
+    TurnId, UserId,
 };
 pub use server::{
     Account, CommandResult, ErrorCode, ErrorInfo, Role, ServerHello, ServerMessage, SessionHead,

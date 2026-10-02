@@ -269,8 +269,87 @@
       "description": "Identifies a provider account on a host; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "Answer": {
+      "description": "An answer to a question.",
+      "oneOf": [
+        {
+          "description": "A free-text answer.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Answer text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "One of the question's choices.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "description": "Position of the choice in the question's `choices`, from 0.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "choice"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ]
+        }
+      ]
+    },
+    "Answerer": {
+      "description": "Who answered an approval request or question.",
+      "oneOf": [
+        {
+          "description": "A user, named by the event's `by`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The primary session of the asking child's task.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "The primary session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "primary"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        }
+      ]
+    },
     "ApprovalDecision": {
-      "description": "A user's answer to an approval request.",
+      "description": "An answer to an approval request.",
       "oneOf": [
         {
           "description": "Run the tool call once.",
@@ -419,7 +498,7 @@
           "const": "forbidden"
         },
         {
-          "description": "A referenced session, account, approval or terminal does not exist.",
+          "description": "A referenced session, account, approval, question or terminal does not exist.",
           "type": "string",
           "const": "not_found"
         },
@@ -456,6 +535,26 @@
       "required": [
         "code",
         "message"
+      ]
+    },
+    "EscalationReason": {
+      "description": "Why a child's approval request or question goes to the user instead of its primary session.",
+      "oneOf": [
+        {
+          "description": "The primary session marked it as the user's decision.",
+          "type": "string",
+          "const": "marked_by_primary"
+        },
+        {
+          "description": "It exceeds what the primary session may decide.",
+          "type": "string",
+          "const": "exceeds_authority"
+        },
+        {
+          "description": "The primary session did not answer in time.",
+          "type": "string",
+          "const": "timeout"
+        }
       ]
     },
     "Event": {
@@ -501,7 +600,7 @@
       ]
     },
     "EventBody": {
-      "description": "What a durable event records.",
+      "description": "What a durable event records.\n\nA task is a primary session that spawns child sessions. Each child is a full session with\nits own journal; the primary's journal records `child_spawned` and `child_reported`. A\nchild's approvals and questions are journaled in the child's own journal, whoever answers\nthem.",
       "oneOf": [
         {
           "description": "The session exists: one repo, one worktree and branch, on this host.",
@@ -519,6 +618,17 @@
               "description": "Starting model, in the provider's own naming.",
               "type": "string"
             },
+            "parent": {
+              "description": "Primary session of the task this session is a child of; absent for a top-level session.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "permission_mode": {
               "description": "Starting permission mode.",
               "$ref": "#/$defs/PermissionMode"
@@ -530,6 +640,13 @@
             "repo": {
               "description": "Absolute path of the repository on the host.",
               "type": "string"
+            },
+            "task": {
+              "description": "Short label of the session's task, shown in the task tree.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "type": "string",
@@ -665,12 +782,28 @@
           ]
         },
         {
-          "description": "The agent is blocked until a user allows or denies a tool call.",
+          "description": "The agent is blocked until someone allows or denies a tool call.",
           "type": "object",
           "properties": {
             "approval_id": {
               "description": "The request, answered by this id.",
               "$ref": "#/$defs/ApprovalId"
+            },
+            "reason": {
+              "description": "Why a child's request went straight to the user; absent when it follows the default route.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EscalationReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "routed_to": {
+              "description": "Who is asked first; a user can always answer, whatever the route.",
+              "$ref": "#/$defs/Route",
+              "default": "user"
             },
             "summary": {
               "description": "One-line description of what the agent wants to do.",
@@ -698,9 +831,39 @@
           ]
         },
         {
-          "description": "A user answered an approval request.",
+          "description": "A request routed to the primary session now waits for the user.",
           "type": "object",
           "properties": {
+            "approval_id": {
+              "description": "The escalated request.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "reason": {
+              "description": "Why it was escalated.",
+              "$ref": "#/$defs/EscalationReason"
+            },
+            "type": {
+              "type": "string",
+              "const": "approval_escalated"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "reason"
+          ]
+        },
+        {
+          "description": "A user or the primary session answered an approval request.",
+          "type": "object",
+          "properties": {
+            "answered_by": {
+              "description": "Who answered; `by` names the user when it is a user.",
+              "$ref": "#/$defs/Answerer",
+              "default": {
+                "type": "user"
+              }
+            },
             "approval_id": {
               "description": "The answered request.",
               "$ref": "#/$defs/ApprovalId"
@@ -718,6 +881,160 @@
             "type",
             "approval_id",
             "decision"
+          ]
+        },
+        {
+          "description": "The agent is blocked until someone answers a question; cleared when its turn ends.",
+          "type": "object",
+          "properties": {
+            "choices": {
+              "description": "Answers to pick from; empty for a free-text answer.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "question_id": {
+              "description": "The question, answered by this id.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "reason": {
+              "description": "Why a child's question went straight to the user; absent when it follows the default route.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EscalationReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "routed_to": {
+              "description": "Who is asked first; a user can always answer, whatever the route.",
+              "$ref": "#/$defs/Route"
+            },
+            "text": {
+              "description": "The question, as Markdown.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn that is blocked.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_asked"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "turn_id",
+            "text",
+            "choices",
+            "routed_to"
+          ]
+        },
+        {
+          "description": "A question routed to the primary session now waits for the user.",
+          "type": "object",
+          "properties": {
+            "question_id": {
+              "description": "The escalated question.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "reason": {
+              "description": "Why it was escalated.",
+              "$ref": "#/$defs/EscalationReason"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_escalated"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "reason"
+          ]
+        },
+        {
+          "description": "A user or the primary session answered a question.",
+          "type": "object",
+          "properties": {
+            "answer": {
+              "description": "The answer.",
+              "$ref": "#/$defs/Answer"
+            },
+            "answered_by": {
+              "description": "Who answered; `by` names the user when it is a user.",
+              "$ref": "#/$defs/Answerer"
+            },
+            "question_id": {
+              "description": "The answered question.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_answered"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "answer",
+            "answered_by"
+          ]
+        },
+        {
+          "description": "This session spawned a child session for part of its task.",
+          "type": "object",
+          "properties": {
+            "child_session_id": {
+              "description": "The child, whose `session_created` names this session as its parent.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "task": {
+              "description": "Short label of the child's task.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "child_spawned"
+            }
+          },
+          "required": [
+            "type",
+            "child_session_id",
+            "task"
+          ]
+        },
+        {
+          "description": "A child session finished a turn and reported back.",
+          "type": "object",
+          "properties": {
+            "child_session_id": {
+              "description": "The child.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "summary": {
+              "description": "The child's final assistant message of that turn, or a short status when it failed.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "The child's turn that ended.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "child_reported"
+            }
+          },
+          "required": [
+            "type",
+            "child_session_id",
+            "turn_id",
+            "summary"
           ]
         },
         {
@@ -1127,6 +1444,10 @@
         "mergeable"
       ]
     },
+    "QuestionId": {
+      "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
     "ReviewStatus": {
       "description": "Review verdict on a pull request.",
       "oneOf": [
@@ -1164,6 +1485,21 @@
           "description": "Drives sessions; never sees or opens a terminal.",
           "type": "string",
           "const": "member"
+        }
+      ]
+    },
+    "Route": {
+      "description": "Who an approval request or question is put to first.",
+      "oneOf": [
+        {
+          "description": "The primary session of the asking child's task.",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "A user.",
+          "type": "string",
+          "const": "user"
         }
       ]
     },
@@ -1240,12 +1576,12 @@
           "const": "idle"
         },
         {
-          "description": "The agent is working.",
+          "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
           "type": "string",
           "const": "running"
         },
         {
-          "description": "Blocked on a user: an approval, or a failed turn to act on.",
+          "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
           "type": "string",
           "const": "needs_you"
         },

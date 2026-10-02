@@ -1,6 +1,6 @@
 //! Projections: the read models each appended event updates, inside the append's transaction.
 
-use herder_protocol::{Event, EventBody, PullRequest, SessionStatus};
+use herder_protocol::{Event, EventBody, PullRequest, SessionId, SessionStatus};
 use rusqlite::{Transaction, params};
 
 use crate::{Result, tag};
@@ -17,11 +17,13 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             account_id,
             model,
             permission_mode,
+            parent,
+            task,
         } => {
             tx.prepare_cached(
                 "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
-                     model, permission_mode, status, last_seq, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     model, permission_mode, parent, task, status, last_seq, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?
             .execute(params![
                 id,
@@ -32,6 +34,8 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 account_id.as_str(),
                 model,
                 tag(permission_mode)?,
+                parent.as_ref().map(SessionId::as_str),
+                task,
                 tag(&SessionStatus::Idle)?,
                 event.seq,
                 event.at,
@@ -99,7 +103,13 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
         | EventBody::TurnFailed { .. }
         | EventBody::ItemAdded { .. }
         | EventBody::ApprovalRequested { .. }
+        | EventBody::ApprovalEscalated { .. }
         | EventBody::ApprovalResolved { .. }
+        | EventBody::QuestionAsked { .. }
+        | EventBody::QuestionEscalated { .. }
+        | EventBody::QuestionAnswered { .. }
+        | EventBody::ChildSpawned { .. }
+        | EventBody::ChildReported { .. }
         | EventBody::Unknown => {}
     }
     tx.prepare_cached("UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE session_id = ?1")?

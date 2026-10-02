@@ -184,7 +184,7 @@ pub enum ErrorCode {
     BadRequest,
     /// The user's role does not allow it.
     Forbidden,
-    /// A referenced session, account, approval or terminal does not exist.
+    /// A referenced session, account, approval, question or terminal does not exist.
     NotFound,
     /// Not possible in the current state, e.g. a prompt while a turn runs.
     Conflict,
