@@ -946,25 +946,24 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
             body: input("exit 3"),
         }))
         .await;
-    loop {
+    // The input's acceptance may arrive before or after the shell exits.
+    let (mut closed, mut listed, mut accepted) = (None, false, false);
+    while !(listed && accepted) {
         match client.recv().await {
             ServerMessage::TerminalClosed {
-                terminal_id: closed,
+                terminal_id: id,
                 exit_code,
-            } => {
-                assert_eq!((&closed, exit_code), (&terminal_id, Some(3)));
-                break;
+            } => closed = Some((id, exit_code)),
+            ServerMessage::Terminals { terminals } => {
+                assert!(terminals.is_empty() && closed.is_some(), "{terminals:?}");
+                listed = true;
             }
-            ServerMessage::TerminalOutput { .. } | ServerMessage::CommandAccepted { .. } => {}
+            ServerMessage::CommandAccepted { .. } => accepted = true,
+            ServerMessage::TerminalOutput { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }
-    assert_eq!(
-        client.recv().await,
-        ServerMessage::Terminals {
-            terminals: Vec::new()
-        }
-    );
+    assert_eq!(closed, Some((terminal_id.clone(), Some(3))));
     let attach = CommandBody::AttachTerminal { terminal_id };
     assert!(matches!(
         client.command("c5", attach).await,
