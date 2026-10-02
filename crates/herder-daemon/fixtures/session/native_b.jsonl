@@ -1,0 +1,6 @@
+# The same session on another Claude account: the CLI resumed it and reports the same id.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Now add a test for it."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "session_identified", "native_id": "claude-session-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "claude-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added a test for /health."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

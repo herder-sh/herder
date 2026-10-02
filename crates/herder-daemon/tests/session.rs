@@ -2071,6 +2071,159 @@ async fn one_session_moves_from_claude_to_codex_to_cursor_and_keeps_going() {
     daemon.shutdown.cancel();
 }
 
+/// Two Claude accounts whose CLIs play `scripts`; account `claude-a`'s config dir holds the
+/// transcript of CLI session `claude-session-1` (unless `transcript` is false) beside its
+/// credentials. Returns the manager, the adapter, the session after its first turn on
+/// `claude-a`, and the transcript's path relative to a config dir.
+async fn switching_claude(
+    dir: &Path,
+    scripts: &[&str],
+    transcript: bool,
+) -> (Switching, Arc<Scripted>, SessionId, PathBuf) {
+    let claude = Scripted::new(scripts);
+    let mut daemon = Switching::open(
+        dir,
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, false),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let relative = PathBuf::from("projects/-app/claude-session-1.jsonl");
+    let a = dir.join("claude-a");
+    std::fs::create_dir_all(a.join("projects/-app")).unwrap();
+    std::fs::write(a.join(".credentials.json"), "a's login").unwrap();
+    std::fs::write(a.join("projects/-app/claude-session-0.jsonl"), "older\n").unwrap();
+    if transcript {
+        std::fs::write(a.join(&relative), "the whole conversation\n").unwrap();
+    }
+    std::fs::create_dir_all(dir.join("claude-b")).unwrap();
+    let session = daemon.create("claude-a").await;
+    let ended = daemon.turn(&session, "Add a health check endpoint.").await;
+    assert!(
+        matches!(ended, EventBody::TurnCompleted { .. }),
+        "{ended:?}"
+    );
+    assert_eq!(
+        daemon.handle(switch_account(&session, "claude-b")).await,
+        Ok(CommandResult::Applied)
+    );
+    (daemon, claude, session, relative)
+}
+
+/// Every file under `dir`, relative to it, sorted.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                found.push(path.strip_prefix(dir).unwrap().to_owned());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+#[tokio::test]
+async fn a_same_provider_switch_resumes_the_clis_own_session_without_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut daemon, claude, session, relative) =
+        switching_claude(dir.path(), &["native_a.jsonl", "native_b.jsonl"], true).await;
+    let ended = daemon.turn(&session, "Now add a test for it.").await;
+    assert!(
+        matches!(ended, EventBody::TurnCompleted { .. }),
+        "{ended:?}"
+    );
+
+    let starts = claude.starts();
+    let [on_a, on_b] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_a.resume, None);
+    assert_eq!(on_b.config_dir, Some(dir.path().join("claude-b")));
+    assert_eq!(on_b.resume.as_deref(), Some("claude-session-1"));
+    assert!(on_b.seed.is_empty(), "{:?}", on_b.seed);
+    // Only the transcript moved, to the same project key; no credentials, no other session.
+    let b = dir.path().join("claude-b");
+    assert_eq!(files_under(&b), std::slice::from_ref(&relative));
+    assert_eq!(
+        std::fs::read_to_string(b.join(&relative)).unwrap(),
+        "the whole conversation\n"
+    );
+    // The resumed CLI's id is now kept with the account it runs on.
+    let store = Store::open(dir.path().join("herder.db")).unwrap();
+    assert_eq!(
+        store.native_session(&session).unwrap(),
+        Some(NativeSession {
+            provider: Provider::Claude,
+            account_id: AccountId::new("claude-b"),
+            native_id: "claude-session-1".into(),
+        })
+    );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_native_resume_the_cli_refuses_falls_back_to_replay() {
+    let dir = tempfile::tempdir().unwrap();
+    // No script for the second start: the fake fails it, as a CLI that cannot resume would.
+    let scripts = [
+        "native_a.jsonl",
+        "unresumable.jsonl",
+        "switch_claude_b.jsonl",
+    ];
+    let (mut daemon, claude, session, _) = switching_claude(dir.path(), &scripts, true).await;
+    let ended = daemon.turn(&session, "Now add a test for it.").await;
+    assert!(
+        matches!(ended, EventBody::TurnCompleted { .. }),
+        "{ended:?}"
+    );
+
+    let starts = claude.starts();
+    let [_, resumed, replayed] = starts.as_slice() else {
+        panic!("expected three starts, got {starts:?}");
+    };
+    assert_eq!(resumed.resume.as_deref(), Some("claude-session-1"));
+    assert_eq!(replayed.resume, None);
+    assert_eq!(replayed.config_dir, Some(dir.path().join("claude-b")));
+    assert_eq!(
+        seed_texts(replayed),
+        [
+            "user: Add a health check endpoint.",
+            "assistant: Added GET /health."
+        ]
+    );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_switch_without_the_clis_transcript_replays() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = ["native_a.jsonl", "switch_claude_b.jsonl"];
+    let (mut daemon, claude, session, _) = switching_claude(dir.path(), &scripts, false).await;
+    let ended = daemon.turn(&session, "Now add a test for it.").await;
+    assert!(
+        matches!(ended, EventBody::TurnCompleted { .. }),
+        "{ended:?}"
+    );
+
+    let starts = claude.starts();
+    let [_, on_b] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_b.resume, None);
+    assert_eq!(seed_texts(on_b).len(), 2);
+    assert!(files_under(&dir.path().join("claude-b")).is_empty());
+    daemon.shutdown.cancel();
+}
+
 #[tokio::test]
 async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
     let dir = tempfile::tempdir().unwrap();

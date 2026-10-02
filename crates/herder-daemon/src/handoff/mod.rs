@@ -1,7 +1,8 @@
 //! Replay handoff: the transcript a new provider session is seeded with, sized to fit.
 //!
-//! A session moves to a fresh CLI process (a daemon restart, or later an account or provider
-//! switch) by replaying its journal's items as the [`StartRequest::seed`]. A long session's
+//! A session moves to a fresh CLI process (a daemon restart, or an account or provider switch)
+//! by replaying its journal's items as the [`StartRequest::seed`], unless a same-provider
+//! account switch resumes the CLI's own session instead ([`native`]). A long session's
 //! journal outgrows the target model's context, so [`transcript`] condenses it to a token
 //! budget from [`budget`]:
 //!
@@ -25,6 +26,7 @@
 
 use herder_protocol::{Item, ItemBody, ItemId, Provider, TurnId};
 
+pub mod native;
 #[cfg(test)]
 mod tests;
 
