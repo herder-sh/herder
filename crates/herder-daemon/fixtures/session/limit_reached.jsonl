@@ -1,0 +1,4 @@
+# The account runs out mid-turn.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "limit_reached", "message": "5-hour limit reached"}}}

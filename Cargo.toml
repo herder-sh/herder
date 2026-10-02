@@ -45,5 +45,6 @@ tokio-util = "0.7"
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+ulid = "1"
 ureq = "3"
 uuid = { version = "1", features = ["v7"] }

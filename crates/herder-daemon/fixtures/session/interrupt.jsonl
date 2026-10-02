@@ -1,0 +1,5 @@
+# A turn that runs until it is interrupted.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Work forever."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "turn-1"}}
