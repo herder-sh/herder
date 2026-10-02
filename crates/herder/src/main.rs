@@ -93,10 +93,7 @@ fn main() -> ExitCode {
                 .map(|()| ExitCode::SUCCESS)
         }
         Some(Command::Hook { hook }) => hook::run(hook),
-        None => {
-            println!("{}", herder_tui::run());
-            Ok(ExitCode::SUCCESS)
-        }
+        None => herder_tui::run().map(|()| ExitCode::SUCCESS),
     };
     result.unwrap_or_else(|err| {
         eprintln!("herder: {err:#}");

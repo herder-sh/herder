@@ -1,0 +1,20 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 80, 16).backend()"
+---
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                             No machines paired yet.                            "
+"                                                                                "
+"                   On a machine running the herder daemon, run                  "
+"                                                                                "
+"                                   herder pair                                  "
+"                                                                                "
+"         It prints a one-time pairing link and QR code for this device.         "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                 ? help  q quit "
