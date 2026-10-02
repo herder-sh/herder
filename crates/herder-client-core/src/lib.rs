@@ -56,8 +56,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use herder_protocol::{
-    Account, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo, Event, HostId,
-    Item, PROTOCOL_VERSION, Role, SessionHead, SessionId, Terminal, TerminalId,
+    Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
+    Event, HostId, Item, PROTOCOL_VERSION, Provider, Role, SessionHead, SessionId, Terminal,
+    TerminalId,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -66,6 +67,20 @@ use auth::{DeviceKey, PairingUri};
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
 pub use terminal::{TerminalEvent, TerminalStream};
+
+/// An account to add with [`Client::add_account`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewAccount {
+    /// Id of the new account; unique on its machine.
+    pub account_id: AccountId,
+    /// Provider to log in to.
+    pub provider: Provider,
+    /// Display label; the id when absent.
+    pub label: Option<String>,
+    /// Config dir on the machine, absolute or starting with `~/`; the daemon picks one in the
+    /// home directory when absent.
+    pub config_dir: Option<String>,
+}
 
 /// Why a client call failed.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -307,7 +322,39 @@ impl Client {
         rows: u16,
     ) -> Result<TerminalStream, Error> {
         self.machine(host_id)?
-            .open_terminal(session_id.clone(), cols, rows)
+            .open_terminal(CommandBody::OpenTerminal {
+                session_id: session_id.clone(),
+                cols,
+                rows,
+            })
+            .await
+    }
+
+    /// Adds an account to a machine: runs its provider's own login in a login terminal of
+    /// `cols` by `rows` and streams it, however long it takes to connect; owners only. The
+    /// account joins the machine's account list once the login exits successfully.
+    pub async fn add_account(
+        &self,
+        host_id: &HostId,
+        account: NewAccount,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        let NewAccount {
+            account_id,
+            provider,
+            label,
+            config_dir,
+        } = account;
+        self.machine(host_id)?
+            .open_terminal(CommandBody::AddAccount {
+                account_id,
+                provider,
+                label,
+                config_dir,
+                cols,
+                rows,
+            })
             .await
     }
 

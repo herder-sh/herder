@@ -193,23 +193,18 @@ impl Supervisor {
         }
     }
 
-    /// Opens a shell in `session_id`'s worktree and streams it, once a connection is up. An
-    /// open lost to a dropped connection is resent with the same id, so it opens one shell.
+    /// Sends `body`, an `open_terminal` or `add_account`, and streams the terminal it opens,
+    /// once a connection is up. An open lost to a dropped connection is resent with the same
+    /// id, so it opens one terminal.
     pub(crate) async fn open_terminal(
         self: &Arc<Self>,
-        session_id: SessionId,
-        cols: u16,
-        rows: u16,
+        body: CommandBody,
     ) -> Result<TerminalStream, Error> {
         let (events, receiver) = mpsc::unbounded_channel();
         let (reply, answer) = oneshot::channel();
         let command = Command {
             id: new_command_id(),
-            body: CommandBody::OpenTerminal {
-                session_id,
-                cols,
-                rows,
-            },
+            body,
         };
         self.ops
             .send(Op::Open(command, reply, events))
@@ -890,7 +885,8 @@ fn answered(
     let mut message = None;
     if let (Some(events), Ok(CommandResult::TerminalOpened { terminal_id })) = (open, &result) {
         let size = match command.body {
-            CommandBody::OpenTerminal { cols, rows, .. } => Some((cols, rows)),
+            CommandBody::OpenTerminal { cols, rows, .. }
+            | CommandBody::AddAccount { cols, rows, .. } => Some((cols, rows)),
             _ => None,
         };
         let early = early.remove(terminal_id).unwrap_or_default();

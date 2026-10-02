@@ -7,6 +7,7 @@ pub mod data_dir;
 pub mod handoff;
 pub mod hub;
 pub mod logging;
+pub mod login;
 pub mod mcp;
 pub mod projects;
 pub mod prs;
@@ -183,9 +184,17 @@ pub async fn serve(
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
-    ws::Server::new(tls, auth, hub, sessions, terminals.clone(), host)
-        .run(listener, shutdown)
-        .await;
+    ws::Server::new(
+        tls,
+        auth,
+        hub,
+        sessions,
+        terminals.clone(),
+        login::Logins::default(),
+        host,
+    )
+    .run(listener, shutdown)
+    .await;
     terminals.close_all();
     info!("herder daemon stopped");
     Ok(())

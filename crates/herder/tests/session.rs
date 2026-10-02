@@ -11,6 +11,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::auth::PairingUri;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::login::Logins;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
@@ -68,7 +69,7 @@ async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
         name: "test-host".into(),
     };
     let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-    let server = Server::new(tls, auth, hub, sessions, terminals, host);
+    let server = Server::new(tls, auth, hub, sessions, terminals, Logins::default(), host);
     tokio::spawn(server.run(listener, shutdown));
     link
 }

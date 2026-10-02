@@ -1,7 +1,8 @@
-//! Terminals: shells on a pseudo-terminal in a session's worktree, for the daemon's owners.
+//! Terminals: programs on a pseudo-terminal, for the daemon's owners.
 //!
-//! A terminal runs the user's login shell (`$SHELL -l`, or `/bin/sh -l`) with
-//! `TERM=xterm-256color`. It outlives the clients that use it: detaching, or disconnecting,
+//! A shell terminal runs the user's login shell (`$SHELL -l`, or `/bin/sh -l`) in a session's
+//! worktree; a login terminal runs a provider's own login for an account being added
+//! ([`crate::login`]). Both get `TERM=xterm-256color`. A terminal outlives the clients that use it: detaching, or disconnecting,
 //! leaves the shell running. Everything it writes is kept in a scrollback ring of the last
 //! [`SCROLLBACK`] bytes; attaching replays the scrollback as one `terminal_output` message,
 //! then streams live output. The bytes are ephemeral: never journaled, and gone once the
@@ -24,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use herder_protocol::{
-    Account, Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, ServerMessage,
-    SessionHead, SessionId, SessionStatus, Terminal, TerminalId,
+    Account, AccountId, Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, ServerMessage,
+    SessionHead, SessionId, SessionStatus, Terminal, TerminalId, TerminalPurpose,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tracing::{debug, info, warn};
@@ -61,7 +62,7 @@ struct Inner {
 
 /// One open terminal.
 struct Term {
-    session_id: SessionId,
+    purpose: TerminalPurpose,
     /// The pty's controlling side, for resizing.
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// The shell's input.
@@ -105,19 +106,45 @@ impl Terminals {
         rows: u16,
         outbox: &Arc<Outbox>,
     ) -> Result<TerminalId, ErrorInfo> {
+        let mut command = CommandBuilder::new(&self.inner.shell);
+        command.arg("-l");
+        command.cwd(cwd);
+        let purpose = TerminalPurpose::Shell { session_id };
+        self.spawn(purpose, command, cols, rows, outbox)
+    }
+
+    /// Opens a terminal of `cols` by `rows` running `command`, the login of `account_id`, and
+    /// attaches `outbox`. The new terminal list is queued before any of its output.
+    pub(crate) fn open_login(
+        &self,
+        account_id: AccountId,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+        outbox: &Arc<Outbox>,
+    ) -> Result<TerminalId, ErrorInfo> {
+        let purpose = TerminalPurpose::Login { account_id };
+        self.spawn(purpose, command, cols, rows, outbox)
+    }
+
+    fn spawn(
+        &self,
+        purpose: TerminalPurpose,
+        mut command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+        outbox: &Arc<Outbox>,
+    ) -> Result<TerminalId, ErrorInfo> {
         let size = size(cols, rows)?;
         let pair = native_pty_system()
             .openpty(size)
             .map_err(|err| internal("cannot open a pseudo-terminal", &err))?;
-        let mut command = CommandBuilder::new(&self.inner.shell);
-        command.arg("-l");
-        command.cwd(cwd);
         command.env("TERM", "xterm-256color");
         let child = pair
             .slave
             .spawn_command(command)
-            .map_err(|err| internal("cannot start a shell", &err))?;
-        // The shell holds the only other handle to its side, so reads end once it exits.
+            .map_err(|err| internal("cannot start the terminal's program", &err))?;
+        // The program holds the only other handle to its side, so reads end once it exits.
         drop(pair.slave);
         let reader = pair
             .master
@@ -129,7 +156,7 @@ impl Terminals {
             .map_err(|err| internal("cannot write to the pseudo-terminal", &err))?;
         let terminal_id = TerminalId::new(ulid::Ulid::new().to_string());
         let term = Arc::new(Term {
-            session_id: session_id.clone(),
+            purpose: purpose.clone(),
             master: Mutex::new(pair.master),
             writer: Arc::new(Mutex::new(writer)),
             killer: Mutex::new(child.clone_killer()),
@@ -141,7 +168,7 @@ impl Terminals {
             self.inner.hub.terminals_changed(&list(&open));
         }
         lock(&term.output).attached.push(Arc::clone(outbox));
-        info!(%terminal_id, %session_id, "terminal opened");
+        info!(%terminal_id, ?purpose, "terminal opened");
         let terminals = self.clone();
         let id = terminal_id.clone();
         let spawned = std::thread::Builder::new()
@@ -237,7 +264,8 @@ impl Terminals {
     /// Hangs up every terminal of `session_id`; each closes once its shell exits.
     pub fn close_session(&self, session_id: &SessionId) {
         for (terminal_id, term) in self.inner.lock().iter() {
-            if term.session_id == *session_id {
+            if matches!(&term.purpose, TerminalPurpose::Shell { session_id: id } if id == session_id)
+            {
                 info!(%terminal_id, %session_id, "closing the terminal of an archived session");
                 term.hang_up();
             }
@@ -277,7 +305,7 @@ impl Terminals {
             Ok(status) => {
                 info!(
                     %terminal_id,
-                    session_id = %term.session_id,
+                    purpose = ?term.purpose,
                     exit_code = status.exit_code(),
                     signal = status.signal(),
                     "terminal closed"
@@ -423,7 +451,7 @@ fn list(open: &BTreeMap<TerminalId, Arc<Term>>) -> Vec<Terminal> {
     open.iter()
         .map(|(terminal_id, term)| Terminal {
             terminal_id: terminal_id.clone(),
-            session_id: term.session_id.clone(),
+            purpose: term.purpose.clone(),
         })
         .collect()
 }

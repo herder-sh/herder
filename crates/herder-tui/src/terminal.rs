@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, TerminalEvent, TerminalStream};
-use herder_protocol::{ErrorCode, HostId, Role, SessionId, TerminalId};
+use herder_protocol::{ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{cursor, execute};
@@ -96,7 +96,10 @@ pub fn rows(machines: &[Machine], session: &SessionKey) -> Vec<Target> {
         .iter()
         .filter(|machine| machine.host_id == session.host_id)
         .flat_map(|machine| &machine.terminals)
-        .filter(|terminal| terminal.session_id == session.session_id)
+        .filter(|terminal| {
+            matches!(&terminal.purpose, TerminalPurpose::Shell { session_id }
+                if *session_id == session.session_id)
+        })
         .map(|terminal| Target::Existing(terminal.terminal_id.clone()));
     std::iter::once(Target::New(session.session_id.clone()))
         .chain(open)
@@ -355,7 +358,7 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) mod app_tests {
-    use herder_protocol::Terminal;
+    use herder_protocol::{AccountId, Terminal};
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::*;
@@ -366,8 +369,8 @@ pub(crate) mod app_tests {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
     }
 
-    /// [`fake::tree`] with two terminals open in `s2`, the first selected session, and one in
-    /// `s1`.
+    /// [`fake::tree`] with two terminals open in `s2`, the first selected session, one in
+    /// `s1`, and an account login, which no session's picker lists.
     pub(crate) fn with_terminals() -> App {
         let mut app = fake::tree();
         let mut machines = app.machines.clone();
@@ -376,8 +379,16 @@ pub(crate) mod app_tests {
             .zip(["s2", "s1", "s2"])
             .map(|(terminal, session)| Terminal {
                 terminal_id: TerminalId::new(*terminal),
-                session_id: SessionId::new(session),
+                purpose: TerminalPurpose::Shell {
+                    session_id: SessionId::new(session),
+                },
             })
+            .chain([Terminal {
+                terminal_id: TerminalId::new("t4"),
+                purpose: TerminalPurpose::Login {
+                    account_id: AccountId::new("a1"),
+                },
+            }])
             .collect();
         app.update(Msg::Machines(machines));
         app

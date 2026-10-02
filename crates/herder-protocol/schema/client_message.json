@@ -538,6 +538,59 @@
           ]
         },
         {
+          "description": "Add an account: run the provider's own login in a fresh config dir, in a login terminal\nthis connection is attached to; owners only. The account joins the account list once\nthe login exits successfully.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Id of the new account; unique on this daemon.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "config_dir": {
+              "description": "Absolute config dir on the host, or one starting with `~/`; the daemon picks one\nin the home directory when absent. It must not hold a login yet.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "description": "Display label; the id when absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "provider": {
+              "description": "Provider to log in to.",
+              "$ref": "#/$defs/Provider"
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "add_account"
+            }
+          },
+          "required": [
+            "type",
+            "account_id",
+            "provider",
+            "cols",
+            "rows"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
@@ -679,6 +732,18 @@
           "type": "string",
           "const": "full_access"
         }
+      ]
+    },
+    "Provider": {
+      "description": "Vendor CLI that runs a session. Open set: accept names not listed in `examples`.",
+      "type": "string",
+      "examples": [
+        "claude",
+        "codex",
+        "cursor",
+        "grok",
+        "opencode",
+        "gemini"
       ]
     },
     "QuestionId": {

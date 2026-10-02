@@ -172,7 +172,9 @@ async fn a_shell_exit_closes_the_terminal_and_updates_the_list() {
         opened,
         [Terminal {
             terminal_id: terminal_id.clone(),
-            session_id: SessionId::new("s1"),
+            purpose: TerminalPurpose::Shell {
+                session_id: SessionId::new("s1"),
+            },
         }]
     );
     assert_eq!(f.terminals.list(), opened);

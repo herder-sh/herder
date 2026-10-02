@@ -1,6 +1,8 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
-//! turn, a daemon killed and restarted mid-turn, and a terminal across a cut connection.
+//! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, and an
+//! account login.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,10 +12,11 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::auth::PairingUri;
 use herder_client_core::{
-    Client, ConnectionState, Error, SessionSubscription, SessionUpdate, TerminalEvent,
+    Client, ConnectionState, Error, NewAccount, SessionSubscription, SessionUpdate, TerminalEvent,
     TerminalStream,
 };
 use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::login::{LoginProgram, Logins};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
@@ -21,7 +24,7 @@ use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, ItemBody,
-    PermissionMode, Provider, Role, SessionId, SessionStatus, TurnId,
+    PermissionMode, Provider, Role, SessionId, SessionStatus, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -33,6 +36,27 @@ fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
         .join(name)
+}
+
+fn fake_provider() -> Provider {
+    Provider::Other("fake".into())
+}
+
+/// A stand-in for a provider's device login: prints a URL, reads the code typed in the
+/// terminal, and succeeds only for the right one.
+fn fake_login() -> LoginProgram {
+    let script = r#"echo "Open https://example.com/device to log in"
+printf 'Code: '
+read code
+[ "$code" = "ABCD" ] || exit 1
+touch "$FAKE_CONFIG_DIR/logged-in"
+echo "Logged in"
+"#;
+    LoginProgram {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".into(), script.into()],
+        config_env: "FAKE_CONFIG_DIR".into(),
+    }
 }
 
 fn account() -> AccountId {
@@ -64,7 +88,7 @@ impl Daemon {
             let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
             let auth = Arc::new(Auth::open(&dir).unwrap());
             let hub = Arc::new(Hub::default());
-            let fake = Provider::Other("fake".into());
+            let fake = fake_provider();
             let mut adapters = Adapters::new();
             adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
             let mut accounts = Accounts::new();
@@ -97,7 +121,16 @@ impl Daemon {
                 name: "test-host".into(),
             };
             let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-            let server = Server::new(tls, Arc::clone(&auth), hub, sessions, terminals, host);
+            let logins = Logins::new(HashMap::from([(fake_provider(), fake_login())]));
+            let server = Server::new(
+                tls,
+                Arc::clone(&auth),
+                hub,
+                sessions,
+                terminals,
+                logins,
+                host,
+            );
             started.send((addr, fingerprint, auth)).ok().unwrap();
             server.run(listener, shutdown).await;
         });
@@ -562,5 +595,91 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         }
     }
     assert_eq!(next_event(&stream).await, None);
+    daemon.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adding_an_account_relays_its_login_to_the_owner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let config_dir = tmp.path().join("fake-2");
+    let new_account = |account_id: &str| NewAccount {
+        account_id: AccountId::new(account_id),
+        provider: fake_provider(),
+        label: Some("Second".into()),
+        config_dir: Some(config_dir.to_str().unwrap().to_owned()),
+    };
+
+    // Members never see a login.
+    let member = Client::open(tmp.path().join("member"), "herder-test/0".into()).unwrap();
+    member
+        .pair(daemon.pairing_link_via("bob", daemon.addr))
+        .await
+        .unwrap();
+    let refused = member
+        .add_account(&host, new_account("fake-2"), 80, 24)
+        .await
+        .err();
+    assert!(
+        matches!(&refused, Some(Error::Rejected(info)) if info.code == ErrorCode::Forbidden),
+        "{refused:?}"
+    );
+    // Nor does an id already taken.
+    let taken = client
+        .add_account(&host, new_account(account().as_str()), 80, 24)
+        .await
+        .err();
+    assert!(
+        matches!(&taken, Some(Error::Rejected(info)) if info.code == ErrorCode::Conflict),
+        "{taken:?}"
+    );
+
+    let stream = client
+        .add_account(&host, new_account("fake-2"), 80, 24)
+        .await
+        .unwrap();
+    let mut screen = Screen::default();
+    screen.read_until(&stream, "Code: ").await;
+    assert!(screen.text.contains("https://example.com/device"));
+    let listed = |client: &Client| {
+        client.machines()[0].terminals.iter().any(|terminal| {
+            terminal.terminal_id == stream.terminal_id()
+                && terminal.purpose
+                    == TerminalPurpose::Login {
+                        account_id: AccountId::new("fake-2"),
+                    }
+        })
+    };
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while !listed(&client) {
+            changes.next().await;
+        }
+    })
+    .await
+    .expect("the login terminal was never listed");
+
+    stream.input(b"ABCD\n".to_vec());
+    screen.read_until(&stream, "Logged in").await;
+    loop {
+        match next_event(&stream).await {
+            Some(TerminalEvent::Output(_)) => {}
+            Some(event) => {
+                assert_eq!(event, TerminalEvent::Closed { exit_code: Some(0) });
+                break;
+            }
+            None => panic!("the stream ended without its exit"),
+        }
+    }
+    // The login ran in the config dir it was given.
+    assert!(config_dir.join("logged-in").exists());
     daemon.kill().await;
 }

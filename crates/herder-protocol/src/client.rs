@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, QuestionId,
-    Seq, SessionId, TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, Provider,
+    QuestionId, Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -163,6 +163,26 @@ pub enum CommandBody {
     OpenTerminal {
         /// Target session.
         session_id: SessionId,
+        /// Width in columns.
+        cols: u16,
+        /// Height in rows.
+        rows: u16,
+    },
+    /// Add an account: run the provider's own login in a fresh config dir, in a login terminal
+    /// this connection is attached to; owners only. The account joins the account list once
+    /// the login exits successfully.
+    AddAccount {
+        /// Id of the new account; unique on this daemon.
+        account_id: AccountId,
+        /// Provider to log in to.
+        provider: Provider,
+        /// Display label; the id when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// Absolute config dir on the host, or one starting with `~/`; the daemon picks one
+        /// in the home directory when absent. It must not hold a login yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_dir: Option<String>,
         /// Width in columns.
         cols: u16,
         /// Height in rows.

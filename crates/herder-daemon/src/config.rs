@@ -326,13 +326,7 @@ fn resolve_accounts(
             !accounts.contains_key(&AccountId::new(&id)),
             "account id {id} is used twice"
         );
-        ensure!(
-            !id.is_empty()
-                && id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
-            "account id {id:?} must be letters, digits, '-', '_' or '.'"
-        );
+        ensure!(valid_id(&id), "account id {id:?} {ID_RULE}");
         let provider = supported(entry.provider).with_context(|| format!("account {id}"))?;
         let config_dir = entry
             .config_dir
@@ -376,6 +370,17 @@ fn resolve_accounts(
     Ok(accounts)
 }
 
+/// What an account id may contain.
+pub(crate) const ID_RULE: &str = "must be letters, digits, '-', '_' or '.'";
+
+/// Whether `id` may name an account: see [`ID_RULE`].
+pub(crate) fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// Validates the `[providers.<name>]` tables into the binary each provider runs.
 fn resolve_binaries(
     tables: BTreeMap<String, ProviderFile>,
@@ -412,7 +417,10 @@ fn supported(name: String) -> Result<Provider> {
 }
 
 /// `path` with a leading `~/` replaced by `$HOME`; it must then be absolute.
-fn resolve_path(path: &Path, env: &impl Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
+pub(crate) fn resolve_path(
+    path: &Path,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf> {
     let path = match path.strip_prefix("~") {
         Ok(rest) => match env("HOME").map(PathBuf::from) {
             Some(home) if home.is_absolute() => home.join(rest),

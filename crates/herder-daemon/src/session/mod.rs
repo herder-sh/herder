@@ -385,6 +385,7 @@ impl SessionManager {
                 },
             ),
             CommandBody::OpenTerminal { .. }
+            | CommandBody::AddAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
