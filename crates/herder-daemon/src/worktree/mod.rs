@@ -31,6 +31,8 @@
 //! [`Worktrees::remove`] removes the worktree and keeps its branches, refusing while the
 //! worktree has uncommitted or untracked changes unless forced.
 
+pub mod checkpoint;
+
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

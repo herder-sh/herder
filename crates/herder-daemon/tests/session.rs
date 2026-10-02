@@ -14,7 +14,7 @@ use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup, TaskLimits,
 };
 use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
-use herder_daemon::worktree::Worktrees;
+use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     CommandBody, CommandId, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event,
@@ -901,6 +901,50 @@ async fn a_branch_checked_out_during_a_session_is_journaled_when_the_turn_ends()
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn each_turn_end_checkpoints_the_worktree_without_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "two_prompts.jsonl", Default::default()).await;
+    let checkpoints = dir.path().join("checkpoints");
+    daemon
+        .manager
+        .checkpoint_turns(checkpoint::Config {
+            dir: checkpoints.clone(),
+            keep: checkpoint::KEEP,
+            push_timeout: Duration::from_secs(30),
+        })
+        .unwrap();
+    let session = daemon.create().await;
+    let worktree = daemon.manager.worktree(&session).await.unwrap();
+    std::fs::write(worktree.join("notes.txt"), "notes\n").unwrap();
+    std::fs::write(worktree.join(".env"), "TOKEN=secret\n").unwrap();
+
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    // Made before the turn's end settles the session.
+    let name = format!("refs/herder/{session}/turn-1");
+    assert_eq!(
+        git(&daemon.repo, &["ls-tree", "-r", "--name-only", &name]),
+        "notes.txt"
+    );
+    assert_eq!(
+        git(&worktree, &["status", "--porcelain"]),
+        "?? .env\n?? notes.txt"
+    );
+    // Without an origin it is bundled, in the background.
+    let bundle = checkpoints.join(session.as_str()).join("turn-1.bundle");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !bundle.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no bundle at {}",
+            bundle.display()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]

@@ -107,6 +107,11 @@ pub async fn serve(
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
     sessions.set_up_worktrees(host.id.clone(), config.projects.clone())?;
+    sessions.checkpoint_turns(worktree::checkpoint::Config {
+        dir: data_dir.root().join("checkpoints"),
+        keep: worktree::checkpoint::KEEP,
+        push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
+    })?;
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),
