@@ -19,7 +19,7 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
         return (area, None);
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
-    let mut height = prompt(session, width).map_or(0, |lines| lines.len() + 2);
+    let mut height = prompt(session, width, false).map_or(0, |lines| lines.len() + 2);
     if session.status != SessionStatus::Archived {
         height += composer_lines(app, width) + 2;
     }
@@ -40,7 +40,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
-    let prompt_lines = prompt(session, width);
+    let prompt_lines = prompt(session, width, app.focus == Focus::Composer);
     let archived = session.status == SessionStatus::Archived;
     let prompt_height = prompt_lines.as_ref().map_or(0, |lines| lines.len() + 2);
     let prompt_height = u16::try_from(prompt_height).unwrap_or(u16::MAX);
@@ -67,6 +67,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
     let title = composer_title(session);
+    let placeholder = if session.questions.is_empty() {
+        "Write a prompt…"
+    } else {
+        "Type an answer…"
+    };
     let focused = app.focus == Focus::Composer;
     let error = app
         .open
@@ -86,6 +91,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         .title(title)
         .title_bottom(bottom.right_aligned());
     let editor = &mut app.compose.editor;
+    editor.set_placeholder_text(placeholder);
     editor.set_cursor_style(if focused {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
@@ -127,18 +133,18 @@ fn composer_lines(app: &App, width: usize) -> usize {
 }
 
 /// The pending approval, else question, as lines `width` wide; `None` when nothing waits.
-fn prompt(session: &Session, width: usize) -> Option<Vec<Line<'static>>> {
+/// `typing` says the composer has the keys, so answer keys need an Esc first.
+fn prompt(session: &Session, width: usize, typing: bool) -> Option<Vec<Line<'static>>> {
     let mut out = Vec::new();
-    let keys = |text: &'static str| Line::styled(text, super::dim());
+    let esc = if typing { "Esc, then " } else { "" };
     if let Some(approval) = session.approvals.first() {
         wrap(&mut out, &approval.summary, super::bold(), width);
-        if approval.routed_to == Route::Primary {
-            out.push(keys(
-                "asked the primary session first; y allow · n deny to answer yourself",
-            ));
+        let hint = if approval.routed_to == Route::Primary {
+            format!("asked the primary session first; {esc}y allow · n deny to answer yourself")
         } else {
-            out.push(keys("y allow · n deny"));
-        }
+            format!("{esc}y allow · n deny")
+        };
+        out.push(Line::styled(hint, super::dim()));
         return Some(out);
     }
     let question = session.questions.first()?;
@@ -160,7 +166,7 @@ fn prompt(session: &Session, width: usize) -> Option<Vec<Line<'static>>> {
         format!("{routed}type the answer below")
     } else {
         format!(
-            "{routed}1-{} pick · or type an answer below",
+            "{routed}{esc}1-{} pick · or type an answer below",
             question.choices.len()
         )
     };
