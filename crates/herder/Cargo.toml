@@ -1,0 +1,19 @@
+[package]
+name = "herder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "herder"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+herder-daemon.workspace = true
+herder-tui.workspace = true
+
+[lints]
+workspace = true

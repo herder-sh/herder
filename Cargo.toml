@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/herder-sh/herder"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+herder-adapters = { path = "crates/herder-adapters" }
+herder-client-core = { path = "crates/herder-client-core" }
+herder-daemon = { path = "crates/herder-daemon" }
+herder-protocol = { path = "crates/herder-protocol" }
+herder-store = { path = "crates/herder-store" }
+herder-tui = { path = "crates/herder-tui" }
