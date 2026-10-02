@@ -12,6 +12,8 @@
 //! - the session list whenever it changes, sent to every client.
 //! - the account list whenever an account's usage changes, sent to every client.
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
+//! - the project list whenever it changes, sent to every client, and on connect once there is
+//!   one ([`crate::projects`]).
 //! - each session's resource usage whenever it changes, sent to every client, and on connect
 //!   for every session with something running ([`crate::resources`]).
 //! - the host's resources and turns whenever they change, sent to every client, and the latest
@@ -25,8 +27,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, Event, EventBody, HostResources, Item, ItemBody, ItemId, Role, Seq, ServerMessage,
-    SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    Account, Event, EventBody, HostResources, Item, ItemBody, ItemId, Project, Role, Seq,
+    ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -64,6 +66,8 @@ struct State {
     usage: HashMap<SessionId, SessionUsage>,
     /// The host's latest resources.
     host: Option<HostResources>,
+    /// The latest project list; `None` until discovery publishes its first.
+    projects: Option<Vec<Project>>,
     outboxes: Vec<Arc<Outbox>>,
 }
 
@@ -195,6 +199,11 @@ impl Hub {
                 usage: usage.clone(),
             });
         }
+        if let Some(projects) = &state.projects {
+            inner.push(ServerMessage::Projects {
+                projects: projects.clone(),
+            });
+        }
         drop(inner);
         outbox.wake();
         state.outboxes.push(Arc::clone(outbox));
@@ -224,6 +233,19 @@ impl Hub {
         let mut state = self.lock();
         state.host = Some(resources.clone());
         let message = ServerMessage::HostResources(resources);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends the new project list to every client, and to every client that connects later.
+    pub(crate) fn projects_changed(&self, projects: Vec<Project>) {
+        let mut state = self.lock();
+        let message = ServerMessage::Projects {
+            projects: projects.clone(),
+        };
+        state.projects = Some(projects);
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();
@@ -960,6 +982,30 @@ mod tests {
         let later = Arc::new(Outbox::default());
         hub.connect(&later, Role::Member);
         assert_eq!(drain(&later), [message(1)]);
+    }
+
+    #[test]
+    fn project_lists_reach_every_client_and_later_ones_once_published() {
+        let hub = Hub::default();
+        let before = Arc::new(Outbox::default());
+        hub.connect(&before, Role::Member);
+        assert!(
+            drain(&before).is_empty(),
+            "no list before discovery publishes one"
+        );
+        let projects = vec![Project {
+            project_id: herder_protocol::ProjectId::new("github.com/org/repo"),
+            name: "repo".to_owned(),
+            paths: vec!["/src/repo".to_owned()],
+            default_account: None,
+            setup_command: None,
+        }];
+        hub.projects_changed(projects.clone());
+        let message = ServerMessage::Projects { projects };
+        assert_eq!(drain(&before), std::slice::from_ref(&message));
+        let later = Arc::new(Outbox::default());
+        hub.connect(&later, Role::Member);
+        assert_eq!(drain(&later), [message]);
     }
 
     #[test]

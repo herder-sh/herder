@@ -8,6 +8,7 @@ pub mod handoff;
 pub mod hub;
 pub mod logging;
 pub mod mcp;
+pub mod projects;
 pub mod prs;
 pub mod resources;
 pub mod session;
@@ -88,18 +89,32 @@ pub async fn serve(
     }
     let hub = Arc::new(Hub::default());
     let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
+    let sessions_changed = Arc::new(tokio::sync::Notify::new());
     let setup = session::Setup {
         store,
         adapters,
         accounts,
         sink: Arc::new(terminal::KillOnArchive {
-            next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+            next: Arc::new(projects::OnSessionsChanged {
+                next: Arc::clone(&hub) as Arc<dyn session::EventSink>,
+                notify: Arc::clone(&sessions_changed),
+            }),
             terminals: terminals.clone(),
         }),
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    tokio::spawn(
+        projects::Discovery {
+            host: host.id.clone(),
+            config: config.projects.clone(),
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed,
+        }
+        .run(shutdown.clone()),
+    );
     let scopes = Arc::new(resources::Scopes::detect(config.resources.clone()).await);
     sessions.limit_resources(Arc::clone(&scopes))?;
     tokio::spawn({
@@ -210,6 +225,7 @@ mod tests {
             binaries: Default::default(),
             tasks: session::TaskLimits::default(),
             resources: Default::default(),
+            projects: Default::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

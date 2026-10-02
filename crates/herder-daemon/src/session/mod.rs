@@ -112,7 +112,7 @@ mod tasks;
 
 pub use routing::{Escalation, Notifier};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -559,6 +559,13 @@ impl SessionManager {
     /// Every session with its latest seq, ordered by session id.
     pub async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         self.inner.journal.heads().await
+    }
+
+    /// The repository of every session, each once.
+    pub async fn repos(&self) -> anyhow::Result<Vec<PathBuf>> {
+        let sessions = self.inner.journal.sessions().await?;
+        let repos: BTreeSet<PathBuf> = sessions.into_iter().map(|s| s.repo.into()).collect();
+        Ok(repos.into_iter().collect())
     }
 
     /// Up to `limit` events of `session_id` after `after_seq`, oldest first; for subscriptions.
