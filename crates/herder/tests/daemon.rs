@@ -1,0 +1,153 @@
+//! End-to-end: the built binary starts, writes its data dir and stops cleanly on SIGTERM.
+
+use std::io::{BufRead, BufReader};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
+
+const TIMEOUT: Duration = Duration::from_secs(20);
+
+fn write_config(dir: &Path) -> std::path::PathBuf {
+    let path = dir.join("daemon.toml");
+    let data_dir = dir.join("data");
+    std::fs::write(
+        &path,
+        format!(
+            "listen = \"127.0.0.1:7447\"\ndata_dir = {:?}\n\n[log]\nformat = \"json\"\n",
+            data_dir.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    path
+}
+
+fn spawn(config: &Path) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_herder"))
+        .args(["daemon", "--config"])
+        .arg(config)
+        .env_remove("HERDER_CONFIG")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// Forwards the child's stderr lines to a channel so reads can time out.
+fn stderr_lines(child: &mut Child) -> mpsc::Receiver<String> {
+    let stderr = child.stderr.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+fn wait_for_line(lines: &mpsc::Receiver<String>, needle: &str) -> String {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let line = lines
+            .recv_timeout(left)
+            .unwrap_or_else(|_| panic!("no log line containing {needle:?}"));
+        if line.contains(needle) {
+            return line;
+        }
+    }
+}
+
+fn wait_with_timeout(child: &mut Child) -> std::process::ExitStatus {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() > deadline {
+            child.kill().unwrap();
+            panic!("daemon did not exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn sigterm(child: &Child) {
+    kill(
+        Pid::from_raw(i32::try_from(child.id()).unwrap()),
+        Signal::SIGTERM,
+    )
+    .unwrap();
+}
+
+#[test]
+fn starts_writes_data_dir_and_stops_on_sigterm() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = write_config(tmp.path());
+    let mut child = spawn(&config);
+    let lines = stderr_lines(&mut child);
+
+    let started = wait_for_line(&lines, "herder daemon started");
+    let data = tmp.path().join("data");
+    for sub in ["db", "tls", "sessions"] {
+        assert!(data.join(sub).is_dir(), "{sub} missing");
+    }
+    let host_id = std::fs::read_to_string(data.join("host-id")).unwrap();
+    assert!(started.contains(host_id.trim()), "{started}");
+    assert!(started.contains("127.0.0.1:7447"), "{started}");
+
+    sigterm(&child);
+    let status = wait_with_timeout(&mut child);
+    assert_eq!(status.code(), Some(0), "{status}");
+    wait_for_line(&lines, "herder daemon stopped");
+
+    // A restart reuses the same host id.
+    let mut child = spawn(&config);
+    let lines = stderr_lines(&mut child);
+    let started = wait_for_line(&lines, "herder daemon started");
+    assert!(started.contains(host_id.trim()), "{started}");
+    sigterm(&child);
+    assert_eq!(wait_with_timeout(&mut child).code(), Some(0));
+}
+
+#[test]
+fn second_daemon_on_the_same_data_dir_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = write_config(tmp.path());
+    let mut first = spawn(&config);
+    let first_lines = stderr_lines(&mut first);
+    wait_for_line(&first_lines, "herder daemon started");
+
+    let mut second = spawn(&config);
+    let second_lines = stderr_lines(&mut second);
+    let status = wait_with_timeout(&mut second);
+    assert_eq!(status.code(), Some(1), "{status}");
+    let message = wait_for_line(&second_lines, "already using the data dir");
+    assert!(
+        message.contains(&format!("pid {}", first.id())),
+        "{message}"
+    );
+
+    sigterm(&first);
+    assert_eq!(wait_with_timeout(&mut first).code(), Some(0));
+}
+
+#[test]
+fn unknown_config_key_fails_to_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("daemon.toml");
+    std::fs::write(&config, "bogus = 1\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_herder"))
+        .args(["daemon", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown field"));
+}
