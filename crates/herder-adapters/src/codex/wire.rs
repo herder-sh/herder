@@ -96,6 +96,21 @@ pub struct ThreadStartParams<'a> {
     pub sandbox: SandboxMode,
 }
 
+/// `thread/resume`: reopens a thread from its rollout file, which Codex finds by id under
+/// `CODEX_HOME/sessions`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResumeParams<'a> {
+    pub thread_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<&'a str>,
+    pub cwd: &'a str,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxMode,
+    /// herder has the history already; only the thread is wanted.
+    pub exclude_turns: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadInjectItemsParams<'a> {
@@ -197,6 +212,7 @@ pub struct RateLimitsReadResult {
     pub rate_limits_by_limit_id: Option<std::collections::BTreeMap<String, RateLimitSnapshot>>,
 }
 
+/// What `thread/start` and `thread/resume` both answer with.
 #[derive(Debug, Deserialize)]
 pub struct ThreadStartResult {
     pub thread: ThreadRef,

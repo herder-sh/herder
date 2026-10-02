@@ -48,6 +48,7 @@ impl FakeAdapter {
                 native_model_switch: true,
                 native_permission_mode_switch: true,
                 reports_usage: true,
+                native_resume: true,
             },
         }
     }

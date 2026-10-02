@@ -62,6 +62,7 @@ pub(super) async fn start(
         stdin: Some(stdin),
         events: event_tx,
         model: None,
+        native_id: None,
         mode: request.permission_mode,
         next_request: 0,
         pending: HashMap::new(),
@@ -136,6 +137,7 @@ pub(super) async fn start(
             native_model_switch: true,
             native_permission_mode_switch: true,
             reports_usage: true,
+            native_resume: true,
         },
         commands,
         events,
@@ -187,6 +189,8 @@ struct Session {
     events: mpsc::Sender<AdapterEvent>,
     /// The model last reported.
     model: Option<String>,
+    /// The CLI's session id last reported.
+    native_id: Option<String>,
     /// The permission mode last reported or started with.
     mode: PermissionMode,
     next_request: u64,
@@ -327,6 +331,13 @@ impl Session {
     async fn handle(&mut self, incoming: Incoming) {
         match incoming {
             Incoming::System(system) => {
+                if let Some(id) = system.session_id.filter(|id| !id.is_empty())
+                    && self.native_id.as_ref() != Some(&id)
+                {
+                    self.native_id = Some(id.clone());
+                    self.emit(AdapterEvent::SessionIdentified { native_id: id })
+                        .await;
+                }
                 if let Some(model) = system.model {
                     self.model_known(model).await;
                 }

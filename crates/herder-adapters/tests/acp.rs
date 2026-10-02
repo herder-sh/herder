@@ -36,6 +36,7 @@ fn request(mode: PermissionMode) -> StartRequest {
         model: None,
         permission_mode: mode,
         seed: Vec::new(),
+        resume: None,
         mcp: None,
         launcher: Vec::new(),
     }
@@ -136,6 +137,7 @@ async fn prompt_streams_the_reply() {
             native_model_switch: true,
             native_permission_mode_switch: true,
             reports_usage: false,
+            native_resume: false,
         }
     );
     prompt(&session, "reply with the word ok");

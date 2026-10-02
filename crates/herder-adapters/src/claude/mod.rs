@@ -15,6 +15,13 @@
 //!   withdraws an unanswered one with `control_cancel_request`.
 //! - Interrupt is the `interrupt` control request; the turn's `result` then ends it.
 //! - Model and permission mode switch natively, with `set_model` and `set_permission_mode`.
+//! - The CLI's session id comes on the `system` `init` line of the first turn and is reported
+//!   as [`AdapterEvent::SessionIdentified`]. [`StartRequest::resume`] is passed as
+//!   `--resume <id>`: the CLI loads that session's transcript from
+//!   `<CLAUDE_CONFIG_DIR>/projects/<cwd key>/<id>.jsonl` and continues it with full context.
+//!   A session it cannot find makes it exit, which fails the start.
+//!
+//! [`AdapterEvent::SessionIdentified`]: crate::AdapterEvent::SessionIdentified
 //!
 //! The process runs with exactly [`StartRequest::env`] plus `CLAUDE_CONFIG_DIR` set to the
 //! account's config dir, when it has one, in the session's worktree. The adapter never looks inside that dir:
@@ -205,6 +212,9 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
     }
     if let Some(model) = &request.model {
         command.args(["--model", model]);
+    }
+    if let Some(id) = &request.resume {
+        command.args(["--resume", id]);
     }
     if let Some(mcp) = &request.mcp {
         command
@@ -423,6 +433,7 @@ mod tests {
             model: Some("sonnet".into()),
             permission_mode: PermissionMode::AutoEdit,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };
@@ -465,6 +476,31 @@ mod tests {
     }
 
     #[test]
+    fn command_resumes_the_requested_session() {
+        let request = StartRequest {
+            config_dir: Some(PathBuf::from("/accounts/home/claude")),
+            env: BTreeMap::new(),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            resume: Some("499f57af-e4af-4c6c-b348-d47c9b704e70".into()),
+            mcp: None,
+            launcher: Vec::new(),
+        };
+        let command = command(Path::new("claude"), &request);
+        let args: Vec<_> = command.as_std().get_args().collect();
+        let at = args.iter().position(|arg| *arg == "--resume").unwrap();
+        assert_eq!(args[at + 1], "499f57af-e4af-4c6c-b348-d47c9b704e70");
+        let without = StartRequest {
+            resume: None,
+            ..request
+        };
+        let command = super::command(Path::new("claude"), &without);
+        assert!(!command.as_std().get_args().any(|arg| arg == "--resume"));
+    }
+
+    #[test]
     fn command_without_a_config_dir_leaves_claude_config_dir_unset() {
         let request = StartRequest {
             config_dir: None,
@@ -473,6 +509,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };
@@ -490,6 +527,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: Some(McpServer {
                 command: PathBuf::from("/usr/bin/herder"),
                 args: vec!["mcp".into(), "--session".into(), "s1".into()],
@@ -530,6 +568,7 @@ mod tests {
             model: Some("sonnet".into()),
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };

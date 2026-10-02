@@ -12,7 +12,7 @@ for schema in \
     ClientRequest ClientNotification ServerRequest ServerNotification \
     CommandExecutionRequestApprovalResponse FileChangeRequestApprovalResponse \
     v1/InitializeResponse v2/GetAccountResponse v2/GetAccountRateLimitsResponse \
-    v2/ThreadStartResponse v2/ThreadInjectItemsResponse v2/TurnStartResponse \
-    v2/TurnInterruptResponse; do
+    v2/ThreadStartResponse v2/ThreadResumeResponse v2/ThreadInjectItemsResponse \
+    v2/TurnStartResponse v2/TurnInterruptResponse; do
     cp "$tmp/$schema.json" "$dir/"
 done

@@ -7,6 +7,14 @@
 //! `turn/start`, which also carries the current model and permission mode, so both switch
 //! natively from the next turn on.
 //!
+//! The thread id is reported as [`AdapterEvent::SessionIdentified`] once the thread is open.
+//! With [`StartRequest::resume`] the thread is reopened with `thread/resume` instead of
+//! `thread/start`: Codex finds its rollout file, `CODEX_HOME/sessions/YYYY/MM/DD/
+//! rollout-<timestamp>-<thread id>.jsonl`, by id, and the thread continues with its full
+//! history. A thread it cannot find fails the start.
+//!
+//! [`AdapterEvent::SessionIdentified`]: crate::AdapterEvent::SessionIdentified
+//!
 //! [`CodexAdapter::read_usage`] runs only the handshake and `account/rateLimits/read`, then
 //! asks the app-server to exit: the limit windows of an account no session runs on.
 //!
@@ -298,6 +306,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };
@@ -332,6 +341,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };
@@ -349,6 +359,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };
