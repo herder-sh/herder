@@ -51,6 +51,7 @@ pub mod codex;
 pub mod fake;
 pub mod fixture;
 pub mod record;
+pub mod transcript;
 pub mod transport;
 
 /// A vendor CLI that herder can run sessions on, one implementation per CLI shape.
