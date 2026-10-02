@@ -320,6 +320,25 @@ fn the_machines_panel_shows_connections_and_fingerprints() {
 }
 
 #[test]
+fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    machines[0].accounts = vec![herder_protocol::Account {
+        account_id: herder_protocol::AccountId::new("claude-main"),
+        provider: herder_protocol::Provider::Claude,
+        label: "Main".into(),
+        usage: Vec::new(),
+    }];
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('m'));
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Tab);
+    typed(&mut app, "codex-2");
+    insta::assert_snapshot!(render(&mut app, 90, 20).backend());
+}
+
+#[test]
 fn the_add_dialog_takes_a_link_or_its_fields() {
     let mut app = App::default();
     press(&mut app, KeyCode::Char('a'));

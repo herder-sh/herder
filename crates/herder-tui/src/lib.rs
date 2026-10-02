@@ -11,6 +11,7 @@
 //!
 //! Everything network-related goes through [`herder_client_core::Client`].
 
+mod accounts;
 mod action;
 mod app;
 mod compose;

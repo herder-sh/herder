@@ -1,7 +1,8 @@
-//! The machines panel and the add-machine dialog: their state, keys and reducer.
+//! The machines panel, its add-machine dialog and its add-account dialog: their state, keys
+//! and reducer.
 //!
-//! The panel lists every paired machine with its connection, role, addresses and pinned
-//! fingerprint. Its add dialog pairs a new one: paste the `herder://pair` link `herder pair`
+//! The panel lists every paired machine with its connection, role, accounts, addresses and
+//! pinned fingerprint. Its add dialog pairs a new one: paste the `herder://pair` link `herder pair`
 //! printed, or type its address, fingerprint and code; check the fingerprint; pair. Pasting a
 //! link anywhere in the TUI opens the dialog at that check.
 
@@ -12,8 +13,10 @@ use herder_client_core::auth::PairingUri;
 use herder_protocol::HostId;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::accounts::{self, AddAccount};
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
+use crate::terminal::{self, Target};
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it; added
 /// to a typed address without one.
@@ -26,6 +29,8 @@ pub struct MachinePanel {
     pub chosen: Option<HostId>,
     /// The add-machine dialog, over the panel.
     pub add: Option<AddMachine>,
+    /// The add-account dialog, over the panel.
+    pub account: Option<AddAccount>,
 }
 
 impl MachinePanel {
@@ -178,6 +183,12 @@ pub enum Input {
     Down,
     /// Open the add dialog.
     Add,
+    /// Open the add-account dialog for the selected machine.
+    AddAccount,
+    /// Pick the previous choice.
+    Left,
+    /// Pick the next choice.
+    Right,
     /// Go on: check the form, pair, or finish.
     Submit,
     /// Type a character.
@@ -191,6 +202,21 @@ pub enum Input {
 /// The action a key asks for while the panel is open.
 pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    if panel.account.is_some() {
+        let input = match key.code {
+            KeyCode::Esc => Input::Close,
+            KeyCode::Enter => Input::Submit,
+            KeyCode::Tab | KeyCode::Down => Input::Down,
+            KeyCode::BackTab | KeyCode::Up => Input::Up,
+            KeyCode::Left => Input::Left,
+            KeyCode::Right => Input::Right,
+            KeyCode::Backspace => Input::Backspace,
+            KeyCode::Char('u') if ctrl => Input::Clear,
+            KeyCode::Char(c) if !ctrl => Input::Char(c),
+            _ => return None,
+        };
+        return Some(Action::Machines(input));
+    }
     let input = match &panel.add {
         Some(AddMachine {
             step: Step::Edit | Step::Failed(_),
@@ -226,6 +252,7 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('k') | KeyCode::Up => Input::Up,
             KeyCode::Char('j') | KeyCode::Down => Input::Down,
             KeyCode::Char('a') => Input::Add,
+            KeyCode::Char('n') => Input::AddAccount,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -248,10 +275,58 @@ impl App {
         let Some(panel) = &mut self.machine_panel else {
             return Vec::new();
         };
+        if let Some(account) = &mut panel.account {
+            match input {
+                Input::Close => panel.account = None,
+                Input::Submit => {
+                    if let Some(new) = account.submit() {
+                        let host_id = account.host_id.clone();
+                        self.machine_panel = None;
+                        return vec![Effect::AttachTerminal {
+                            host_id,
+                            target: Target::Login(new),
+                        }];
+                    }
+                }
+                Input::Up | Input::Down => account.focus = account.focus.next(input == Input::Down),
+                Input::Left | Input::Right if account.focus == accounts::Field::Provider => {
+                    account.cycle(input == Input::Right);
+                }
+                Input::Char(c) => match account.field() {
+                    Some(field) => field.push(c),
+                    None if c == ' ' => account.cycle(true),
+                    None => {}
+                },
+                Input::Backspace => {
+                    if let Some(field) = account.field() {
+                        field.pop();
+                    }
+                }
+                Input::Clear => {
+                    if let Some(field) = account.field() {
+                        field.clear();
+                    }
+                }
+                _ => {}
+            }
+            return Vec::new();
+        }
         let Some(add) = &mut panel.add else {
             match input {
                 Input::Close => self.machine_panel = None,
                 Input::Add => panel.add = Some(AddMachine::default()),
+                Input::AddAccount => {
+                    let Some(at) = panel.selected(&self.machines) else {
+                        return Vec::new();
+                    };
+                    let host_id = self.machines[at].host_id.clone();
+                    match terminal::refusal(&self.machines, &host_id) {
+                        Some(refusal) => {
+                            self.notice = Some(format!("adding accounts: {refusal}"));
+                        }
+                        None => panel.account = Some(AddAccount::new(host_id)),
+                    }
+                }
                 Input::Up | Input::Down => {
                     let step = if input == Input::Up { -1 } else { 1 };
                     if let Some(at) = panel.selected(&self.machines) {
@@ -310,10 +385,13 @@ impl App {
             self.machine_panel = Some(MachinePanel {
                 chosen: None,
                 add: Some(add),
+                account: None,
             });
             return true;
         };
-        if let Some(add) = &mut panel.add
+        if let Some(field) = panel.account.as_mut().and_then(AddAccount::field) {
+            field.push_str(text.lines().next().unwrap_or(""));
+        } else if let Some(add) = &mut panel.add
             && matches!(add.step, Step::Edit | Step::Failed(_))
         {
             add.paste(text);
@@ -370,6 +448,8 @@ impl AddMachine {
 #[cfg(test)]
 mod tests {
     use ratatui::crossterm::event::KeyEvent;
+
+    use herder_protocol::Provider;
 
     use super::*;
     use crate::app::Msg;
@@ -563,5 +643,73 @@ mod tests {
         assert!(app.machine_panel.as_ref().unwrap().add.is_none());
         press(&mut app, KeyCode::Char('q'));
         assert_eq!(app.machine_panel, None);
+    }
+
+    #[test]
+    fn the_account_dialog_starts_the_selected_machines_login() {
+        let mut app = App::default();
+        app.update(Msg::Machines(vec![
+            machine("h1", "box", &[]),
+            machine("h2", "laptop", &[]),
+        ]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('n'));
+        let account = |app: &App| app.machine_panel.as_ref().unwrap().account.clone().unwrap();
+        assert_eq!(account(&app).host_id, HostId::new("h2"));
+        // The provider is picked with the arrows or space, wrapping around.
+        press(&mut app, KeyCode::Left);
+        assert_eq!(*account(&app).provider(), Provider::Cursor);
+        typed(&mut app, " ");
+        assert_eq!(*account(&app).provider(), Provider::Claude);
+        press(&mut app, KeyCode::Right);
+        assert_eq!(account(&app).default_config_dir(), "~/.codex-<id>");
+        // An id is needed.
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!(account(&app).focus, crate::accounts::Field::Id);
+        assert!(account(&app).error.is_some());
+        typed(&mut app, "work");
+        assert_eq!(account(&app).default_config_dir(), "~/.codex-work");
+        press(&mut app, KeyCode::Tab);
+        typed(&mut app, "Work");
+        press(&mut app, KeyCode::Tab);
+        app.update(Msg::Paste("~/.codex-w\nignored".into()));
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Effect::AttachTerminal {
+                host_id: HostId::new("h2"),
+                target: Target::Login(herder_client_core::NewAccount {
+                    account_id: herder_protocol::AccountId::new("work"),
+                    provider: Provider::Codex,
+                    label: Some("Work".into()),
+                    config_dir: Some("~/.codex-".into()),
+                }),
+            }]
+        );
+        assert_eq!(app.machine_panel, None);
+    }
+
+    #[test]
+    fn members_cannot_add_accounts() {
+        let mut app = App::default();
+        let mut member = machine("h1", "box", &[]);
+        member.role = Some(herder_protocol::Role::Member);
+        app.update(Msg::Machines(vec![member]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(app.machine_panel.as_ref().unwrap().account, None);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("adding accounts: terminals are owner-only")
+        );
+        // Esc on the dialog closes only the dialog.
+        let mut app = App::default();
+        app.update(Msg::Machines(vec![machine("h1", "box", &[])]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Esc);
+        let panel = app.machine_panel.as_ref().unwrap();
+        assert_eq!(panel.account, None);
     }
 }

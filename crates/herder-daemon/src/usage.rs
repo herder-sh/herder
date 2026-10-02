@@ -122,11 +122,11 @@ impl Usage {
     }
 }
 
-/// Probes `accounts` until `shutdown`: each one at once, then every [`Config::interval`], and
+/// Probes every account `accounts` lists, as it is on each round, until `shutdown`: each one at once, then every [`Config::interval`], and
 /// those not read within [`Config::fresh`] whenever `wake` is notified. Each answer goes to `report`.
 pub(crate) async fn poll(
     config: Config,
-    accounts: Accounts,
+    accounts: impl Fn() -> Accounts,
     wake: Arc<Notify>,
     report: impl Fn(&AccountId, Vec<UsageWindow>),
     shutdown: CancellationToken,
@@ -134,7 +134,7 @@ pub(crate) async fn poll(
     let mut probed: HashMap<AccountId, Instant> = HashMap::new();
     let mut max_age = config.interval;
     loop {
-        for (account_id, account) in &accounts {
+        for (account_id, account) in &accounts() {
             let Some(probe) = config.probes.get(&account.provider) else {
                 continue;
             };

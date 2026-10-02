@@ -126,7 +126,7 @@ pub use routing::{Escalation, Notifier};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 
 use anyhow::Context;
 use herder_adapters::Adapter;
@@ -229,6 +229,18 @@ pub struct Setup {
     pub worktrees: Worktrees,
 }
 
+impl Inner {
+    /// The account `account_id`, as it is now.
+    pub(crate) fn account(&self, account_id: &AccountId) -> Option<AccountConfig> {
+        self.accounts_lock().get(account_id).cloned()
+    }
+
+    fn accounts_lock(&self) -> std::sync::RwLockReadGuard<'_, Accounts> {
+        // Every update is one insert, so a poisoned map is consistent.
+        self.accounts.read().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// Creates, lists and drives every session on this host. Cheap to clone.
 #[derive(Clone)]
 pub struct SessionManager {
@@ -238,7 +250,8 @@ pub struct SessionManager {
 struct Inner {
     journal: Journal,
     adapters: Adapters,
-    accounts: Accounts,
+    /// Grows as accounts are added ([`SessionManager::add_account`]); never shrinks.
+    accounts: RwLock<Accounts>,
     turn_ids: TurnIds,
     worktrees: Worktrees,
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
@@ -270,7 +283,7 @@ impl Inner {
     /// account.
     pub(super) fn report_usage(&self, account_id: &AccountId, windows: Vec<UsageWindow>) {
         if let Some(usage) = self.usage.report(account_id, windows) {
-            let accounts = crate::accounts::list(&self.accounts, &usage);
+            let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
             self.journal.sink().accounts_changed(&accounts);
         }
     }
@@ -289,9 +302,10 @@ impl Inner {
         failing: &AccountId,
     ) -> Option<AccountId> {
         let config = self.failover.get().cloned().unwrap_or_default();
+        let accounts = self.accounts_lock();
         let choice = failover::Choice {
             config: &config,
-            accounts: &self.accounts,
+            accounts: &accounts,
             adapters: &self.adapters,
             usage: &self.usage.all(),
             limits: &self.limits,
@@ -326,7 +340,7 @@ impl SessionManager {
             inner: Arc::new(Inner {
                 journal,
                 adapters: setup.adapters,
-                accounts: setup.accounts,
+                accounts: RwLock::new(setup.accounts),
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
                 actors: Mutex::new(HashMap::new()),
@@ -599,7 +613,26 @@ impl SessionManager {
 
     /// Every account sessions may run on, as clients see them.
     pub fn accounts(&self) -> Vec<Account> {
-        crate::accounts::list(&self.inner.accounts, &self.inner.usage.all())
+        crate::accounts::list(&self.inner.accounts_lock(), &self.inner.usage.all())
+    }
+
+    /// Lets sessions run on a newly added account, announces the new account list and asks for
+    /// its usage; `false`, changing nothing, when the id is taken.
+    pub fn add_account(&self, account_id: AccountId, account: AccountConfig) -> bool {
+        let inner = &self.inner;
+        {
+            let mut accounts = inner
+                .accounts
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            if accounts.contains_key(&account_id) {
+                return false;
+            }
+            accounts.insert(account_id, account);
+        }
+        inner.journal.sink().accounts_changed(&self.accounts());
+        inner.refresh_usage.notify_one();
+        true
     }
 
     /// Starts probing every account's usage ([`crate::usage`]) until the manager's shutdown.
@@ -609,9 +642,15 @@ impl SessionManager {
         std::fs::create_dir_all(&config.dir)
             .with_context(|| format!("creating {}", config.dir.display()))?;
         let weak = Arc::downgrade(inner);
+        let accounts = weak.clone();
         tokio::spawn(usage::poll(
             config,
-            inner.accounts.clone(),
+            move || {
+                accounts
+                    .upgrade()
+                    .map(|inner| inner.accounts_lock().clone())
+                    .unwrap_or_default()
+            },
             Arc::clone(&inner.refresh_usage),
             move |account_id, windows| {
                 if let Some(inner) = weak.upgrade() {
@@ -661,7 +700,7 @@ impl SessionManager {
         request: CreateRequest,
     ) -> Result<(SessionId, String), ErrorInfo> {
         let inner = &self.inner;
-        let account = inner.accounts.get(&request.account_id).ok_or_else(|| {
+        let account = inner.account(&request.account_id).ok_or_else(|| {
             error(
                 ErrorCode::NotFound,
                 format!("account {} does not exist", request.account_id),

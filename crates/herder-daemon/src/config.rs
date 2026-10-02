@@ -33,6 +33,10 @@
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
 //! are admitted within; see [`ResourcesConfig`] for its keys and defaults.
 //!
+//! Accounts added from a client ([`crate::login`]) are appended to this file as new
+//! `[[accounts]]` entries, which creates it when it does not exist yet; the rest of the file is
+//! kept as written.
+//!
 //! `config_dir` is handed to the CLI as its config dir variable (`CLAUDE_CONFIG_DIR`,
 //! `CODEX_HOME`, ...); without one the variable is not set and the CLI uses its default. It may
 //! start with `~/`, must otherwise be absolute, and need not exist yet: logging in creates it.
@@ -94,6 +98,8 @@ pub const DEFAULT_PORT: u16 = 7447;
 /// Resolved daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    /// The config file: the one read, or where one is created when an account is added.
+    pub path: PathBuf,
     /// Address the daemon listens on.
     pub listen: SocketAddr,
     /// Directory holding everything the daemon persists.
@@ -228,12 +234,17 @@ impl Config {
         explicit: Option<&Path>,
         env: impl Fn(&str) -> Option<OsString>,
     ) -> Result<Self> {
-        let file = match explicit {
+        let (path, file) = match explicit {
             Some(path) => {
-                read(path)?.with_context(|| format!("config file {} not found", path.display()))?
+                let file = read(path)?
+                    .with_context(|| format!("config file {} not found", path.display()))?;
+                (path.to_owned(), file)
             }
-            None => read(&xdg_dir(&env, "XDG_CONFIG_HOME", ".config")?.join("herder/daemon.toml"))?
-                .unwrap_or_default(),
+            None => {
+                let path = xdg_dir(&env, "XDG_CONFIG_HOME", ".config")?.join("herder/daemon.toml");
+                let file = read(&path)?.unwrap_or_default();
+                (path, file)
+            }
         };
         let data_dir = match file.data_dir {
             Some(dir) => dir,
@@ -246,6 +257,7 @@ impl Config {
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
         Ok(Self {
+            path,
             listen: file.listen,
             data_dir,
             log: file.log,
@@ -331,6 +343,99 @@ fn resolve_projects(
         })
         .collect::<Result<_>>()?;
     Ok(ProjectsConfig { roots, entries })
+}
+
+/// Appends an `[[accounts]]` entry for `account` to the config file at `path`, creating the
+/// file if it does not exist. The file is replaced atomically, and only if it still loads with
+/// the new entry as `account_id`: an id or config dir already in use fails, changing nothing.
+pub fn append_account(path: &Path, account_id: &AccountId, account: &AccountConfig) -> Result<()> {
+    append_account_with_env(path, account_id, account, |key| std::env::var_os(key))
+}
+
+fn append_account_with_env(
+    path: &Path,
+    account_id: &AccountId,
+    account: &AccountConfig,
+    env: impl Fn(&str) -> Option<OsString>,
+) -> Result<()> {
+    let quote = |text: &str| toml::Value::String(text.to_owned()).to_string();
+    let mut entry = format!(
+        "[[accounts]]\nid = {}\nprovider = {}\nlabel = {}\n",
+        quote(account_id.as_str()),
+        quote(account.provider.as_str()),
+        quote(&account.label),
+    );
+    if let Some(dir) = &account.config_dir {
+        let dir = dir
+            .to_str()
+            .with_context(|| format!("config dir {} is not UTF-8", dir.display()))?;
+        entry.push_str(&format!("config_dir = {}\n", quote(dir)));
+    }
+    if account.failover {
+        entry.push_str("failover = true\n");
+    }
+    let mut text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading config file {}", path.display()));
+        }
+    };
+    if !text.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text.push_str(&entry);
+    let file: ConfigFile =
+        toml::from_str(&text).with_context(|| format!("adding to {}", path.display()))?;
+    let accounts = resolve_accounts(file.accounts, &env)?;
+    ensure!(
+        accounts.get(account_id) == Some(account),
+        "{} does not end in a table the new account can follow",
+        path.display()
+    );
+    write_atomically(path, text.as_bytes())
+        .with_context(|| format!("writing config file {}", path.display()))
+}
+
+/// Replaces `path` with `data` through a temporary file in its directory, which is created if
+/// needed; a new file is owner-only, an existing one keeps its permissions.
+fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mode = match std::fs::metadata(path) {
+        Ok(meta) => meta.permissions().mode() & 0o7777,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => 0o600,
+        Err(err) => return Err(err),
+    };
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = dir.join(format!(".{name}.herder-tmp"));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(&tmp)?;
+        // `mode` is masked by the umask on create; set it exactly.
+        file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        std::fs::File::open(dir)?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Validates the `[[accounts]]` entries and resolves their config dirs.
@@ -486,6 +591,8 @@ fn xdg_dir(env: &impl Fn(&str) -> Option<OsString>, var: &str, fallback: &str) -
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
 
     fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
@@ -582,6 +689,7 @@ mod tests {
         assert_eq!(
             config,
             Config {
+                path: path.clone(),
                 listen: "[::1]:8000".parse().unwrap(),
                 data_dir: PathBuf::from("/var/lib/herder"),
                 log: LogConfig {
@@ -922,5 +1030,85 @@ mod tests {
             let err = load(home.path(), text).unwrap_err();
             assert!(err.contains(expected), "{text}: {err}");
         }
+    }
+
+    fn added(provider: Provider, dir: &Path) -> AccountConfig {
+        AccountConfig {
+            provider,
+            label: "Work \"2\"".into(),
+            config_dir: Some(dir.to_owned()),
+            failover: false,
+        }
+    }
+
+    #[test]
+    fn an_added_account_is_appended_keeping_the_rest_of_the_file() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let env = || env(&vars);
+        let original = "# my daemon\nlisten = \"127.0.0.1:9000\"\n\n[[accounts]]\nid = \"main\"\n\
+                        provider = \"claude\" # the default login\n\n[providers.codex]\nbinary = \"codex\"";
+        let path = write(home.path(), original);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let dir = home.path().join(".claude-work");
+        let account = added(Provider::Claude, &dir);
+        append_account_with_env(&path, &AccountId::new("work"), &account, env()).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(original), "{text}");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+        let config = Config::load_with_env(Some(&path), env()).unwrap();
+        assert_eq!(config.accounts[&AccountId::new("work")], account);
+        assert_eq!(config.accounts.len(), 2);
+        assert_eq!(config.listen, "127.0.0.1:9000".parse().unwrap());
+        assert_eq!(config.binaries[&Provider::Codex], PathBuf::from("codex"));
+    }
+
+    #[test]
+    fn adding_an_account_creates_a_missing_file() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let env = || env(&vars);
+        let path = home.path().join("herder/daemon.toml");
+        let account = added(Provider::Codex, &home.path().join(".codex-2"));
+        append_account_with_env(&path, &AccountId::new("codex-2"), &account, env()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let config = Config::load_with_env(Some(&path), env()).unwrap();
+        assert_eq!(config.accounts[&AccountId::new("codex-2")], account);
+        assert_eq!(config.path, path);
+    }
+
+    #[test]
+    fn an_account_that_does_not_fit_leaves_the_file_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let vars = [("HOME", home.path().to_str().unwrap())];
+        let env = || env(&vars);
+        let original = "[[accounts]]\nid = \"a\"\nprovider = \"codex\"\nconfig_dir = \"/x\"\n";
+        let path = write(home.path(), original);
+        let cases = [
+            ("a", added(Provider::Codex, Path::new("/y")), "used twice"),
+            (
+                "b",
+                added(Provider::Codex, Path::new("/x")),
+                "already uses /x",
+            ),
+        ];
+        for (id, account, expected) in cases {
+            let err =
+                append_account_with_env(&path, &AccountId::new(id), &account, env()).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{id}: {err:#}");
+        }
+        // An inline accounts array cannot be followed by a table of it.
+        let inline = write(home.path(), "accounts = []\n");
+        let account = added(Provider::Codex, Path::new("/z"));
+        assert!(append_account_with_env(&inline, &AccountId::new("c"), &account, env()).is_err());
+        assert_eq!(std::fs::read_to_string(&inline).unwrap(), "accounts = []\n");
+        assert_eq!(
+            std::fs::read_dir(home.path()).unwrap().count(),
+            1,
+            "no temporary file is left behind"
+        );
     }
 }
