@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,7 +12,7 @@ use herder_protocol::{
     AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
     PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId,
-    TurnId,
+    Terminal, TurnId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -29,6 +30,7 @@ use crate::auth::client::{DeviceKey, client_config};
 use crate::auth::{Auth, PAIRING_CODE_HEADER, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::session::EventSink;
+use crate::terminal::Terminals;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -38,9 +40,11 @@ const CHUNK: usize = 8 * 1024;
 const CHUNKS: usize = 1200;
 
 /// Serves the journal the test writes to; accepts `send_prompt`, rejects everything else.
+/// Every session's worktree is `worktree`.
 struct TestBackend {
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
+    worktree: PathBuf,
 }
 
 impl Backend for TestBackend {
@@ -82,6 +86,23 @@ impl Backend for TestBackend {
             }),
         }
     }
+
+    async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
+        if self
+            .store
+            .lock()
+            .unwrap()
+            .session(session_id)
+            .unwrap()
+            .is_none()
+        {
+            return Err(ErrorInfo {
+                code: ErrorCode::NotFound,
+                message: "no such session".into(),
+            });
+        }
+        Ok(self.worktree.clone())
+    }
 }
 
 /// A running server, with the journal writer the session manager would own.
@@ -109,6 +130,7 @@ impl Daemon {
         let backend = TestBackend {
             store: Arc::clone(&store),
             commands: Arc::clone(&commands),
+            worktree: tmp.path().to_owned(),
         };
         let hub = Arc::new(Hub::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -129,7 +151,15 @@ impl Daemon {
             &CancellationToken::new(),
         )
         .unwrap();
-        let server = Server::new(tls, Arc::clone(&auth), Arc::clone(&hub), backend, host);
+        let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
+        let server = Server::new(
+            tls,
+            Arc::clone(&auth),
+            Arc::clone(&hub),
+            backend,
+            terminals,
+            host,
+        );
         tokio::spawn(server.run(listener, shutdown.clone()));
         Arc::new(Self {
             addr,
@@ -345,7 +375,19 @@ impl Client {
             panic!("expected a hello");
         };
         assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
+        if hello.role == Role::Owner {
+            assert!(matches!(self.recv().await, ServerMessage::Terminals { .. }));
+        }
         hello
+    }
+
+    async fn command(&mut self, id: &str, body: CommandBody) -> ServerMessage {
+        self.send(&ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body,
+        }))
+        .await;
+        self.recv().await
     }
 
     async fn subscribe(&mut self, session: &SessionId, after_seq: Seq) {
@@ -764,15 +806,135 @@ async fn terminals_are_for_owners_only() {
         ServerMessage::CommandAccepted { .. }
     ));
 
-    // The owner's terminal command reaches the backend.
+    // The owner opens one; the member never hears of it.
     let mut owner = daemon.client().await;
     owner.hello(Vec::new()).await;
     owner.send(&open("c3")).await;
-    let ServerMessage::CommandRejected { error, .. } = owner.recv().await else {
-        panic!("expected the test backend's rejection");
+    assert!(
+        matches!(owner.recv().await, ServerMessage::Terminals { terminals } if terminals.len() == 1)
+    );
+    assert!(matches!(
+        owner.recv().await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::TerminalOpened { .. },
+            ..
+        }
+    ));
+    let prompt = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "hi".into(),
     };
-    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(matches!(
+        member.command("c4", prompt).await,
+        ServerMessage::CommandAccepted { .. }
+    ));
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let open = CommandBody::OpenTerminal {
+        session_id: session.clone(),
+        cols: 80,
+        rows: 24,
+    };
+    client
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("c1"),
+            body: open,
+        }))
+        .await;
+    let ServerMessage::Terminals { terminals } = client.recv().await else {
+        panic!("expected the terminal list");
+    };
+    let ServerMessage::CommandAccepted {
+        result: CommandResult::TerminalOpened { terminal_id },
+        ..
+    } = client.recv().await
+    else {
+        panic!("expected the terminal to open");
+    };
+    let listed = Terminal {
+        terminal_id: terminal_id.clone(),
+        session_id: session.clone(),
+    };
+    assert_eq!(terminals, std::slice::from_ref(&listed));
+    let input = |line: &str| CommandBody::TerminalInput {
+        terminal_id: terminal_id.clone(),
+        data: herder_protocol::Bytes(format!("{line}\n").into_bytes()),
+    };
+    client
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("c2"),
+            body: input("printf 'he%s\\n' llo"),
+        }))
+        .await;
+    let mut seen = Vec::new();
+    let mut accepted = false;
+    while !accepted || !String::from_utf8_lossy(&seen).contains("hello") {
+        match client.recv().await {
+            ServerMessage::TerminalOutput { data, .. } => seen.extend(data.0),
+            ServerMessage::CommandAccepted { .. } => accepted = true,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    drop(client);
+
+    // A new connection lists the terminal, and attaching replays what it wrote.
+    let mut client = daemon.client().await;
+    client
+        .send(&ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "test".into(),
+            resume: Vec::new(),
+        }))
+        .await;
+    assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Sessions { .. }
+    ));
+    assert_eq!(
+        client.recv().await,
+        ServerMessage::Terminals {
+            terminals: vec![listed]
+        }
+    );
+    let attach = CommandBody::AttachTerminal {
+        terminal_id: terminal_id.clone(),
+    };
+    let ServerMessage::TerminalOutput { data, .. } = client.command("c3", attach).await else {
+        panic!("expected the scrollback");
+    };
+    assert!(String::from_utf8_lossy(&data.0).contains("hello"));
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::CommandAccepted { .. }
+    ));
+
+    // Exiting the shell closes the terminal.
+    client
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new("c4"),
+            body: input("exit"),
+        }))
+        .await;
+    loop {
+        match client.recv().await {
+            ServerMessage::Terminals { terminals } if terminals.is_empty() => break,
+            ServerMessage::TerminalOutput { .. } | ServerMessage::CommandAccepted { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    let attach = CommandBody::AttachTerminal { terminal_id };
+    assert!(matches!(
+        client.command("c5", attach).await,
+        ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::NotFound
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

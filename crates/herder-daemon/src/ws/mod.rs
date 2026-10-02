@@ -11,6 +11,7 @@ mod tests;
 mod tls;
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +27,9 @@ pub use tls::{Tls, fingerprint};
 
 use crate::auth::Auth;
 use crate::hub::Hub;
+use crate::hub::Outbox;
 use crate::session::SessionManager;
+use crate::terminal::Terminals;
 use commands::Commands;
 
 /// Who a connection acts as.
@@ -60,6 +63,12 @@ pub trait Backend: Send + Sync + 'static {
         identity: &Identity,
         command: CommandBody,
     ) -> impl Future<Output = Result<CommandResult, ErrorInfo>> + Send;
+
+    /// The worktree of a session that is not read-only, for a terminal to run in.
+    fn worktree(
+        &self,
+        session_id: &SessionId,
+    ) -> impl Future<Output = Result<PathBuf, ErrorInfo>> + Send;
 }
 
 impl Backend for SessionManager {
@@ -83,6 +92,10 @@ impl Backend for SessionManager {
     ) -> Result<CommandResult, ErrorInfo> {
         self.handle(identity.user_id.clone(), command).await
     }
+
+    async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
+        SessionManager::worktree(self, session_id).await
+    }
 }
 
 /// The host this daemon runs on, as announced in the server hello.
@@ -104,20 +117,69 @@ struct Shared<B> {
     auth: Arc<Auth>,
     hub: Arc<Hub>,
     backend: B,
+    terminals: Terminals,
     commands: Commands,
     host: Host,
 }
 
+impl<B: Backend> Shared<B> {
+    /// Applies a command from the connection with `outbox`: terminal commands here, as they act
+    /// on the connection, the rest in the backend.
+    async fn apply(
+        &self,
+        identity: &Identity,
+        outbox: &Arc<Outbox>,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let terminals = &self.terminals;
+        match command {
+            CommandBody::OpenTerminal {
+                session_id,
+                cols,
+                rows,
+            } => {
+                let cwd = self.backend.worktree(&session_id).await?;
+                let terminal_id = terminals.open(session_id, &cwd, cols, rows, outbox)?;
+                return Ok(CommandResult::TerminalOpened { terminal_id });
+            }
+            CommandBody::AttachTerminal { terminal_id } => {
+                terminals.attach(&terminal_id, outbox)?
+            }
+            CommandBody::DetachTerminal { terminal_id } => {
+                terminals.detach(&terminal_id, outbox)?
+            }
+            CommandBody::ResizeTerminal {
+                terminal_id,
+                cols,
+                rows,
+            } => terminals.resize(&terminal_id, outbox, cols, rows)?,
+            CommandBody::TerminalInput { terminal_id, data } => {
+                terminals.input(&terminal_id, outbox, data.0).await?;
+            }
+            command => return self.backend.command(identity, command).await,
+        }
+        Ok(CommandResult::Applied)
+    }
+}
+
 impl<B: Backend> Server<B> {
-    /// A server for `backend`, whose events reach clients through `hub`; `auth` decides who
-    /// may connect.
-    pub fn new(tls: Tls, auth: Arc<Auth>, hub: Arc<Hub>, backend: B, host: Host) -> Self {
+    /// A server for `backend` and `terminals`, whose events reach clients through `hub`; `auth`
+    /// decides who may connect.
+    pub fn new(
+        tls: Tls,
+        auth: Arc<Auth>,
+        hub: Arc<Hub>,
+        backend: B,
+        terminals: Terminals,
+        host: Host,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 tls,
                 auth,
                 hub,
                 backend,
+                terminals,
                 commands: Commands::default(),
                 host,
             }),

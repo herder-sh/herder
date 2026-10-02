@@ -10,13 +10,18 @@
 //!   client and flushed every [`FLUSH_INTERVAL`]; a client that falls behind loses its pending
 //!   deltas and gets a snapshot of the item once it catches up.
 //! - the session list whenever it changes, sent to every client.
+//! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
+//!
+//! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
+//! its attached clients' outboxes with [`Outbox::terminal_output`].
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Event, EventBody, Item, ItemBody, ItemId, Seq, ServerMessage, SessionHead, SessionId,
+    Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead, SessionId,
+    Terminal,
 };
 
 use crate::session::EventSink;
@@ -34,6 +39,11 @@ pub const DELTA_BACKLOG: usize = 16;
 /// Queued messages at which a client is disconnected. Durable events are never dropped, so a
 /// client this far behind resumes from its cursor on a new connection instead.
 pub const MAX_BACKLOG: usize = 1024;
+
+/// Queued messages at which terminal output disconnects a client instead of being queued. The
+/// bytes are not stored anywhere else, so a client this far behind reconnects and re-attaches,
+/// which replays the terminal's scrollback.
+pub const TERMINAL_BACKLOG: usize = 256;
 
 /// Fan-out point between the journal writer and the connected clients.
 #[derive(Debug, Default)]
@@ -147,10 +157,42 @@ impl Hub {
         }
     }
 
-    /// Registers a client that has completed its hello; from now on it receives every
-    /// session list change.
-    pub(crate) fn connect(&self, outbox: &Arc<Outbox>) {
-        self.lock().outboxes.push(Arc::clone(outbox));
+    /// Registers a client that has completed its hello as `role`; from now on it receives every
+    /// session list change, and every terminal list change if it is an owner.
+    pub(crate) fn connect(&self, outbox: &Arc<Outbox>, role: Role) {
+        let mut state = self.lock();
+        outbox.lock().owner = role == Role::Owner;
+        state.outboxes.push(Arc::clone(outbox));
+    }
+
+    /// Sends the new terminal list to every owner.
+    pub(crate) fn terminals_changed(&self, terminals: &[Terminal]) {
+        let message = ServerMessage::Terminals {
+            terminals: terminals.to_vec(),
+        };
+        let state = self.lock();
+        for outbox in &state.outboxes {
+            let mut inner = outbox.lock();
+            if !inner.owner {
+                continue;
+            }
+            inner.push(message.clone());
+            inner.terminals_sent = true;
+            drop(inner);
+            outbox.wake();
+        }
+    }
+
+    /// Queues the terminal list read after [`Hub::connect`] to an owner, unless a change already
+    /// reached it, as [`Hub::initial_sessions`] does for sessions.
+    pub(crate) fn initial_terminals(&self, outbox: &Outbox, terminals: Vec<Terminal>) {
+        let _state = self.lock();
+        let mut inner = outbox.lock();
+        if inner.owner && !inner.terminals_sent {
+            inner.push(ServerMessage::Terminals { terminals });
+        }
+        drop(inner);
+        outbox.wake();
     }
 
     /// Queues the session list read after [`Hub::connect`], unless a change already reached
@@ -265,6 +307,10 @@ struct Inner {
     stale: Vec<(SessionId, ItemId)>,
     /// Whether a session list change has been queued since the client connected.
     sessions_sent: bool,
+    /// Whether the client's user is an owner, and so sees terminals.
+    owner: bool,
+    /// Whether a terminal list change has been queued since the client connected.
+    terminals_sent: bool,
     state: OutboxState,
     #[cfg(test)]
     peak: usize,
@@ -310,6 +356,22 @@ impl Outbox {
         }
         drop(inner);
         self.wake();
+    }
+
+    /// Queues bytes a terminal wrote, or closes the outbox as [`OutboxState::Overflowed`] when
+    /// [`TERMINAL_BACKLOG`] messages are already queued. False once the outbox no longer accepts
+    /// messages, so the terminal can let go of it.
+    pub(crate) fn terminal_output(&self, message: ServerMessage) -> bool {
+        let mut inner = self.lock();
+        if inner.queue.len() >= TERMINAL_BACKLOG {
+            inner.overflow();
+        } else {
+            inner.push(message);
+        }
+        let open = inner.state == OutboxState::Open;
+        drop(inner);
+        self.wake();
+        open
     }
 
     /// The next message to write.
@@ -552,7 +614,7 @@ mod tests {
     fn live_hub() -> (Hub, Arc<Outbox>) {
         let hub = Hub::default();
         let outbox = Arc::new(Outbox::default());
-        hub.connect(&outbox);
+        hub.connect(&outbox, Role::Owner);
         hub.subscribe(&outbox, &session());
         hub.go_live(&outbox, &session(), 0);
         (hub, outbox)
@@ -644,7 +706,7 @@ mod tests {
     fn events_published_during_replay_are_held_then_deduplicated() {
         let hub = Hub::default();
         let outbox = Arc::new(Outbox::default());
-        hub.connect(&outbox);
+        hub.connect(&outbox, Role::Owner);
         hub.subscribe(&outbox, &session());
         hub.event(&event(2, EventBody::ModelSwitched { model: "a".into() }));
         hub.event(&event(3, EventBody::ModelSwitched { model: "b".into() }));
@@ -665,7 +727,7 @@ mod tests {
     fn an_event_replay_already_read_is_skipped_when_published_late() {
         let hub = Hub::default();
         let outbox = Arc::new(Outbox::default());
-        hub.connect(&outbox);
+        hub.connect(&outbox, Role::Owner);
         hub.subscribe(&outbox, &session());
         // Replay read seq 1 and 2 before seq 2's publish reached the hub.
         hub.go_live(&outbox, &session(), 2);
@@ -688,15 +750,49 @@ mod tests {
             }]
         };
         let first = Arc::new(Outbox::default());
-        hub.connect(&first);
+        hub.connect(&first, Role::Owner);
         hub.initial_sessions(&first, heads(1));
         let second = Arc::new(Outbox::default());
-        hub.connect(&second);
+        hub.connect(&second, Role::Owner);
         hub.sessions_changed(&heads(2));
         // Read before the change landed, queued after it.
         hub.initial_sessions(&second, heads(1));
         let sessions = ServerMessage::Sessions { sessions: heads(2) };
         assert_eq!(drain(&second), std::slice::from_ref(&sessions));
         assert_eq!(drain(&first)[1], sessions);
+    }
+
+    #[test]
+    fn terminal_lists_reach_owners_only() {
+        let hub = Hub::default();
+        let owner = Arc::new(Outbox::default());
+        let member = Arc::new(Outbox::default());
+        hub.connect(&owner, Role::Owner);
+        hub.connect(&member, Role::Member);
+        let terminals = vec![Terminal {
+            terminal_id: herder_protocol::TerminalId::new("t1"),
+            session_id: session(),
+        }];
+        hub.terminals_changed(&terminals);
+        hub.initial_terminals(&member, Vec::new());
+        // Read before the change landed, queued after it.
+        hub.initial_terminals(&owner, Vec::new());
+        assert_eq!(drain(&owner), [ServerMessage::Terminals { terminals }]);
+        assert!(drain(&member).is_empty());
+    }
+
+    #[test]
+    fn terminal_output_closes_a_client_that_falls_behind() {
+        let outbox = Outbox::default();
+        let output = || ServerMessage::TerminalOutput {
+            terminal_id: herder_protocol::TerminalId::new("t1"),
+            data: herder_protocol::Bytes(b"x".to_vec()),
+        };
+        for _ in 0..TERMINAL_BACKLOG {
+            assert!(outbox.terminal_output(output()));
+        }
+        assert!(!outbox.terminal_output(output()));
+        assert_eq!(outbox.state(), OutboxState::Overflowed);
+        assert!(outbox.pop().is_none());
     }
 }

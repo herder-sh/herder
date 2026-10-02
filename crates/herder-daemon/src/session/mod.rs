@@ -337,6 +337,27 @@ impl SessionManager {
         Ok(owned)
     }
 
+    /// The worktree of `session_id`, for a terminal; refused once the session is read-only.
+    pub async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
+        let session = self
+            .inner
+            .journal
+            .session(session_id.clone())
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| not_found(session_id))?;
+        if matches!(
+            session.status,
+            SessionStatus::Archived | SessionStatus::Moved
+        ) {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!("session {session_id} is read-only and has no worktree"),
+            ));
+        }
+        Ok(PathBuf::from(session.worktree))
+    }
+
     /// Every session with its latest seq, ordered by session id.
     pub async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         self.inner.journal.heads().await
