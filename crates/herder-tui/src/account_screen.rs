@@ -1,8 +1,8 @@
 //! The accounts screen: every machine's accounts with their usage windows, and the
 //! add-account dialog for the selected machine.
 //!
-//! Usage is what the daemon last heard from each provider; failover is set in each daemon's
-//! own config, which the protocol does not carry, so the screen only says where it lives.
+//! Usage is what the daemon last heard from each provider. Failover is set in each daemon's
+//! own config; the screen shows it as the daemon reports it and says where it lives.
 
 use herder_client_core::Machine;
 use herder_protocol::{Account, AccountId, HostId};

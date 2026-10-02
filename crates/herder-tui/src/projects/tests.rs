@@ -1,4 +1,4 @@
-use herder_protocol::{AccountId, CommandBody, PermissionMode, SessionHead, SessionId};
+use herder_protocol::{AccountId, CommandBody, PermissionMode};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
@@ -85,20 +85,12 @@ fn a_session_joins_its_project_once_its_daemon_resolves_it() {
         Some(ProjectId::new("h2:/work/scratch"))
     );
     let mut machines = app.machines.clone();
-    machines[1].sessions[1] = SessionHead {
-        session_id: SessionId::new("s5"),
-        head_seq: 0,
-        project_id: Some(ProjectId::new("github.com/acme/app")),
-    };
+    machines[1].sessions[1] = fake::head("s5", Some("github.com/acme/app"));
     app.update(Msg::Machines(machines));
     assert_eq!(app.rows()[1], session("h2", "s5", 0));
     // A session not loaded yet has no repo, so no project until it is.
     let mut machines = app.machines.clone();
-    machines[0].sessions.push(SessionHead {
-        session_id: SessionId::new("s7"),
-        head_seq: 0,
-        project_id: None,
-    });
+    machines[0].sessions.push(fake::head("s7", None));
     app.update(Msg::Machines(machines));
     assert_eq!(app.project_of(&key("h1", "s7")), None);
     assert_eq!(
@@ -148,11 +140,14 @@ fn a_new_session_starts_from_the_project_on_the_clone_used_last() {
         [Effect::Send {
             host_id: HostId::new("h1"),
             command: CommandBody::CreateSession {
-                repo: "/home/ann/src/app".into(),
+                repo: Some("/home/ann/src/app".into()),
+                project_id: None,
                 branch: None,
-                account_id: AccountId::new("claude-main"),
+                account_id: Some(AccountId::new("claude-main")),
                 model: None,
                 permission_mode: PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
             },
             origin: Origin::NewSession(HostId::new("h1")),
         }]
@@ -201,4 +196,59 @@ fn the_pr_view_lists_each_projects_prs_across_sessions_and_machines() {
             (key("h1", "s2"), 3)
         ]
     );
+}
+
+#[test]
+fn listed_projects_name_themselves_offer_every_clone_and_their_default_account() {
+    let mut app = fake::projects();
+    let app_id = ProjectId::new("github.com/acme/app");
+    let mut machines = app.machines.clone();
+    // laptop names the project and has a second clone with no session yet, and starts its
+    // sessions on a second account.
+    machines[1]
+        .accounts
+        .push(fake::account("claude-work", "Work"));
+    machines[1].projects = vec![herder_protocol::Project {
+        project_id: app_id.clone(),
+        name: "Acme app".into(),
+        paths: vec!["/work/app".into(), "/srv/app".into()],
+        default_account: Some(AccountId::new("claude-work")),
+        setup_command: None,
+    }];
+    app.update(Msg::Machines(machines));
+    assert_eq!(app.project_name(&app_id), "Acme app");
+    assert_eq!(
+        app.project_name(&ProjectId::new("github.com/acme/docs")),
+        "docs"
+    );
+    assert_eq!(
+        app.clones(&app_id),
+        [
+            ProjectClone {
+                host_id: HostId::new("h1"),
+                repo: "/home/ann/src/app".into(),
+            },
+            ProjectClone {
+                host_id: HostId::new("h2"),
+                repo: "/work/app".into(),
+            },
+            ProjectClone {
+                host_id: HostId::new("h2"),
+                repo: "/srv/app".into(),
+            },
+        ]
+    );
+
+    // On laptop, the dialog starts on the project's default account; on box, the first.
+    press(&mut app, KeyCode::Char('g'));
+    press(&mut app, KeyCode::Char('n'));
+    let dialog = app.compose.dialog.as_ref().unwrap();
+    assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h2"), 1));
+    press(&mut app, KeyCode::Right);
+    let dialog = app.compose.dialog.as_ref().unwrap();
+    assert_eq!(dialog.repo.lines(), ["/srv/app"]);
+    assert_eq!(dialog.account, 1);
+    press(&mut app, KeyCode::Right);
+    let dialog = app.compose.dialog.as_ref().unwrap();
+    assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h1"), 0));
 }

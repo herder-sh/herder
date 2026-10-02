@@ -474,11 +474,14 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
         session_id: primary,
     } = client
         .command(CommandBody::CreateSession {
-            repo: repo.to_str().unwrap().to_owned(),
+            repo: Some(repo.to_str().unwrap().to_owned()),
+            project_id: None,
             branch: None,
-            account_id: account,
+            account_id: Some(account),
             model: None,
             permission_mode: PermissionMode::AutoEdit,
+            max_children: None,
+            failover_pin: None,
         })
         .await
     else {
@@ -514,7 +517,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     // The question reaches the primary, and the primary answers it. The command is never the
     // primary's: the first thing it waits for is the question.
     let event = tools.call("wait_for", json!({ "timeout_secs": 10 })).await;
-    let question_id = format!("{asks}/question-1");
+    let question_id = "question-1";
     assert_eq!(
         event,
         json!({
@@ -528,7 +531,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             },
         })
     );
-    let choose = json!({ "question_id": question_id, "choice": 1 });
+    let choose = json!({ "child": asks.as_str(), "question_id": question_id, "choice": 1 });
     assert_eq!(tools.call("answer", choose).await, json!({}));
 
     // The command waits on Alice, who sees it on her client and allows it.

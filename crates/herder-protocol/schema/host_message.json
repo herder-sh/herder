@@ -228,6 +228,13 @@
           "description": "Combined status of required checks.",
           "$ref": "#/$defs/CiStatus"
         },
+        "head_branch": {
+          "description": "Branch the pull request merges from, as a short name; absent from events journaled\nbefore herder recorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mergeable": {
           "description": "Whether it can merge cleanly.",
           "$ref": "#/$defs/Mergeable"

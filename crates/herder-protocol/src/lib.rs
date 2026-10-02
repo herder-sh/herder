@@ -3,7 +3,7 @@
 //! One WebSocket carries JSON text frames: [`ClientMessage`] from client to daemon and
 //! [`ServerMessage`] from daemon to client. Both are internally tagged on `"type"`.
 //!
-//! Evolution rules for protocol version 2:
+//! Evolution rules (protocol version 3):
 //! - Adding a variant, or an optional field, is compatible and keeps [`PROTOCOL_VERSION`].
 //! - Renaming or removing anything, or changing a field's type, bumps [`PROTOCOL_VERSION`].
 //! - Receivers ignore unknown fields. Enums that grow over time ([`ServerMessage`],
@@ -39,13 +39,13 @@ pub use replication::{
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
-    Account, CommandResult, ErrorCode, ErrorInfo, Role, ServerHello, ServerMessage, SessionHead,
-    Terminal, TerminalPurpose, UsageWindow,
+    Account, CommandResult, ErrorCode, ErrorInfo, FailoverSettings, Role, ServerHello,
+    ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow,
 };
 pub use types::{PermissionMode, Provider};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Per-session sequence number of a durable event: starts at 1 and increases by 1 per event.
 pub type Seq = u64;

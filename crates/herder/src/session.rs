@@ -9,11 +9,11 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::{Client, ConnectionState, Error, Machine, SessionSubscription};
+use herder_client_core::{Client, ConnectionState, Machine, SessionSubscription};
 use herder_protocol::{
     AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, CommandResult, Event, EventBody,
-    ItemBody, PermissionMode, PullRequest, QuestionId, Route, Seq, SessionId, SessionStatus,
-    TurnError, TurnId,
+    ItemBody, PermissionMode, ProjectId, PullRequest, QuestionId, Route, Seq, SessionId,
+    SessionStatus, TurnError, TurnId,
 };
 use serde::Serialize;
 use tokio::time::Instant;
@@ -47,9 +47,13 @@ enum Command {
     /// With nothing piped on stdin the session starts idle, without a prompt.
     New {
         /// Absolute path of the repository on the machine.
-        #[arg(long, value_name = "PATH")]
-        repo: String,
-        /// Account to run on, by id or label [default: the machine's only account].
+        #[arg(long, value_name = "PATH", required_unless_present = "project")]
+        repo: Option<String>,
+        /// Project to work on, by id, in its first clone on the machine.
+        #[arg(long, value_name = "PROJECT", conflicts_with = "repo")]
+        project: Option<String>,
+        /// Account to run on, by id or label [default: the machine's only account, else the
+        /// project's default account].
         #[arg(long, value_name = "ACCOUNT")]
         account: Option<String>,
         /// Model, in the provider's naming [default: the provider's default].
@@ -61,6 +65,18 @@ enum Command {
         /// Branch to create [default: a name herder picks].
         #[arg(long, value_name = "BRANCH")]
         branch: Option<String>,
+        /// Most children the session may run at once as a task's primary [default: the
+        /// machine's limit].
+        #[arg(long, value_name = "N")]
+        max_children: Option<u32>,
+        /// Keep the session on its account when it hits a limit [default: the machine's
+        /// failover setting].
+        #[arg(long, conflicts_with = "no_pin")]
+        pin: bool,
+        /// Let the session fail over when its account hits a limit, even on a machine that
+        /// pins sessions.
+        #[arg(long)]
+        no_pin: bool,
     },
     /// Prompt a session with stdin, queued behind a running turn, or answer what it asks.
     Send {
@@ -209,19 +225,26 @@ impl Cli {
         match command {
             Command::New {
                 repo,
+                project,
                 account,
                 model,
                 mode,
                 branch,
+                max_children,
+                pin,
+                no_pin,
             } => {
                 let account_id = self.account(account.as_deref())?;
                 let created = self
                     .send(CommandBody::CreateSession {
                         repo,
+                        project_id: project.map(ProjectId::new),
                         branch,
                         account_id,
                         model,
                         permission_mode: mode.into(),
+                        max_children,
+                        failover_pin: (pin || no_pin).then_some(pin),
                     })
                     .await?;
                 let CommandResult::SessionCreated { session_id } = created else {
@@ -292,21 +315,10 @@ impl Cli {
 
     /// Waits until the client holds everything the daemon had to say when it was asked: the
     /// session and account lists, and every session subscribed to so far.
-    ///
-    /// The daemon sends the lists on connecting and replays a subscription before it reads
-    /// the next message, then answers commands in order, so the answer to a command sent now
-    /// arrives after all of it. An interrupt of no session changes nothing and is refused at
-    /// once.
     async fn sync(&self) -> Result<()> {
-        let barrier = self.client.send(
-            &self.machine.host_id,
-            CommandBody::Interrupt {
-                session_id: SessionId::new(""),
-            },
-        );
-        match tokio::time::timeout(CONNECT_TIMEOUT, barrier).await {
-            Ok(Ok(_) | Err(Error::Rejected(_))) => Ok(()),
-            Ok(Err(err)) => Err(err.into()),
+        let synced = self.client.synced(&self.machine.host_id);
+        match tokio::time::timeout(CONNECT_TIMEOUT, synced).await {
+            Ok(result) => Ok(result?),
             Err(_) => match self.current().map(|m| m.connection) {
                 Some(ConnectionState::Disconnected { error }) => {
                     bail!("cannot reach {}: {error}", self.machine.name)
@@ -328,8 +340,9 @@ impl Cli {
             .find(|m| m.host_id == self.machine.host_id)
     }
 
-    /// The account named `wanted`, by id or label, or the machine's only one.
-    fn account(&self, wanted: Option<&str>) -> Result<AccountId> {
+    /// The account named `wanted`, by id or label, or the machine's only one; `None` leaves
+    /// the choice to the project's default account.
+    fn account(&self, wanted: Option<&str>) -> Result<Option<AccountId>> {
         let accounts = self.current().map(|m| m.accounts).unwrap_or_default();
         let names = accounts
             .iter()
@@ -338,14 +351,14 @@ impl Cli {
             .join(", ");
         let name = &self.machine.name;
         match (wanted, accounts.as_slice()) {
-            (None, [account]) => Ok(account.account_id.clone()),
+            (None, [account]) => Ok(Some(account.account_id.clone())),
             (None, []) => bail!("{name} has no accounts"),
-            (None, _) => bail!("{name} has several accounts; pick one with --account: {names}"),
+            (None, _) => Ok(None),
             (Some(wanted), _) => accounts
                 .iter()
                 .find(|a| a.account_id.as_str() == wanted)
                 .or_else(|| accounts.iter().find(|a| a.label == wanted))
-                .map(|a| a.account_id.clone())
+                .map(|a| Some(a.account_id.clone()))
                 .with_context(|| format!("{name} has no account {wanted}; it has: {names}")),
         }
     }
@@ -858,6 +871,7 @@ mod tests {
             number,
             url: format!("https://github.com/o/r/pull/{number}"),
             title: "Fix it".into(),
+            head_branch: None,
             state,
             ci,
             review: ReviewStatus::None,

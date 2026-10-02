@@ -10,6 +10,20 @@ use herder_protocol::{
 use crate::app::{App, Msg};
 use crate::session::SessionKey;
 
+/// A session as its daemon lists it: idle on `claude-main`, top-level.
+pub fn head(id: &str, project: Option<&str>) -> SessionHead {
+    SessionHead {
+        session_id: SessionId::new(id),
+        head_seq: 0,
+        status: SessionStatus::Idle,
+        parent: None,
+        task: None,
+        project_id: project.map(herder_protocol::ProjectId::new),
+        account_id: AccountId::new("claude-main"),
+        children_need_you: 0,
+    }
+}
+
 pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
     Machine {
         host_id: HostId::new(host),
@@ -18,15 +32,10 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         fingerprint: "ab".repeat(32),
         connection: ConnectionState::Connected,
         role: Some(Role::Owner),
-        sessions: sessions
-            .iter()
-            .map(|id| SessionHead {
-                session_id: SessionId::new(*id),
-                head_seq: 0,
-                project_id: None,
-            })
-            .collect(),
+        sessions: sessions.iter().map(|id| head(id, None)).collect(),
+        projects: Vec::new(),
         accounts: Vec::new(),
+        failover: Default::default(),
         terminals: Vec::new(),
         resources: None,
         session_usage: Default::default(),
@@ -55,6 +64,8 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         permission_mode: PermissionMode::Ask,
         parent: parent.map(SessionId::new),
         task: task.map(str::to_owned),
+        max_children: None,
+        failover_pin: None,
     }
 }
 
@@ -194,6 +205,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         provider: Provider::Claude,
         label: label.to_owned(),
         usage: Vec::new(),
+        failover: false,
     }
 }
 
@@ -214,6 +226,7 @@ pub fn pr(number: u64, title: &str, state: PrState) -> PullRequest {
         number,
         url: format!("https://github.com/acme/app/pull/{number}"),
         title: title.to_owned(),
+        head_branch: Some(format!("fix-{number}")),
         state,
         ci: CiStatus::None,
         review: ReviewStatus::None,
@@ -388,11 +401,7 @@ pub fn projects() -> App {
         machine.accounts = vec![account("claude-main", "Main")];
         for (host, id, project, ..) in &sessions {
             if machine.host_id.as_str() == *host {
-                machine.sessions.push(SessionHead {
-                    session_id: SessionId::new(*id),
-                    head_seq: 0,
-                    project_id: project.map(herder_protocol::ProjectId::new),
-                });
+                machine.sessions.push(head(id, *project));
             }
         }
     }

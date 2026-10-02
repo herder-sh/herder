@@ -1,6 +1,6 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
-//! account login, and resource figures.
+//! account login, resource figures, the sync barrier, and renaming and forgetting a machine.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -24,8 +24,8 @@ use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, Constraint, Container, ContainerState, ErrorCode, Event,
-    EventBody, HostId, HostResources, ItemBody, PermissionMode, Provider, Role, SessionId,
-    SessionStatus, SessionUsage, TerminalPurpose, TurnId,
+    EventBody, FailoverSettings, HostId, HostResources, ItemBody, PermissionMode, Provider, Role,
+    SessionId, SessionStatus, SessionUsage, TerminalPurpose, TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -64,6 +64,13 @@ echo "Logged in"
     }
 }
 
+fn failover() -> FailoverSettings {
+    FailoverSettings {
+        pin: true,
+        providers: vec![Provider::Codex],
+    }
+}
+
 fn account() -> AccountId {
     AccountId::new("account-1")
 }
@@ -94,6 +101,7 @@ impl Daemon {
             let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
             let auth = Arc::new(Auth::open(&dir).unwrap());
             let hub = Arc::new(Hub::default());
+            hub.set_failover(failover());
             let fake = fake_provider();
             let mut adapters = Adapters::new();
             adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
@@ -305,11 +313,14 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
         .send(
             &host,
             CommandBody::CreateSession {
-                repo,
+                repo: Some(repo),
+                project_id: None,
                 branch: None,
-                account_id: account(),
+                account_id: Some(account()),
                 model: None,
                 permission_mode: PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
             },
         )
         .await
@@ -379,6 +390,109 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
         .read_since(&session_id, 0, usize::MAX)
         .unwrap();
     assert_eq!(view.events, journal);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn synced_waits_for_the_lists_and_the_replay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client");
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let created = client
+        .send(
+            &host,
+            CommandBody::CreateSession {
+                repo: Some(repo),
+                project_id: None,
+                branch: None,
+                account_id: Some(account()),
+                model: None,
+                permission_mode: PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
+            },
+        )
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a session, got {created:?}");
+    };
+    drop(client);
+
+    // A fresh client has nothing cached; once synced, its lists and the replay are in.
+    let client = Client::open(config, "herder-test/0".into()).unwrap();
+    let sub = client.subscribe_session(&host, &session_id).unwrap();
+    tokio::time::timeout(TIMEOUT, client.synced(&host))
+        .await
+        .unwrap()
+        .unwrap();
+    let machine = client.machines().remove(0);
+    assert_eq!(machine.connection, ConnectionState::Connected);
+    let head = &machine.sessions[0];
+    assert_eq!(head.session_id, session_id);
+    assert_eq!(
+        (head.status, &head.account_id),
+        (SessionStatus::Idle, &account())
+    );
+    assert_eq!(machine.failover, failover());
+    assert!(machine.accounts.iter().all(|account| !account.failover));
+    let update = sub.next().await.unwrap();
+    assert!(matches!(
+        update.events.first().map(|event| &event.body),
+        Some(EventBody::SessionCreated { .. })
+    ));
+    assert_eq!(
+        update.events.last().map(|event| event.seq),
+        Some(head.head_seq)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client");
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    client.rename(&host, "build box".into()).unwrap();
+    assert_eq!(client.machines()[0].name, "build box");
+    // Pairing again keeps the name.
+    client.pair(daemon.pairing_link()).await.unwrap();
+    assert_eq!(client.machines()[0].name, "build box");
+    drop(client);
+
+    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    assert_eq!(client.machines()[0].name, "build box");
+    let unknown = HostId::new("host-2");
+    assert_eq!(
+        client.rename(&unknown, "x".into()),
+        Err(Error::UnknownMachine(unknown.clone()))
+    );
+    assert_eq!(client.forget(&unknown), Err(Error::UnknownMachine(unknown)));
+    let sub = client
+        .subscribe_session(&host, &SessionId::new("s"))
+        .unwrap();
+    client.forget(&host).unwrap();
+    assert!(client.machines().is_empty());
+    assert!(sub.next().await.is_none());
+    drop(client);
+
+    let client = Client::open(config, "herder-test/0".into()).unwrap();
+    assert!(client.machines().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -532,11 +646,14 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         .send(
             &host,
             CommandBody::CreateSession {
-                repo,
+                repo: Some(repo),
+                project_id: None,
                 branch: None,
-                account_id: account(),
+                account_id: Some(account()),
                 model: None,
                 permission_mode: PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
             },
         )
         .await

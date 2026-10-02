@@ -18,7 +18,7 @@
       ]
     },
     {
-      "description": "Every session on this daemon; sent after hello, whenever a session is created and\nwhenever a session's project changes.",
+      "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account or project changes.",
       "type": "object",
       "properties": {
         "sessions": {
@@ -70,6 +70,10 @@
             "$ref": "#/$defs/Account"
           }
         },
+        "failover": {
+          "description": "How this daemon's sessions fail over.",
+          "$ref": "#/$defs/FailoverSettings"
+        },
         "type": {
           "type": "string",
           "const": "accounts"
@@ -77,7 +81,8 @@
       },
       "required": [
         "type",
-        "accounts"
+        "accounts",
+        "failover"
       ]
     },
     {
@@ -315,6 +320,24 @@
         "type",
         "error"
       ]
+    },
+    {
+      "description": "Answers a [`crate::ClientMessage::Sync`] once everything the daemon sent before it on\nthis connection is out.",
+      "type": "object",
+      "properties": {
+        "token": {
+          "description": "The sync's token.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "const": "synced"
+        }
+      },
+      "required": [
+        "type",
+        "token"
+      ]
     }
   ],
   "$defs": {
@@ -325,6 +348,10 @@
         "account_id": {
           "description": "The account.",
           "$ref": "#/$defs/AccountId"
+        },
+        "failover": {
+          "description": "Whether sessions may fail over to this account when theirs hits a limit.",
+          "type": "boolean"
         },
         "label": {
           "description": "Display label chosen by the owner.",
@@ -346,7 +373,8 @@
         "account_id",
         "provider",
         "label",
-        "usage"
+        "usage",
+        "failover"
       ]
     },
     "AccountId": {
@@ -802,6 +830,22 @@
             "branch": {
               "description": "Branch the session owns.",
               "type": "string"
+            },
+            "failover_pin": {
+              "description": "Whether the session stays on its account when it hits a limit; absent for the\ndaemon's `[failover] pin`.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "max_children": {
+              "description": "Most live children this session may have as a task's primary; absent for the\ndaemon's limit.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
             },
             "model": {
               "description": "Starting model, in the provider's own naming.",
@@ -1398,6 +1442,27 @@
         }
       ]
     },
+    "FailoverSettings": {
+      "description": "How a daemon's sessions fail over when their account hits a limit.",
+      "type": "object",
+      "properties": {
+        "pin": {
+          "description": "Whether sessions stay on their account by default; a session created with\n`failover_pin` overrides it.",
+          "type": "boolean"
+        },
+        "providers": {
+          "description": "Providers to fail over to, in order, once no account of the session's own provider is\neligible; empty keeps sessions on their provider.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Provider"
+          }
+        }
+      },
+      "required": [
+        "pin",
+        "providers"
+      ]
+    },
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
@@ -1792,6 +1857,13 @@
           "description": "Combined status of required checks.",
           "$ref": "#/$defs/CiStatus"
         },
+        "head_branch": {
+          "description": "Branch the pull request merges from, as a short name; absent from events journaled\nbefore herder recorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mergeable": {
           "description": "Whether it can merge cleanly.",
           "$ref": "#/$defs/Mergeable"
@@ -1929,17 +2001,38 @@
       ]
     },
     "SessionHead": {
-      "description": "A session and the seq of its latest event.",
+      "description": "A session as lists show it, and the seq of its latest event.",
       "type": "object",
       "properties": {
+        "account_id": {
+          "description": "Account the session runs on now.",
+          "$ref": "#/$defs/AccountId"
+        },
+        "children_need_you": {
+          "description": "How many of this session's children are `needs_you`; 0 for a child.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
         "head_seq": {
           "description": "Seq of its latest event.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
+        "parent": {
+          "description": "Primary session of the task this session is a child of; absent for a top-level session.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "project_id": {
-          "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent only from a daemon that predates projects.",
+          "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent until the daemon's project discovery has seen the repository.",
           "anyOf": [
             {
               "$ref": "#/$defs/ProjectId"
@@ -1952,11 +2045,25 @@
         "session_id": {
           "description": "The session.",
           "$ref": "#/$defs/SessionId"
+        },
+        "status": {
+          "description": "Where the session stands.",
+          "$ref": "#/$defs/SessionStatus"
+        },
+        "task": {
+          "description": "Short label of the session's task, shown in the task tree.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "session_id",
-        "head_seq"
+        "head_seq",
+        "status",
+        "account_id",
+        "children_need_you"
       ]
     },
     "SessionId": {

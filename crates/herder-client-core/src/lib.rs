@@ -10,7 +10,8 @@
 //! A machine is a daemon this device paired with, keyed by the daemon's [`HostId`]. The
 //! profile, `<config_dir>/machines.json`, holds each machine's addresses, the pinned SHA-256
 //! of its certificate, and the device key this device presents to it (one key per machine).
-//! [`Client::pair`] adds one from a `herder://pair` link.
+//! [`Client::pair`] adds one from a `herder://pair` link, [`Client::rename`] changes the name
+//! it is shown by on this device, and [`Client::forget`] removes it.
 //!
 //! # Connections
 //!
@@ -19,7 +20,8 @@
 //! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever.
 //! [`Client::wake`] cuts the wait short, for when an app returns to the foreground. A
 //! connection silent for 45 s, despite pings, counts as lost. [`Machine::connection`] says
-//! where it stands.
+//! where it stands, and [`Client::synced`] waits until a connection is up and the daemon has
+//! sent its lists and the replay of every subscription.
 //!
 //! # Resources
 //!
@@ -64,8 +66,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
-    Event, HostId, HostResources, Item, PROTOCOL_VERSION, Provider, Role, SessionHead, SessionId,
-    SessionUsage, Terminal, TerminalId,
+    Event, FailoverSettings, HostId, HostResources, Item, PROTOCOL_VERSION, Project, Provider,
+    Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -118,7 +120,7 @@ pub enum Error {
 pub struct Machine {
     /// The daemon's host id.
     pub host_id: HostId,
-    /// The daemon's host name.
+    /// The name it was given with [`Client::rename`], else the daemon's host name.
     pub name: String,
     /// Addresses tried in order, as `host:port`.
     pub addresses: Vec<String>,
@@ -130,8 +132,13 @@ pub struct Machine {
     pub role: Option<Role>,
     /// The daemon's sessions, as last listed.
     pub sessions: Vec<SessionHead>,
+    /// The projects with a clone on the daemon's host, as last listed; merge them across
+    /// machines by `project_id`.
+    pub projects: Vec<Project>,
     /// The daemon's accounts, as last listed.
     pub accounts: Vec<Account>,
+    /// How the daemon's sessions fail over, as sent with the accounts.
+    pub failover: FailoverSettings,
     /// Open terminals, as last listed; owners only, so empty for members.
     pub terminals: Vec<Terminal>,
     /// The host's load and turn admission, as last sent; `None` while not connected.
@@ -257,8 +264,12 @@ impl Client {
         saved.name = hello.host_name;
 
         let mut machines = self.lock();
-        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved.clone()).collect();
+        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
         let index = all.iter().position(|m| m.host_id == saved.host_id);
+        // A machine paired again keeps the name it was given.
+        if let Some(index) = index {
+            saved.name.clone_from(&all[index].name);
+        }
         match index {
             Some(index) => all[index] = saved.clone(),
             None => all.push(saved.clone()),
@@ -277,6 +288,48 @@ impl Client {
         drop(machines);
         self.inner.changed.send_modify(|version| *version += 1);
         Ok(supervisor.view())
+    }
+
+    /// Shows a machine as `name` on this device from now on, and saves that.
+    pub fn rename(&self, host_id: &HostId, name: String) -> Result<(), Error> {
+        let machines = self.lock();
+        let machine = find(&machines, host_id)?;
+        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
+        for saved in &mut all {
+            if saved.host_id == *host_id {
+                saved.name.clone_from(&name);
+            }
+        }
+        profile::save(&self.inner.config_dir, &all)?;
+        machine.rename(name);
+        Ok(())
+    }
+
+    /// Unpairs a machine on this device: removes it from the profile, with this device's key
+    /// for it, and stops its connection; its subscriptions end. The daemon still lists the
+    /// device until its owner revokes it.
+    pub fn forget(&self, host_id: &HostId) -> Result<(), Error> {
+        let mut machines = self.lock();
+        let machine = find(&machines, host_id)?;
+        let all: Vec<SavedMachine> = machines
+            .iter()
+            .filter(|m| m.saved.host_id != *host_id)
+            .map(|m| m.saved())
+            .collect();
+        profile::save(&self.inner.config_dir, &all)?;
+        machines.retain(|m| m.saved.host_id != *host_id);
+        drop(machines);
+        machine.stop();
+        self.inner.changed.send_modify(|version| *version += 1);
+        Ok(())
+    }
+
+    /// Waits until a machine is connected and its daemon sent everything it owes for what
+    /// this client sent before the call: the session, account and terminal lists that follow
+    /// each hello, and the replay of every session subscribed before. Projects arrive once the
+    /// daemon has resolved them, which may be later.
+    pub async fn synced(&self, host_id: &HostId) -> Result<(), Error> {
+        self.machine(host_id)?.synced().await
     }
 
     /// Reconnects every disconnected machine now instead of after its backoff.
@@ -384,20 +437,25 @@ impl Client {
     }
 
     fn machine(&self, host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
-        self.lock()
-            .iter()
-            .find(|machine| machine.saved.host_id == *host_id)
-            .cloned()
-            .ok_or_else(|| Error::UnknownMachine(host_id.clone()))
+        find(&self.lock(), host_id)
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
-        // Every update is a single push or replace, so a poisoned list is consistent.
+        // Every update is a single push, replace or removal, so a poisoned list is consistent.
         self.inner
             .machines
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// The supervisor of `host_id` among `machines`.
+fn find(machines: &[Arc<Supervisor>], host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
+    machines
+        .iter()
+        .find(|machine| machine.saved.host_id == *host_id)
+        .cloned()
+        .ok_or_else(|| Error::UnknownMachine(host_id.clone()))
 }
 
 /// A stream of [`SessionUpdate`]s for one session; dropping it unsubscribes.

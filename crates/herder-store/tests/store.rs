@@ -32,6 +32,8 @@ fn created() -> EventBody {
         permission_mode: PermissionMode::Ask,
         parent: None,
         task: None,
+        max_children: None,
+        failover_pin: None,
     }
 }
 
@@ -60,6 +62,8 @@ fn child_created(parent: &SessionId, task: &str) -> EventBody {
         permission_mode,
         parent: Some(parent.clone()),
         task: Some(task.into()),
+        max_children: None,
+        failover_pin: None,
     }
 }
 
@@ -68,6 +72,7 @@ fn pr(number: u64, state: PrState) -> PullRequest {
         number,
         url: format!("https://github.com/herder-sh/herder/pull/{number}"),
         title: format!("PR {number}"),
+        head_branch: Some(format!("pr-{number}")),
         state,
         ci: CiStatus::Pending,
         review: ReviewStatus::Required,
@@ -124,6 +129,7 @@ fn fold(events: &[Event]) -> Projections {
             permission_mode,
             parent,
             task,
+            ..
         } = &event.body
         {
             session = Some(Session {
@@ -494,11 +500,46 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 4);
+    assert_eq!(version(&path), 5);
 
-    let store = Store::open(&path).unwrap();
+    let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 4);
+    assert_eq!(version(&path), 5);
+    store
+        .append(new_event(
+            &s,
+            1,
+            EventBody::PrLinked {
+                pr: pr(7, PrState::Open),
+            },
+        ))
+        .unwrap();
+    drop(store);
+
+    // Back to the v4 schema, as a build before pull request branches left it; reopening
+    // migrates it, and a pull request tracked before has no branch until it updates.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE session_prs DROP COLUMN head_branch; PRAGMA user_version = 4;")
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(version(&path), 5);
+    let mut untracked = pr(7, PrState::Open);
+    untracked.head_branch = None;
+    assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
+    store
+        .append(new_event(
+            &s,
+            2,
+            EventBody::PrUpdated {
+                pr: pr(7, PrState::Open),
+            },
+        ))
+        .unwrap();
+    assert_eq!(store.session_prs(&s).unwrap(), [pr(7, PrState::Open)]);
+    store
+        .append(new_event(&s, 3, EventBody::PrUnlinked { number: 7 }))
+        .unwrap();
     drop(store);
 
     // Back to the v2 schema, as a build before session branches left it; reopening migrates
@@ -506,12 +547,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
+            "ALTER TABLE session_prs DROP COLUMN head_branch;
+             DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
              PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 4);
+    assert_eq!(version(&path), 5);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -523,7 +565,8 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE session_branches;
+            "ALTER TABLE session_prs DROP COLUMN head_branch;
+             DROP TABLE session_branches;
              DROP TABLE command_results;
              DROP TABLE queued_prompts;
              DROP INDEX sessions_parent;
@@ -533,7 +576,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 4);
+    assert_eq!(version(&path), 5);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -546,13 +589,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 5)
+        .pragma_update(None, "user_version", 6)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 5,
-            supported: 4
+            found: 6,
+            supported: 5
         })
     ));
 }

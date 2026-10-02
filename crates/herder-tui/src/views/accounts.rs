@@ -1,5 +1,6 @@
-//! The accounts screen, over the main screen: each machine with its accounts and how much of
-//! each usage window they used, with a bar and when it resets.
+//! The accounts screen, over the main screen: each machine with its failover settings and its
+//! accounts, which ones sessions fail over to, and how much of each usage window they used,
+//! with a bar and when it resets.
 
 use herder_client_core::Machine;
 use herder_protocol::{Account, SessionStatus, Timestamp, UsageWindow};
@@ -15,9 +16,11 @@ use crate::app::App;
 /// The widest a usage bar gets.
 const BAR: usize = 30;
 
-/// Where failover is set, as the protocol does not carry it.
-const FAILOVER: &str = "Failover is set in each machine's daemon config (failover = true per \
-                        account, [failover] pin); herder does not report it to clients yet.";
+/// What the failover marks mean, and where they are set.
+const FAILOVER: &str = "A session whose account hits a limit moves to an account marked \
+                        failover, of its own provider, then of the providers after \"then\", \
+                        unless sessions are pinned. All are set in the machine's daemon config \
+                        (failover = true per account, [failover] pin and providers).";
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, screen: &AccountScreen) {
     let narrow = area.width < super::NARROW;
@@ -95,11 +98,24 @@ fn name_style(chosen: bool) -> Style {
 
 fn machine_text(machine: &Machine, chosen: bool) -> Text<'static> {
     let (mark, color, state) = super::machines::connection(machine);
+    let mut facts = format!("  {state}");
+    if machine.failover.pin {
+        facts.push_str(" · pinned");
+    }
+    if !machine.failover.providers.is_empty() {
+        let providers: Vec<&str> = machine
+            .failover
+            .providers
+            .iter()
+            .map(|provider| provider.as_str())
+            .collect();
+        facts.push_str(&format!(" · then {}", providers.join(", ")));
+    }
     let mut lines = vec![Line::from(vec![
         Span::styled(mark, Style::new().fg(color)),
         Span::raw(" "),
         Span::styled(machine.name.clone(), name_style(chosen)),
-        Span::styled(format!("  {state}"), super::dim()),
+        Span::styled(facts, super::dim()),
     ])];
     if machine.accounts.is_empty() {
         lines.push(Line::styled("  no accounts: n adds one", super::dim()));
@@ -127,6 +143,9 @@ fn account_text(
     let mut facts = account.provider.as_str().to_owned();
     if account.label != account.account_id.as_str() {
         facts.push_str(&format!(" · {}", account.account_id));
+    }
+    if account.failover {
+        facts.push_str(" · failover");
     }
     match sessions {
         0 => {}

@@ -22,8 +22,9 @@ use herder_client_core::auth::{DeviceKey, PairingUri, client_config};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     Account, AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command,
-    CommandBody, CommandId, CommandResult, Cursor, Event, EventBody, Item, ItemBody, ItemId,
-    PROTOCOL_VERSION, PermissionMode, Provider, Role, ServerMessage, SessionStatus, UserId,
+    CommandBody, CommandId, CommandResult, Cursor, Event, EventBody, FailoverSettings, Item,
+    ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider, Role, ServerMessage,
+    SessionStatus, UserId,
 };
 use herder_store::Store;
 use rustls::pki_types::ServerName;
@@ -370,7 +371,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
         client.recv().await,
         ServerMessage::Sessions { .. }
     ));
-    let ServerMessage::Accounts { accounts } = client.recv().await else {
+    let ServerMessage::Accounts { accounts, failover } = client.recv().await else {
         panic!("expected the accounts list");
     };
     assert_eq!(
@@ -380,17 +381,22 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: Provider::Claude,
             label: "Work".into(),
             usage: Vec::new(),
+            failover: false,
         }]
     );
+    assert_eq!(failover, FailoverSettings::default());
 
     // Create a session on the repository and stream it.
     let CommandResult::SessionCreated { session_id } = client
         .command(CommandBody::CreateSession {
-            repo: repo.to_str().unwrap().to_owned(),
+            repo: Some(repo.to_str().unwrap().to_owned()),
+            project_id: None,
             branch: None,
-            account_id: account.clone(),
+            account_id: Some(account.clone()),
             model: None,
             permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
         })
         .await
     else {

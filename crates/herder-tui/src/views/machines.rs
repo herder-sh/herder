@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragra
 
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
-use crate::machines::{AddMachine, Field, Form, MachinePanel, Step};
+use crate::machines::{AddMachine, Field, Form, MachinePanel, PanelEdit, Step};
 
 /// Width of the label column of details and form fields.
 const LABEL: usize = 13;
@@ -47,14 +47,37 @@ fn keys(text: &str) -> Line<'_> {
 
 fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
     let selected = panel.selected(&app.machines);
-    let details =
+    let mut details =
         selected.map_or_else(Vec::new, |at| details(&app.machines[at], value_width(area)));
+    let keys_text = match &panel.edit {
+        Some(PanelEdit::Rename(name)) => {
+            // The name being typed replaces the details' heading.
+            if let Some(heading) = details.first_mut() {
+                *heading = Line::from(vec![
+                    Span::styled("name: ", super::dim()),
+                    Span::styled(format!("{name}▏"), super::bold()),
+                ]);
+            }
+            "Enter save the name on this device  Esc cancel"
+        }
+        Some(PanelEdit::Forget) => {
+            if let Some(heading) = details.first_mut() {
+                let name = selected.map_or("", |at| app.machines[at].name.as_str());
+                *heading = Line::styled(
+                    format!("Forget {name} on this device? Pair again to get it back."),
+                    Style::new().fg(Color::Yellow),
+                );
+            }
+            "y forget  n keep"
+        }
+        None => "a add machine  n add account  e rename  d forget  r reconnect  Esc close",
+    };
     let rows = app.machines.len().max(1);
     // Borders, the machines, a blank line, the details.
     let area = popup(area, rows + details.len() + 3);
     let block = Block::bordered()
         .title(" machines ")
-        .title_bottom(keys("a add machine  n add account  r reconnect  Esc close"))
+        .title_bottom(keys(keys_text))
         .border_style(Style::new().fg(Color::Cyan))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);

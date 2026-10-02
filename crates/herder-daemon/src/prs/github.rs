@@ -194,6 +194,9 @@ pub(crate) struct ApiPull {
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ApiHead {
     pub(crate) sha: String,
+    /// The branch, for a pull request whose head repository still exists.
+    #[serde(default, rename = "ref")]
+    pub(crate) branch: Option<String>,
 }
 
 /// One entry of `GET repos/{o}/{r}/pulls/{n}/commits`.
@@ -254,6 +257,7 @@ pub(crate) fn pull_request(
         number: pull.number,
         url: pull.html_url.clone(),
         title: pull.title.clone(),
+        head_branch: pull.head.branch.clone(),
         state: state(pull),
         ci: ci(runs, status),
         review: review(pull, reviews),
@@ -423,7 +427,7 @@ mod tests {
             "merged_at": null,
             "mergeable": true,
             "created_at": "2026-10-01T00:00:00Z",
-            "head": {"sha": "abc"},
+            "head": {"sha": "abc", "ref": "feature"},
             "requested_reviewers": [],
             "requested_teams": []
         });

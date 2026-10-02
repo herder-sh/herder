@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
     CommandId, CommandResult, Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead,
-    SessionId, Timestamp, UserId,
+    SessionId, SessionStatus, Timestamp, UserId,
 };
 use herder_store::{NewEvent, QueuedPrompt, Session, Store};
 
@@ -18,8 +18,32 @@ use super::EventSink;
 pub(crate) struct Journal {
     store: Arc<Mutex<Store>>,
     sink: Arc<dyn EventSink>,
-    /// The project of every clone discovery knows, by repository path.
-    projects: Arc<RwLock<HashMap<String, ProjectId>>>,
+    /// The projects discovery knows.
+    projects: Arc<RwLock<Projects>>,
+}
+
+/// The project list discovery last published, and the project of each clone in it.
+#[derive(Default)]
+pub(crate) struct Projects {
+    pub(crate) list: Vec<Project>,
+    by_path: HashMap<String, ProjectId>,
+}
+
+impl Projects {
+    /// The project whose clone `repo` is, if discovery knows it.
+    pub(crate) fn of_repo(&self, repo: &str) -> Option<&Project> {
+        let id = self.by_path.get(repo)?;
+        self.list.iter().find(|project| project.project_id == *id)
+    }
+}
+
+/// What a session was created with that lists do not show.
+#[derive(Debug, Default)]
+pub(crate) struct Settings {
+    /// Its own limit on live children, as a task's primary.
+    pub(crate) max_children: Option<u32>,
+    /// Its own failover pin.
+    pub(crate) failover_pin: Option<bool>,
 }
 
 impl Journal {
@@ -35,14 +59,22 @@ impl Journal {
         &*self.sink
     }
 
-    /// Appends an event now and publishes it once stored. Publishing happens under the store
-    /// lock, so events reach the sink in seq order whichever task records them.
+    /// Appends an event now and publishes it once stored, followed by the session list when
+    /// the event changes what it shows. Publishing happens under the store lock, so events and
+    /// lists reach the sink in order whichever task records them.
     pub(crate) async fn record(
         &self,
         session_id: SessionId,
         by: Option<UserId>,
         body: EventBody,
     ) -> Result<Event> {
+        let lists = matches!(
+            body,
+            EventBody::SessionCreated { .. }
+                | EventBody::SessionStatusChanged { .. }
+                | EventBody::AccountSwitched { .. }
+                | EventBody::ProviderSwitched { .. }
+        );
         let event = NewEvent {
             session_id,
             at: Timestamp::now(),
@@ -50,9 +82,14 @@ impl Journal {
             body,
         };
         let sink = self.sink.clone();
+        let projects = self.projects.clone();
         self.with_store(move |store| {
             let stored = store.append(event)?;
             sink.event(&stored);
+            if lists {
+                let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
+                sink.sessions_changed(&heads(store.sessions()?, &projects));
+            }
             Ok(stored)
         })
         .await
@@ -145,15 +182,30 @@ impl Journal {
 
     pub(super) async fn heads(&self) -> Result<Vec<SessionHead>> {
         let sessions = self.sessions().await?;
-        let projects = self.projects.read().unwrap_or_else(PoisonError::into_inner);
-        Ok(sessions
-            .into_iter()
-            .map(|session| SessionHead {
-                project_id: projects.get(&session.repo).cloned(),
-                session_id: session.session_id,
-                head_seq: session.last_seq,
-            })
-            .collect())
+        let projects = self.projects();
+        Ok(heads(sessions, &projects))
+    }
+
+    /// The projects discovery last published.
+    pub(crate) fn projects(&self) -> std::sync::RwLockReadGuard<'_, Projects> {
+        // Every update is one assignment, so a poisoned lock holds a consistent list.
+        self.projects.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// What `session_id` was created with; the defaults for a session that does not exist.
+    pub(crate) async fn settings(&self, session_id: SessionId) -> Result<Settings> {
+        let first = self.read_since(session_id, 0, 1).await?;
+        Ok(match first.into_iter().next().map(|event| event.body) {
+            Some(EventBody::SessionCreated {
+                max_children,
+                failover_pin,
+                ..
+            }) => Settings {
+                max_children,
+                failover_pin,
+            },
+            _ => Settings::default(),
+        })
     }
 
     /// Resolves sessions' projects from `projects` from now on; returns whether any clone's
@@ -171,8 +223,11 @@ impl Journal {
             .projects
             .write()
             .unwrap_or_else(PoisonError::into_inner);
-        let changed = *current != by_path;
-        *current = by_path;
+        let changed = current.by_path != by_path;
+        *current = Projects {
+            list: projects.to_vec(),
+            by_path,
+        };
         changed
     }
 
@@ -190,4 +245,30 @@ impl Journal {
         .await
         .context("the store task panicked")?
     }
+}
+
+/// `sessions` as lists show them, each with its project as `projects` resolve it and, for a
+/// primary, how many of its children need the user.
+fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
+    let mut need_you: HashMap<SessionId, u32> = HashMap::new();
+    for session in &sessions {
+        if let Some(parent) = &session.parent
+            && session.status == SessionStatus::NeedsYou
+        {
+            *need_you.entry(parent.clone()).or_default() += 1;
+        }
+    }
+    sessions
+        .into_iter()
+        .map(|session| SessionHead {
+            project_id: projects.by_path.get(&session.repo).cloned(),
+            children_need_you: need_you.get(&session.session_id).copied().unwrap_or(0),
+            session_id: session.session_id,
+            head_seq: session.last_seq,
+            status: session.status,
+            parent: session.parent,
+            task: session.task,
+            account_id: session.account_id,
+        })
+        .collect()
 }

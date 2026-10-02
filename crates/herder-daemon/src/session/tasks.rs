@@ -1,16 +1,16 @@
 //! Tasks: a primary session runs child sessions through the task tools ([`herder_tasktools`]).
 //!
 //! A child is a full session on this host, in the primary's repository with its own worktree
-//! and branch, created with the primary as its `parent`. It starts on the primary's account and
-//! provider, with the primary's model and permission mode unless `spawn` picks others; its
-//! permission mode may never exceed the primary's, and a child cannot spawn (a task is one
-//! level deep). A primary has at most [`TaskLimits::max_children`] live (not archived)
-//! children at once; `spawn` past that is refused as `limit_exceeded`. While the host admits no
-//! more turns for want of memory, load or pressure ([`crate::resources::admission`]), `spawn` is
-//! refused as `host_busy` with a hint to retry after [`RETRY_AFTER_SECS`]; while only the turn
-//! limit binds, the child is created and its first turn waits for a slot. While `wait_for`
-//! blocks, the primary's turn lends its slot to other turns, so its children can run. Every
-//! prompt the primary sends is journaled in the child with no `by`, since the agent sent it.
+//! and branch, created with the primary as its `parent`. It starts on the primary's account,
+//! provider and failover pin, with the primary's model and permission mode unless `spawn` picks
+//! others; its permission mode may never exceed the primary's, and a child cannot spawn (a task
+//! is one level deep). A primary has at most the `max_children` it was created with, else
+//! [`TaskLimits::max_children`], live (not archived) children at once; `spawn` past that is
+//! refused as `limit_exceeded`. While the host admits no more turns for want of memory, load or
+//! pressure ([`crate::resources::admission`]), `spawn` is refused as `host_busy` with a hint to
+//! retry after [`RETRY_AFTER_SECS`]; while only the turn limit binds, the child is created and
+//! its first turn waits for a slot. While `wait_for` blocks, the primary's turn lends its slot
+//! to other turns, so its children can run. Every prompt the primary sends is journaled in the child with no `by`, since the agent sent it.
 //!
 //! When a child's turn ends, however it ended, the child journals `child_reported` in the
 //! primary, with its final assistant message of the turn or a short failure status, and the
@@ -28,9 +28,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use herder_protocol::{
-    ApprovalId, ErrorInfo, EventBody, PermissionMode, QuestionId, SessionId, SessionStatus,
-};
+use herder_protocol::{ErrorInfo, EventBody, PermissionMode, SessionId, SessionStatus};
 use herder_store::Session;
 use herder_tasktools::{
     AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
@@ -42,7 +40,6 @@ use tokio::sync::{self, oneshot, watch};
 use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
-use super::routing::{primary_id, split_id};
 use super::{CreateRequest, Inner, SessionManager};
 use crate::mcp::{ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
@@ -138,7 +135,7 @@ impl Tasks {
 
     /// `request` of `child` now waits for `primary`'s answer: through `wait_for` and `status`.
     pub(super) fn route(&self, primary: &SessionId, child: &SessionId, request: &Request) {
-        let request = primary_id(child, request);
+        let request = request.clone();
         let mut state = self.lock();
         state
             .open
@@ -161,17 +158,9 @@ impl Tasks {
     /// `request` of `child` no longer waits for `primary`: it was answered or escalated, or its
     /// turn ended. A `wait_for` that has not returned it yet never will.
     pub(super) fn withdraw(&self, primary: &SessionId, child: &SessionId, request: &RequestRef) {
-        let id = match request {
-            RequestRef::Question(id) => format!("{child}/{id}"),
-            RequestRef::Approval(id) => format!("{child}/{id}"),
-        };
         let matches = |open: &Request| match (open, request) {
-            (Request::Question { question_id, .. }, RequestRef::Question(_)) => {
-                question_id.as_str() == id
-            }
-            (Request::Approval { approval_id, .. }, RequestRef::Approval(_)) => {
-                approval_id.as_str() == id
-            }
+            (Request::Question { question_id, .. }, RequestRef::Question(id)) => question_id == id,
+            (Request::Approval { approval_id, .. }, RequestRef::Approval(id)) => approval_id == id,
             _ => false,
         };
         let mut state = self.lock();
@@ -354,7 +343,13 @@ impl SessionManager {
         // Admission, after every check on the arguments and before anything is created: the
         // task's child limit, then the host's capacity.
         let admitted = self.inner.tasks.admission.lock().await;
-        let max_children = limits.max_children;
+        let settings = self
+            .inner
+            .journal
+            .settings(caller.clone())
+            .await
+            .map_err(|err| tool_internal(format!("{err:#}")))?;
+        let max_children = settings.max_children.unwrap_or(limits.max_children);
         let live = self
             .inner
             .journal
@@ -395,6 +390,9 @@ impl SessionManager {
             permission_mode,
             parent: Some(caller.clone()),
             task: Some(input.task.clone()),
+            max_children: None,
+            // The task fails over, or stays put, as one.
+            failover_pin: settings.failover_pin,
         };
         let (child, branch) = self
             .create_session(None, request)
@@ -503,30 +501,9 @@ impl SessionManager {
         caller: SessionId,
         input: AnswerInput,
     ) -> Result<AnswerOutput, ToolError> {
-        let (child, input) = match input {
-            AnswerInput::Question {
-                question_id,
-                answer,
-            } => {
-                let (child, id) = request_of(question_id.as_str(), "question")?;
-                let question_id = QuestionId::new(id);
-                let input = AnswerInput::Question {
-                    question_id,
-                    answer,
-                };
-                (child, input)
-            }
-            AnswerInput::Approval {
-                approval_id,
-                decision,
-            } => {
-                let (child, id) = request_of(approval_id.as_str(), "approval request")?;
-                let approval_id = ApprovalId::new(id);
-                let input = AnswerInput::Approval {
-                    approval_id,
-                    decision,
-                };
-                (child, input)
+        let child = match &input {
+            AnswerInput::Question { child, .. } | AnswerInput::Approval { child, .. } => {
+                child.clone()
             }
         };
         self.act(caller, child, PrimaryAct::Answer(input)).await?;
@@ -538,17 +515,12 @@ impl SessionManager {
         caller: SessionId,
         input: EscalateInput,
     ) -> Result<EscalateOutput, ToolError> {
-        let (child, request) = match &input.request {
-            RequestRef::Question(id) => {
-                let (child, id) = request_of(id.as_str(), "question")?;
-                (child, RequestRef::Question(QuestionId::new(id)))
-            }
-            RequestRef::Approval(id) => {
-                let (child, id) = request_of(id.as_str(), "approval request")?;
-                (child, RequestRef::Approval(ApprovalId::new(id)))
-            }
-        };
-        let note = input.note.filter(|note| !note.trim().is_empty());
+        let EscalateInput {
+            child,
+            request,
+            note,
+        } = input;
+        let note = note.filter(|note| !note.trim().is_empty());
         self.act(caller, child, PrimaryAct::Escalate { request, note })
             .await?;
         Ok(EscalateOutput {})
@@ -606,18 +578,6 @@ impl SessionManager {
         }
         Ok(session)
     }
-}
-
-/// The child and adapter id in `id`, a `kind`'s id as `wait_for` and `status` give it.
-fn request_of<'a>(id: &'a str, kind: &str) -> Result<(SessionId, &'a str), ToolError> {
-    split_id(id).ok_or_else(|| {
-        ToolError::new(
-            ErrorCode::NotFound,
-            format!(
-                "{kind} {id} does not exist; pass the id exactly as wait_for or status gave it"
-            ),
-        )
-    })
 }
 
 fn mode_name(mode: PermissionMode) -> &'static str {

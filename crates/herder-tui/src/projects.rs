@@ -4,13 +4,13 @@
 //! A session's project is the `project_id` its daemon lists it with; clones of one repository
 //! on two machines share it, so their sessions land under one project. Until the daemon has
 //! resolved it, a session counts as the local project of its repo on its machine, the id the
-//! daemon gives a repository without a remote. The client core does not pass on the daemons'
-//! project lists, so a project's name is the last segment of its id, and the clones known are
-//! the repos of its sessions.
+//! daemon gives a repository without a remote. A project's name and clones are what the
+//! daemons list for it: the first machine's name for it, and every clone on every machine, so a
+//! clone with no session yet can start one.
 
 use std::collections::BTreeMap;
 
-use herder_protocol::{HostId, ProjectId};
+use herder_protocol::{HostId, Project, ProjectId};
 
 use crate::app::{App, Row};
 use crate::session::SessionKey;
@@ -34,8 +34,8 @@ pub struct ProjectClone {
     pub repo: String,
 }
 
-/// The display name of a project: the last segment of its id, the repository name of
-/// `github.com/org/repo` or the directory of a local `HOST:/home/dev/scratch`.
+/// The name of a project no machine lists: the last segment of its id, the repository name
+/// of `github.com/org/repo` or the directory of a local `HOST:/home/dev/scratch`.
 pub fn name(id: &ProjectId) -> &str {
     let id = id.as_str();
     id.rsplit(['/', ':'])
@@ -44,6 +44,35 @@ pub fn name(id: &ProjectId) -> &str {
 }
 
 impl App {
+    /// `id` as the first machine that lists it has it.
+    fn listed(&self, id: &ProjectId) -> Option<&Project> {
+        self.machines
+            .iter()
+            .flat_map(|machine| &machine.projects)
+            .find(|project| project.project_id == *id)
+    }
+
+    /// The display name of a project: as its machines list it, else from its id ([`name`]).
+    pub fn project_name(&self, id: &ProjectId) -> String {
+        self.listed(id)
+            .map_or_else(|| name(id).to_owned(), |project| project.name.clone())
+    }
+
+    /// Index in `host_id`'s accounts of the account `project` starts sessions on there; the
+    /// first when it names none.
+    pub fn default_account(&self, host_id: &HostId, project: Option<&ProjectId>) -> usize {
+        let Some(machine) = self.machines.iter().find(|m| m.host_id == *host_id) else {
+            return 0;
+        };
+        machine
+            .projects
+            .iter()
+            .find(|p| Some(&p.project_id) == project)
+            .and_then(|p| p.default_account.as_ref())
+            .and_then(|id| machine.accounts.iter().position(|a| a.account_id == *id))
+            .unwrap_or(0)
+    }
+
     /// Switches the session list between projects and machines, keeping a selected session.
     pub fn toggle_grouping(&mut self) {
         self.grouping = match self.grouping {
@@ -90,7 +119,7 @@ impl App {
                     project.is_none(),
                     project
                         .as_ref()
-                        .map(|p| name(p).to_owned())
+                        .map(|p| self.project_name(p))
                         .unwrap_or_default(),
                     project,
                 );
@@ -120,33 +149,47 @@ impl App {
         }
     }
 
-    /// The machines with a clone of `project`, in pairing order, each with the repo of its
-    /// newest session there.
+    /// Every clone of `project`, by machine in pairing order: on each, the repo of its newest
+    /// session there first, then the other clones its daemon lists.
     pub fn clones(&self, project: &ProjectId) -> Vec<ProjectClone> {
         let sessions = self.sessions_of(project);
-        self.machines
-            .iter()
-            .filter_map(|machine| {
-                let (_, repo) = sessions
-                    .iter()
-                    .filter(|(key, _)| key.host_id == machine.host_id)
-                    .max_by_key(|(key, _)| &key.session_id)?;
-                Some(ProjectClone {
-                    host_id: machine.host_id.clone(),
-                    repo: (*repo).to_owned(),
-                })
-            })
-            .collect()
+        let mut clones = Vec::new();
+        for machine in &self.machines {
+            let newest = sessions
+                .iter()
+                .filter(|(key, _)| key.host_id == machine.host_id)
+                .max_by_key(|(key, _)| &key.session_id)
+                .map(|(_, repo)| *repo);
+            let listed = machine
+                .projects
+                .iter()
+                .filter(|p| p.project_id == *project)
+                .flat_map(|p| p.paths.iter().map(String::as_str));
+            let mut repos: Vec<&str> = newest.into_iter().collect();
+            for repo in listed {
+                if !repos.contains(&repo) {
+                    repos.push(repo);
+                }
+            }
+            clones.extend(repos.into_iter().map(|repo| ProjectClone {
+                host_id: machine.host_id.clone(),
+                repo: repo.to_owned(),
+            }));
+        }
+        clones
     }
 
-    /// The clone of `project` used last: the one its newest session started from.
+    /// The clone of `project` used last: the one its newest session started from; else its
+    /// first clone.
     pub fn last_used_clone(&self, project: &ProjectId) -> Option<ProjectClone> {
         let sessions = self.sessions_of(project);
-        let (key, repo) = sessions.iter().max_by_key(|(key, _)| &key.session_id)?;
-        Some(ProjectClone {
-            host_id: key.host_id.clone(),
-            repo: (*repo).to_owned(),
-        })
+        match sessions.iter().max_by_key(|(key, _)| &key.session_id) {
+            Some((key, repo)) => Some(ProjectClone {
+                host_id: key.host_id.clone(),
+                repo: (*repo).to_owned(),
+            }),
+            None => self.clones(project).into_iter().next(),
+        }
     }
 
     /// Every listed session of `project` whose repo is known, with that repo.

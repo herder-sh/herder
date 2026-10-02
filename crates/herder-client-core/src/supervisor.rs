@@ -15,7 +15,8 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
-    PROTOCOL_VERSION, Role, ServerHello, ServerMessage, SessionId, TerminalId,
+    FailoverSettings, PROTOCOL_VERSION, Project, Role, ServerHello, ServerMessage, SessionId,
+    TerminalId,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
@@ -74,11 +75,15 @@ enum Op {
     Attach(TerminalId),
     /// Send a terminal command once if connected, ignoring its answer: input, resize, detach.
     Once(CommandBody),
+    /// Report once the daemon sent everything it owes for what was sent before.
+    Sync(oneshot::Sender<()>),
 }
 
 /// A machine's supervisor: the state its task maintains, and the handle the client drives it
 /// through.
 pub(crate) struct Supervisor {
+    /// The machine as saved when the supervisor started; its name may have changed since
+    /// ([`Supervisor::saved`]).
     pub(crate) saved: SavedMachine,
     state: Mutex<State>,
     /// Bumped whenever [`Supervisor::view`] would change.
@@ -90,10 +95,14 @@ pub(crate) struct Supervisor {
 
 #[derive(Default)]
 struct State {
+    /// The machine's display name, once renamed.
+    name: Option<String>,
     connection: Option<ConnectionState>,
     role: Option<Role>,
     sessions: Vec<herder_protocol::SessionHead>,
+    projects: Vec<Project>,
     accounts: Vec<herder_protocol::Account>,
+    failover: FailoverSettings,
     terminals: Vec<herder_protocol::Terminal>,
     resources: Option<herder_protocol::HostResources>,
     session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
@@ -164,11 +173,29 @@ impl Supervisor {
         self.wake.notify_one();
     }
 
+    /// The machine as it should be saved now.
+    pub(crate) fn saved(&self) -> SavedMachine {
+        let mut saved = self.saved.clone();
+        if let Some(name) = &self.lock().name {
+            saved.name.clone_from(name);
+        }
+        saved
+    }
+
+    /// Shows the machine as `name` from now on.
+    pub(crate) fn rename(&self, name: String) {
+        self.lock().name = Some(name);
+        self.notify();
+    }
+
     pub(crate) fn view(&self) -> Machine {
         let state = self.lock();
         Machine {
             host_id: self.saved.host_id.clone(),
-            name: self.saved.name.clone(),
+            name: state
+                .name
+                .clone()
+                .unwrap_or_else(|| self.saved.name.clone()),
             addresses: self.saved.addresses.clone(),
             fingerprint: self.saved.fingerprint.clone(),
             connection: state
@@ -177,10 +204,24 @@ impl Supervisor {
                 .unwrap_or(ConnectionState::Connecting),
             role: state.role,
             sessions: state.sessions.clone(),
+            projects: state.projects.clone(),
             accounts: state.accounts.clone(),
+            failover: state.failover.clone(),
             terminals: state.terminals.clone(),
             resources: state.resources.clone(),
             session_usage: state.session_usage.clone(),
+        }
+    }
+
+    /// Waits until the machine is connected and the daemon sent everything it owes for what
+    /// this client sent before the call: the lists that follow its hello and the replay of
+    /// every subscription made before.
+    pub(crate) async fn synced(&self) -> Result<(), Error> {
+        let (reply, done) = oneshot::channel();
+        self.ops.send(Op::Sync(reply)).map_err(|_| Error::Closed)?;
+        tokio::select! {
+            () = self.stop.cancelled() => Err(Error::Closed),
+            done = done => done.map_err(|_| Error::Closed),
         }
     }
 
@@ -495,8 +536,13 @@ impl Supervisor {
                 state.sessions = sessions;
                 return self.notify_after(state);
             }
-            ServerMessage::Accounts { accounts } => {
+            ServerMessage::Projects { projects } => {
+                state.projects = projects;
+                return self.notify_after(state);
+            }
+            ServerMessage::Accounts { accounts, failover } => {
                 state.accounts = accounts;
+                state.failover = failover;
                 return self.notify_after(state);
             }
             ServerMessage::Terminals { terminals } => {
@@ -545,9 +591,8 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Hellos, answers and terminal messages are handled by the connection; projects
-            // are not exposed through the client core yet.
-            ServerMessage::Projects { .. }
+            // Hellos, answers, syncs and terminal messages are handled by the connection.
+            ServerMessage::Synced { .. }
             | ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
@@ -654,6 +699,8 @@ async fn run(
     mut ops: mpsc::UnboundedReceiver<Op>,
 ) {
     let mut pending: Vec<Pending> = Vec::new();
+    // Syncs waiting for their answer, by token, sent again on each new connection.
+    let mut syncs: HashMap<String, oneshot::Sender<()>> = HashMap::new();
     let mut attempt = 0;
     let saved = &supervisor.saved;
     loop {
@@ -673,7 +720,7 @@ async fn run(
                 attempt = 0;
                 supervisor.lock().role = Some(hello.role);
                 supervisor.set_connection(ConnectionState::Connected);
-                match serve(&supervisor, ws, &mut ops, &mut pending).await {
+                match serve(&supervisor, ws, &mut ops, &mut pending, &mut syncs).await {
                     Ended::Stopped => return,
                     Ended::Lost(error) => error,
                 }
@@ -704,6 +751,9 @@ async fn run(
                         reply,
                         open: Some(events),
                     }),
+                    Some(Op::Sync(reply)) => {
+                        syncs.insert(ulid::Ulid::new().to_string(), reply);
+                    }
                     // The next hello resumes whatever is wanted by then, and the next
                     // connection attaches every stream; terminal commands are best effort.
                     Some(Op::Subscribe(_) | Op::Unsubscribe(_) | Op::Attach(_) | Op::Once(_)) => {}
@@ -720,6 +770,7 @@ async fn serve(
     ws: Ws,
     ops: &mut mpsc::UnboundedReceiver<Op>,
     pending: &mut Vec<Pending>,
+    syncs: &mut HashMap<String, oneshot::Sender<()>>,
 ) -> Ended {
     let (mut sink, mut stream) = ws.split();
     // Attaches in flight on this connection, by command id.
@@ -730,10 +781,15 @@ async fn serve(
     let resent = pending
         .iter()
         .map(|command| ClientMessage::Command(command.command.clone()));
+    syncs.retain(|_, reply| !reply.is_closed());
+    let synced = syncs.keys().map(|token| ClientMessage::Sync {
+        token: token.clone(),
+    });
     let messages: Vec<_> = supervisor
         .reattach(&mut attaching)
         .into_iter()
         .chain(resent)
+        .chain(synced)
         .collect();
     for message in messages {
         if let Err(error) = write(&mut sink, encode(&message)).await {
@@ -788,6 +844,11 @@ async fn serve(
                         }
                     }
                     Some(Op::Once(body)) => once(body),
+                    Some(Op::Sync(reply)) => {
+                        let token = ulid::Ulid::new().to_string();
+                        syncs.insert(token.clone(), reply);
+                        ClientMessage::Sync { token }
+                    }
                 };
                 if let Err(error) = write(&mut sink, encode(&message)).await {
                     return Ended::Lost(error);
@@ -844,6 +905,12 @@ async fn serve(
                     &mut early,
                     &mut attaching,
                 )
+            }
+            ServerMessage::Synced { token } => {
+                if let Some(reply) = syncs.remove(&token) {
+                    let _ = reply.send(());
+                }
+                None
             }
             ServerMessage::TerminalOutput { terminal_id, data } => {
                 let opening = pending.iter().any(|command| command.open.is_some());

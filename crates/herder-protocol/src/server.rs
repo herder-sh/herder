@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item, ItemId, Project,
-    ProjectId, Provider, Seq, SessionId, SessionUsage, TerminalId, Timestamp, UserId,
+    ProjectId, Provider, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp,
+    UserId,
 };
 
 /// A daemon-to-client message.
@@ -14,8 +15,8 @@ use crate::{
 pub enum ServerMessage {
     /// First message on every connection, answering the client's hello.
     Hello(ServerHello),
-    /// Every session on this daemon; sent after hello, whenever a session is created and
-    /// whenever a session's project changes.
+    /// Every session on this daemon; sent after hello and whenever a session is created or
+    /// its status, account or project changes.
     Sessions {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
@@ -30,6 +31,8 @@ pub enum ServerMessage {
     Accounts {
         /// The accounts.
         accounts: Vec<Account>,
+        /// How this daemon's sessions fail over.
+        failover: FailoverSettings,
     },
     /// Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.
     Terminals {
@@ -101,6 +104,12 @@ pub enum ServerMessage {
         /// What went wrong.
         error: ErrorInfo,
     },
+    /// Answers a [`crate::ClientMessage::Sync`] once everything the daemon sent before it on
+    /// this connection is out.
+    Synced {
+        /// The sync's token.
+        token: String,
+    },
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -134,17 +143,29 @@ pub enum Role {
     Member,
 }
 
-/// A session and the seq of its latest event.
+/// A session as lists show it, and the seq of its latest event.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionHead {
     /// The session.
     pub session_id: SessionId,
     /// Seq of its latest event.
     pub head_seq: Seq,
+    /// Where the session stands.
+    pub status: SessionStatus,
+    /// Primary session of the task this session is a child of; absent for a top-level session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<SessionId>,
+    /// Short label of the session's task, shown in the task tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     /// Project of the session's repository, as resolved under the daemon's current config;
-    /// absent only from a daemon that predates projects.
+    /// absent until the daemon's project discovery has seen the repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Account the session runs on now.
+    pub account_id: AccountId,
+    /// How many of this session's children are `needs_you`; 0 for a child.
+    pub children_need_you: u32,
 }
 
 /// A provider login on this host, used through its own config dir.
@@ -158,6 +179,19 @@ pub struct Account {
     pub label: String,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
+    /// Whether sessions may fail over to this account when theirs hits a limit.
+    pub failover: bool,
+}
+
+/// How a daemon's sessions fail over when their account hits a limit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FailoverSettings {
+    /// Whether sessions stay on their account by default; a session created with
+    /// `failover_pin` overrides it.
+    pub pin: bool,
+    /// Providers to fail over to, in order, once no account of the session's own provider is
+    /// eligible; empty keeps sessions on their provider.
+    pub providers: Vec<Provider>,
 }
 
 /// Usage of one provider limit window, such as a five-hour or weekly limit.

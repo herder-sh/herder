@@ -55,6 +55,7 @@ impl Backend for TestBackend {
             provider: Provider::Claude,
             label: "Main".into(),
             usage: Vec::new(),
+            failover: false,
         }]
     }
 
@@ -67,7 +68,12 @@ impl Backend for TestBackend {
             .map(|session| SessionHead {
                 session_id: session.session_id,
                 head_seq: session.last_seq,
+                status: session.status,
+                parent: session.parent,
+                task: session.task,
                 project_id: None,
+                account_id: session.account_id,
+                children_need_you: 0,
             })
             .collect())
     }
@@ -220,6 +226,8 @@ impl Daemon {
                 permission_mode: PermissionMode::Ask,
                 parent: None,
                 task: None,
+                max_children: None,
+                failover_pin: None,
             },
         );
         session
@@ -456,7 +464,7 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
         (&sessions[0].session_id, sessions[0].head_seq),
         (&session, 1)
     );
-    let ServerMessage::Accounts { accounts } = client.recv().await else {
+    let ServerMessage::Accounts { accounts, .. } = client.recv().await else {
         panic!("expected the accounts list");
     };
     let ids: Vec<_> = accounts.iter().map(|a| a.account_id.as_str()).collect();
@@ -682,6 +690,34 @@ async fn a_client_resumes_from_its_cursor_after_a_disconnect() {
     daemon.append(&session, added("i15", "x"));
     client.read_until(|view| view.last_seq() == 17).await;
     assert_eq!(client.view.events.len(), 11);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sync_is_answered_after_the_replay_before_it() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    for n in 0..300 {
+        daemon.append(&session, added(&format!("i{n}"), "x"));
+    }
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    client.subscribe(&session, 0).await;
+    let token = "01J9SYNC".to_owned();
+    client
+        .send(&ClientMessage::Sync {
+            token: token.clone(),
+        })
+        .await;
+    loop {
+        match client.recv().await {
+            ServerMessage::Synced { token: synced } => {
+                assert_eq!(synced, token);
+                break;
+            }
+            message => client.view.apply(message),
+        }
+    }
+    assert_eq!(client.view.last_seq(), 301);
 }
 
 /// Says hello and expects the daemon to refuse the device and close the connection.

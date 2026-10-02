@@ -576,12 +576,13 @@ impl App {
         let project = self.selected_project();
         if let Some(clone) = project.as_ref().and_then(|p| self.last_used_clone(p)) {
             repo.insert_str(&clone.repo);
+            let account = self.default_account(&clone.host_id, project.as_ref());
             self.compose.dialog = Some(NewSession {
                 project,
                 host_id: clone.host_id,
                 field: Field::Machine,
                 repo,
-                account: 0,
+                account,
                 model: line("provider default"),
                 mode: PermissionMode::Ask,
                 error: None,
@@ -616,26 +617,40 @@ impl App {
     }
 
     fn cycle(&mut self, step: i8) {
-        let clones = self
+        let project = self
             .compose
             .dialog
             .as_ref()
-            .and_then(|dialog| dialog.project.as_ref())
-            .map(|project| self.clones(project));
+            .and_then(|dialog| dialog.project.clone());
+        let clones = project.as_ref().map(|project| self.clones(project));
+        // The account each machine starts the project's sessions on.
+        let accounts: Vec<usize> = self
+            .machines
+            .iter()
+            .map(|m| self.default_account(&m.host_id, project.as_ref()))
+            .collect();
+        let account_on = |machines: &[herder_client_core::Machine], host_id: &HostId| {
+            machines
+                .iter()
+                .position(|m| m.host_id == *host_id)
+                .map_or(0, |at| accounts[at])
+        };
         let Some(dialog) = &mut self.compose.dialog else {
             return;
         };
         match dialog.field {
             Field::Machine if let Some(clones) = clones => {
+                let repo = text(&dialog.repo);
                 let at = clones
                     .iter()
-                    .position(|c| c.host_id == dialog.host_id)
+                    .position(|c| c.host_id == dialog.host_id && c.repo == repo.trim())
+                    .or_else(|| clones.iter().position(|c| c.host_id == dialog.host_id))
                     .unwrap_or(0);
                 if let Some(clone) = clones.get(cycle(at, clones.len(), step)) {
                     dialog.host_id = clone.host_id.clone();
                     dialog.repo = line("/absolute/path/to/repo");
                     dialog.repo.insert_str(&clone.repo);
-                    dialog.account = 0;
+                    dialog.account = account_on(&self.machines, &clone.host_id);
                 }
             }
             Field::Machine => {
@@ -691,11 +706,14 @@ impl App {
         dialog.error = None;
         dialog.sending = true;
         let command = CommandBody::CreateSession {
-            repo,
+            repo: Some(repo),
+            project_id: None,
             branch: None,
-            account_id: account.account_id.clone(),
+            account_id: Some(account.account_id.clone()),
             model: (!model.is_empty()).then_some(model),
             permission_mode: dialog.mode,
+            max_children: None,
+            failover_pin: None,
         };
         vec![Effect::Send {
             host_id: dialog.host_id.clone(),
@@ -1114,11 +1132,14 @@ mod tests {
             [Effect::Send {
                 host_id: HostId::new("h1"),
                 command: CommandBody::CreateSession {
-                    repo: "/home/ann/src/app".into(),
+                    repo: Some("/home/ann/src/app".into()),
+                    project_id: None,
                     branch: None,
-                    account_id: herder_protocol::AccountId::new("claude-work"),
+                    account_id: Some(herder_protocol::AccountId::new("claude-work")),
                     model: Some("claude-opus".into()),
                     permission_mode: PermissionMode::ReadOnly,
+                    max_children: None,
+                    failover_pin: None,
                 },
                 origin: Origin::NewSession(HostId::new("h1")),
             }]

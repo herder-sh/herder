@@ -89,6 +89,16 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                     } => send(&client, host_id, command, origin, tx.clone()),
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
                     Effect::Pair(link) => pair(&client, link, tx.clone()),
+                    Effect::RenameMachine { host_id, name } => {
+                        if let Err(err) = client.rename(&host_id, name) {
+                            let _ = tx.send(Msg::Notice(format!("renaming: {err}")));
+                        }
+                    }
+                    Effect::ForgetMachine(host_id) => {
+                        if let Err(err) = client.forget(&host_id) {
+                            let _ = tx.send(Msg::Notice(format!("forgetting: {err}")));
+                        }
+                    }
                     Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
                 }
             }
