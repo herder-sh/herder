@@ -391,3 +391,132 @@ fn a_child_names_its_primary_and_what_the_primary_answered() {
     press(&mut app, KeyCode::Enter);
     insta::assert_snapshot!(render(&mut app, 110, 20).backend());
 }
+
+/// Snapshots `app` on a phone-sized screen and a desktop one, named `name_45x40` and
+/// `name_120x40`.
+fn narrow_and_wide(name: &str, app: &mut App) {
+    for (width, height) in [(45, 40), (120, 40)] {
+        insta::assert_snapshot!(
+            format!("{name}_{width}x{height}"),
+            render(app, width, height).backend()
+        );
+    }
+}
+
+#[test]
+fn the_session_list_on_narrow_and_wide_screens() {
+    let mut app = fake::with_prs();
+    fake::feed(
+        &mut app,
+        "h1",
+        "s3",
+        update(
+            "s3",
+            5,
+            vec![fake::approval("a1", "Bash: rm -rf target")],
+            Vec::new(),
+        ),
+    );
+    narrow_and_wide("list", &mut app);
+}
+
+#[test]
+fn a_session_on_narrow_and_wide_screens() {
+    let mut app = mid_turn();
+    narrow_and_wide("session", &mut app);
+}
+
+#[test]
+fn an_approval_on_a_narrow_screen_answers_without_esc() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        fake::approval("a1", "Bash: rm -rf target"),
+    ]);
+    press(&mut app, KeyCode::Char('i'));
+    insta::assert_snapshot!(render(&mut app, 45, 40).backend());
+}
+
+#[test]
+fn the_inbox_on_narrow_and_wide_screens() {
+    let mut app = fake::escalated();
+    press(&mut app, KeyCode::Char('i'));
+    narrow_and_wide("inbox", &mut app);
+}
+
+#[test]
+fn every_pr_on_narrow_and_wide_screens() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('P'));
+    narrow_and_wide("prs", &mut app);
+}
+
+#[test]
+fn the_help_scrolls_on_a_small_screen() {
+    let mut app = fake::tree();
+    press(&mut app, KeyCode::Char('?'));
+    let top = render(&mut app, 45, 30).backend().to_string();
+    assert!(top.contains("j/k scroll"), "{top}");
+    for _ in 0..100 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let end = render(&mut app, 45, 30).backend().to_string();
+    assert!(app.help);
+    assert!(end.contains("show or hide"), "{end}");
+    assert!(!end.contains("open the selected session"), "{end}");
+    // Any other key closes it.
+    press(&mut app, KeyCode::Char('x'));
+    assert!(!app.help);
+}
+
+/// The screen `app` draws on a fresh `width` by `height` terminal.
+fn fresh(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    render(app, width, height).backend().buffer().clone()
+}
+
+/// Resizes the test terminal as a terminal would and lets the app repaint, as the event loop
+/// does.
+fn resize(terminal: &mut Terminal<TestBackend>, app: &mut App, width: u16, height: u16) {
+    terminal.backend_mut().resize(width, height);
+    let effects = app.update(Msg::Resize);
+    assert_eq!(effects, [crate::app::Effect::Repaint]);
+    super::paint(terminal, app, true).unwrap();
+}
+
+#[test]
+fn resizing_narrow_wide_narrow_leaves_no_stale_cells() {
+    let mut app = mid_turn();
+    let mut terminal = Terminal::new(TestBackend::new(45, 40)).unwrap();
+    super::paint(&mut terminal, &mut app, false).unwrap();
+    for (width, height) in [(120, 40), (45, 40), (45, 22), (45, 40)] {
+        resize(&mut terminal, &mut app, width, height);
+        assert_eq!(
+            *terminal.backend().buffer(),
+            fresh(&mut app, width, height),
+            "after resizing to {width}x{height}"
+        );
+    }
+}
+
+#[test]
+fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
+    use ratatui::backend::Backend;
+    use ratatui::buffer::Cell;
+
+    let mut app = fake::tree();
+    let mut terminal = Terminal::new(TestBackend::new(45, 40)).unwrap();
+    super::paint(&mut terminal, &mut app, false).unwrap();
+    // A phone keyboard opened and closed between two draws: the terminal reflowed its rows,
+    // and its size is the one ratatui last drew at.
+    let mut junk = Cell::default();
+    junk.set_symbol("#");
+    let cells: Vec<(u16, u16, Cell)> = (0..40)
+        .flat_map(|y| (0..45).map(move |x| (x, y)))
+        .map(|(x, y)| (x, y, junk.clone()))
+        .collect();
+    terminal
+        .backend_mut()
+        .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+        .unwrap();
+    resize(&mut terminal, &mut app, 45, 40);
+    assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 45, 40));
+}

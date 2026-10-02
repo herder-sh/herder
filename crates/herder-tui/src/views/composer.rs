@@ -19,7 +19,7 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
         return (area, None);
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
-    let mut height = prompt(session, width, false).map_or(0, |lines| lines.len() + 2);
+    let mut height = prompt(session, width, "").map_or(0, |lines| lines.len() + 2);
     if session.status != SessionStatus::Archived {
         height += composer_lines(app, width) + 2;
     }
@@ -35,12 +35,19 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
     (transcript, Some(controls))
 }
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+/// `compact`, on a narrow screen, keeps the hints short.
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
     let Some(session) = app.open_session() else {
         return;
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
-    let prompt_lines = prompt(session, width, app.focus == Focus::Composer);
+    // Answer keys go to the composer while it has them: say how to leave it first.
+    let leave = match app.focus {
+        Focus::Composer if app.compose.editor.is_empty() => "⌫, then ",
+        Focus::Composer => "Esc, then ",
+        _ => "",
+    };
+    let prompt_lines = prompt(session, width, leave);
     let archived = session.status == SessionStatus::Archived;
     let prompt_height = prompt_lines.as_ref().map_or(0, |lines| lines.len() + 2);
     let prompt_height = u16::try_from(prompt_height).unwrap_or(u16::MAX);
@@ -80,6 +87,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         .cloned();
     let bottom = match error {
         Some(error) => Line::styled(format!(" {error} "), Style::new().fg(Color::Red)),
+        None if focused && compact => Line::styled(" Enter send · ⌫ leave ", super::dim()),
         None if focused => Line::styled(
             " Enter send · Alt-Enter new line · Esc leave ",
             super::dim(),
@@ -133,10 +141,9 @@ fn composer_lines(app: &App, width: usize) -> usize {
 }
 
 /// The pending approval, else question, as lines `width` wide; `None` when nothing waits.
-/// `typing` says the composer has the keys, so answer keys need an Esc first.
-fn prompt(session: &Session, width: usize, typing: bool) -> Option<Vec<Line<'static>>> {
+/// `esc` says how to leave the composer first, while it has the keys.
+fn prompt(session: &Session, width: usize, esc: &str) -> Option<Vec<Line<'static>>> {
     let mut out = Vec::new();
-    let esc = if typing { "Esc, then " } else { "" };
     if let Some(approval) = session.approvals.first() {
         wrap(&mut out, &approval.summary, super::bold(), width);
         escalation(&mut out, approval.reason, approval.note.as_deref(), width);
@@ -207,6 +214,11 @@ fn wrap(out: &mut Vec<Line<'static>>, text: &str, style: Style, width: usize) {
 
 fn attention() -> Style {
     Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+}
+
+/// [`waiting`] as one glyph, for compact rows.
+pub(super) fn waiting_glyph(session: &Session) -> Option<(&'static str, Style)> {
+    waiting(session).map(|(label, style)| (if label == "question" { "?" } else { "!" }, style))
 }
 
 /// The session list's badge for a session waiting on the user, instead of its status. A

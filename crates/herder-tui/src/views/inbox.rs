@@ -15,7 +15,8 @@ use crate::session::reason_text;
 /// Marks the selected request.
 const MARK: &str = "▶ ";
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+/// `compact`, on a narrow screen, keeps the hints short.
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
     let (list_area, answer_area) = match app.inbox.answer {
         Some(_) => {
             let [list, answer] =
@@ -25,10 +26,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         None => (area, None),
     };
     let waiting = app.waiting();
-    let hint = if app.inbox.answer.is_some() {
-        " Enter send · Esc cancel "
-    } else {
-        " y allow · n deny · 1-9 pick · Enter answer · l session · Esc back "
+    let hint = match (app.inbox.answer.is_some(), compact) {
+        (true, false) => " Enter send · Esc cancel ",
+        (true, true) => " Enter send · ⌫ cancel ",
+        (false, false) => " y allow · n deny · 1-9 pick · Enter answer · l session · Esc back ",
+        (false, true) => " y/n · 1-9 · Enter answer · l open · ⌫ back ",
     };
     let block = Block::bordered()
         .title(Line::from(vec![
