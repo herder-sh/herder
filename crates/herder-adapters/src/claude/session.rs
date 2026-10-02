@@ -5,16 +5,16 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, TurnError,
-    TurnId,
+    Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
+    QuestionId, TurnError, TurnId,
 };
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
 
 use super::wire::{
-    self, ApiEvent, Block, BlockStart, CanUseTool, ControlRequest, Delta, Incoming, Permission,
-    Request, Response,
+    self, ApiEvent, AskUserQuestion, Block, BlockStart, CanUseTool, ControlRequest, Delta,
+    Incoming, Permission, Question, Request, Response,
 };
 use super::{Failure, classify, mode_flag, mode_from_flag};
 use crate::transport::{Exit, Transport};
@@ -32,9 +32,9 @@ const SUMMARY_MAX: usize = 200;
 /// What the agent is told when herder refuses a tool call.
 const DENIED: &str = "The user denied this tool call.";
 
-/// What the agent is told when it asks a question herder cannot show yet.
-const NO_QUESTIONS: &str = "herder cannot show questions yet. Ask the user in your reply \
-                            instead, then end your turn.";
+/// What the agent is told when its `AskUserQuestion` input has no question herder can read.
+const UNREADABLE_QUESTIONS: &str = "herder could not read these questions. Ask the user in \
+                                    your reply instead, then end your turn.";
 
 /// Heads the seed transcript.
 const SEED_PREAMBLE: &str = "This session continues an earlier conversation, replayed below \
@@ -70,8 +70,10 @@ pub(super) async fn start(
         streaming: None,
         tool_calls: HashMap::new(),
         approvals: HashMap::new(),
+        asks: Vec::new(),
         next_item: 0,
         next_approval: 0,
+        next_question: 0,
     };
 
     let initialize = session.request(Request::Initialize, Pending::Ignored).await;
@@ -156,6 +158,22 @@ struct OpenTurn {
     failure: Failure,
 }
 
+/// An `AskUserQuestion` call waiting for an answer to each of its questions.
+struct Ask {
+    /// The CLI's `request_id` to answer on.
+    request_id: String,
+    /// The tool's input, which the answers are added to.
+    input: Value,
+    questions: Vec<AskedQuestion>,
+}
+
+struct AskedQuestion {
+    id: QuestionId,
+    question: Question,
+    /// The `answers` value, once the daemon answered.
+    answer: Option<String>,
+}
+
 /// A text or thinking item being streamed.
 struct Streaming {
     id: ItemId,
@@ -181,8 +199,11 @@ struct Session {
     tool_calls: HashMap<String, ItemId>,
     /// Open approval requests and the CLI's `request_id` to answer each on.
     approvals: HashMap<ApprovalId, String>,
+    /// Open `AskUserQuestion` calls, in the order asked.
+    asks: Vec<Ask>,
     next_item: u64,
     next_approval: u64,
+    next_question: u64,
 }
 
 impl Session {
@@ -284,14 +305,18 @@ impl Session {
             } => {
                 if let Some(request_id) = self.approvals.remove(&approval_id) {
                     let permission = match decision {
-                        ApprovalDecision::Allow => Permission::Allow,
+                        ApprovalDecision::Allow => Permission::Allow {
+                            updated_input: None,
+                        },
                         ApprovalDecision::Deny => Permission::Deny { message: DENIED },
                     };
                     self.answer(&request_id, permission).await;
                 }
             }
-            // `AskUserQuestion` is still denied, so no `QuestionAsked` is pending to answer.
-            AdapterCommand::AnswerQuestion { .. } => {}
+            AdapterCommand::AnswerQuestion {
+                question_id,
+                answer,
+            } => self.answer_question(&question_id, answer).await,
             // Handled by `run`, which owns stopping.
             AdapterCommand::Shutdown => {}
         }
@@ -356,6 +381,7 @@ impl Session {
             }
             Incoming::ControlCancelRequest { request_id } => {
                 self.approvals.retain(|_, open| *open != request_id);
+                self.asks.retain(|ask| ask.request_id != request_id);
             }
             Incoming::StreamEvent(_)
             | Incoming::Assistant(_)
@@ -545,10 +571,7 @@ impl Session {
             return;
         };
         if request.tool_name == "AskUserQuestion" {
-            let permission = Permission::Deny {
-                message: NO_QUESTIONS,
-            };
-            self.answer(&request_id, permission).await;
+            self.ask(request_id, turn_id, request.input).await;
             return;
         }
         let summary = summary(&request);
@@ -576,6 +599,93 @@ impl Session {
             summary,
         })
         .await;
+    }
+
+    // ---- Questions ----
+
+    /// Asks each question of an `AskUserQuestion` call as its own `QuestionAsked`; the call
+    /// is answered once all of them are.
+    async fn ask(&mut self, request_id: String, turn_id: TurnId, input: Value) {
+        let questions = match AskUserQuestion::deserialize(&input) {
+            Ok(ask) if !ask.questions.is_empty() => ask.questions,
+            _ => {
+                let permission = Permission::Deny {
+                    message: UNREADABLE_QUESTIONS,
+                };
+                self.answer(&request_id, permission).await;
+                return;
+            }
+        };
+        let mut asked = Vec::with_capacity(questions.len());
+        for question in questions {
+            self.next_question += 1;
+            let id = QuestionId::new(format!("question-{}", self.next_question));
+            self.emit(AdapterEvent::QuestionAsked {
+                question_id: id.clone(),
+                turn_id: turn_id.clone(),
+                text: question_text(&question),
+                choices: question
+                    .options
+                    .iter()
+                    .map(|option| option.label.clone())
+                    .collect(),
+            })
+            .await;
+            asked.push(AskedQuestion {
+                id,
+                question,
+                answer: None,
+            });
+        }
+        self.asks.push(Ask {
+            request_id,
+            input,
+            questions: asked,
+        });
+    }
+
+    /// Records an answer; the last one of its call sends them all. An answer to a question
+    /// that is not open, or a choice it does not have, is ignored.
+    async fn answer_question(&mut self, question_id: &QuestionId, answer: Answer) {
+        let Some(at) = self
+            .asks
+            .iter()
+            .position(|ask| ask.questions.iter().any(|q| &q.id == question_id))
+        else {
+            return;
+        };
+        let ask = &mut self.asks[at];
+        let Some(asked) = ask.questions.iter_mut().find(|q| &q.id == question_id) else {
+            return;
+        };
+        let text = match answer {
+            Answer::Text { text } => text,
+            Answer::Choice { index } => {
+                let option = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| asked.question.options.get(index));
+                let Some(option) = option else { return };
+                option.label.clone()
+            }
+        };
+        asked.answer = Some(text);
+        if ask.questions.iter().any(|q| q.answer.is_none()) {
+            return;
+        }
+        let ask = self.asks.remove(at);
+        let answers: Map<String, Value> = ask
+            .questions
+            .into_iter()
+            .filter_map(|q| Some((q.question.question, Value::String(q.answer?))))
+            .collect();
+        let mut input = ask.input;
+        if let Value::Object(fields) = &mut input {
+            fields.insert("answers".into(), Value::Object(answers));
+        }
+        let permission = Permission::Allow {
+            updated_input: Some(input),
+        };
+        self.answer(&ask.request_id, permission).await;
     }
 
     async fn answer(&mut self, request_id: &str, permission: Permission<'_>) {
@@ -624,6 +734,7 @@ impl Session {
         let Some(turn) = self.turn.take() else { return };
         self.tool_calls.clear();
         self.approvals.clear();
+        self.asks.clear();
         let turn_id = turn.id;
         self.emit(match end {
             TurnEnd::Completed => AdapterEvent::TurnCompleted { turn_id },
@@ -732,6 +843,29 @@ fn summary(request: &CanUseTool) -> String {
         None => line,
     }
 }
+
+/// A question as Markdown: its text, then what each option means.
+fn question_text(question: &Question) -> String {
+    let mut text = question.question.clone();
+    let described: Vec<String> = question
+        .options
+        .iter()
+        .filter(|option| !option.description.is_empty())
+        .map(|option| format!("- **{}**: {}", option.label, option.description))
+        .collect();
+    if !described.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&described.join("\n"));
+    }
+    if question.multi_select {
+        text.push_str(MULTI_SELECT);
+    }
+    text
+}
+
+/// Ends a multi-select question, which the contract answers with one choice or free text.
+const MULTI_SELECT: &str = "\n\nMore than one may apply: to pick several, answer with their \
+                            names separated by commas.";
 
 /// The seed transcript as one context message; `None` when there is nothing to replay.
 fn seed_text(seed: &[Item]) -> Option<String> {

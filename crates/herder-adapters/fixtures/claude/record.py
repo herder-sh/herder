@@ -3,7 +3,8 @@
 
 Plays the herder side of each scenario: it sends exactly the lines the Claude adapter sends
 (tests/claude.rs replays them against the adapter, so any drift fails there), and answers
-approvals and interrupts the way the tests do. Run from the repo root, with `claude` logged in:
+approvals, questions and interrupts the way the tests do. Run from the repo root, with
+`claude` logged in:
 
     cargo build -p herder && crates/herder-adapters/fixtures/claude/record.py [scenario ...]
 
@@ -151,24 +152,37 @@ def scenario_approval(claude):
         claude.answer(message["request_id"], {"behavior": "allow"})
 
 
+QUESTION = (
+    "Use the AskUserQuestion tool to ask me whether to print A or B, then reply with exactly "
+    "the letter I chose."
+)
+
+
+def is_question(message):
+    return is_permission(message) and message["request"]["tool_name"] == "AskUserQuestion"
+
+
 def scenario_question(claude):
     claude.call({"subtype": "initialize"})
-    claude.prompt(
-        "Use the AskUserQuestion tool to ask me whether I prefer tea or coffee. If you cannot, "
-        "reply with the word skipped."
-    )
+    claude.prompt(QUESTION)
     while True:
-        message = claude.until(lambda m: is_result(m) or is_permission(m))
+        message = claude.until(lambda m: is_result(m) or is_question(m))
         if is_result(message):
             return
-        claude.answer(
-            message["request_id"],
-            {
-                "behavior": "deny",
-                "message": "herder cannot show questions yet. Ask the user in your reply "
-                "instead, then end your turn.",
-            },
-        )
+        # The adapter's answer: the tool's own input plus `answers`, picking the second option
+        # of every question. serde_json sorts object keys, so the input is sorted to match.
+        tool_input = message["request"]["input"]
+        answers = {q["question"]: q["options"][1]["label"] for q in tool_input["questions"]}
+        updated = json.loads(json.dumps({**tool_input, "answers": answers}, sort_keys=True))
+        claude.answer(message["request_id"], {"behavior": "allow", "updatedInput": updated})
+
+
+def scenario_question_interrupt(claude):
+    claude.call({"subtype": "initialize"})
+    claude.prompt(QUESTION)
+    claude.until(is_question)
+    claude.request({"subtype": "interrupt"})
+    claude.until(is_result)
 
 
 def scenario_interrupt(claude):
@@ -205,6 +219,7 @@ SCENARIOS = {
     "switch": scenario_switch,
     "approval": scenario_approval,
     "question": scenario_question,
+    "question_interrupt": scenario_question_interrupt,
     "interrupt": scenario_interrupt,
     "seed": scenario_seed,
 }

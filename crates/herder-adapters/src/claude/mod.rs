@@ -49,9 +49,17 @@
 //!
 //! # Questions
 //!
-//! `AskUserQuestion` arrives as a `can_use_tool` request too, but answering it means returning
-//! the chosen answers as the tool's input, and the adapter contract has no question event yet.
-//! Until it does the adapter denies it, telling the agent to ask in its reply instead.
+//! `AskUserQuestion` arrives as a `can_use_tool` request too, after its `tool_call` item. One
+//! call carries 1 to 4 questions; each becomes its own `QuestionAsked`, in order, with the
+//! question as text, the options' descriptions as a list below it, and the options' labels as
+//! `choices`. The call is answered once every one of its questions is: an allow whose
+//! `updatedInput` is the call's input plus `answers`, mapping each question's text to the
+//! chosen label or the free-text answer, the shape the Agent SDK documents. Claude Code then
+//! returns the answers as the tool's result. Multi-select questions take one choice, or free
+//! text that names several, which the CLI expects joined with `", "`; their text says so. A
+//! choice the question does not have, or an answer to a question that is not open, is
+//! ignored. Input without a question to show is denied. On interrupt the CLI withdraws the
+//! call with `control_cancel_request`, voiding its questions.
 //!
 //! # Errors
 //!
