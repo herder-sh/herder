@@ -36,6 +36,30 @@
 //! [tasks]
 //! max_children = 5 # live (not archived) children a primary may have at once
 //! ```
+//!
+//! # Projects
+//!
+//! The daemon finds repositories in its sessions, under the `[projects]` roots and at the
+//! paths `[[project]]` entries declare; a project is identified by its `origin` remote. Each
+//! `[[project]]` entry overrides one project; see [`crate::projects`]:
+//!
+//! ```toml
+//! [projects]
+//! roots = ["~/Projects"] # scanned 3 levels deep; none by default
+//!
+//! [[project]]
+//! name = "herder"                  # the last segment of the id when absent
+//! remotes = [                      # merged into one project; the first gives its id
+//!   "git@github.com:herder-sh/herder.git",
+//!   "https://gitlab.com/mirror/herder",
+//! ]
+//! paths = ["~/src/herder-old"]     # clones of it whatever their remote; without `remotes`,
+//!                                  # this declares the project by path
+//! default_account = "claude-main"  # an `[[accounts]]` id
+//! setup_command = "make bootstrap" # run in each new worktree
+//! ```
+//!
+//! An entry needs `remotes` or `paths`. No remote or path may appear in two entries.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -44,10 +68,11 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use herder_protocol::{AccountId, Provider};
+use herder_protocol::{AccountId, ProjectId, Provider};
 use serde::Deserialize;
 
 use crate::accounts;
+use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
 use crate::session::{AccountConfig, Accounts, TaskLimits};
 
@@ -71,6 +96,8 @@ pub struct Config {
     pub tasks: TaskLimits,
     /// Limits for the systemd scopes sessions run in.
     pub resources: ResourcesConfig,
+    /// Where projects are discovered, and their overrides.
+    pub projects: ProjectsConfig,
 }
 
 /// Logging settings: the `[log]` table.
@@ -113,6 +140,8 @@ struct ConfigFile {
     providers: BTreeMap<String, ProviderFile>,
     tasks: TaskLimits,
     resources: ResourcesConfig,
+    projects: ProjectsFile,
+    project: Vec<ProjectFile>,
 }
 
 impl Default for ConfigFile {
@@ -125,8 +154,30 @@ impl Default for ConfigFile {
             providers: BTreeMap::new(),
             tasks: TaskLimits::default(),
             resources: ResourcesConfig::default(),
+            projects: ProjectsFile::default(),
+            project: Vec::new(),
         }
     }
+}
+
+/// The `[projects]` table as written.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ProjectsFile {
+    roots: Vec<PathBuf>,
+}
+
+/// One `[[project]]` entry as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectFile {
+    name: Option<String>,
+    #[serde(default)]
+    remotes: Vec<String>,
+    #[serde(default)]
+    paths: Vec<PathBuf>,
+    default_account: Option<String>,
+    setup_command: Option<String>,
 }
 
 /// One `[[accounts]]` entry as written.
@@ -173,16 +224,93 @@ impl Config {
             None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
         };
         file.resources.validate()?;
+        let accounts = resolve_accounts(file.accounts, &env)?;
+        let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
         Ok(Self {
             listen: file.listen,
             data_dir,
             log: file.log,
-            accounts: resolve_accounts(file.accounts, &env)?,
+            accounts,
             binaries: resolve_binaries(file.providers, &env)?,
             tasks: file.tasks,
             resources: file.resources,
+            projects,
         })
     }
+}
+
+/// Validates the `[projects]` table and the `[[project]]` entries.
+fn resolve_projects(
+    table: ProjectsFile,
+    entries: Vec<ProjectFile>,
+    accounts: &Accounts,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<ProjectsConfig> {
+    let roots = table
+        .roots
+        .iter()
+        .map(|root| resolve_path(root, env).context("projects.roots"))
+        .collect::<Result<_>>()?;
+    let mut remotes_seen = HashSet::new();
+    let mut paths_seen = HashSet::new();
+    let entries = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let which = match &entry.name {
+                Some(name) => format!("project {name:?}"),
+                None => format!("project entry {}", index + 1),
+            };
+            ensure!(
+                !entry.remotes.is_empty() || !entry.paths.is_empty(),
+                "{which}: needs remotes or paths"
+            );
+            let remotes = entry
+                .remotes
+                .iter()
+                .map(|url| {
+                    let id = ProjectId::from_remote(url)
+                        .with_context(|| format!("{which}: {url:?} is not a remote URL"))?;
+                    ensure!(
+                        remotes_seen.insert(id.clone()),
+                        "{which}: remote {id} is in another entry too"
+                    );
+                    Ok(id)
+                })
+                .collect::<Result<_>>()?;
+            let paths = entry
+                .paths
+                .iter()
+                .map(|path| {
+                    let path =
+                        resolve_path(path, env).with_context(|| format!("{which}: paths"))?;
+                    // Drops a trailing slash, so the path compares and prints as discovered.
+                    let path: PathBuf = path.components().collect();
+                    ensure!(
+                        paths_seen.insert(path.clone()),
+                        "{which}: path {} is in another entry too",
+                        path.display()
+                    );
+                    Ok(path)
+                })
+                .collect::<Result<_>>()?;
+            let default_account = entry.default_account.map(AccountId::new);
+            if let Some(account) = &default_account {
+                ensure!(
+                    accounts.contains_key(account),
+                    "{which}: default_account {account} is not an account"
+                );
+            }
+            Ok(ProjectEntry {
+                name: entry.name,
+                remotes,
+                paths,
+                default_account,
+                setup_command: entry.setup_command,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(ProjectsConfig { roots, entries })
 }
 
 /// Validates the `[[accounts]]` entries and resolves their config dirs.
@@ -443,6 +571,7 @@ mod tests {
                     max_memory_pressure: 30,
                     max_load_percent: 200,
                 },
+                projects: ProjectsConfig::default(),
             }
         );
     }
@@ -663,5 +792,96 @@ mod tests {
         )
         .unwrap();
         assert_eq!(config.accounts.len(), 2);
+    }
+
+    #[test]
+    fn projects_are_loaded_with_remotes_normalised_and_home_expanded() {
+        let home = tempfile::tempdir().unwrap();
+        let config = load(
+            home.path(),
+            r#"
+            [[accounts]]
+            id = "claude-main"
+            provider = "claude"
+
+            [projects]
+            roots = ["~/Projects", "/srv/src"]
+
+            [[project]]
+            name = "herder"
+            remotes = ["git@github.com:herder-sh/herder.git", "https://gitlab.com/mirror/herder/"]
+            paths = ["~/old/herder"]
+            default_account = "claude-main"
+            setup_command = "make bootstrap"
+
+            [[project]]
+            paths = ["/srv/scratch"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.projects,
+            ProjectsConfig {
+                roots: vec![home.path().join("Projects"), PathBuf::from("/srv/src")],
+                entries: vec![
+                    ProjectEntry {
+                        name: Some("herder".to_owned()),
+                        remotes: vec![
+                            ProjectId::new("github.com/herder-sh/herder"),
+                            ProjectId::new("gitlab.com/mirror/herder"),
+                        ],
+                        paths: vec![home.path().join("old/herder")],
+                        default_account: Some(AccountId::new("claude-main")),
+                        setup_command: Some("make bootstrap".to_owned()),
+                    },
+                    ProjectEntry {
+                        paths: vec![PathBuf::from("/srv/scratch")],
+                        ..ProjectEntry::default()
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_projects_are_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        let cases = [
+            (
+                "[[project]]\nname = \"x\"\n",
+                "project \"x\": needs remotes or paths",
+            ),
+            (
+                "[[project]]\nremotes = [\"/local/path\"]\n",
+                "is not a remote URL",
+            ),
+            (
+                "[[project]]\nremotes = [\"git@github.com:o/r.git\"]\n\
+                 [[project]]\nremotes = [\"https://github.com/o/r\"]\n",
+                "project entry 2: remote github.com/o/r is in another entry too",
+            ),
+            (
+                "[[project]]\npaths = [\"/a\"]\n[[project]]\npaths = [\"/a/\"]\n",
+                "path /a is in another entry too",
+            ),
+            (
+                "[[project]]\npaths = [\"rel\"]\n",
+                "must be absolute or start with ~/",
+            ),
+            (
+                "[[project]]\npaths = [\"/a\"]\ndefault_account = \"nope\"\n",
+                "default_account nope is not an account",
+            ),
+            ("[projects]\nroots = [\"rel\"]\n", "projects.roots"),
+            ("[projects]\ndepth = 2\n", "unknown field `depth`"),
+            (
+                "[[project]]\npaths = [\"/a\"]\nid = \"x\"\n",
+                "unknown field `id`",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = load(home.path(), text).unwrap_err();
+            assert!(err.contains(expected), "{text}: {err}");
+        }
     }
 }
