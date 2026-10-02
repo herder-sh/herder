@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
@@ -26,7 +27,6 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Identity, Server, Tls};
-use crate::auth::client::{DeviceKey, client_config};
 use crate::auth::{Auth, PAIRING_CODE_HEADER, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::session::EventSink;

@@ -1,5 +1,5 @@
-//! The client side of pairing, for the TUI and the client core: the device key, a TLS config
-//! that pins the daemon's certificate, and the `herder://pair` payload `herder pair` prints.
+//! The client side of pairing: the device key, a TLS config that pins the daemon's
+//! certificate, and the `herder://pair` link `herder pair` prints.
 
 use std::fmt;
 use std::str::FromStr;
@@ -11,9 +11,11 @@ use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, OtherError, SignatureScheme};
+use sha2::{Digest, Sha256};
 use url::Url;
 
-use crate::ws::fingerprint;
+/// WebSocket upgrade request header an unpaired device sends its pairing code in.
+pub const PAIRING_CODE_HEADER: &str = "herder-pairing-code";
 
 /// A client device's Ed25519 key and the self-signed certificate it presents to daemons.
 ///
@@ -154,7 +156,7 @@ pub struct PairingUri {
     pub hosts: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex: the client pins it.
     pub fingerprint: String,
-    /// One-time pairing code, sent in [`super::PAIRING_CODE_HEADER`].
+    /// One-time pairing code, sent in [`PAIRING_CODE_HEADER`].
     pub code: String,
 }
 
@@ -201,6 +203,15 @@ impl FromStr for PairingUri {
             code,
         })
     }
+}
+
+/// SHA-256 of a DER-encoded certificate, as lowercase hex: how daemons and devices know each
+/// other's certificates.
+fn fingerprint(cert_der: &[u8]) -> String {
+    Sha256::digest(cert_der)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(test)]

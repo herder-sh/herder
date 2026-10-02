@@ -6,5 +6,31 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+herder-protocol.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "sync", "time"] }
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+herder-adapters.workspace = true
+herder-daemon.workspace = true
+herder-store.workspace = true
+jiff.workspace = true
+tempfile.workspace = true
+
 [lints]
 workspace = true
