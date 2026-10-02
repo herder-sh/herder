@@ -859,6 +859,7 @@ impl Actor {
             permission_mode: session.permission_mode,
             seed,
             mcp,
+            launcher: Vec::new(),
         };
         adapter.start(request).await
     }

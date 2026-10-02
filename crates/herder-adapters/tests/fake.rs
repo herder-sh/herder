@@ -25,6 +25,7 @@ fn request() -> StartRequest {
         permission_mode: PermissionMode::Ask,
         seed: Vec::new(),
         mcp: None,
+        launcher: Vec::new(),
     }
 }
 
