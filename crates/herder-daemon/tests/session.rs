@@ -1150,3 +1150,79 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
     assert_eq!(config_dirs(&claude_starts), [None]);
     shutdown.cancel();
 }
+
+#[tokio::test]
+async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session() {
+    use herder_daemon::mcp;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir(&data_dir).unwrap();
+    daemon
+        .manager
+        .serve_mcp(mcp::Config {
+            data_dir: data_dir.clone(),
+            herder: PathBuf::from("/opt/herder"),
+            tools: Arc::new(mcp::Unimplemented),
+        })
+        .unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let starts = daemon.starts.lock().unwrap().clone();
+    let server = starts[0].mcp.clone().expect("an MCP server for the CLI");
+    assert_eq!(server.command, Path::new("/opt/herder"));
+    assert_eq!(
+        server.args,
+        [
+            "mcp",
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+            "--session",
+            session.as_str()
+        ]
+    );
+
+    // The shim the CLI would run authenticates as the session and reaches the tools.
+    let call = |session: SessionId| {
+        let data_dir = data_dir.clone();
+        async move {
+            let (mut input, shim_input) = tokio::io::duplex(1 << 16);
+            let (shim_output, output) = tokio::io::duplex(1 << 16);
+            let shim = tokio::spawn(async move {
+                mcp::shim(&data_dir, &session, shim_input, shim_output).await
+            });
+            input
+                .write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\
+                      \"params\":{\"name\":\"status\",\"arguments\":{}}}\n",
+                )
+                .await
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(output).read_line(&mut line).await.unwrap();
+            drop(input);
+            (line, shim.await.unwrap())
+        }
+    };
+    let (line, shim) = call(session.clone()).await;
+    shim.unwrap();
+    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(
+        response["result"]["structuredContent"],
+        serde_json::json!({ "children": [] })
+    );
+
+    // Archiving withdraws the token.
+    let archive = CommandBody::ArchiveSession {
+        session_id: session.clone(),
+        force: true,
+    };
+    daemon.manager.handle(alice(), archive).await.unwrap();
+    let (_, shim) = call(session).await;
+    assert!(shim.is_err());
+    daemon.stop().await;
+}

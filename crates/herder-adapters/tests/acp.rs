@@ -36,6 +36,7 @@ fn request(mode: PermissionMode) -> StartRequest {
         model: None,
         permission_mode: mode,
         seed: Vec::new(),
+        mcp: None,
     }
 }
 

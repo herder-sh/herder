@@ -54,6 +54,16 @@ enum Command {
         #[command(subcommand)]
         command: dev::Command,
     },
+    /// Serve herder's task tools over MCP on stdio; the agent CLI of a session runs this.
+    #[command(hide = true)]
+    Mcp {
+        /// The daemon's data dir.
+        #[arg(long, value_name = "PATH")]
+        data_dir: PathBuf,
+        /// The session whose agent runs this.
+        #[arg(long, value_name = "ID")]
+        session: String,
+    },
     /// Run by the git hooks herder installs in session worktrees.
     #[command(hide = true)]
     Hook {
@@ -78,6 +88,10 @@ fn main() -> ExitCode {
         })
         .map(|()| ExitCode::SUCCESS),
         Some(Command::Dev { command }) => dev::run(command),
+        Some(Command::Mcp { data_dir, session }) => {
+            herder_daemon::mcp::run_shim(&data_dir, herder_protocol::SessionId::new(session))
+                .map(|()| ExitCode::SUCCESS)
+        }
         Some(Command::Hook { hook }) => hook::run(hook),
         None => {
             println!("{}", herder_tui::run());
@@ -150,6 +164,17 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn parses_mcp_flags() {
+        let cli =
+            Cli::try_parse_from(["herder", "mcp", "--data-dir", "/d", "--session", "01J"]).unwrap();
+        let Some(Command::Mcp { data_dir, session }) = cli.command else {
+            panic!("expected mcp");
+        };
+        assert_eq!((data_dir, session.as_str()), (PathBuf::from("/d"), "01J"));
+        assert!(Cli::try_parse_from(["herder", "mcp", "--data-dir", "/d"]).is_err());
     }
 
     #[test]

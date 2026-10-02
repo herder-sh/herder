@@ -330,6 +330,9 @@ impl Actor {
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
         }
+        if let Some(mcp) = self.inner.mcp.get() {
+            mcp.revoke(&self.session.session_id);
+        }
         let status = SessionStatus::Archived;
         self.record(Some(by), EventBody::SessionStatusChanged { status })
             .await
@@ -464,6 +467,14 @@ impl Actor {
                 _ => None,
             })
             .collect();
+        let mcp = match self.inner.mcp.get() {
+            Some(mcp) => Some(mcp.grant(&session.session_id).map_err(|err| {
+                fatal(format!(
+                    "granting the session its herder MCP token: {err:#}"
+                ))
+            })?),
+            None => None,
+        };
         let request = StartRequest {
             config_dir: account.config_dir.clone(),
             env: std::env::vars().collect(),
@@ -471,6 +482,7 @@ impl Actor {
             model: Some(session.model.clone()).filter(|model| !model.is_empty()),
             permission_mode: session.permission_mode,
             seed,
+            mcp,
         };
         adapter.start(request).await
     }

@@ -12,6 +12,7 @@ futures-util.workspace = true
 herder-adapters.workspace = true
 herder-protocol.workspace = true
 herder-store.workspace = true
+herder-tasktools.workspace = true
 jiff.workspace = true
 nix.workspace = true
 portable-pty.workspace = true
@@ -22,10 +23,10 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "net", "process", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "net", "process", "sync", "time"] }
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

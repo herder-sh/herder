@@ -48,6 +48,12 @@
 //! removes them, and `link_pr` / `unlink_pr` go to the tracker ([`crate::prs`]), which journals
 //! pull request events alongside the session's actor.
 //!
+//! # MCP
+//!
+//! Once [`SessionManager::serve_mcp`] runs, each start of a session's CLI grants it a fresh
+//! token for herder's MCP server ([`crate::mcp`]) and registers that server with the CLI;
+//! archive withdraws it.
+//!
 //! # Questions
 //!
 //! A question the agent asks is journaled as `question_asked`, routed to the user, and blocks
@@ -80,6 +86,7 @@ use tracing::warn;
 use actor::{Actor, Request, SessionCommand};
 use journal::Journal;
 
+use crate::mcp::{self, Mcp};
 use crate::prs::{self, PrTracker};
 use crate::worktree::{self, Worktrees};
 
@@ -171,6 +178,8 @@ struct Inner {
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
     /// Pull request tracking, once started.
     prs: OnceLock<Arc<PrTracker>>,
+    /// herder's MCP server, once started.
+    mcp: OnceLock<Arc<Mcp>>,
     shutdown: CancellationToken,
 }
 
@@ -196,6 +205,7 @@ impl SessionManager {
                 worktrees: setup.worktrees,
                 actors: Mutex::new(HashMap::new()),
                 prs: OnceLock::new(),
+                mcp: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -294,6 +304,17 @@ impl SessionManager {
             PrTracker::start(inner.journal.clone(), config, inner.shutdown.clone()).await?;
         let _ = inner.prs.set(Arc::clone(&tracker));
         Ok(tracker)
+    }
+
+    /// Starts herder's MCP server ([`crate::mcp`]) until the manager's shutdown, and registers
+    /// it with every session's CLI from its next start; once per manager.
+    pub fn serve_mcp(&self, config: mcp::Config) -> anyhow::Result<()> {
+        let inner = &self.inner;
+        if inner.mcp.get().is_some() {
+            anyhow::bail!("the MCP server runs already");
+        }
+        let _ = inner.mcp.set(Mcp::start(config, inner.shutdown.clone())?);
+        Ok(())
     }
 
     fn prs(&self) -> Result<&PrTracker, ErrorInfo> {

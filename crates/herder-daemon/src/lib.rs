@@ -6,6 +6,7 @@ pub mod config;
 pub mod data_dir;
 pub mod hub;
 pub mod logging;
+pub mod mcp;
 pub mod prs;
 pub mod session;
 pub mod terminal;
@@ -94,10 +95,16 @@ pub async fn serve(
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    let herder = herder_binary()?;
+    sessions.serve_mcp(mcp::Config {
+        data_dir: data_dir.root().to_owned(),
+        herder: herder.clone(),
+        tools: Arc::new(mcp::Unimplemented),
+    })?;
     sessions
         .track_prs(prs::Config {
             data_dir: data_dir.root().to_owned(),
-            herder: herder_binary()?,
+            herder,
             github: Arc::new(prs::GhCli),
             fast: prs::FAST,
             slow: prs::SLOW,
@@ -183,5 +190,6 @@ mod tests {
         assert!(tmp.path().join("data/db/herder.db").is_file());
         assert!(tmp.path().join("data/tls/cert.pem").is_file());
         assert!(tmp.path().join("data/control.sock").exists());
+        assert!(tmp.path().join("data/mcp.sock").exists());
     }
 }

@@ -20,6 +20,15 @@
 //! account's config dir, when it has one, in the session's worktree. The adapter never looks inside that dir:
 //! the CLI's own login is the only credential involved.
 //!
+//! # herder's MCP server
+//!
+//! [`StartRequest::mcp`] is passed inline as `--mcp-config`, a stdio server named `herder`, so
+//! the agent sees its tools as `mcp__herder__spawn` and so on. `--mcp-config` adds to the
+//! servers the user configured; `--strict-mcp-config` is never passed. The tools are allowed
+//! with `--allowedTools mcp__herder`: they are herder's own and act only through herder, which
+//! enforces its own limits, so asking the user before each `status` or `wait_for` would only
+//! get in the way, and `dontAsk` would refuse them outright.
+//!
 //! # Permission modes
 //!
 //! | herder        | `--permission-mode` | What Claude Code does                                  |
@@ -92,7 +101,7 @@ use herder_protocol::{ErrorClass, PermissionMode, TurnError};
 use tokio::process::Command;
 
 use crate::transport::Transport;
-use crate::{Adapter, StartFuture, StartRequest};
+use crate::{Adapter, McpServer, StartFuture, StartRequest};
 
 /// The Claude Code version the wire format and fixtures were taken from.
 pub const CLAUDE_VERSION: &str = "2.1.286";
@@ -132,7 +141,8 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 }
 
 /// The `claude` command for `request`: its environment is exactly the request's plus
-/// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree.
+/// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree, with
+/// herder's MCP server registered.
 pub fn command(program: &Path, request: &StartRequest) -> Command {
     let mut command = Command::new(program);
     command
@@ -159,7 +169,26 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
     if let Some(model) = &request.model {
         command.args(["--model", model]);
     }
+    if let Some(mcp) = &request.mcp {
+        command
+            .arg("--mcp-config")
+            .arg(mcp_config(mcp).to_string())
+            .args(["--allowedTools", "mcp__herder"]);
+    }
     command
+}
+
+/// The `--mcp-config` JSON that registers `mcp` as the `herder` server.
+fn mcp_config(mcp: &McpServer) -> serde_json::Value {
+    serde_json::json!({
+        "mcpServers": {
+            "herder": {
+                "type": "stdio",
+                "command": mcp.command.to_string_lossy(),
+                "args": mcp.args,
+            }
+        }
+    })
 }
 
 /// Claude Code's permission mode for `mode`; see the module docs for the table.
@@ -351,6 +380,7 @@ mod tests {
             model: Some("sonnet".into()),
             permission_mode: PermissionMode::AutoEdit,
             seed: Vec::new(),
+            mcp: None,
         };
         let command = command(Path::new("claude"), &request);
         let command = command.as_std();
@@ -399,9 +429,48 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            mcp: None,
         };
         let command = command(Path::new("claude"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
         assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
+    }
+
+    #[test]
+    fn command_registers_herders_mcp_server() {
+        let request = StartRequest {
+            config_dir: None,
+            env: BTreeMap::new(),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            mcp: Some(McpServer {
+                command: PathBuf::from("/usr/bin/herder"),
+                args: vec!["mcp".into(), "--session".into(), "s1".into()],
+            }),
+        };
+        let command = command(Path::new("claude"), &request);
+        let args: Vec<_> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect();
+        assert!(!args.contains(&"--strict-mcp-config"));
+        let at = args.iter().position(|arg| *arg == "--mcp-config").unwrap();
+        let config: serde_json::Value = serde_json::from_str(args[at + 1]).unwrap();
+        assert_eq!(
+            config,
+            serde_json::json!({
+                "mcpServers": {
+                    "herder": {
+                        "type": "stdio",
+                        "command": "/usr/bin/herder",
+                        "args": ["mcp", "--session", "s1"],
+                    }
+                }
+            })
+        );
+        assert_eq!(&args[at + 2..], ["--allowedTools", "mcp__herder"]);
     }
 }

@@ -140,6 +140,7 @@ mod tests {
             model: model.map(Into::into),
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            mcp: None,
         }
     }
 
