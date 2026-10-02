@@ -178,6 +178,11 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
     command
 }
 
+/// Claude's limit on one herder tool call, in milliseconds: `wait_for` blocks up to 600 s, plus
+/// a minute of slack. Set per server, so it overrides any `MCP_TOOL_TIMEOUT` in the
+/// environment, which applies to every server and may be set lower than `wait_for` needs.
+const MCP_TOOL_TIMEOUT_MS: u64 = 660_000;
+
 /// The `--mcp-config` JSON that registers `mcp` as the `herder` server.
 fn mcp_config(mcp: &McpServer) -> serde_json::Value {
     serde_json::json!({
@@ -186,6 +191,7 @@ fn mcp_config(mcp: &McpServer) -> serde_json::Value {
                 "type": "stdio",
                 "command": mcp.command.to_string_lossy(),
                 "args": mcp.args,
+                "timeout": MCP_TOOL_TIMEOUT_MS,
             }
         }
     })
@@ -467,6 +473,7 @@ mod tests {
                         "type": "stdio",
                         "command": "/usr/bin/herder",
                         "args": ["mcp", "--session", "s1"],
+                        "timeout": 660_000,
                     }
                 }
             })

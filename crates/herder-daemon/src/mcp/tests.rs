@@ -6,6 +6,27 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::task::JoinHandle;
 
 use super::*;
+use herder_tasktools::{ErrorCode, StatusOutput, ToolError};
+
+/// Tools that know no children: `status` reports none and every other tool fails.
+struct Unimplemented;
+
+impl ToolHandler for Unimplemented {
+    fn call(&self, _caller: SessionId, call: ToolCall) -> ToolFuture {
+        let result = match call {
+            ToolCall::Status(_) => CallToolResult::success(&StatusOutput {
+                children: Vec::new(),
+            })
+            .unwrap(),
+            call => ToolError::new(
+                ErrorCode::Internal,
+                format!("not implemented: `{}`", call.tool().name()),
+            )
+            .into(),
+        };
+        Box::pin(std::future::ready(result))
+    }
+}
 
 struct Daemon {
     _tmp: tempfile::TempDir,
@@ -21,9 +42,8 @@ fn daemon(tools: Arc<dyn ToolHandler>) -> Daemon {
     let config = Config {
         data_dir: dir.clone(),
         herder: PathBuf::from("/usr/bin/herder"),
-        tools,
     };
-    let mcp = Mcp::start(config, shutdown.clone()).unwrap();
+    let mcp = Mcp::start(config, tools, shutdown.clone()).unwrap();
     Daemon {
         _tmp: tmp,
         dir,

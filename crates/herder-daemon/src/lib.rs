@@ -100,7 +100,6 @@ pub async fn serve(
     sessions.serve_mcp(mcp::Config {
         data_dir: data_dir.root().to_owned(),
         herder: herder.clone(),
-        tools: Arc::new(mcp::Unimplemented),
     })?;
     sessions
         .track_prs(prs::Config {

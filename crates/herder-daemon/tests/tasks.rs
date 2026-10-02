@@ -1,0 +1,602 @@
+//! A primary session runs child sessions through the task tools, called over herder's MCP
+//! server as the primary's CLI would.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use herder_adapters::{
+    Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
+};
+use herder_daemon::mcp;
+use herder_daemon::session::{
+    AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, ulid_turn_ids,
+};
+use herder_daemon::worktree::Worktrees;
+use herder_protocol::{
+    AccountId, CommandBody, CommandResult, Event, EventBody, Item, ItemBody, ItemId,
+    PermissionMode, Provider, SessionHead, SessionId, UserId,
+};
+use herder_store::Store;
+use herder_tasktools::CallToolResult;
+use serde_json::{Value, json};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+/// A provider whose agent answers every prompt `Done: <prompt>` after a moment, and never
+/// ends a turn on `Hang.`.
+struct Echo;
+
+impl Adapter for Echo {
+    fn start(&self, _request: StartRequest) -> StartFuture {
+        Box::pin(async move {
+            let (commands, mut received) = mpsc::unbounded_channel();
+            let (events, rx) = mpsc::channel(64);
+            tokio::spawn(async move {
+                while let Some(command) = received.recv().await {
+                    match command {
+                        AdapterCommand::SendPrompt { turn_id, text } => {
+                            let started = AdapterEvent::TurnStarted {
+                                turn_id: turn_id.clone(),
+                            };
+                            let _ = events.send(started).await;
+                            if text == "Hang." {
+                                continue;
+                            }
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            let item = Item {
+                                id: ItemId::new(format!("item-{turn_id}")),
+                                turn_id: turn_id.clone(),
+                                body: ItemBody::AssistantMessage {
+                                    text: format!("Done: {text}"),
+                                },
+                            };
+                            let _ = events.send(AdapterEvent::ItemCompleted { item }).await;
+                            let _ = events.send(AdapterEvent::TurnCompleted { turn_id }).await;
+                        }
+                        AdapterCommand::Shutdown => break,
+                        _ => {}
+                    }
+                }
+                let _ = events.send(AdapterEvent::Exited { error: None }).await;
+            });
+            Ok(AdapterSession {
+                capabilities: Capabilities {
+                    native_model_switch: true,
+                    native_permission_mode_switch: true,
+                    reports_usage: false,
+                },
+                commands,
+                events: rx,
+            })
+        })
+    }
+}
+
+struct Quiet;
+
+impl EventSink for Quiet {
+    fn event(&self, _: &Event) {}
+    fn snapshot(&self, _: &SessionId, _: &Item) {}
+    fn delta(&self, _: &SessionId, _: &ItemId, _: &str) {}
+    fn sessions_changed(&self, _: &[SessionHead]) {}
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+struct Daemon {
+    manager: SessionManager,
+    data_dir: PathBuf,
+    repo: PathBuf,
+    shutdown: CancellationToken,
+}
+
+impl Daemon {
+    /// A daemon on `dir`, which a later daemon may open again.
+    async fn open(dir: &Path) -> Self {
+        let mut adapters = Adapters::new();
+        adapters.register(Provider::Other("echo".into()), Arc::new(Echo));
+        let mut accounts = Accounts::new();
+        accounts.insert(
+            AccountId::new("account-1"),
+            AccountConfig {
+                provider: Provider::Other("echo".into()),
+                label: "Account 1".into(),
+                config_dir: None,
+                failover: false,
+            },
+        );
+        let setup = Setup {
+            store: Store::open(dir.join("herder.db")).unwrap(),
+            adapters,
+            accounts,
+            sink: Arc::new(Quiet),
+            turn_ids: ulid_turn_ids(),
+            worktrees: Worktrees::new(dir.join("worktrees")),
+        };
+        let shutdown = CancellationToken::new();
+        let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+        let data_dir = dir.join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        manager
+            .serve_mcp(mcp::Config {
+                data_dir: data_dir.clone(),
+                herder: PathBuf::from("/opt/herder"),
+            })
+            .unwrap();
+        let repo = dir.join("app");
+        if !repo.exists() {
+            std::fs::create_dir(&repo).unwrap();
+            git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+            git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        }
+        Self {
+            manager,
+            data_dir,
+            repo,
+            shutdown,
+        }
+    }
+
+    /// A top-level session in `mode` whose CLI has started, so it holds an MCP token.
+    async fn primary(&self, mode: PermissionMode) -> SessionId {
+        let session_id = self.create(mode).await;
+        self.start(&session_id).await;
+        session_id
+    }
+
+    async fn create(&self, mode: PermissionMode) -> SessionId {
+        let create = CommandBody::CreateSession {
+            repo: self.repo.to_str().unwrap().to_owned(),
+            branch: None,
+            account_id: AccountId::new("account-1"),
+            model: Some("echo-1".into()),
+            permission_mode: mode,
+        };
+        let CommandResult::SessionCreated { session_id } =
+            self.manager.handle(alice(), create).await.unwrap()
+        else {
+            panic!("expected a created session");
+        };
+        session_id
+    }
+
+    /// Runs a turn of `session_id`, which starts its CLI and grants it an MCP token.
+    async fn start(&self, session_id: &SessionId) {
+        let turns = |events: &[Event]| {
+            events
+                .iter()
+                .filter(|event| matches!(event.body, EventBody::TurnCompleted { .. }))
+                .count()
+        };
+        let before = turns(&self.journal(session_id).await);
+        let prompt = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: "Plan.".into(),
+        };
+        self.manager.handle(alice(), prompt).await.unwrap();
+        for _ in 0..250 {
+            if turns(&self.journal(session_id).await) > before {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the turn did not complete");
+    }
+
+    async fn journal(&self, session_id: &SessionId) -> Vec<Event> {
+        self.manager.read_since(session_id, 0, 1000).await.unwrap()
+    }
+
+    /// Waits for `session_id`'s journal to hold `count` events `matching`.
+    async fn until_n(
+        &self,
+        session_id: &SessionId,
+        count: usize,
+        matching: fn(&EventBody) -> bool,
+    ) {
+        for _ in 0..250 {
+            let journal = self.journal(session_id).await;
+            if journal.iter().filter(|event| matching(&event.body)).count() >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("timed out; journal: {:#?}", self.journal(session_id).await);
+    }
+
+    async fn until(&self, session_id: &SessionId, matching: fn(&EventBody) -> bool) {
+        self.until_n(session_id, 1, matching).await;
+    }
+
+    /// An MCP client for `session`'s CLI, through the shim.
+    fn connect(&self, session: &SessionId) -> Client {
+        let (input, shim_input) = tokio::io::duplex(1 << 16);
+        let (shim_output, output) = tokio::io::duplex(1 << 16);
+        let (dir, session) = (self.data_dir.clone(), session.clone());
+        let shim =
+            tokio::spawn(async move { mcp::shim(&dir, &session, shim_input, shim_output).await });
+        Client {
+            input,
+            output: BufReader::new(output),
+            _shim: shim,
+            next_id: 0,
+        }
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
+}
+
+struct Client {
+    input: DuplexStream,
+    output: BufReader<DuplexStream>,
+    _shim: JoinHandle<anyhow::Result<()>>,
+    next_id: u64,
+}
+
+impl Client {
+    async fn call(&mut self, name: &str, arguments: Value) -> CallToolResult {
+        self.next_id += 1;
+        let id = self.next_id;
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        });
+        let mut line = request.to_string();
+        line.push('\n');
+        self.input.write_all(line.as_bytes()).await.unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(10), self.output.read_line(&mut line))
+            .await
+            .expect("no answer in time")
+            .unwrap();
+        let response: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(response["id"], id, "{response}");
+        serde_json::from_value(response["result"].clone()).unwrap()
+    }
+
+    /// A successful call's `structuredContent`.
+    async fn ok(&mut self, name: &str, arguments: Value) -> Value {
+        let result = self.call(name, arguments).await;
+        assert!(!result.is_error, "{name}: {result:?}");
+        result.structured_content.unwrap()
+    }
+
+    /// A failed call's error code.
+    async fn fails(&mut self, name: &str, arguments: Value) -> String {
+        let result = self.call(name, arguments).await;
+        assert!(result.is_error, "{name}: {result:?}");
+        let error: Value = serde_json::from_str(&result.content[0].text).unwrap();
+        error["code"].as_str().unwrap().to_owned()
+    }
+}
+
+fn alice() -> UserId {
+    UserId::new("alice")
+}
+
+fn id(value: &Value) -> SessionId {
+    SessionId::new(value.as_str().unwrap())
+}
+
+#[tokio::test]
+async fn a_primary_spawns_two_children_and_gets_each_report_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut tools = daemon.connect(&primary);
+
+    let a = tools
+        .ok("spawn", json!({ "task": "Fix A", "prompt": "Do A." }))
+        .await;
+    let b = tools
+        .ok("spawn", json!({ "task": "Fix B", "prompt": "Do B." }))
+        .await;
+    let (child_a, child_b) = (id(&a["child"]), id(&b["child"]));
+    assert_ne!(a["branch"], b["branch"]);
+
+    let mut reports = BTreeSet::new();
+    for _ in 0..2 {
+        let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(event["kind"], "report", "{event}");
+        assert_eq!(event["status"], "idle", "{event}");
+        reports.insert((
+            event["child"].as_str().unwrap().to_owned(),
+            event["summary"].as_str().unwrap().to_owned(),
+        ));
+    }
+    assert_eq!(
+        reports,
+        BTreeSet::from([
+            (child_a.to_string(), "Done: Do A.".to_owned()),
+            (child_b.to_string(), "Done: Do B.".to_owned()),
+        ])
+    );
+    // Each event once: nothing is left, and no child works.
+    let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(event, json!({ "kind": "idle" }));
+
+    // The primary's journal records both spawns and both reports.
+    let journal = daemon.journal(&primary).await;
+    let spawned: Vec<_> = journal
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::ChildSpawned {
+                child_session_id,
+                task,
+            } => Some((child_session_id.clone(), task.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        spawned,
+        [
+            (child_a.clone(), "Fix A".to_owned()),
+            (child_b.clone(), "Fix B".to_owned())
+        ]
+    );
+    let reported = journal
+        .iter()
+        .filter(|event| matches!(event.body, EventBody::ChildReported { .. }))
+        .count();
+    assert_eq!(reported, 2);
+
+    // A child is a full session of its own, on the primary's settings, prompted by the agent.
+    let child = daemon.journal(&child_a).await;
+    let EventBody::SessionCreated {
+        repo,
+        worktree,
+        branch,
+        account_id,
+        model,
+        permission_mode,
+        parent,
+        task,
+        ..
+    } = &child[0].body
+    else {
+        panic!("expected session_created, got {:?}", child[0].body);
+    };
+    assert_eq!(repo, daemon.repo.to_str().unwrap());
+    assert!(Path::new(worktree).is_dir());
+    assert_eq!(branch, a["branch"].as_str().unwrap());
+    assert_eq!(account_id, &AccountId::new("account-1"));
+    assert_eq!(model, "echo-1");
+    assert_eq!(*permission_mode, PermissionMode::AutoEdit);
+    assert_eq!(parent.as_ref(), Some(&primary));
+    assert_eq!(task.as_deref(), Some("Fix A"));
+    assert_eq!(child[0].by, None);
+    let prompt = child
+        .iter()
+        .find(|event| {
+            matches!(&event.body, EventBody::ItemAdded { item }
+                if matches!(&item.body, ItemBody::UserMessage { .. }))
+        })
+        .unwrap();
+    assert_eq!(prompt.by, None);
+
+    let status = tools.ok("status", json!({})).await;
+    assert_eq!(
+        status,
+        json!({ "children": [
+            {
+                "child": child_a.as_str(),
+                "task": "Fix A",
+                "branch": a["branch"],
+                "status": "idle",
+                "last_report": "Done: Do A.",
+                "open_questions": [],
+            },
+            {
+                "child": child_b.as_str(),
+                "task": "Fix B",
+                "branch": b["branch"],
+                "status": "idle",
+                "last_report": "Done: Do B.",
+                "open_questions": [],
+            },
+        ]})
+    );
+    let only_b = tools
+        .ok("status", json!({ "children": [child_b.as_str()] }))
+        .await;
+    assert_eq!(only_b["children"].as_array().unwrap().len(), 1);
+    assert_eq!(only_b["children"][0]["child"], child_b.as_str());
+}
+
+#[tokio::test]
+async fn a_child_never_gets_a_permission_mode_above_its_primarys() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    for mode in ["auto_edit", "full_access"] {
+        let spawn = json!({ "task": "T", "prompt": "Do it.", "permission_mode": mode });
+        assert_eq!(tools.fails("spawn", spawn).await, "not_allowed", "{mode}");
+    }
+    let other = json!({ "task": "T", "prompt": "Do it.", "provider": "codex" });
+    assert_eq!(tools.fails("spawn", other).await, "not_allowed");
+    // Nothing was created for the refused calls.
+    assert_eq!(
+        tools.ok("status", json!({})).await,
+        json!({ "children": [] })
+    );
+
+    let lower = json!({ "task": "T", "prompt": "Do it.", "permission_mode": "read_only" });
+    let child = id(&tools.ok("spawn", lower).await["child"]);
+    let journal = daemon.journal(&child).await;
+    assert!(matches!(
+        journal[0].body,
+        EventBody::SessionCreated {
+            permission_mode: PermissionMode::ReadOnly,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn a_child_cannot_spawn_and_reaches_only_its_own_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Do it." }))
+        .await["child"]);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report");
+
+    // The child's CLI has started, so it holds a token and can call the tools.
+    let mut child_tools = daemon.connect(&child);
+    let spawn = json!({ "task": "Deeper", "prompt": "Do more." });
+    assert_eq!(child_tools.fails("spawn", spawn).await, "depth_exceeded");
+    let send = json!({ "child": primary.as_str(), "text": "Hi." });
+    assert_eq!(child_tools.fails("send", send).await, "not_your_child");
+    assert_eq!(
+        child_tools.ok("status", json!({})).await,
+        json!({ "children": [] })
+    );
+
+    // Another task's child, and a session that does not exist, are out of reach too.
+    let other = daemon.primary(PermissionMode::Ask).await;
+    let mut other_tools = daemon.connect(&other);
+    let send = json!({ "child": child.as_str(), "text": "Hi." });
+    assert_eq!(other_tools.fails("send", send).await, "not_your_child");
+    let wait = json!({ "child": child.as_str(), "timeout_secs": 1 });
+    assert_eq!(other_tools.fails("wait_for", wait).await, "not_your_child");
+    let status = json!({ "children": [child.as_str()] });
+    assert_eq!(other_tools.fails("status", status).await, "not_your_child");
+    let send = json!({ "child": "01NOSUCHSESSION", "text": "Hi." });
+    assert_eq!(tools.fails("send", send).await, "not_found");
+}
+
+#[tokio::test]
+async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "First." }))
+        .await["child"]);
+
+    // The first turn is still running, so the follow-up waits behind it.
+    let send = json!({ "child": child.as_str(), "text": "Second." });
+    assert_eq!(tools.ok("send", send).await, json!({ "queued": true }));
+    let wait = json!({ "child": child.as_str(), "timeout_secs": 10 });
+    let first = tools.ok("wait_for", wait.clone()).await;
+    assert_eq!(first["summary"], "Done: First.");
+    // The child went on with the queued prompt.
+    assert_eq!(first["status"], "running");
+    let second = tools.ok("wait_for", wait.clone()).await;
+    assert_eq!(second["summary"], "Done: Second.");
+    assert_eq!(second["status"], "idle");
+
+    // An idle child starts at once.
+    let send = json!({ "child": child.as_str(), "text": "Hang." });
+    assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
+    let wait = json!({ "child": child.as_str(), "timeout_secs": 1 });
+    assert_eq!(
+        tools.ok("wait_for", wait).await,
+        json!({ "kind": "timeout" })
+    );
+    daemon
+        .until_n(&primary, 2, |body| {
+            matches!(body, EventBody::ChildReported { .. })
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn wait_for_filters_by_child_and_leaves_other_reports_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let a = id(&tools
+        .ok("spawn", json!({ "task": "A", "prompt": "Do A." }))
+        .await["child"]);
+    let b = id(&tools
+        .ok("spawn", json!({ "task": "B", "prompt": "Do B." }))
+        .await["child"]);
+    // Both have reported before anyone waits.
+    daemon
+        .until_n(&primary, 2, |body| {
+            matches!(body, EventBody::ChildReported { .. })
+        })
+        .await;
+    let wait_b = json!({ "child": b.as_str(), "timeout_secs": 5 });
+    assert_eq!(
+        tools.ok("wait_for", wait_b.clone()).await["child"],
+        b.as_str()
+    );
+    assert_eq!(
+        tools.ok("wait_for", wait_b).await,
+        json!({ "kind": "idle" })
+    );
+    let any = tools.ok("wait_for", json!({ "timeout_secs": 5 })).await;
+    assert_eq!(any["child"], a.as_str());
+    let bad = json!({ "timeout_secs": 0 });
+    assert_eq!(tools.fails("wait_for", bad).await, "invalid_arguments");
+}
+
+#[tokio::test]
+async fn a_child_turn_cut_short_by_a_restart_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Hang." }))
+        .await["child"]);
+    daemon
+        .until(&child, |body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    drop(tools);
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let daemon = Daemon::open(dir.path()).await;
+    let journal = daemon.journal(&primary).await;
+    let Some(EventBody::ChildReported {
+        child_session_id,
+        summary,
+        ..
+    }) = journal.last().map(|event| &event.body)
+    else {
+        panic!("expected child_reported, got {journal:#?}");
+    };
+    assert_eq!(child_session_id, &child);
+    assert_eq!(
+        summary,
+        "The turn failed: the daemon stopped during this turn"
+    );
+
+    // The new daemon still hands the report to the primary's wait_for.
+    daemon.start(&primary).await;
+    let mut tools = daemon.connect(&primary);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 5 })).await;
+    assert_eq!(report["child"], child.as_str());
+    assert_eq!(report["status"], "needs_you");
+}

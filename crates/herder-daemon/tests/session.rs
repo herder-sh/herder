@@ -1166,7 +1166,6 @@ async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session()
         .serve_mcp(mcp::Config {
             data_dir: data_dir.clone(),
             herder: PathBuf::from("/opt/herder"),
-            tools: Arc::new(mcp::Unimplemented),
         })
         .unwrap();
     let session = daemon.create().await;
