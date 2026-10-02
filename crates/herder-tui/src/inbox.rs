@@ -125,6 +125,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
     if inbox && app.inbox.answer.is_some() {
         return Some(match key.code {
             KeyCode::Esc => InboxAction::Cancel,
+            KeyCode::Backspace if app.inbox.answer.as_ref().is_some_and(|a| a.is_empty()) => {
+                InboxAction::Cancel
+            }
             KeyCode::Enter if key.modifiers.is_empty() => InboxAction::Submit,
             _ => InboxAction::Key(key),
         });
@@ -142,7 +145,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
         KeyCode::Char(digit @ '1'..='9') => InboxAction::Choose(u32::from(digit) - u32::from('1')),
         KeyCode::Enter | KeyCode::Char('a') => InboxAction::StartAnswer,
         KeyCode::Char('l' | 'o') | KeyCode::Right => InboxAction::OpenSession,
-        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => InboxAction::Close,
+        KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
+            InboxAction::Close
+        }
         _ => return None,
     };
     Some(action)

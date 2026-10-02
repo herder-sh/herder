@@ -3,6 +3,9 @@
 //! Every key goes through [`for_key`] to become an [`Action`], and only actions change the app
 //! ([`crate::app::App::act`]). A new view adds its actions here and its keys to [`for_key`],
 //! usually behind a check of what has focus.
+//!
+//! Every action has a key a phone's on-screen keyboard has: a letter, a digit, Enter or
+//! Backspace. Esc, Tab, arrows and Ctrl chords are alternatives, never the only way.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -68,8 +71,14 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         return Some(Action::Compose(Act::CtrlC));
     }
     if app.help {
-        // Any key closes the help.
-        return Some(Action::ToggleHelp);
+        // Any key but scrolling closes the help.
+        let action = match key.code {
+            KeyCode::Char('k') | KeyCode::Up => Action::Up,
+            KeyCode::Char('j') | KeyCode::Down => Action::Down,
+            KeyCode::Char(' ') | KeyCode::PageDown => Action::PageDown,
+            _ => Action::ToggleHelp,
+        };
+        return Some(action);
     }
     if let Some(panel) = &app.machine_panel {
         return crate::machines::for_key(key, panel);
@@ -81,7 +90,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             KeyCode::Char('g') | KeyCode::Home => Action::Top,
             KeyCode::Char('G') | KeyCode::End => Action::Bottom,
             KeyCode::Enter => Action::Open,
-            KeyCode::Esc | KeyCode::Char('q' | 't') => Action::Back,
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q' | 't') => Action::Back,
             _ => return None,
         };
         return Some(action);
@@ -119,7 +128,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('j') | KeyCode::Down => Action::Down,
         KeyCode::Char('u') if ctrl => Action::PageUp,
         KeyCode::Char('d') if ctrl => Action::PageDown,
-        KeyCode::PageUp => Action::PageUp,
+        KeyCode::PageUp | KeyCode::Char('b') => Action::PageUp,
         KeyCode::PageDown | KeyCode::Char(' ') => Action::PageDown,
         KeyCode::Char('g') | KeyCode::Home => Action::Top,
         KeyCode::Char('G') | KeyCode::End => Action::Bottom,
@@ -127,7 +136,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             Action::Open
         }
         KeyCode::Tab | KeyCode::BackTab => Action::SwitchPane,
-        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left if app.focus == Focus::Transcript => {
+        KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left
+            if app.focus == Focus::Transcript =>
+        {
             Action::Back
         }
         KeyCode::Char('r') => Action::Reconnect,
@@ -145,15 +156,15 @@ pub const HELP: &[(&str, &str)] = &[
     ("j / k, ↓ / ↑", "move, or scroll the transcript"),
     ("Enter, l", "open the selected session"),
     ("Tab", "switch between sessions and transcript"),
-    ("Esc, h", "back to the sessions"),
-    ("PgUp / PgDn", "scroll a page (also Ctrl-u / Ctrl-d)"),
+    ("h, ⌫, Esc", "back to the sessions"),
+    ("b / Space", "scroll a page (also PgUp / PgDn)"),
     ("g / G", "first / last; G follows the transcript"),
     ("i, Enter", "write in the open session"),
     ("Enter / Alt-Enter", "send / new line, in the composer"),
-    ("Esc", "leave the composer or close a dialog"),
+    ("Esc, ⌫ on empty", "leave the composer or close a dialog"),
     ("y / n", "allow / deny the pending approval"),
     ("1-9", "pick an answer to the pending question"),
-    ("Ctrl-c", "interrupt the running turn"),
+    ("Ctrl-c, :interrupt", "interrupt the running turn"),
     (":", "commands: model, mode, archive, new"),
     ("n", "new session"),
     ("p", "focus the session's pull requests"),

@@ -22,7 +22,7 @@ use crate::terminal::{self, Picker};
 pub enum Msg {
     /// A key was pressed.
     Key(KeyEvent),
-    /// The terminal changed size; only a redraw is needed.
+    /// The terminal changed size: the screen is repainted from scratch.
     Resize,
     /// The paired machines, as [`herder_client_core::Client::machines`] now lists them.
     Machines(Vec<Machine>),
@@ -70,6 +70,8 @@ pub enum Effect {
     OpenUrl(String),
     /// Pair with the daemon of a `herder://pair` link, answering with [`Msg::Paired`].
     Pair(String),
+    /// Clear the screen and draw every cell anew, as after a resize.
+    Repaint,
     /// Suspend the TUI and attach the local terminal to a daemon terminal.
     AttachTerminal {
         /// The machine.
@@ -172,6 +174,8 @@ pub struct App {
     pub focus: Focus,
     /// Whether the key help is shown.
     pub help: bool,
+    /// The first help row shown, when the help does not fit.
+    pub help_scroll: usize,
     /// Where the open transcript is scrolled.
     pub scroll: Scroll,
     /// The session list's scroll position, kept between draws.
@@ -201,6 +205,7 @@ impl Default for App {
             open: None,
             focus: Focus::Sessions,
             help: false,
+            help_scroll: 0,
             scroll: Scroll::default(),
             list: ListState::default(),
             compose: Compose::default(),
@@ -229,7 +234,7 @@ impl App {
                 self.notice = Some(ended.notice());
                 Vec::new()
             }
-            Msg::Resize => Vec::new(),
+            Msg::Resize => vec![Effect::Repaint],
             Msg::Machines(machines) => {
                 self.machines(machines);
                 self.open_pending();
@@ -275,6 +280,18 @@ impl App {
             return self.compose(act);
         }
         self.compose.quit_armed = false;
+        if self.help {
+            match action {
+                Action::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                Action::Down => self.help_scroll += 1,
+                Action::PageDown => self.help_scroll += 10,
+                _ => {
+                    self.help = false;
+                    self.help_scroll = 0;
+                }
+            }
+            return Vec::new();
+        }
         if self.terminals.is_some() {
             return self.act_in_picker(action);
         }
@@ -802,6 +819,48 @@ mod tests {
         press(&mut app, KeyCode::Char('G'));
         press(&mut app, KeyCode::Char('z'));
         assert_eq!(app.folded, HashSet::from([key("h1", "s2")]));
+    }
+
+    #[test]
+    fn plain_keys_go_back_from_every_view_a_session_list_opens() {
+        let mut app = fake::with_prs();
+        for back in [KeyCode::Backspace, KeyCode::Char('h')] {
+            press(&mut app, KeyCode::Enter);
+            assert_eq!(app.focus, Focus::Transcript);
+            press(&mut app, back);
+            assert_eq!(app.focus, Focus::Sessions);
+        }
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.focus, Focus::Prs);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.focus, Focus::Transcript);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('P'));
+        assert_eq!(app.focus, Focus::AllPrs);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('I'));
+        assert_eq!(app.focus, Focus::Inbox);
+        press(&mut app, KeyCode::Backspace);
+        assert_ne!(app.focus, Focus::Inbox);
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.machine_panel.is_none());
+    }
+
+    #[test]
+    fn b_scrolls_the_transcript_up_a_page() {
+        let mut app = fake::tree();
+        press(&mut app, KeyCode::Enter);
+        app.scroll.total = 100;
+        app.scroll.height = 10;
+        press(&mut app, KeyCode::Char('b'));
+        assert_eq!(app.scroll.first_line(), 81);
+    }
+
+    #[test]
+    fn a_resize_asks_for_a_repaint() {
+        let mut app = fake::tree();
+        assert_eq!(app.update(Msg::Resize), [Effect::Repaint]);
     }
 
     #[test]

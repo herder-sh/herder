@@ -159,6 +159,17 @@ impl Field {
     }
 }
 
+impl NewSession {
+    /// Whether the focused field is a text field with nothing typed.
+    fn field_is_empty(&self) -> bool {
+        match self.field {
+            Field::Repo => self.repo.is_empty(),
+            Field::Model => self.model.is_empty(),
+            _ => false,
+        }
+    }
+}
+
 /// `at` moved one place forward (`step` > 0) or back in a ring of `len`.
 fn cycle(at: usize, len: usize, step: i8) -> usize {
     match len {
@@ -195,22 +206,29 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
     let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if let Some(dialog) = &app.compose.dialog {
+        // Without Tab or arrows, as on a phone: a choice field moves with j / k and changes
+        // with h / l, Backspace on an empty text field goes back a field, and Backspace on a
+        // choice closes the dialog.
+        let text = dialog.field.is_text();
         return match key.code {
             KeyCode::Esc => compose(Act::Leave),
             KeyCode::Enter => compose(Act::Submit),
             KeyCode::Tab | KeyCode::Down => compose(Act::Field(1)),
             KeyCode::BackTab | KeyCode::Up => compose(Act::Field(-1)),
-            KeyCode::Left if !dialog.field.is_text() => compose(Act::Cycle(-1)),
-            KeyCode::Right | KeyCode::Char(' ') if !dialog.field.is_text() => {
-                compose(Act::Cycle(1))
-            }
-            _ if dialog.field.is_text() => compose(Act::Key(key)),
+            KeyCode::Char('j') if !text => compose(Act::Field(1)),
+            KeyCode::Char('k') if !text => compose(Act::Field(-1)),
+            KeyCode::Left | KeyCode::Char('h') if !text => compose(Act::Cycle(-1)),
+            KeyCode::Right | KeyCode::Char(' ' | 'l') if !text => compose(Act::Cycle(1)),
+            KeyCode::Backspace if !text => compose(Act::Leave),
+            KeyCode::Backspace if dialog.field_is_empty() => compose(Act::Field(-1)),
+            _ if text => compose(Act::Key(key)),
             _ => Some(None),
         };
     }
-    if app.compose.palette.is_some() {
+    if let Some(palette) = &app.compose.palette {
         return match key.code {
             KeyCode::Esc => compose(Act::Leave),
+            KeyCode::Backspace if palette.input.is_empty() => compose(Act::Leave),
             KeyCode::Enter => compose(Act::Submit),
             _ => compose(Act::Key(key)),
         };
@@ -220,6 +238,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
     }
     match key.code {
         KeyCode::Esc => compose(Act::Leave),
+        // Leaves without Esc, which a phone keyboard may lack.
+        KeyCode::Backspace if app.compose.editor.is_empty() => compose(Act::Leave),
         KeyCode::Enter if key.modifiers.is_empty() => compose(Act::Submit),
         KeyCode::Enter => compose(Act::Newline),
         KeyCode::Char('j') if ctrl => compose(Act::Newline),
@@ -704,6 +724,68 @@ mod tests {
         assert_eq!(press(&mut app, KeyCode::Enter), []);
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.focus, Focus::Transcript);
+    }
+
+    #[test]
+    fn backspace_on_an_empty_composer_leaves_it_so_y_answers_without_esc() {
+        let mut app = open_s2(vec![started("turn-1"), approval("a1", "Bash: ls")]);
+        press(&mut app, KeyCode::Char('i'));
+        type_text(&mut app, "y");
+        press(&mut app, KeyCode::Backspace);
+        // The first Backspace erases, the next leaves.
+        assert_eq!(app.focus, Focus::Composer);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.focus, Focus::Transcript);
+        let effects = press(&mut app, KeyCode::Char('y'));
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::Send {
+                    command: CommandBody::AnswerApproval { .. },
+                    ..
+                }]
+            ),
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn the_palette_and_dialog_close_with_backspace_and_move_with_letters() {
+        let mut app = open_s2(vec![]);
+        press(&mut app, KeyCode::Char(':'));
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.compose.palette.is_none());
+
+        // In the transcript n denies; from the list it opens the dialog.
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('n'));
+        let field = |app: &App| app.compose.dialog.as_ref().map(|d| d.field);
+        // The repo comes filled in from the open session.
+        assert_eq!(field(&app), Some(Field::Repo));
+        press(&mut app, KeyCode::Up);
+        assert_eq!(field(&app), Some(Field::Machine));
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(field(&app), Some(Field::Mode));
+        press(&mut app, KeyCode::Char('k'));
+        // In a text field, letters type; Backspace on it empty goes back a field.
+        type_text(&mut app, "jk");
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(field(&app), Some(Field::Model));
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(field(&app), Some(Field::Account));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(field(&app), Some(Field::Model));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(field(&app), Some(Field::Mode));
+        let mode = |app: &App| app.compose.dialog.as_ref().map(|d| d.mode);
+        let before = mode(&app);
+        press(&mut app, KeyCode::Char('l'));
+        assert_ne!(mode(&app), before);
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(mode(&app), before);
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.compose.dialog.is_none());
     }
 
     #[test]
