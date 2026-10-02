@@ -8,6 +8,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
+use herder_daemon::resources::{self, Host, ResourcesConfig, Scopes};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
 };
@@ -1337,5 +1338,48 @@ async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() 
         &item.body,
         ItemBody::ToolResult { output, .. } if output.contains("[… 3000 chars elided …]")
     )));
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn with_limits_on_each_cli_start_runs_in_a_scope_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let scopes = Arc::new(Scopes::new(
+        ResourcesConfig::default(),
+        Host {
+            memory_total: 10_000,
+            cores: 2,
+            nice: 0,
+        },
+        true,
+    ));
+    daemon.manager.limit_resources(Arc::clone(&scopes)).unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let starts = daemon.starts.lock().unwrap().clone();
+    let [start] = starts.as_slice() else {
+        panic!("expected one start, got {starts:?}");
+    };
+    let unit = scopes.unit(&session).unwrap();
+    assert!(unit.starts_with(&format!("herder-{session}-")), "{unit}");
+    let limits = scopes.limits(false);
+    assert_eq!(start.launcher, resources::launcher(&unit, &limits));
+    assert_eq!(limits.cpu_weight, 100);
+    assert_eq!(limits.memory_max, 4_000);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn without_limits_the_cli_runs_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let starts = daemon.starts.lock().unwrap().clone();
+    assert!(starts.iter().all(|start| start.launcher.is_empty()));
     daemon.stop().await;
 }
