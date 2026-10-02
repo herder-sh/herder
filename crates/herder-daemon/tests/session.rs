@@ -8,6 +8,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
+use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     AccountId, ApprovalDecision, ApprovalId, CommandBody, CommandResult, ErrorClass, ErrorCode,
     Event, EventBody, Item, ItemBody, ItemId, PermissionMode, Provider, SessionHead, SessionId,
@@ -78,9 +79,31 @@ fn bob() -> UserId {
     UserId::new("bob")
 }
 
+/// Runs git in `dir` with a fixed identity, panicking on failure; returns trimmed stdout.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
 /// A daemon's session manager over a database that outlives it.
 struct Daemon {
     manager: SessionManager,
+    /// A git repository with one commit on `main`, for sessions to work on.
+    repo: PathBuf,
     seen: mpsc::UnboundedReceiver<Seen>,
     /// Everything `events_until` has received so far.
     log: Vec<Seen>,
@@ -118,11 +141,19 @@ impl Daemon {
             turn_ids: Box::new(move || {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
+            worktrees: Worktrees::new(dir.join("worktrees")),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+        let repo = dir.join("app");
+        if !repo.exists() {
+            std::fs::create_dir(&repo).unwrap();
+            git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+            git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        }
         Self {
             manager,
+            repo,
             seen,
             log: Vec::new(),
             starts,
@@ -130,7 +161,8 @@ impl Daemon {
         }
     }
 
-    async fn create(&self, repo: &Path) -> SessionId {
+    async fn create(&self) -> SessionId {
+        let repo = &self.repo;
         let result = self
             .manager
             .handle(
@@ -249,7 +281,7 @@ fn seqs(events: &[Event]) -> Vec<u64> {
 async fn two_clients_prompting_one_session_share_one_ordered_history() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "two_prompts.jsonl", Default::default()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
 
     // Bob's prompt arrives while Alice's turn is still running: it is queued, not refused.
     daemon.prompt(alice(), &session, "First.").await;
@@ -285,7 +317,7 @@ async fn two_clients_prompting_one_session_share_one_ordered_history() {
 async fn streaming_items_publish_a_snapshot_then_deltas() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "two_prompts.jsonl", Default::default()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.prompt(alice(), &session, "Second.").await;
     daemon.until_status(SessionStatus::Idle).await;
@@ -325,7 +357,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
     let dir = tempfile::tempdir().unwrap();
     let turns = Arc::new(AtomicU64::new(0));
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", turns.clone()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.until_status(SessionStatus::Idle).await;
     daemon.stop().await;
@@ -349,7 +381,10 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
     let [start] = starts.as_slice() else {
         panic!("expected one start, got {starts:?}");
     };
-    assert_eq!(start.cwd, dir.path());
+    let EventBody::SessionCreated { worktree, .. } = &daemon.journal(&session).await[0].body else {
+        panic!("expected session_created");
+    };
+    assert_eq!(start.cwd, Path::new(worktree));
     assert_eq!(start.config_dir, dir.path().join("account"));
     assert_eq!(start.permission_mode, PermissionMode::Ask);
     let seed: Vec<_> = start.seed.iter().map(|item| &item.body).collect();
@@ -384,7 +419,7 @@ async fn restart_fails_a_turn_the_previous_daemon_left_open() {
     let dir = tempfile::tempdir().unwrap();
     let turns = Arc::new(AtomicU64::new(0));
     let mut daemon = Daemon::open(dir.path(), "interrupt.jsonl", turns.clone()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
     daemon.prompt(alice(), &session, "Work forever.").await;
     daemon
         .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
@@ -403,7 +438,7 @@ async fn restart_fails_a_turn_the_previous_daemon_left_open() {
 async fn interrupt_stops_the_running_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "interrupt.jsonl", Default::default()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
 
     let interrupt = CommandBody::Interrupt {
         session_id: session.clone(),
@@ -428,7 +463,7 @@ async fn interrupt_stops_the_running_turn() {
 async fn limit_reached_fails_the_turn_and_needs_you() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "limit_reached.jsonl", Default::default()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
     daemon
         .prompt(alice(), &session, "Refactor the parser.")
         .await;
@@ -449,7 +484,7 @@ async fn limit_reached_fails_the_turn_and_needs_you() {
 async fn approval_is_journaled_and_its_answer_reaches_the_adapter() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "approval.jsonl", Default::default()).await;
-    let session = daemon.create(dir.path()).await;
+    let session = daemon.create().await;
     daemon.prompt(alice(), &session, "Run the tests.").await;
     daemon.until_status(SessionStatus::NeedsYou).await;
 
@@ -503,4 +538,136 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
     };
     let error = daemon.manager.handle(alice(), create).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn create_puts_the_session_on_its_own_worktree_and_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let slug = session.as_str()[18..].to_lowercase();
+    let journal = daemon.journal(&session).await;
+    let EventBody::SessionCreated {
+        repo,
+        worktree,
+        branch,
+        ..
+    } = &journal[0].body
+    else {
+        panic!("expected session_created, got {:?}", journal[0].body);
+    };
+    assert_eq!(repo, daemon.repo.to_str().unwrap());
+    assert_eq!(
+        Path::new(worktree),
+        dir.path().join(format!("worktrees/app-{slug}"))
+    );
+    assert_eq!(*branch, format!("herder/{slug}"));
+    assert_eq!(
+        git(Path::new(worktree), &["branch", "--show-current"]),
+        *branch
+    );
+
+    // The agent runs in the worktree.
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap()[0].cwd, Path::new(worktree));
+
+    git(Path::new(worktree), &["checkout", "--quiet", "-b", "spike"]);
+    assert_eq!(
+        daemon.manager.branches(&session).await.unwrap(),
+        [branch.clone(), "spike".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let create = |branch: &str| CommandBody::CreateSession {
+        repo: daemon.repo.to_str().unwrap().to_owned(),
+        branch: Some(branch.to_owned()),
+        account_id: account(),
+        model: None,
+        permission_mode: PermissionMode::Ask,
+    };
+    let result = daemon.manager.handle(alice(), create("fix/login")).await;
+    let Ok(CommandResult::SessionCreated { session_id }) = result else {
+        panic!("expected a created session, got {result:?}");
+    };
+    assert_eq!(
+        daemon.manager.branches(&session_id).await.unwrap(),
+        ["fix/login"]
+    );
+    let error = daemon
+        .manager
+        .handle(alice(), create("fix/login"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    let error = daemon
+        .manager
+        .handle(alice(), create("bad..name"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::BadRequest);
+}
+
+#[tokio::test]
+async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let created = daemon.journal(&session).await;
+    let EventBody::SessionCreated {
+        worktree, branch, ..
+    } = &created[0].body
+    else {
+        panic!("expected session_created");
+    };
+    let worktree = PathBuf::from(worktree);
+    git(&worktree, &["checkout", "--quiet", "-b", "side"]);
+    std::fs::write(worktree.join("draft.txt"), "wip").unwrap();
+
+    let error = daemon
+        .manager
+        .archive(bob(), session.clone(), false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(worktree.is_dir());
+
+    std::fs::remove_file(worktree.join("draft.txt")).unwrap();
+    let result = daemon.manager.archive(bob(), session.clone(), false).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    let events = daemon.until_status(SessionStatus::Archived).await;
+    assert_eq!(describe(&events).last().unwrap(), "bob: status Archived");
+    assert!(!worktree.exists());
+    let branches = git(&daemon.repo, &["branch", "--format=%(refname:short)"]);
+    assert!(branches.lines().any(|line| line == branch), "{branches}");
+    assert!(branches.lines().any(|line| line == "side"), "{branches}");
+
+    let prompt = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "Again.".into(),
+    };
+    let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+    let error = daemon
+        .manager
+        .archive(alice(), session.clone(), true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
+
+    // Still archived and read-only after a restart.
+    daemon.stop().await;
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let prompt = CommandBody::SendPrompt {
+        session_id: session,
+        text: "Again.".into(),
+    };
+    let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict);
 }
