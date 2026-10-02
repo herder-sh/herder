@@ -7,14 +7,15 @@
 use std::path::Path;
 
 use herder_protocol::{
-    Batch, Cursor, DeviceId, HostId, JournalRecord, MAX_BATCH_EVENTS, RawEventBody, RejectReason,
-    Seq, SessionId, SessionSummary, Timestamp, UserId,
+    AccountId, Batch, Cursor, DeviceId, HostId, JournalRecord, MAX_BATCH_EVENTS, RawEventBody,
+    RejectReason, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE hosts (
     device_id TEXT NOT NULL PRIMARY KEY,
     host_id   TEXT NOT NULL,
@@ -40,7 +41,31 @@ CREATE TABLE sessions (
     summary    TEXT NOT NULL,
     PRIMARY KEY (host_id, session_id)
 ) STRICT;
-"];
+",
+    "
+CREATE INDEX events_type ON events (host_id, session_id, event_type, seq);
+",
+];
+
+/// Event types that set the account a session runs on; each body has an `account_id`.
+const ACCOUNT_EVENTS: &str = "'session_created', 'account_switched', 'provider_switched'";
+
+/// A host that replicated here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostRecord {
+    /// The host.
+    pub host_id: HostId,
+    /// Its display name, as its latest hello gave it.
+    pub host_name: String,
+    /// When it was last heard from.
+    pub seen_at: Timestamp,
+}
+
+/// The account of a stored event body that sets one.
+#[derive(serde::Deserialize)]
+struct AccountOf {
+    account_id: AccountId,
+}
 
 /// What became of a batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,16 +178,90 @@ impl VaultStore {
     }
 
     /// Every host that ever replicated here, with its latest name, ordered by host id.
-    pub fn hosts(&self) -> Result<Vec<(HostId, String)>> {
+    pub fn hosts(&self) -> Result<Vec<HostRecord>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT host_id, host_name FROM hosts h WHERE seen_at =
+            "SELECT host_id, host_name, seen_at FROM hosts h WHERE seen_at =
                (SELECT MAX(seen_at) FROM hosts WHERE host_id = h.host_id)
              GROUP BY host_id ORDER BY host_id",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((HostId::new(row.get::<_, String>(0)?), row.get(1)?))
+            Ok(HostRecord {
+                host_id: HostId::new(row.get::<_, String>(0)?),
+                host_name: row.get(1)?,
+                seen_at: row.get(2)?,
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Records that the host replicating from `device` was last heard from `at`.
+    pub fn seen(&mut self, device: &DeviceId, at: Timestamp) -> Result<()> {
+        self.conn
+            .prepare_cached("UPDATE hosts SET seen_at = ?2 WHERE device_id = ?1")?
+            .execute(params![device.as_str(), at])?;
+        Ok(())
+    }
+
+    /// Every replicated session of every host as clients list it, ordered by session id. `head_seq` is the last seq held here; a session is listed
+    /// once its creation is held.
+    pub fn fleet(&self) -> Result<Vec<SessionHead>> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT s.summary,
+               (SELECT MAX(seq) FROM events e
+                WHERE e.host_id = s.host_id AND e.session_id = s.session_id),
+               (SELECT body FROM events e
+                WHERE e.host_id = s.host_id AND e.session_id = s.session_id
+                  AND e.event_type IN ({ACCOUNT_EVENTS})
+                ORDER BY seq DESC LIMIT 1)
+             FROM sessions s ORDER BY s.session_id, s.host_id"
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            let summary: String = row.get(0)?;
+            let summary: SessionSummary = serde_json::from_str(&summary).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(0, Type::Text, err.into())
+            })?;
+            let account = row
+                .get::<_, Option<String>>(2)?
+                .map(|body| serde_json::from_str::<AccountOf>(&body))
+                .transpose()
+                .map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(2, Type::Text, err.into())
+                })?;
+            Ok((summary, row.get::<_, Option<Seq>>(1)?, account))
+        })?;
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let need_you = |id: &SessionId| {
+            rows.iter()
+                .filter(|(child, ..)| {
+                    child.parent.as_ref() == Some(id) && child.status == SessionStatus::NeedsYou
+                })
+                .count() as u32
+        };
+        Ok(rows
+            .iter()
+            .filter_map(|(summary, head, account)| {
+                Some(SessionHead {
+                    session_id: summary.session_id.clone(),
+                    head_seq: (*head)?,
+                    status: summary.status,
+                    parent: summary.parent.clone(),
+                    task: summary.task.clone(),
+                    project_id: Some(summary.project_id.clone()),
+                    account_id: account.as_ref()?.account_id.clone(),
+                    children_need_you: need_you(&summary.session_id),
+                })
+            })
+            .collect())
+    }
+
+    /// The host whose session `session` is held here, if any.
+    pub fn host_of(&self, session: &SessionId) -> Result<Option<HostId>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT host_id FROM sessions WHERE session_id = ?1 LIMIT 1")?
+            .query_row([session.as_str()], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(HostId::new))
     }
 
     /// For every session of `host` held here, the last seq held, ordered by session id.
@@ -384,6 +483,76 @@ mod tests {
         assert!(store.cursors(&HostId::new("h2")).unwrap().is_empty());
     }
 
+    fn summary(id: &str, parent: Option<&str>, status: SessionStatus) -> SessionSummary {
+        SessionSummary {
+            session_id: SessionId::new(id),
+            project_id: herder_protocol::ProjectId::new("github.com/org/repo"),
+            repo: "/repo".into(),
+            branch: format!("herder/{id}"),
+            status,
+            prs: Vec::new(),
+            parent: parent.map(SessionId::new),
+            task: None,
+            head_seq: 1,
+            updated_at: "2027-01-15T08:00:00Z".parse().unwrap(),
+        }
+    }
+
+    fn event(seq: Seq, body: serde_json::Value) -> JournalRecord {
+        JournalRecord {
+            body: RawEventBody::from_value(body).unwrap(),
+            ..record(seq, "")
+        }
+    }
+
+    #[test]
+    fn the_fleet_lists_sessions_whose_creation_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let host = HostId::new("h1");
+        let created = serde_json::json!({
+            "type": "session_created", "repo": "/repo", "worktree": "/wt", "branch": "b",
+            "provider": "claude", "account_id": "main", "model": "m",
+            "permission_mode": "ask"
+        });
+        let switched = serde_json::json!({"type": "account_switched", "account_id": "other"});
+        let primary = Batch {
+            session_id: SessionId::new("s1"),
+            events: vec![
+                event(1, created.clone()),
+                event(2, switched),
+                record(3, "x"),
+            ],
+        };
+        store.append(&host, &primary).unwrap();
+        let child = Batch {
+            session_id: SessionId::new("s2"),
+            events: vec![event(1, created)],
+        };
+        store.append(&host, &child).unwrap();
+        store
+            .put_summary(&host, &summary("s1", None, SessionStatus::Idle))
+            .unwrap();
+        store
+            .put_summary(&host, &summary("s2", Some("s1"), SessionStatus::NeedsYou))
+            .unwrap();
+        // Summarised before any of its events arrived: not listed yet.
+        store
+            .put_summary(&host, &summary("s3", None, SessionStatus::Idle))
+            .unwrap();
+
+        let heads = store.fleet().unwrap();
+        assert_eq!(heads.len(), 2);
+        assert_eq!(heads[0].session_id.as_str(), "s1");
+        assert_eq!(heads[0].head_seq, 3);
+        assert_eq!(heads[0].account_id.as_str(), "other");
+        assert_eq!(heads[0].children_need_you, 1);
+        assert_eq!(heads[1].account_id.as_str(), "main");
+        assert_eq!(heads[1].parent.as_ref().unwrap().as_str(), "s1");
+        assert_eq!(store.host_of(&SessionId::new("s2")).unwrap(), Some(host));
+        assert_eq!(store.host_of(&SessionId::new("nope")).unwrap(), None);
+    }
+
     #[test]
     fn a_host_replicates_from_one_paired_device() {
         let dir = tempfile::tempdir().unwrap();
@@ -402,6 +571,13 @@ mod tests {
                 .bind(&d2, &h1, "box", std::slice::from_ref(&d2))
                 .unwrap()
         );
-        assert_eq!(store.hosts().unwrap().len(), 1);
+        let seen: Timestamp = "2027-01-15T09:00:00Z".parse().unwrap();
+        store.seen(&d2, seen).unwrap();
+        let hosts = store.hosts().unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(
+            (hosts[0].host_name.as_str(), hosts[0].seen_at),
+            ("box", seen)
+        );
     }
 }

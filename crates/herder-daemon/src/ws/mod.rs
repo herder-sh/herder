@@ -11,6 +11,7 @@ mod tests;
 mod tls;
 
 use std::future::Future;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +24,12 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+pub(crate) use conn::handshake;
 pub use tls::{Tls, fingerprint};
+
+/// A connection after the TLS and WebSocket handshakes.
+pub(crate) type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
 
 use crate::auth::Auth;
 use crate::hub::Hub;
@@ -241,6 +247,21 @@ impl<B: Backend> Server<B> {
                 host,
             }),
         }
+    }
+
+    /// Serves one client whose handshakes are done and whose first text frame, `first`, was
+    /// already read: for the vault, whose port takes hosts and clients alike. The caller runs
+    /// the hub's flusher.
+    pub(crate) async fn serve(
+        &self,
+        ws: Ws,
+        device: String,
+        first: String,
+        peer: SocketAddr,
+        cancel: CancellationToken,
+    ) {
+        let shared = Arc::clone(&self.shared);
+        conn::serve(ws, device, Some(first), peer, shared, cancel).await;
     }
 
     /// Accepts connections on `listener` until `shutdown`, which also closes every connection.
