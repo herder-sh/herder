@@ -855,6 +855,34 @@ async fn terminals_are_for_owners_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compose_down_is_for_owners_only() {
+    let daemon = Daemon::start().await;
+    let session = daemon.create_session("s1");
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let down = || CommandBody::ComposeDown {
+        session_id: session.clone(),
+        project: "app".into(),
+    };
+    let ServerMessage::CommandRejected { error, .. } = member.command("c1", down()).await else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    // The owner's reaches the backend, which this one does not support.
+    let ServerMessage::CommandRejected { error, .. } = owner.command("c2", down()).await else {
+        panic!("expected the test backend's rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");

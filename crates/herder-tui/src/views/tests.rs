@@ -358,7 +358,7 @@ fn the_add_dialog_shows_the_fingerprint_to_check() {
     press(&mut app, KeyCode::Enter);
     let mut paired = fake::machine("h2", "laptop", &[]);
     paired.fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into();
-    app.update(Msg::Paired(Ok(paired)));
+    app.update(Msg::Paired(Ok(Box::new(paired))));
     insta::assert_snapshot!("paired", render(&mut app, 90, 16).backend());
 }
 

@@ -48,7 +48,7 @@ pub enum Msg {
     /// Something to tell the user on the status line, such as a refused command.
     Notice(String),
     /// Pairing a machine ended: the machine, or why it failed.
-    Paired(Result<Machine, String>),
+    Paired(Result<Box<Machine>, String>),
     /// An attached terminal gave the screen back.
     TerminalEnded(terminal::Ended),
 }

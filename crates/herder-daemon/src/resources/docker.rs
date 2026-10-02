@@ -114,6 +114,15 @@ impl Docker {
         containers
     }
 
+    /// `session`'s containers as the last poll found them.
+    pub fn containers(&self, session: &SessionId) -> Vec<Container> {
+        self.lock()
+            .containers
+            .get(session)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Stops and removes the containers and networks of Compose project `project`.
     pub async fn compose_down(&self, project: &str) -> anyhow::Result<()> {
         let mut command = Command::new(&self.program);

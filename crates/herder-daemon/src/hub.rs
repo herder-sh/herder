@@ -206,7 +206,7 @@ impl Hub {
 
     /// Sends a session's new resource usage to every client. A usage with no processes and no
     /// containers is sent once and then no longer to clients that connect later.
-    pub(crate) fn session_resources(&self, session_id: &SessionId, usage: SessionUsage) {
+    pub fn session_resources(&self, session_id: &SessionId, usage: SessionUsage) {
         let mut state = self.lock();
         if usage.processes == 0 && usage.containers.is_empty() {
             state.usage.remove(session_id);
@@ -224,7 +224,7 @@ impl Hub {
     }
 
     /// Sends the host's new resources to every client, and to clients that connect later.
-    pub(crate) fn host_resources(&self, resources: HostResources) {
+    pub fn host_resources(&self, resources: HostResources) {
         let mut state = self.lock();
         state.host = Some(resources.clone());
         let message = ServerMessage::HostResources(resources);

@@ -95,6 +95,8 @@ struct State {
     sessions: Vec<herder_protocol::SessionHead>,
     accounts: Vec<herder_protocol::Account>,
     terminals: Vec<herder_protocol::Terminal>,
+    resources: Option<herder_protocol::HostResources>,
+    session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -177,6 +179,8 @@ impl Supervisor {
             sessions: state.sessions.clone(),
             accounts: state.accounts.clone(),
             terminals: state.terminals.clone(),
+            resources: state.resources.clone(),
+            session_usage: state.session_usage.clone(),
         }
     }
 
@@ -458,7 +462,14 @@ impl Supervisor {
     }
 
     fn set_connection(&self, connection: ConnectionState) {
-        self.lock().connection = Some(connection);
+        let mut state = self.lock();
+        // Resource figures are live; a new connection sends them afresh.
+        if connection != ConnectionState::Connected {
+            state.resources = None;
+            state.session_usage.clear();
+        }
+        state.connection = Some(connection);
+        drop(state);
         self.notify();
     }
 
@@ -492,6 +503,19 @@ impl Supervisor {
                 state.terminals = terminals;
                 return self.notify_after(state);
             }
+            ServerMessage::HostResources(resources) => {
+                state.resources = Some(resources);
+                return self.notify_after(state);
+            }
+            ServerMessage::SessionResources { session_id, usage } => {
+                // The daemon sends a session's idle usage once, then nothing until it changes.
+                if usage.processes == 0 && usage.containers.is_empty() {
+                    state.session_usage.remove(&session_id);
+                } else {
+                    state.session_usage.insert(session_id, usage);
+                }
+                return self.notify_after(state);
+            }
             ServerMessage::Event(event) => {
                 let log = state.logs.entry(event.session_id.clone()).or_default();
                 if !log.log.event(event) {
@@ -521,11 +545,9 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Hellos, answers and terminal messages are handled by the connection; resource
-            // usage and projects are not exposed through the client core yet.
+            // Hellos, answers and terminal messages are handled by the connection; projects
+            // are not exposed through the client core yet.
             ServerMessage::Projects { .. }
-            | ServerMessage::HostResources(_)
-            | ServerMessage::SessionResources { .. }
             | ServerMessage::TerminalOutput { .. }
             | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)

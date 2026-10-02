@@ -21,6 +21,12 @@
 //! connection silent for 45 s, despite pings, counts as lost. [`Machine::connection`] says
 //! where it stands.
 //!
+//! # Resources
+//!
+//! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
+//! pushed, at most every two seconds each; they are live only while connected, so they are
+//! cleared when the connection is not up.
+//!
 //! # Sessions
 //!
 //! The client caches, per session, every durable event it received and the items streaming
@@ -52,13 +58,14 @@ mod profile;
 mod supervisor;
 mod terminal;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
-    Event, HostId, Item, PROTOCOL_VERSION, Provider, Role, SessionHead, SessionId, Terminal,
-    TerminalId,
+    Event, HostId, HostResources, Item, PROTOCOL_VERSION, Provider, Role, SessionHead, SessionId,
+    SessionUsage, Terminal, TerminalId,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -127,6 +134,11 @@ pub struct Machine {
     pub accounts: Vec<Account>,
     /// Open terminals, as last listed; owners only, so empty for members.
     pub terminals: Vec<Terminal>,
+    /// The host's load and turn admission, as last sent; `None` while not connected.
+    pub resources: Option<HostResources>,
+    /// What each session with processes or containers uses, as last sent; empty while not
+    /// connected.
+    pub session_usage: HashMap<SessionId, SessionUsage>,
 }
 
 /// Where a machine's connection stands.
@@ -275,7 +287,7 @@ impl Client {
     }
 
     /// Notifications that [`Client::machines`] changed: a machine was paired, a connection
-    /// changed state, or a daemon sent a new list.
+    /// changed state, or a daemon sent a new list or new resource figures.
     pub fn changes(&self) -> Changes {
         Changes {
             changed: tokio::sync::Mutex::new(self.inner.changed.subscribe()),

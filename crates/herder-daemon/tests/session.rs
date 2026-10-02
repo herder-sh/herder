@@ -1481,6 +1481,64 @@ async fn archive_stops_what_the_session_left_running() {
     daemon.stop().await;
 }
 
+#[tokio::test]
+async fn compose_down_brings_down_a_project_the_session_started() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let worktree = daemon.manager.worktree(&session).await.unwrap();
+    // A fake docker: lists one container of compose project `app` in the worktree and records
+    // every call.
+    let line = serde_json::json!({
+        "id": "c1",
+        "name": "app-db-1",
+        "image": "postgres:16",
+        "state": "running",
+        "project": "app",
+        "working_dir": worktree,
+    });
+    std::fs::write(dir.path().join("ps"), line.to_string()).unwrap();
+    let program = dir.path().join("docker");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{calls}'\nif [ \"$1\" = ps ]; then cat '{ps}'; fi\n",
+            calls = dir.path().join("calls").display(),
+            ps = dir.path().join("ps").display(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let down = |project: &str| CommandBody::ComposeDown {
+        session_id: session.clone(),
+        project: project.to_owned(),
+    };
+
+    // Before containers are tracked there is nothing to bring down.
+    let refused = daemon.manager.handle(alice(), down("app")).await;
+    assert_eq!(refused.unwrap_err().code, ErrorCode::Unsupported);
+
+    let docker = Arc::new(resources::Docker::new(&program));
+    daemon
+        .manager
+        .track_containers(Arc::clone(&docker))
+        .unwrap();
+    docker.poll(|| daemon.manager.worktrees()).await;
+    // Only a project among the session's containers.
+    let refused = daemon.manager.handle(alice(), down("other")).await;
+    assert_eq!(refused.unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(
+        daemon.manager.handle(alice(), down("app")).await,
+        Ok(CommandResult::Applied)
+    );
+    let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+    let calls: Vec<&str> = calls.lines().collect();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert_eq!(calls[1], "compose --project-name app down");
+    daemon.stop().await;
+}
+
 /// Fake adapters that play one script per start, in order, recording every start request and
 /// every command across starts.
 struct Scripted {

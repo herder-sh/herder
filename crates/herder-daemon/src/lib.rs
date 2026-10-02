@@ -120,11 +120,13 @@ pub async fn serve(
     let scopes = Arc::new(resources::Scopes::detect(config.resources.clone()).await);
     sessions.limit_resources(Arc::clone(&scopes))?;
     sessions.configure_failover(config.failover.clone())?;
+    let docker = Arc::new(resources::Docker::new("docker"));
+    sessions.track_containers(Arc::clone(&docker))?;
     tokio::spawn({
         let hub = Arc::clone(&hub);
         let sessions = sessions.clone();
         let shutdown = shutdown.clone();
-        let docker = resources::Docker::new("docker");
+        let docker = Arc::clone(&docker);
         async move {
             let worktrees = || sessions.worktrees();
             resources::run_sampler(&scopes, &docker, worktrees, &hub, shutdown).await;

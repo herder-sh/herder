@@ -65,7 +65,7 @@ pub enum Step {
     /// Waiting for the daemon to accept the code.
     Pairing(PairingUri),
     /// Paired.
-    Paired(Machine),
+    Paired(Box<Machine>),
 }
 
 /// The add-machine form: a pasted link, or what `herder pair` prints field by field.
@@ -367,7 +367,7 @@ impl App {
     }
 
     /// The outcome of pairing, for the dialog if it still waits for it.
-    pub(crate) fn paired(&mut self, result: Result<Machine, String>) {
+    pub(crate) fn paired(&mut self, result: Result<Box<Machine>, String>) {
         let Some(panel) = &mut self.machine_panel else {
             return;
         };
@@ -480,8 +480,8 @@ mod tests {
         assert_eq!(press(&mut app, KeyCode::Enter), []);
 
         let new = machine("h9", "laptop", &[]);
-        app.update(Msg::Paired(Ok(new.clone())));
-        assert_eq!(*step(&app), Step::Paired(new));
+        app.update(Msg::Paired(Ok(Box::new(new.clone()))));
+        assert_eq!(*step(&app), Step::Paired(Box::new(new)));
         assert_eq!(
             app.machine_panel.as_ref().unwrap().chosen,
             Some(HostId::new("h9"))
@@ -559,7 +559,7 @@ mod tests {
         assert!(matches!(step(&app), Step::Pairing(_)));
         // Closing while pairing drops the dialog; the late outcome is ignored.
         press(&mut app, KeyCode::Esc);
-        app.update(Msg::Paired(Ok(machine("h9", "laptop", &[]))));
+        app.update(Msg::Paired(Ok(Box::new(machine("h9", "laptop", &[])))));
         assert_eq!(app.machine_panel.as_ref().unwrap().add, None);
     }
 
