@@ -43,6 +43,12 @@ pub enum Action {
     Compose(Act),
     /// Something about pull requests.
     Pr(PrAction),
+    /// Show the machines panel.
+    OpenMachines,
+    /// Open the add-machine dialog.
+    AddMachine,
+    /// Input to the machines panel or its add dialog.
+    Machines(crate::machines::Input),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -57,6 +63,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     if app.help {
         // Any key closes the help.
         return Some(Action::ToggleHelp);
+    }
+    if let Some(panel) = &app.machine_panel {
+        return crate::machines::for_key(key, panel);
     }
     if let Some(action) = compose::for_key(key, app) {
         return action;
@@ -100,6 +109,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             Action::Back
         }
         KeyCode::Char('r') => Action::Reconnect,
+        KeyCode::Char('m') => Action::OpenMachines,
+        KeyCode::Char('a') => Action::AddMachine,
         _ => return None,
     };
     Some(action)
@@ -127,6 +138,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("L", "link a pull request by number or URL"),
     ("x", "unlink the selected pull request"),
     ("r", "reconnect now"),
+    ("m", "machines: connections and fingerprints"),
+    ("a", "add a machine (or paste its link)"),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),
 ];

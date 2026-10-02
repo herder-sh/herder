@@ -1,0 +1,20 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 90, 16).backend()"
+---
+"┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
+"│● box (4)                   ││                                                          │"
+"│ needs you app · herder/api ││                                                          │"
+"│ ┌ add a machine ─────────────────────────────────────────────────────────────────────┐ │"
+"│ │                                                                                    │ │"
+"│ │ Paired with laptop.                                                                │ │"
+"│ │                                                                                    │ │"
+"│ │   host id      h2                                                                  │ │"
+"│ │   fingerprint  9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08    │ │"
+"│ │                                                                                    │ │"
+"│ │ Its sessions show in the list as it connects.                                      │ │"
+"│ │                                                                                    │ │"
+"│ └──────────────────────────────────── Enter done ────────────────────────────────────┘ │"
+"│                            ││                                                          │"
+"└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" ● box connected                                                           ? help  q quit "

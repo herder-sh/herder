@@ -292,3 +292,53 @@ fn a_notice_replaces_the_connections_until_the_next_key() {
     let screen = render(&mut app, 90, 8).backend().to_string();
     assert!(screen.contains("connected"), "{screen}");
 }
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c));
+    }
+}
+
+const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
+                    &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\
+                    &code=ABCDE-FGHJK";
+
+#[test]
+fn the_machines_panel_shows_connections_and_fingerprints() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    let mut down = fake::machine("h2", "laptop", &[]);
+    down.connection = ConnectionState::Disconnected {
+        error: "connection refused".into(),
+    };
+    down.role = None;
+    machines.push(down);
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('m'));
+    press(&mut app, KeyCode::Char('j'));
+    insta::assert_snapshot!(render(&mut app, 90, 20).backend());
+}
+
+#[test]
+fn the_add_dialog_takes_a_link_or_its_fields() {
+    let mut app = App::default();
+    press(&mut app, KeyCode::Char('a'));
+    press(&mut app, KeyCode::Tab);
+    typed(&mut app, "box.lan");
+    press(&mut app, KeyCode::Tab);
+    typed(&mut app, "9f86d0");
+    press(&mut app, KeyCode::Enter);
+    insta::assert_snapshot!(render(&mut app, 90, 20).backend());
+}
+
+#[test]
+fn the_add_dialog_shows_the_fingerprint_to_check() {
+    let mut app = fake::tree();
+    app.update(Msg::Paste(LINK.into()));
+    insta::assert_snapshot!(render(&mut app, 90, 16).backend());
+    press(&mut app, KeyCode::Enter);
+    let mut paired = fake::machine("h2", "laptop", &[]);
+    paired.fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into();
+    app.update(Msg::Paired(Ok(paired)));
+    insta::assert_snapshot!("paired", render(&mut app, 90, 16).backend());
+}

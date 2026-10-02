@@ -95,6 +95,7 @@ fn print_pairing(info: &PairingInfo) -> Result<()> {
     println!("\nThe code works once, for the next {minutes} minutes.\n");
     println!("{qr}");
     println!("{uri}");
+    println!("\nIn a terminal, run `herder connect '<link>'` with it, or paste it into herder.");
     Ok(())
 }
 

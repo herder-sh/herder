@@ -11,6 +11,7 @@ use ratatui::widgets::ListState;
 
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
+use crate::machines::MachinePanel;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
 
@@ -41,6 +42,8 @@ pub enum Msg {
     },
     /// Something to tell the user on the status line, such as a refused command.
     Notice(String),
+    /// Pairing a machine ended: the machine, or why it failed.
+    Paired(Result<Machine, String>),
 }
 
 /// Something the event loop does for the app.
@@ -61,6 +64,8 @@ pub enum Effect {
     },
     /// Open a web page in the browser.
     OpenUrl(String),
+    /// Pair with the daemon of a `herder://pair` link, answering with [`Msg::Paired`].
+    Pair(String),
 }
 
 /// Which pane keys go to.
@@ -164,6 +169,8 @@ pub struct App {
     pub prs: Prs,
     /// A message for the status line, until the next key.
     pub notice: Option<String>,
+    /// The machines panel, if shown.
+    pub machine_panel: Option<MachinePanel>,
 }
 
 impl Default for App {
@@ -180,6 +187,7 @@ impl Default for App {
             compose: Compose::default(),
             prs: Prs::default(),
             notice: None,
+            machine_panel: None,
         }
     }
 }
@@ -208,7 +216,9 @@ impl App {
                 Vec::new()
             }
             Msg::Paste(text) => {
-                self.paste(&text);
+                if !self.paste_pairing(&text) {
+                    self.paste(&text);
+                }
                 Vec::new()
             }
             Msg::Sent { origin, result } => {
@@ -225,6 +235,10 @@ impl App {
                 self.notice = Some(text);
                 Vec::new()
             }
+            Msg::Paired(result) => {
+                self.paired(result);
+                Vec::new()
+            }
         }
     }
 
@@ -238,6 +252,9 @@ impl App {
             Action::Compose(_) => {}
             Action::Quit => return vec![Effect::Quit],
             Action::Reconnect => return vec![Effect::Wake],
+            Action::Machines(input) => return self.machine_input(input),
+            Action::OpenMachines => self.open_machines(false),
+            Action::AddMachine => self.open_machines(true),
             Action::ToggleHelp => self.help = !self.help,
             Action::Pr(action) => return self.act_pr(action),
             Action::Open => {

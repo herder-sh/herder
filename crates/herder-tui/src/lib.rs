@@ -16,6 +16,7 @@ mod app;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod machines;
 mod prs;
 mod session;
 mod views;
@@ -77,6 +78,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         origin,
                     } => send(&client, host_id, command, origin, tx.clone()),
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
+                    Effect::Pair(link) => pair(&client, link, tx.clone()),
                 }
             }
             next = rx.try_recv().ok();
@@ -179,6 +181,15 @@ fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
     }
 }
 
+/// Pairs with the daemon of `link` and sends the outcome to the loop.
+fn pair(client: &Client, link: String, tx: mpsc::UnboundedSender<Msg>) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let result = client.pair(link).await.map_err(|err| err.to_string());
+        let _ = tx.send(Msg::Paired(result));
+    });
+}
+
 /// Sends the machines now and after every change.
 fn forward_machines(client: &Client, tx: mpsc::UnboundedSender<Msg>) {
     let client = client.clone();
@@ -260,7 +271,7 @@ impl Subscriptions {
 }
 
 /// The client profile's directory: `$XDG_CONFIG_HOME/herder`, else `~/.config/herder`.
-fn config_dir() -> Result<PathBuf> {
+pub fn config_dir() -> Result<PathBuf> {
     let absolute = |var| {
         std::env::var_os(var)
             .map(PathBuf::from)

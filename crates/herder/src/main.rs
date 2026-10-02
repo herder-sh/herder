@@ -1,5 +1,6 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
+mod connect;
 mod dev;
 mod hook;
 mod pair;
@@ -32,6 +33,11 @@ enum Command {
     },
     /// Pair a device with the daemon running on this machine, or list and revoke devices.
     Pair(pair::Args),
+    /// Pair this device with a daemon, from the link `herder pair` printed on its machine.
+    Connect {
+        /// The `herder://pair?...` link.
+        link: String,
+    },
     /// Manage the systemd user service that runs the daemon at boot.
     Service {
         #[command(subcommand)]
@@ -76,6 +82,7 @@ fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Some(Command::Daemon { config }) => daemon(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Update {
             version,

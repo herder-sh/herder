@@ -1,4 +1,4 @@
-//! The screen shown while no machine is paired: how to pair one.
+//! The screen shown while no machine is paired: how to pair one, through the add-machine dialog.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -15,7 +15,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect) {
         Line::raw(""),
         Line::styled("herder pair", command),
         Line::raw(""),
-        Line::raw("It prints a one-time pairing link and QR code for this device."),
+        Line::raw("It prints a one-time pairing link. Press a here and paste it,"),
+        Line::raw("or paste it anywhere in herder."),
     ])
     .centered();
     let height = u16::try_from(text.height()).unwrap_or(u16::MAX);

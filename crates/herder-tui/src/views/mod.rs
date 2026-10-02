@@ -5,6 +5,7 @@
 
 mod composer;
 mod help;
+mod machines;
 mod new_session;
 mod pairing;
 mod palette;
@@ -51,6 +52,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status::draw(frame, status_line, app);
     }
     new_session::draw(frame, area, app);
+    if let Some(panel) = &app.machine_panel {
+        machines::draw(frame, body, app, panel);
+    }
     if app.help {
         help::draw(frame, area);
     }

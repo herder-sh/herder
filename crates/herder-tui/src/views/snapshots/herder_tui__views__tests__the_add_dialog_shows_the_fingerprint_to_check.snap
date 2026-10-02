@@ -1,0 +1,20 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 90, 16).backend()"
+---
+"┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
+"│● box (4)                   ││                                                          │"
+"│ needs you app · herder/api ││                                                          │"
+"│ ┌ add a machine ─────────────────────────────────────────────────────────────────────┐ │"
+"│ │                                                                                    │ │"
+"│ │ Pair with this daemon?                                                             │ │"
+"│ │                                                                                    │ │"
+"│ │   address      192.168.1.5:7447, 10.0.0.2:7447                                     │ │"
+"│ │   fingerprint  9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08    │ │"
+"│ │                                                                                    │ │"
+"│ │ Check that the fingerprint is the one `herder pair` printed.                       │ │"
+"│ │                                                                                    │ │"
+"│ └─────────────────────────────── Enter pair  Esc back ───────────────────────────────┘ │"
+"│                            ││                                                          │"
+"└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" ● box connected                                                           ? help  q quit "
