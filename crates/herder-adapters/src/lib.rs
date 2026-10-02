@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 pub mod acp;
+pub mod claude;
 pub mod codex;
 pub mod fake;
 pub mod fixture;
