@@ -10,6 +10,7 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_daemon::mcp;
+use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
     TaskLimits, ulid_turn_ids,
@@ -617,6 +618,52 @@ async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
     daemon.manager.handle(alice(), archive).await.unwrap();
     tools.ok("spawn", spawn.clone()).await;
     assert_eq!(tools.fails("spawn", spawn).await, "limit_exceeded");
+}
+
+/// A host with `GIB`s of memory available, which the test changes.
+struct FakeHost(Arc<Mutex<u64>>);
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+impl ReadHost for FakeHost {
+    fn read(&self) -> anyhow::Result<Reading> {
+        Ok(Reading {
+            memory_total: 16 * GIB,
+            memory_available: *self.0.lock().unwrap() * GIB,
+            load_1m: 0.5,
+            cpu_percent: 10.0,
+            pressure: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn spawn_on_a_busy_host_is_refused_with_a_retry_hint() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let available = Arc::new(Mutex::new(8));
+    let config = ResourcesConfig::default();
+    let admission = Admission::new(config.budget(8), Box::new(FakeHost(available.clone())));
+    daemon.manager.admit_turns(Arc::new(admission)).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+
+    *available.lock().unwrap() = 1;
+    let refused = tools.call("spawn", spawn.clone()).await;
+    assert!(refused.is_error, "{refused:?}");
+    let error: Value = serde_json::from_str(&refused.content[0].text).unwrap();
+    assert_eq!(error["code"], "host_busy");
+    assert_eq!(error["retry_after_secs"], 30);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("less than 2048 MiB"), "{message}");
+    let status = tools.ok("status", json!({})).await;
+    assert!(status["children"].as_array().unwrap().is_empty());
+
+    *available.lock().unwrap() = 8;
+    tools.ok("spawn", spawn).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report");
 }
 
 #[tokio::test]

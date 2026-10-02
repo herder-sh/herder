@@ -27,7 +27,11 @@
 //! [`Scopes::run_sampler`] reads each scope's cgroup every [`SAMPLE_INTERVAL`] and publishes
 //! [`ServerMessage::SessionResources`](herder_protocol::ServerMessage::SessionResources)
 //! through the [`Hub`] when it changed; once a scope is gone, it publishes one zero usage.
+//!
+//! Scopes bound each session; [`Admission`] bounds their sum: a turn starts only while the
+//! host has room for it ([`admission`]).
 
+pub mod admission;
 mod cgroup;
 
 use std::collections::HashMap;
@@ -44,6 +48,7 @@ use tracing::{info, warn};
 
 use crate::hub::Hub;
 
+pub use admission::{Admission, Budget, Permit, ProcHost, ReadHost, Reading, Ticket};
 pub use cgroup::Sample;
 
 /// How often scopes are read; the contract's limit for `session_resources`.
@@ -55,7 +60,7 @@ const APPEAR_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the startup probe may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Per-session limits: the `[resources]` table.
+/// Per-session limits and the host's turn budget: the `[resources]` table.
 ///
 /// ```toml
 /// [resources]
@@ -64,6 +69,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// cpu_weight = 100          # primaries; systemd's default for everything else is 100
 /// child_cpu_weight = 50     # child sessions
 /// nice = 10
+/// max_turns = 3             # turns running at once; max(1, cores / 4) when absent
+/// min_memory_available_mib = 2048  # MemAvailable a new turn needs
+/// max_memory_pressure = 20  # PSI memory `some avg10`, in percent, that stops new turns
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -78,6 +86,12 @@ pub struct ResourcesConfig {
     pub child_cpu_weight: u16,
     /// Niceness of every agent CLI, -20 to 19.
     pub nice: i8,
+    /// Most turns running on this host at once; `None` is a quarter of its cores, at least 1.
+    pub max_turns: Option<u32>,
+    /// Least memory available, in MiB, for a new turn to start.
+    pub min_memory_available_mib: u64,
+    /// PSI memory `some avg10`, in percent, at which no new turn starts, 1 to 100.
+    pub max_memory_pressure: u8,
 }
 
 impl Default for ResourcesConfig {
@@ -88,6 +102,9 @@ impl Default for ResourcesConfig {
             cpu_weight: 100,
             child_cpu_weight: 50,
             nice: 10,
+            max_turns: None,
+            min_memory_available_mib: 2048,
+            max_memory_pressure: 20,
         }
     }
 }
@@ -116,6 +133,14 @@ impl ResourcesConfig {
             (-20..=19).contains(&self.nice),
             "resources.nice must be -20 to 19"
         );
+        anyhow::ensure!(
+            self.max_turns != Some(0),
+            "resources.max_turns must be at least 1"
+        );
+        anyhow::ensure!(
+            (1..=100).contains(&self.max_memory_pressure),
+            "resources.max_memory_pressure must be 1 to 100"
+        );
         Ok(())
     }
 
@@ -132,6 +157,18 @@ impl ResourcesConfig {
             memory_high: memory_max / 100 * u64::from(self.memory_high_percent),
             memory_max,
             nice: self.nice.max(host.nice),
+        }
+    }
+}
+
+impl ResourcesConfig {
+    /// The turn budget of a host with `cores` CPUs.
+    pub fn budget(&self, cores: u32) -> Budget {
+        Budget {
+            cores,
+            max_turns: self.max_turns.unwrap_or((cores / 4).max(1)),
+            min_memory_available: self.min_memory_available_mib.saturating_mul(1024 * 1024),
+            max_memory_pressure: f64::from(self.max_memory_pressure),
         }
     }
 }
@@ -166,8 +203,7 @@ impl Host {
         let meminfo = std::fs::read_to_string("/proc/meminfo")?;
         let memory_total = cgroup::mem_total(&meminfo)
             .ok_or_else(|| anyhow::anyhow!("/proc/meminfo has no MemTotal"))?;
-        let cores = std::thread::available_parallelism()
-            .map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX));
+        let cores = cores();
         let stat = std::fs::read_to_string("/proc/self/stat")?;
         let nice = cgroup::nice(&stat)
             .ok_or_else(|| anyhow::anyhow!("/proc/self/stat has no niceness"))?;
@@ -177,6 +213,11 @@ impl Host {
             nice,
         })
     }
+}
+
+/// CPUs this process may run on.
+pub fn cores() -> u32 {
+    std::thread::available_parallelism().map_or(1, |n| u32::try_from(n.get()).unwrap_or(u32::MAX))
 }
 
 /// The `systemd-run` launcher for a scope named `unit` with `limits`; the CLI follows it.

@@ -17,7 +17,8 @@
 //!
 //! # Status
 //!
-//! `idle` → `running` when a turn starts; `needs_you` while an approval or a question is
+//! `idle` → `running` when a turn starts, or `waiting_for_capacity` first while the host has no
+//! room for it (see Resources); `needs_you` while an approval or a question is
 //! pending or after a failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
 //! nothing queued. Every change is journaled as `session_status_changed`.
 //!
@@ -65,6 +66,14 @@
 //! Once [`SessionManager::limit_resources`] runs, each start of a session's CLI runs it in a
 //! systemd scope of its own ([`crate::resources`]); a child's scope gets the smaller CPU
 //! weight.
+//!
+//! Once [`SessionManager::admit_turns`] runs, every turn needs a permit from
+//! [`Admission`] before it starts, whichever session it is in. A turn the host has no room for
+//! keeps its prompt queued, journals `waiting_for_capacity`, and starts once its permit
+//! arrives, in the order the turns asked; a session with prompts left after a turn asks
+//! again, behind every turn already waiting. A turn's end frees its permit. `spawn` is
+//! refused as `host_busy` while the host admits no turn. A daemon restart loses waiting
+//! prompts like every queued prompt, so a session left `waiting_for_capacity` settles `idle`.
 //!
 //! # Questions
 //!
@@ -124,7 +133,7 @@ use tasks::{TaskTools, Tasks};
 
 use crate::mcp::{self, Mcp};
 use crate::prs::{self, PrTracker};
-use crate::resources::Scopes;
+use crate::resources::{Admission, Scopes};
 use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees};
 
@@ -231,6 +240,8 @@ struct Inner {
     usage: Usage,
     /// Asks the usage poller, once started, to refresh accounts not read lately.
     refresh_usage: Arc<Notify>,
+    /// What admits turns within the host's capacity, once set.
+    admission: OnceLock<Arc<Admission>>,
     shutdown: CancellationToken,
 }
 
@@ -254,7 +265,9 @@ impl SessionManager {
         for session in journal.sessions().await? {
             if matches!(
                 session.status,
-                SessionStatus::Running | SessionStatus::NeedsYou
+                SessionStatus::Running
+                    | SessionStatus::NeedsYou
+                    | SessionStatus::WaitingForCapacity
             ) {
                 actor::close_abandoned_turn(&journal, &tasks, &session).await?;
             }
@@ -274,6 +287,7 @@ impl SessionManager {
                 scopes: OnceLock::new(),
                 usage: Usage::default(),
                 refresh_usage: Arc::new(Notify::new()),
+                admission: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -421,6 +435,15 @@ impl SessionManager {
             .scopes
             .set(scopes)
             .map_err(|_| anyhow::anyhow!("resources are limited already"))
+    }
+
+    /// Starts every turn from now on only once `admission` admits it; once per manager.
+    /// Without it, turns start as soon as their session is free.
+    pub fn admit_turns(&self, admission: Arc<Admission>) -> anyhow::Result<()> {
+        self.inner
+            .admission
+            .set(admission)
+            .map_err(|_| anyhow::anyhow!("turns are admitted already"))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to

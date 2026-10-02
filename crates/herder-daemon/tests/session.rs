@@ -8,7 +8,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
-use herder_daemon::resources::{self, Host, ResourcesConfig, Scopes};
+use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
 };
@@ -16,9 +16,9 @@ use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody,
-    ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
-    TurnId, UsageWindow, UserId,
+    CommandBody, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody,
+    Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId,
+    SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -144,18 +144,34 @@ impl Daemon {
     /// Opens a manager on `dir`'s database running `script`; `turns` numbers turn ids across
     /// restarts, as the fake scripts expect.
     async fn open(dir: &Path, script: &str, turns: Arc<AtomicU64>) -> Self {
+        let recording = Recording {
+            fake: FakeAdapter::new(fixture(script)),
+            starts: Default::default(),
+            commands: Default::default(),
+        };
+        let (starts, commands) = (recording.starts.clone(), recording.commands.clone());
+        Self::open_with(dir, Arc::new(recording), starts, commands, turns).await
+    }
+
+    /// Opens a manager whose CLI starts play `scripts`, one per start, in order.
+    async fn open_scripts(dir: &Path, scripts: &[&str], turns: Arc<AtomicU64>) -> Self {
+        let scripted = Scripted::new(scripts);
+        let (starts, commands) = (scripted.starts.clone(), scripted.commands.clone());
+        Self::open_with(dir, scripted, starts, commands, turns).await
+    }
+
+    /// Opens a manager running the fake provider's sessions on `adapter`, which records into
+    /// `starts` and `commands`.
+    async fn open_with(
+        dir: &Path,
+        adapter: Arc<dyn Adapter>,
+        starts: Arc<Mutex<Vec<StartRequest>>>,
+        commands: Arc<Mutex<Vec<AdapterCommand>>>,
+        turns: Arc<AtomicU64>,
+    ) -> Self {
         let (tx, seen) = mpsc::unbounded_channel();
-        let starts = Arc::new(Mutex::new(Vec::new()));
-        let commands = Arc::new(Mutex::new(Vec::new()));
         let mut adapters = Adapters::new();
-        adapters.register(
-            fake(),
-            Arc::new(Recording {
-                fake: FakeAdapter::new(fixture(script)),
-                starts: starts.clone(),
-                commands: commands.clone(),
-            }),
-        );
+        adapters.register(fake(), adapter);
         let mut accounts = Accounts::new();
         accounts.insert(
             account(),
@@ -1992,5 +2008,153 @@ async fn idle_accounts_are_probed_at_once_and_again_on_refresh() {
     assert_eq!(requests[0].permission_mode, PermissionMode::ReadOnly);
     assert!(requests[0].mcp.is_none() && requests[0].seed.is_empty());
     assert!(dir.path().join("usage").is_dir());
+    daemon.stop().await;
+}
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// A host whose readings the test sets.
+#[derive(Clone)]
+struct FakeHost(Arc<Mutex<Reading>>);
+
+impl FakeHost {
+    fn new(memory_available: u64) -> Self {
+        let reading = Reading {
+            memory_total: 16 * GIB,
+            memory_available,
+            load_1m: 0.5,
+            cpu_percent: 10.0,
+            pressure: None,
+        };
+        Self(Arc::new(Mutex::new(reading)))
+    }
+
+    fn set_memory_available(&self, bytes: u64) {
+        self.0.lock().unwrap().memory_available = bytes;
+    }
+}
+
+impl ReadHost for FakeHost {
+    fn read(&self) -> anyhow::Result<Reading> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+/// Admits `daemon`'s turns on a 4-core `host`, at most `max_turns` at once.
+fn admit(daemon: &Daemon, max_turns: u32, host: &FakeHost) -> Arc<Admission> {
+    let config = ResourcesConfig {
+        max_turns: Some(max_turns),
+        ..ResourcesConfig::default()
+    };
+    let admission = Arc::new(Admission::new(config.budget(4), Box::new(host.clone())));
+    daemon.manager.admit_turns(Arc::clone(&admission)).unwrap();
+    admission
+}
+
+#[tokio::test]
+async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = ["hold.jsonl", "admitted.jsonl"];
+    let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
+    let admission = admit(&daemon, 1, &FakeHost::new(8 * GIB));
+    let first = daemon.create().await;
+    let second = daemon.create().await;
+    daemon.prompt(alice(), &first, "Hold the machine.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+
+    daemon.prompt(bob(), &second, "Wait your turn.").await;
+    daemon.until_status(SessionStatus::WaitingForCapacity).await;
+    let host = admission.resources();
+    assert_eq!(
+        (host.running_turns, host.waiting_turns, host.constraint),
+        (1, 1, Some(Constraint::MaxTurns))
+    );
+    assert_eq!(
+        describe(&daemon.journal(&second).await),
+        ["alice: session_created", "-: status WaitingForCapacity"]
+    );
+
+    let interrupt = CommandBody::Interrupt {
+        session_id: first.clone(),
+    };
+    daemon.manager.handle(alice(), interrupt).await.unwrap();
+    let events = daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    let at = |what: &dyn Fn(&Event) -> bool| events.iter().position(what).unwrap();
+    let interrupted =
+        at(&|e| e.session_id == first && matches!(e.body, EventBody::TurnInterrupted { .. }));
+    let admitted = at(&|e| {
+        e.session_id == second
+            && matches!(
+                e.body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::Running
+                }
+            )
+    });
+    assert!(interrupted < admitted, "{:#?}", describe(&events));
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&second).await),
+        [
+            "alice: session_created",
+            "-: status WaitingForCapacity",
+            "-: status Running",
+            "bob: user turn-2 Wait your turn.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Done.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let host = admission.resources();
+    assert_eq!((host.running_turns, host.waiting_turns), (0, 0));
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_turn_waits_while_memory_is_short_and_starts_once_there_is_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let host = FakeHost::new(GIB);
+    let admission = admit(&daemon, 4, &host);
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::WaitingForCapacity).await;
+    assert_eq!(admission.resources().constraint, Some(Constraint::Memory));
+    admission.recheck();
+    assert!(daemon.starts.lock().unwrap().is_empty());
+
+    host.set_memory_available(4 * GIB);
+    admission.recheck();
+    daemon.until_status(SessionStatus::Idle).await;
+    let journal = describe(&daemon.journal(&session).await);
+    assert_eq!(
+        journal[1..4],
+        [
+            "-: status WaitingForCapacity",
+            "-: status Running",
+            "alice: user turn-1 First."
+        ]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn restart_settles_a_session_left_waiting_for_capacity_idle() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    admit(&daemon, 4, &FakeHost::new(GIB));
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::WaitingForCapacity).await;
+    daemon.stop().await;
+
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let journal = describe(&daemon.journal(&session).await);
+    assert_eq!(journal.last().unwrap(), "-: status Idle", "{journal:#?}");
     daemon.stop().await;
 }

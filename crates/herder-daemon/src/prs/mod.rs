@@ -418,7 +418,7 @@ impl PrTracker {
             .is_some_and(|until| until > now);
         let working = matches!(
             session.status,
-            SessionStatus::Running | SessionStatus::NeedsYou
+            SessionStatus::Running | SessionStatus::NeedsYou | SessionStatus::WaitingForCapacity
         );
         let fast = hot || settling || working;
         Some((

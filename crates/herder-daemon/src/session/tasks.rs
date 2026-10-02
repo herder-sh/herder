@@ -5,7 +5,9 @@
 //! provider, with the primary's model and permission mode unless `spawn` picks others; its
 //! permission mode may never exceed the primary's, and a child cannot spawn (a task is one
 //! level deep). A primary has at most [`TaskLimits::max_children`] live (not archived)
-//! children at once; `spawn` past that is refused as `limit_exceeded`. Every prompt the
+//! children at once; `spawn` past that is refused as `limit_exceeded`. While the host admits no
+//! more turns ([`crate::resources::admission`]), `spawn` is refused as `host_busy` with a hint
+//! to retry after [`RETRY_AFTER_SECS`]. Every prompt the
 //! primary sends is journaled in the child with no `by`, since the agent sent it.
 //!
 //! When a child's turn ends, however it ended, the child journals `child_reported` in the
@@ -41,6 +43,7 @@ use super::actor::{self, PrimaryAct};
 use super::routing::{primary_id, split_id};
 use super::{CreateRequest, Inner, SessionManager};
 use crate::mcp::{ToolFuture, ToolHandler};
+use crate::resources::admission::RETRY_AFTER_SECS;
 
 /// Limits on every task on this daemon: the `[tasks]` table of the daemon config.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -340,7 +343,7 @@ impl SessionManager {
             ));
         }
         // Admission, after every check on the arguments and before anything is created: the
-        // task's child limit here, and the host's capacity, refused as `host_busy` (P2c.3).
+        // task's child limit, then the host's capacity.
         let admitted = self.inner.tasks.admission.lock().await;
         let max_children = limits.max_children;
         let live = self
@@ -359,6 +362,18 @@ impl SessionManager {
                     "this task already has {live} live children, and its limit is \
                      {max_children}; give the remaining work to a child you have with `send`, \
                      or do it yourself. A child stops counting once the user archives it"
+                ),
+            ));
+        }
+        if let Some(admission) = self.inner.admission.get()
+            && let Some(constraint) = admission.constraint()
+        {
+            return Err(ToolError::host_busy(
+                RETRY_AFTER_SECS,
+                format!(
+                    "this machine has no room for another agent now: {}. Keep working or call \
+                     wait_for, then retry in {RETRY_AFTER_SECS} seconds",
+                    admission.explain(constraint)
                 ),
             ));
         }
