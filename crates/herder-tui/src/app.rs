@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
-use herder_protocol::{CommandBody, CommandResult, HostId, SessionId};
+use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId};
 use ratatui::crossterm::event::KeyEvent;
 use ratatui::widgets::ListState;
 
@@ -14,6 +14,7 @@ use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
+use crate::projects::Grouping;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
 use crate::switch::Switch;
@@ -105,6 +106,8 @@ pub enum Focus {
 pub enum Row {
     /// A machine's heading.
     Machine(HostId),
+    /// A project's heading; `None` heads the sessions whose project is not known yet.
+    Project(Option<ProjectId>),
     /// A session, `depth` levels into its task tree (0 for a top-level session).
     Session {
         /// The session.
@@ -117,7 +120,7 @@ pub enum Row {
 impl Row {
     pub(crate) fn session(&self) -> Option<&SessionKey> {
         match self {
-            Row::Machine(_) => None,
+            Row::Machine(_) | Row::Project(_) => None,
             Row::Session { key, .. } => Some(key),
         }
     }
@@ -125,6 +128,7 @@ impl Row {
     fn same(&self, other: &Row) -> bool {
         match (self, other) {
             (Row::Machine(a), Row::Machine(b)) => a == b,
+            (Row::Project(a), Row::Project(b)) => a == b,
             (Row::Session { key: a, .. }, Row::Session { key: b, .. }) => a == b,
             _ => false,
         }
@@ -200,6 +204,8 @@ pub struct App {
     pub account_screen: Option<AccountScreen>,
     /// The switch dialog, while it is open.
     pub switch: Option<Switch>,
+    /// How the session list groups sessions.
+    pub grouping: Grouping,
 }
 
 impl Default for App {
@@ -223,6 +229,7 @@ impl Default for App {
             inbox: Inbox::default(),
             account_screen: None,
             switch: None,
+            grouping: Grouping::default(),
         }
     }
 }
@@ -325,6 +332,7 @@ impl App {
             Action::Accounts(input) => return self.account_input(input),
             Action::OpenSwitch => self.open_switch(),
             Action::Switch(input) => return self.switch_input(input),
+            Action::Group => self.toggle_grouping(),
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {
@@ -440,51 +448,61 @@ impl App {
     }
 
     fn tree(&self, fold: bool) -> Vec<Row> {
+        if self.grouping == Grouping::Projects {
+            return self.project_rows(fold);
+        }
         let mut rows = Vec::new();
         for machine in &self.machines {
             rows.push(Row::Machine(machine.host_id.clone()));
-            let listed: HashSet<&SessionId> = machine
+            let keys: Vec<SessionKey> = machine
                 .sessions
                 .iter()
-                .map(|head| &head.session_id)
+                .map(|head| SessionKey {
+                    host_id: machine.host_id.clone(),
+                    session_id: head.session_id.clone(),
+                })
                 .collect();
-            let key = |session_id: &SessionId| SessionKey {
-                host_id: machine.host_id.clone(),
-                session_id: session_id.clone(),
-            };
-            let parent = |session_id: &SessionId| {
-                self.sessions
-                    .get(&key(session_id))
-                    .and_then(|session| session.parent.as_ref())
-                    .filter(|parent| listed.contains(parent) && *parent != session_id)
-            };
-            let mut children: HashMap<&SessionId, Vec<&SessionId>> = HashMap::new();
-            let mut roots = Vec::new();
-            for head in &machine.sessions {
-                match parent(&head.session_id) {
-                    Some(parent) => children.entry(parent).or_default().push(&head.session_id),
-                    None => roots.push(&head.session_id),
-                }
-            }
             // The daemon lists sessions oldest first.
-            let mut stack: Vec<(&SessionId, usize)> = roots.into_iter().map(|id| (id, 0)).collect();
-            let mut seen = HashSet::new();
-            while let Some((session_id, depth)) = stack.pop() {
-                if !seen.insert(session_id) {
-                    continue;
-                }
-                let session_key = key(session_id);
-                let folded = fold && self.folded.contains(&session_key);
-                rows.push(Row::Session {
-                    key: session_key,
-                    depth,
-                });
-                if folded {
-                    continue;
-                }
-                if let Some(kids) = children.get(session_id) {
-                    stack.extend(kids.iter().rev().map(|kid| (*kid, depth + 1)));
-                }
+            rows.extend(self.forest(&keys, fold));
+        }
+        rows
+    }
+
+    /// The session rows of `keys`, given oldest first: newest first, each followed by its
+    /// children among `keys`, oldest first, unless it is folded.
+    pub(crate) fn forest(&self, keys: &[SessionKey], fold: bool) -> Vec<Row> {
+        let listed: HashSet<&SessionKey> = keys.iter().collect();
+        let parent = |key: &SessionKey| {
+            let parent = SessionKey {
+                host_id: key.host_id.clone(),
+                session_id: self.sessions.get(key)?.parent.clone()?,
+            };
+            (listed.contains(&parent) && parent != *key).then_some(parent)
+        };
+        let mut children: HashMap<SessionKey, Vec<&SessionKey>> = HashMap::new();
+        let mut roots = Vec::new();
+        for key in keys {
+            match parent(key) {
+                Some(parent) => children.entry(parent).or_default().push(key),
+                None => roots.push(key),
+            }
+        }
+        let mut rows = Vec::new();
+        let mut stack: Vec<(&SessionKey, usize)> = roots.into_iter().map(|key| (key, 0)).collect();
+        let mut seen = HashSet::new();
+        while let Some((key, depth)) = stack.pop() {
+            if !seen.insert(key) {
+                continue;
+            }
+            rows.push(Row::Session {
+                key: key.clone(),
+                depth,
+            });
+            if fold && self.folded.contains(key) {
+                continue;
+            }
+            if let Some(kids) = children.get(key) {
+                stack.extend(kids.iter().rev().map(|kid| (*kid, depth + 1)));
             }
         }
         rows
@@ -650,7 +668,10 @@ mod tests {
 
     #[test]
     fn a_child_whose_parent_is_not_listed_is_top_level() {
-        let mut app = App::default();
+        let mut app = App {
+            grouping: crate::projects::Grouping::Machines,
+            ..App::default()
+        };
         app.update(Msg::Machines(vec![machine("h1", "box", &["s3"])]));
         fake::feed(
             &mut app,

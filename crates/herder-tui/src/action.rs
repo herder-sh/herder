@@ -67,6 +67,8 @@ pub enum Action {
     OpenSwitch,
     /// Input to the switch dialog.
     Switch(crate::switch::Input),
+    /// Group the session list by project or by machine.
+    Group,
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -164,6 +166,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('s') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
             Action::OpenSwitch
         }
+        KeyCode::Char('v') => Action::Group,
         _ => return None,
     };
     Some(action)
@@ -197,6 +200,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("s", "switch the session's account, provider or model"),
     ("A", "accounts: usage and limits; n adds one"),
     ("z", "fold or unfold the selected task's children"),
+    ("v", "group sessions by project or by machine"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (
         "Enter / l",

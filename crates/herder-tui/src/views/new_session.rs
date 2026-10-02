@@ -35,7 +35,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         ),
     };
     let block = Block::bordered()
-        .title(" new session ")
+        .title(match &dialog.project {
+            Some(project) => format!(" new session · {} ", crate::projects::name(project)),
+            None => " new session ".to_owned(),
+        })
         .title_bottom(footer.centered())
         .border_style(Style::new().fg(Color::Cyan))
         .padding(Padding::uniform(1));

@@ -18,7 +18,12 @@ textwrap.workspace = true
 tokio = { workspace = true, features = ["signal", "sync", "time"] }
 
 [dev-dependencies]
+herder-adapters.workspace = true
+herder-daemon.workspace = true
+herder-store.workspace = true
 insta.workspace = true
+tempfile.workspace = true
+tokio-util.workspace = true
 
 [lints]
 workspace = true

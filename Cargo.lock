@@ -1105,15 +1105,20 @@ name = "herder-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "herder-adapters",
  "herder-client-core",
+ "herder-daemon",
  "herder-protocol",
+ "herder-store",
  "insta",
  "nix 0.31.3",
  "ratatui",
  "ratatui-textarea",
  "serde_json",
+ "tempfile",
  "textwrap",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

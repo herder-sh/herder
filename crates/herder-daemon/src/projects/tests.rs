@@ -324,3 +324,78 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
     shutdown.cancel();
     task.await.unwrap();
 }
+
+#[tokio::test]
+async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("app");
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    let mut store = herder_store::Store::open(tmp.path().join("herder.db")).unwrap();
+    store
+        .append(herder_store::NewEvent {
+            session_id: SessionId::new("s1"),
+            at: jiff::Timestamp::now(),
+            by: None,
+            body: herder_protocol::EventBody::SessionCreated {
+                repo: app.to_string_lossy().into_owned(),
+                worktree: tmp.path().join("wt").to_string_lossy().into_owned(),
+                branch: "b".into(),
+                provider: herder_protocol::Provider::Claude,
+                account_id: AccountId::new("a"),
+                model: "m".into(),
+                permission_mode: herder_protocol::PermissionMode::Ask,
+                parent: None,
+                task: None,
+            },
+        })
+        .unwrap();
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Member);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store,
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::new(),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sessions.sessions().await.unwrap()[0].project_id, None);
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: ProjectsConfig::default(),
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed: Arc::new(Notify::new()),
+        }
+        .run(shutdown.clone()),
+    );
+
+    let heads = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match outbox.pop() {
+                Some(herder_protocol::ServerMessage::Sessions { sessions }) => return sessions,
+                Some(_) => {}
+                None => outbox.ready().await,
+            }
+        }
+    })
+    .await
+    .expect("a session list");
+    let app_id = Some(ProjectId::new("github.com/org/app"));
+    assert_eq!(heads[0].project_id, app_id);
+    assert_eq!(sessions.sessions().await.unwrap()[0].project_id, app_id);
+
+    shutdown.cancel();
+    task.await.unwrap();
+}

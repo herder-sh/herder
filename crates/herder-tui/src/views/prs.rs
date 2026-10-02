@@ -1,5 +1,6 @@
 //! Pull requests on screen: the strip over the open session's transcript, the badge on each
-//! session-list row, the cross-session view, and the link prompt.
+//! session-list row, the cross-session view, and the link prompt. Grouped by project, the
+//! cross-session view lists each project's PRs together, from every session and machine.
 //!
 //! Colours carry the state everywhere: green open, grey draft, magenta merged, red closed; for
 //! checks green passing, red failing, yellow running.
@@ -72,11 +73,14 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
     } else {
         " Enter open · l session · x unlink · L link · Esc back "
     };
+    let by_project = app.grouping == crate::projects::Grouping::Projects;
+    let title = if by_project {
+        " pull requests · by project "
+    } else {
+        " pull requests · every session "
+    };
     let block = Block::bordered()
-        .title(Line::styled(
-            " pull requests · every session ",
-            super::bold(),
-        ))
+        .title(Line::styled(title, super::bold()))
         .title_bottom(Line::styled(hint, super::dim()).right_aligned())
         .border_style(super::border(app, Focus::AllPrs));
     let prs = app.all_prs();
@@ -95,7 +99,22 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
     let mut items = Vec::new();
     let mut selected_item = 0;
     let mut previous = None;
+    let mut project = None;
     for (index, (key, pr)) in prs.iter().enumerate() {
+        if by_project && (index == 0 || project != app.project_of(key)) {
+            project = app.project_of(key);
+            if !items.is_empty() {
+                items.push(ListItem::new(""));
+            }
+            let name = project
+                .as_ref()
+                .map_or("no project yet", crate::projects::name);
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled("◆ ", Style::new().fg(Color::Cyan)),
+                Span::styled(name.to_owned(), super::bold()),
+            ])));
+            previous = None;
+        }
         if previous != Some(*key) {
             previous = Some(*key);
             let machine = app
@@ -118,8 +137,11 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
                 heading.push(Span::raw("  "));
                 heading.push(Span::styled(label, style));
             }
-            if !items.is_empty() {
+            if !items.is_empty() && !by_project {
                 items.push(ListItem::new(""));
+            }
+            if by_project {
+                heading.insert(0, Span::raw("  "));
             }
             items.push(ListItem::new(Line::from(heading)));
         }
@@ -127,7 +149,8 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
             selected_item = items.len();
         }
         let mut line = row(pr, number_width, compact);
-        line.spans.insert(0, Span::raw("  "));
+        line.spans
+            .insert(0, Span::raw(if by_project { "    " } else { "  " }));
         items.push(ListItem::new(line));
     }
     let mut state = ListState::default().with_selected(Some(selected_item));
