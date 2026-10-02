@@ -69,8 +69,9 @@ pub type StartFuture = Pin<Box<dyn Future<Output = Result<AdapterSession, TurnEr
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartRequest {
     /// The account's config dir; the adapter points the CLI at it (`CLAUDE_CONFIG_DIR`,
-    /// `CODEX_HOME`, ...) and never reads what is inside.
-    pub config_dir: PathBuf,
+    /// `CODEX_HOME`, ...) and never reads what is inside. Absent for an account in the CLI's
+    /// default location: the variable is then not set, so `env` decides.
+    pub config_dir: Option<PathBuf>,
     /// The CLI's complete environment; the adapter adds nothing but the config dir variable.
     pub env: BTreeMap<String, String>,
     /// The session's worktree, the CLI's working directory.

@@ -18,7 +18,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn request() -> StartRequest {
     StartRequest {
-        config_dir: PathBuf::from("/nonexistent/account"),
+        config_dir: Some(PathBuf::from("/nonexistent/account")),
         env: BTreeMap::new(),
         cwd: PathBuf::from("/nonexistent/worktree"),
         model: None,

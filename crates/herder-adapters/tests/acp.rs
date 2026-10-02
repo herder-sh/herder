@@ -29,7 +29,7 @@ fn fixture(path: &str) -> PathBuf {
 
 fn request(mode: PermissionMode) -> StartRequest {
     StartRequest {
-        config_dir: PathBuf::from("/nonexistent/account"),
+        config_dir: Some(PathBuf::from("/nonexistent/account")),
         env: BTreeMap::new(),
         // Where the fixtures were recorded.
         cwd: PathBuf::from("/tmp/acpwork/repo"),

@@ -45,7 +45,7 @@ id! {
     QuestionId,
     /// Identifies a host running a daemon; a ULID string, opaque to receivers.
     HostId,
-    /// Identifies a provider account on a host; a ULID string, opaque to receivers.
+    /// Identifies a provider account on a host; the name its owner gave it, opaque to receivers.
     AccountId,
     /// Identifies a named user of a daemon; a ULID string, opaque to receivers.
     UserId,

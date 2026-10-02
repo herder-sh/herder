@@ -8,7 +8,7 @@
 //! natively from the next turn on.
 //!
 //! The process runs with exactly [`StartRequest::env`] plus `CODEX_HOME` set to the account's
-//! config dir. The adapter never looks inside that dir.
+//! config dir, when it has one. The adapter never looks inside that dir.
 //!
 //! # Permission modes
 //!
@@ -94,15 +94,17 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 }
 
 /// The `codex app-server` command for `request`: its environment is exactly the request's plus
-/// `CODEX_HOME`, in the session's worktree.
+/// `CODEX_HOME` when the account has a config dir, in the session's worktree.
 pub fn command(program: &std::path::Path, request: &StartRequest) -> Command {
     let mut command = Command::new(program);
     command
         .arg("app-server")
         .env_clear()
         .envs(&request.env)
-        .env("CODEX_HOME", &request.config_dir)
         .current_dir(&request.cwd);
+    if let Some(dir) = &request.config_dir {
+        command.env("CODEX_HOME", dir);
+    }
     command
 }
 
@@ -259,7 +261,7 @@ mod tests {
     #[test]
     fn command_sets_exactly_the_request_env_and_codex_home() {
         let request = StartRequest {
-            config_dir: PathBuf::from("/accounts/work/codex"),
+            config_dir: Some(PathBuf::from("/accounts/work/codex")),
             env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
             cwd: PathBuf::from("/worktrees/s1"),
             model: None,
@@ -286,5 +288,20 @@ mod tests {
                 (OsStr::new("PATH"), Some(OsStr::new("/usr/bin"))),
             ]
         );
+    }
+
+    #[test]
+    fn command_without_a_config_dir_leaves_codex_home_unset() {
+        let request = StartRequest {
+            config_dir: None,
+            env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+        };
+        let command = command(std::path::Path::new("codex"), &request);
+        let envs: Vec<_> = command.as_std().get_envs().collect();
+        assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
     }
 }

@@ -63,7 +63,7 @@
 mod actor;
 pub(crate) mod journal;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -96,17 +96,21 @@ pub trait EventSink: Send + Sync + 'static {
     fn sessions_changed(&self, sessions: &[SessionHead]);
 }
 
-/// A provider account on this host, as the session manager needs it.
+/// A provider account on this host: a login the provider's CLI keeps in a config dir.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountConfig {
     /// Provider the account belongs to; picks the adapter.
     pub provider: Provider,
-    /// The account's config dir, handed to the adapter.
-    pub config_dir: PathBuf,
+    /// Display label chosen by the owner.
+    pub label: String,
+    /// The account's config dir, handed to the adapter; `None` is the CLI's default location.
+    pub config_dir: Option<PathBuf>,
+    /// Whether sessions may fail over to this account when theirs hits a limit; opt-in.
+    pub failover: bool,
 }
 
-/// Every account sessions may run on.
-pub type Accounts = HashMap<AccountId, AccountConfig>;
+/// Every account sessions may run on, by id.
+pub type Accounts = BTreeMap<AccountId, AccountConfig>;
 
 /// One adapter per provider; sessions pick theirs by provider.
 #[derive(Clone, Default)]
@@ -123,7 +127,7 @@ impl Adapters {
         self.0.insert(provider, adapter);
     }
 
-    fn get(&self, provider: &Provider) -> Option<Arc<dyn Adapter>> {
+    pub(crate) fn get(&self, provider: &Provider) -> Option<Arc<dyn Adapter>> {
         self.0.get(provider).cloned()
     }
 }
@@ -356,6 +360,11 @@ impl SessionManager {
             ));
         }
         Ok(PathBuf::from(session.worktree))
+    }
+
+    /// Every account sessions may run on, as clients see them.
+    pub fn accounts(&self) -> Vec<herder_protocol::Account> {
+        crate::accounts::list(&self.inner.accounts)
     }
 
     /// Every session with its latest seq, ordered by session id.

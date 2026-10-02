@@ -368,7 +368,9 @@ impl World {
             AccountId::new("account-1"),
             AccountConfig {
                 provider: fake,
-                config_dir: root.join("account"),
+                label: "Account 1".into(),
+                config_dir: Some(root.join("account")),
+                failover: false,
             },
         );
         let data = root.join("data");

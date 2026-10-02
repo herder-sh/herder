@@ -1,5 +1,6 @@
 //! Daemon runtime: the WebSocket server and the agent sessions it hosts.
 
+pub mod accounts;
 pub mod auth;
 pub mod config;
 pub mod data_dir;
@@ -18,7 +19,7 @@ use herder_protocol::HostId;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub use config::Config;
 pub use data_dir::DataDir;
@@ -45,15 +46,8 @@ pub fn run(config: Config) -> Result<()> {
                 }
                 token.cancel();
             });
-            // Adapters and accounts register here with the accounts component (P4.1); until
-            // then sessions run only where a caller of `serve` supplies them, as tests do.
-            serve(
-                &config,
-                session::Adapters::new(),
-                session::Accounts::new(),
-                shutdown,
-            )
-            .await
+            let adapters = accounts::adapters(&config.accounts, &config.binaries);
+            serve(&config, adapters, config.accounts.clone(), shutdown).await
         })
 }
 
@@ -75,6 +69,17 @@ pub async fn serve(
     let store = herder_store::Store::open(&store_path)
         .with_context(|| format!("opening the journal {}", store_path.display()))?;
     let auth = Arc::new(auth::Auth::open(data_dir.root())?);
+    for (id, account) in &accounts {
+        match &account.config_dir {
+            Some(dir) if !dir.is_dir() => warn!(
+                account_id = %id,
+                "config dir {} does not exist yet; log in to {} there first",
+                dir.display(),
+                account.provider.as_str()
+            ),
+            _ => info!(account_id = %id, provider = account.provider.as_str(), "account loaded"),
+        }
+    }
     let hub = Arc::new(Hub::default());
     let terminals = terminal::Terminals::new(Arc::clone(&hub), terminal::login_shell());
     let setup = session::Setup {
@@ -156,6 +161,8 @@ mod tests {
             listen: "127.0.0.1:0".parse().unwrap(),
             data_dir: tmp.path().join("data"),
             log: config::LogConfig::default(),
+            accounts: session::Accounts::new(),
+            binaries: Default::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

@@ -151,7 +151,9 @@ impl Daemon {
             account(),
             AccountConfig {
                 provider: fake(),
-                config_dir: dir.join("account"),
+                label: "Account 1".into(),
+                config_dir: Some(dir.join("account")),
+                failover: false,
             },
         );
         let setup = Setup {
@@ -443,7 +445,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
         panic!("expected session_created");
     };
     assert_eq!(start.cwd, Path::new(worktree));
-    assert_eq!(start.config_dir, dir.path().join("account"));
+    assert_eq!(start.config_dir, Some(dir.path().join("account")));
     assert_eq!(start.permission_mode, PermissionMode::Ask);
     let seed: Vec<_> = start.seed.iter().map(|item| &item.body).collect();
     assert_eq!(
@@ -1036,4 +1038,115 @@ async fn terminals_get_the_worktree_until_the_session_is_archived() {
         .unwrap();
     let error = daemon.manager.worktree(&session).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
+}
+
+#[tokio::test]
+async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let recording = || Recording {
+        fake: FakeAdapter::new(fixture("first.jsonl")),
+        starts: Default::default(),
+        commands: Default::default(),
+    };
+    let (claude, codex) = (recording(), recording());
+    let (claude_starts, codex_starts) = (claude.starts.clone(), codex.starts.clone());
+    let mut adapters = Adapters::new();
+    adapters.register(Provider::Claude, Arc::new(claude));
+    adapters.register(Provider::Codex, Arc::new(codex));
+    let codex_home = dir.path().join("codex-work");
+    let accounts = Accounts::from([
+        (
+            AccountId::new("claude-main"),
+            AccountConfig {
+                provider: Provider::Claude,
+                label: "Main".into(),
+                config_dir: None,
+                failover: false,
+            },
+        ),
+        (
+            AccountId::new("codex-work"),
+            AccountConfig {
+                provider: Provider::Codex,
+                label: "Work".into(),
+                config_dir: Some(codex_home.clone()),
+                failover: true,
+            },
+        ),
+    ]);
+    let (tx, mut seen) = mpsc::unbounded_channel();
+    let setup = Setup {
+        store: Store::open(dir.path().join("herder.db")).unwrap(),
+        adapters,
+        accounts,
+        sink: Arc::new(Recorder(tx)),
+        turn_ids: Box::new(|| TurnId::new("turn-1")),
+        worktrees: Worktrees::new(dir.path().join("worktrees")),
+    };
+    let shutdown = CancellationToken::new();
+    let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+    let repo = dir.path().join("app");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+    git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+
+    let labels: Vec<_> = manager
+        .accounts()
+        .into_iter()
+        .map(|account| {
+            (
+                account.account_id.to_string(),
+                account.provider,
+                account.label,
+            )
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            ("claude-main".into(), Provider::Claude, "Main".into()),
+            ("codex-work".into(), Provider::Codex, "Work".into()),
+        ]
+    );
+
+    for account in ["codex-work", "claude-main"] {
+        let create = CommandBody::CreateSession {
+            repo: repo.to_str().unwrap().to_owned(),
+            branch: None,
+            account_id: AccountId::new(account),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+        };
+        let Ok(CommandResult::SessionCreated { session_id }) =
+            manager.handle(alice(), create).await
+        else {
+            panic!("{account}: no session");
+        };
+        let prompt = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: "First.".into(),
+        };
+        manager.handle(alice(), prompt).await.unwrap();
+        loop {
+            let next = tokio::time::timeout(Duration::from_secs(5), seen.recv());
+            if let Seen::Event(event) = next.await.unwrap().unwrap()
+                && event.session_id == session_id
+                && matches!(event.body, EventBody::TurnCompleted { .. })
+            {
+                break;
+            }
+        }
+    }
+
+    let config_dirs = |starts: &Mutex<Vec<StartRequest>>| -> Vec<Option<PathBuf>> {
+        starts
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|start| start.config_dir.clone())
+            .collect()
+    };
+    assert_eq!(config_dirs(&codex_starts), [Some(codex_home)]);
+    assert_eq!(config_dirs(&claude_starts), [None]);
+    shutdown.cancel();
 }
