@@ -13,15 +13,13 @@ use herder_protocol::{
     ServerMessage,
 };
 use tokio::net::TcpStream;
-use tokio_rustls::server::TlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::{Backend, Shared, fingerprint};
+use super::{Backend, Shared, Tls, Ws, fingerprint};
 use crate::auth;
 use crate::hub::{Outbox, OutboxState};
 
@@ -35,8 +33,6 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// drain below this before each query, so a long journal never piles up in memory.
 const REPLAY_PAGE: usize = 256;
 
-type Ws = WebSocketStream<TlsStream<TcpStream>>;
-
 pub(super) async fn run<B: Backend>(
     stream: TcpStream,
     peer: SocketAddr,
@@ -48,7 +44,7 @@ pub(super) async fn run<B: Backend>(
     }
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared)) => ws,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&shared.tls, stream)) => ws,
     };
     let (ws, device) = match ws {
         Ok(Ok(ws)) => ws,
@@ -61,12 +57,25 @@ pub(super) async fn run<B: Backend>(
             return;
         }
     };
+    serve(ws, device, None, peer, shared, cancel).await;
+}
+
+/// Serves a connection whose handshakes are done; `first` is its first text frame when the
+/// caller already read it.
+pub(super) async fn serve<B: Backend>(
+    ws: Ws,
+    device: String,
+    first: Option<String>,
+    peer: SocketAddr,
+    shared: Arc<Shared<B>>,
+    cancel: CancellationToken,
+) {
     let (sink, stream) = ws.split();
     let outbox = Arc::new(Outbox::default());
     let writer = tokio::spawn(write(sink, Arc::clone(&outbox), cancel.clone()));
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
-        result = read(stream, &shared, &outbox, &device, &cancel) => result,
+        result = read(stream, first, &shared, &outbox, &device, &cancel) => result,
     };
     if let Err(err) = result {
         debug!(%peer, "connection failed: {err:#}");
@@ -78,9 +87,9 @@ pub(super) async fn run<B: Backend>(
     debug!(%peer, "connection closed");
 }
 
-/// The TLS and WebSocket handshakes; returns the fingerprint of the client's device certificate.
-async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, String)> {
-    let tls = shared.tls.acceptor().accept(stream).await?;
+/// The TLS and WebSocket handshakes; returns the fingerprint of the peer's device certificate.
+pub(crate) async fn handshake(tls: &Tls, stream: TcpStream) -> Result<(Ws, String)> {
+    let tls = tls.acceptor().accept(stream).await?;
     // The verifier makes a client certificate mandatory; this only guards against a change there.
     let device = tls
         .get_ref()
@@ -88,7 +97,7 @@ async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, Stri
         .peer_certificates()
         .and_then(|certs| certs.first())
         .map(|cert| fingerprint(cert))
-        .context("the client sent no device certificate")?;
+        .context("the peer sent no device certificate")?;
     let ws = tokio_tungstenite::accept_async(tls).await?;
     Ok((ws, device))
 }
@@ -96,14 +105,18 @@ async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, Stri
 /// Handles the client's messages until it closes the connection.
 async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
+    first: Option<String>,
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
     device: &str,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream))
-        .await
-        .map_err(|_| anyhow!("no hello within {HANDSHAKE_TIMEOUT:?}"))??;
+    let first = match first {
+        Some(text) => Some(decode(&text)),
+        None => tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream))
+            .await
+            .map_err(|_| anyhow!("no hello within {HANDSHAKE_TIMEOUT:?}"))??,
+    };
     let hello = match first {
         Some(Ok(ClientMessage::Hello(hello))) => hello,
         Some(Ok(_)) => return reject(outbox, "the first message must be a hello"),
@@ -214,14 +227,16 @@ async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessag
             return Ok(None);
         };
         return Ok(Some(match frame.context("reading from the client")? {
-            Message::Text(text) => {
-                serde_json::from_str(&text).map_err(|err| format!("invalid message: {err}"))
-            }
+            Message::Text(text) => decode(&text),
             Message::Binary(_) => Err("messages must be JSON text frames".to_owned()),
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
         }));
     }
+}
+
+fn decode(text: &str) -> Result<ClientMessage, String> {
+    serde_json::from_str(text).map_err(|err| format!("invalid message: {err}"))
 }
 
 /// Replays the session's journal after the cursor, then switches the subscription to live.

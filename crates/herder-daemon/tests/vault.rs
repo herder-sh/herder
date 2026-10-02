@@ -1,6 +1,7 @@
 //! A host daemon replicating to a vault daemon, both in process over TLS on localhost: sessions
-//! appear in the vault, a vault restarted mid-stream gets the rest, and a host that was offline
-//! catches up when it is back.
+//! appear in the vault, a vault restarted mid-stream gets the rest, a host that was offline
+//! catches up when it is back, and a client paired with the vault sees every host's sessions,
+//! read-only, with the host's liveness.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -8,20 +9,28 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
+use herder_client_core::auth::{PairingUri, client_config};
+use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::VaultConfig;
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::{Replicator, Server, VaultStore, WakeOnEvent};
+use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
-    AccountId, CommandBody, EventBody, HostId, JournalRecord, PermissionMode, Provider, SessionId,
-    SessionSummary, Timestamp, TurnId, UserId,
+    AccountId, CommandBody, ErrorCode, EventBody, HostHello, HostId, HostMessage, JournalRecord,
+    PermissionMode, Provider, REPLICATION_VERSION, SessionId, SessionStatus, SessionSummary,
+    Timestamp, TurnId, UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
+use rustls::pki_types::ServerName;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
+use tokio_rustls::TlsConnector;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -75,6 +84,11 @@ struct Vault {
 impl Vault {
     /// Starts a vault on `dir`, listening on `port` (0 for any).
     async fn start(dir: &Path, port: u16) -> Self {
+        Self::start_with(dir, port, LIVENESS_TIMEOUT).await
+    }
+
+    /// Starts a vault that takes a host silent for `liveness` for gone.
+    async fn start_with(dir: &Path, port: u16, liveness: Duration) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
         std::fs::create_dir_all(dir.join("tls")).unwrap();
@@ -87,7 +101,11 @@ impl Vault {
                 let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
                 let addr = listener.local_addr().unwrap();
                 let fingerprint = tls.fingerprint().to_owned();
-                let server = Server::new(tls, Arc::clone(&auth), store);
+                let host = Host {
+                    id: HostId::new("vault"),
+                    name: "vault".into(),
+                };
+                let server = Server::new(tls, Arc::clone(&auth), store, host, liveness);
                 started.send((addr, fingerprint, auth)).ok().unwrap();
                 server.run(listener, CancellationToken::new()).await;
             }
@@ -108,6 +126,16 @@ impl Vault {
             fingerprint: self.fingerprint.clone(),
             pairing_code: Some(self.auth.mint("host-1", None, PAIRING_TTL).unwrap().code),
         }
+    }
+
+    /// A pairing link for a client of `user`, as `herder pair` on the vault prints it.
+    fn pairing_link(&self, user: &str) -> String {
+        PairingUri {
+            hosts: vec![self.addr.to_string()],
+            fingerprint: self.fingerprint.clone(),
+            code: self.auth.mint(user, None, PAIRING_TTL).unwrap().code,
+        }
+        .to_string()
     }
 
     /// Every event the vault holds of `host-1`, by session; read from its database file.
@@ -373,5 +401,203 @@ async fn a_host_that_was_offline_catches_up_without_pairing_again() {
     assert_gap_free(&vault_dir);
     assert_eq!(vault.auth.devices().len(), 1);
     host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+/// The vault as the paired client sees it once `ready` holds, waiting for it.
+async fn machine_when(client: &Client, ready: impl Fn(&Machine) -> bool) -> Machine {
+    let changes = client.changes();
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        if let Some(machine) = client.machines().into_iter().find(&ready) {
+            return machine;
+        }
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            tokio::time::timeout(left, changes.next()).await.is_ok(),
+            "the client never saw it: {:?}",
+            client.machines()
+        );
+    }
+}
+
+/// The seqs of the next `count` events the subscription delivers.
+async fn seqs(sub: &SessionSubscription, count: usize) -> Vec<u64> {
+    let mut seqs = Vec::new();
+    while seqs.len() < count {
+        let update = tokio::time::timeout(TIMEOUT, sub.next())
+            .await
+            .unwrap()
+            .unwrap();
+        seqs.extend(update.events.iter().map(|event| event.seq));
+    }
+    seqs
+}
+
+/// The refusal of a prompt to `session` sent through the vault.
+async fn refusal(client: &Client, vault: &HostId, session: &str) -> herder_protocol::ErrorInfo {
+    let command = CommandBody::SendPrompt {
+        session_id: SessionId::new(session),
+        text: "hi".into(),
+    };
+    match client.send(vault, command).await {
+        Err(Error::Rejected(error)) => error,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_of_the_vault_sees_host_sessions_read_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+
+    let client = Client::open(tmp.path().join("client"), "test".into()).unwrap();
+    let paired = client.pair(vault.pairing_link("alice")).await.unwrap();
+    let vault_id = paired.host_id;
+    assert_eq!(vault_id.as_str(), "vault");
+    let machine = machine_when(&client, |m| m.sessions.len() == 2).await;
+    let s1 = &machine.sessions[0];
+    assert_eq!(s1.session_id.as_str(), "s1");
+    assert_eq!(s1.head_seq, 4);
+    assert_eq!(s1.status, SessionStatus::Idle);
+    assert_eq!(s1.account_id.as_str(), "main");
+    assert_eq!(
+        s1.project_id.as_ref().map(|p| p.as_str()),
+        Some("host-1:/home/dev/herder")
+    );
+
+    // The transcript replays, then follows the host live.
+    let sub = client
+        .subscribe_session(&vault_id, &SessionId::new("s1"))
+        .unwrap();
+    assert_eq!(seqs(&sub, 4).await, [1, 2, 3, 4]);
+    host.switch_model("s1", "live").await;
+    let update = tokio::time::timeout(TIMEOUT, sub.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(update.events.len(), 1);
+    assert_eq!(
+        update.events[0].body,
+        EventBody::ModelSwitched {
+            model: "live".into()
+        }
+    );
+
+    // Mutating commands are refused, naming the owning host.
+    let error = refusal(&client, &vault_id, "s1").await;
+    assert_eq!(error.code, ErrorCode::Conflict);
+    assert!(error.message.contains("read-only"), "{}", error.message);
+    assert!(
+        error.message.contains("devbox (host-1)"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.ends_with("which is online"),
+        "{}",
+        error.message
+    );
+    let archive = CommandBody::ArchiveSession {
+        session_id: SessionId::new("s2"),
+        force: true,
+    };
+    assert!(matches!(
+        client.send(&vault_id, archive).await,
+        Err(Error::Rejected(error)) if error.code == ErrorCode::Conflict
+    ));
+    let missing = refusal(&client, &vault_id, "nope").await;
+    assert_eq!(missing.code, ErrorCode::NotFound);
+
+    // The host stops: its sessions stay listed and readable, and are shown offline.
+    host.runtime.kill().await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let error = refusal(&client, &vault_id, "s1").await;
+        if error.message.contains("which is offline, last seen ") {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{}", error.message);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(client.machines()[0].sessions.len(), 2);
+    let sub = client
+        .subscribe_session(&vault_id, &SessionId::new("s2"))
+        .unwrap();
+    assert_eq!(seqs(&sub, 4).await, [1, 2, 3, 4]);
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_silent_host_is_offline_after_the_liveness_timeout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 1, 0);
+    let liveness = Duration::from_millis(500);
+    let vault = Vault::start_with(&vault_dir, 0, liveness).await;
+    // A real host replicates the session, then stops for good.
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    host.runtime.kill().await;
+    let client = Client::open(tmp.path().join("client"), "test".into()).unwrap();
+    let vault_id = client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .unwrap()
+        .host_id;
+
+    // The host's device comes back but falls silent after its hello, as a host whose machine
+    // hangs or whose network drops without closing the connection would.
+    let device = Replicator::device_key(&host_dir).unwrap();
+    let config = client_config(&vault.fingerprint, &device).unwrap();
+    let tcp = tokio::net::TcpStream::connect(vault.addr).await.unwrap();
+    let tls = TlsConnector::from(Arc::new(config))
+        .connect(ServerName::try_from("herder").unwrap(), tcp)
+        .await
+        .unwrap();
+    let request = format!("wss://{}/", vault.addr)
+        .into_client_request()
+        .unwrap();
+    let (mut ws, _) = tokio_tungstenite::client_async(request, tls).await.unwrap();
+    let hello = HostMessage::Hello(HostHello {
+        replication_version: REPLICATION_VERSION,
+        host_id: host_id(),
+        host_name: "devbox".into(),
+        build: "test".into(),
+        pairing_code: None,
+    });
+    let text = serde_json::to_string(&hello).unwrap();
+    ws.send(Message::text(text)).await.unwrap();
+    let Some(Ok(Message::Text(reply))) = ws.next().await else {
+        panic!("no hello from the vault");
+    };
+    assert!(matches!(
+        serde_json::from_str(&reply).unwrap(),
+        VaultMessage::Hello(_)
+    ));
+    assert!(
+        refusal(&client, &vault_id, "s1")
+            .await
+            .message
+            .ends_with("which is online")
+    );
+
+    // Silent from now on, without closing: offline once the timeout passes.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let error = refusal(&client, &vault_id, "s1").await;
+        if error.message.contains("which is offline") {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{}", error.message);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(ws);
     vault.runtime.kill().await;
 }

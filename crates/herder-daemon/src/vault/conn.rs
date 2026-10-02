@@ -1,31 +1,29 @@
-//! One host connection to the vault: TLS with the host's device certificate, the WebSocket
-//! upgrade, the hellos, then batches handled one at a time, each acknowledged once durable.
+//! One connection to the vault: TLS with the peer's device certificate, the WebSocket upgrade
+//! and the first message, which tells a host from a client. A client is served by the
+//! daemon's client server over the fleet view; a host gets the hellos, then its batches are
+//! handled one at a time, each acknowledged once durable.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    Cursor, DeviceId, HostMessage, REPLICATION_VERSION, ReplicationError, ReplicationErrorCode,
-    VaultHello, VaultMessage,
+    Cursor, DeviceId, HostId, HostMessage, REPLICATION_VERSION, ReplicationError,
+    ReplicationErrorCode, VaultHello, VaultMessage,
 };
 use tokio::net::TcpStream;
-use tokio_rustls::server::TlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::store::{self, Outcome, VaultStore};
-use super::{BUILD, Shared};
-use crate::ws::fingerprint;
+use super::store::{self, Outcome};
+use super::{BUILD, Shared, blocking};
+use crate::ws::{self, Ws};
 
-/// Time a host gets for the TLS and WebSocket handshakes, and again for its hello.
+/// Time a peer gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-
-type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
 pub(super) async fn run(
     stream: TcpStream,
@@ -36,16 +34,29 @@ pub(super) async fn run(
     let _ = stream.set_nodelay(true);
     let ws = tokio::select! {
         () = cancel.cancelled() => return,
-        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared)) => ws,
+        ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, ws::handshake(&shared.tls, stream)) => ws,
     };
     let (mut ws, device) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => return debug!(%peer, "handshake failed: {err:#}"),
         Err(_) => return debug!(%peer, "handshake timed out"),
     };
+    let first = tokio::select! {
+        () = cancel.cancelled() => return,
+        first = tokio::time::timeout(HANDSHAKE_TIMEOUT, first_text(&mut ws)) => first,
+    };
+    let first = match first {
+        Ok(Ok(Some(first))) => first,
+        Ok(Ok(None)) => return,
+        Ok(Err(err)) => return debug!(%peer, "no hello: {err:#}"),
+        Err(_) => return debug!(%peer, "no hello within {HANDSHAKE_TIMEOUT:?}"),
+    };
+    if !is_host(&first) {
+        return shared.clients.serve(ws, device, first, peer, cancel).await;
+    }
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
-        result = serve(&mut ws, &shared, &device, &cancel) => result,
+        result = serve(&mut ws, &first, &shared, &device, &cancel) => result,
     };
     if let Err(err) = result {
         debug!(%peer, "host connection failed: {err:#}");
@@ -53,34 +64,40 @@ pub(super) async fn run(
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close(None)).await;
 }
 
-async fn handshake(stream: TcpStream, shared: &Shared) -> Result<(Ws, String)> {
-    let tls = shared.tls.acceptor().accept(stream).await?;
-    // The verifier makes a client certificate mandatory; this only guards against a change there.
-    let device = tls
-        .get_ref()
-        .1
-        .peer_certificates()
-        .and_then(|certs| certs.first())
-        .map(|cert| fingerprint(cert))
-        .context("the host sent no device certificate")?;
-    Ok((tokio_tungstenite::accept_async(tls).await?, device))
+/// The first text frame, or `None` when the peer closes first.
+async fn first_text(ws: &mut Ws) -> Result<Option<String>> {
+    loop {
+        let Some(frame) = ws.next().await else {
+            return Ok(None);
+        };
+        match frame.context("reading the first message")? {
+            Message::Text(text) => return Ok(Some(text.as_str().to_owned())),
+            Message::Binary(_) => bail!("messages must be JSON text frames"),
+            Message::Close(_) => return Ok(None),
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
 }
 
-/// Handles the host's messages until it closes the connection or breaks the protocol.
+/// Whether a first message is a host's hello: only that one carries a replication version.
+fn is_host(first: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(first)
+        .is_ok_and(|hello| hello.get("replication_version").is_some())
+}
+
+/// Handles the host's messages after its hello, `first`, until it closes the connection,
+/// breaks the protocol or falls silent.
 async fn serve(
     ws: &mut Ws,
+    first: &str,
     shared: &Shared,
     device: &str,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, next(ws))
-        .await
-        .map_err(|_| anyhow!("no hello within {HANDSHAKE_TIMEOUT:?}"))??;
-    let hello = match first {
-        Some(Ok(HostMessage::Hello(hello))) => hello,
-        Some(Ok(_)) => return fail(ws, bad("the first message must be a hello")).await,
-        Some(Err(err)) => return fail(ws, bad(&err)).await,
-        None => return Ok(()),
+    let hello = match serde_json::from_str(first) {
+        Ok(HostMessage::Hello(hello)) => hello,
+        Ok(_) => return fail(ws, bad("the first message must be a hello")).await,
+        Err(err) => return fail(ws, bad(&format!("invalid message: {err}"))).await,
     };
     let identity =
         match shared
@@ -113,7 +130,7 @@ async fn serve(
     let host = hello.host_id.clone();
     let bound = {
         let (device, host, name) = (identity.device_id.clone(), host.clone(), hello.host_name);
-        blocking(shared, move |store| {
+        blocking(&shared.store, move |store| {
             store.bind(&device, &host, &name, &paired)
         })
         .await?
@@ -130,7 +147,7 @@ async fn serve(
     }
     let cursors = {
         let host = host.clone();
-        blocking(shared, move |store| store.cursors(&host)).await?
+        blocking(&shared.store, move |store| store.cursors(&host)).await?
     };
     info!(
         host_id = %host,
@@ -141,24 +158,62 @@ async fn serve(
     );
     send(ws, hello_message(cursors)).await?;
 
-    while let Some(message) = next(ws).await? {
+    let presence = shared.fleet.presence();
+    presence.connected(&host);
+    let result = receive(ws, shared, &host).await;
+    let seen = presence.disconnected(&host);
+    let device = identity.device_id.clone();
+    blocking(&shared.store, move |store| store.seen(&device, seen)).await?;
+    info!(host_id = %host, online = presence.online(&host), "host disconnected");
+    result
+}
+
+/// Handles the host's messages once it is connected.
+async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
+    loop {
+        let frame = match tokio::time::timeout(shared.liveness, ws.next()).await {
+            Err(_) => bail!("the host was silent for {:?}", shared.liveness),
+            Ok(None) => return Ok(()),
+            Ok(Some(frame)) => frame.context("reading from the host")?,
+        };
+        shared.fleet.presence().heard(host);
+        let message = match frame {
+            Message::Text(text) => {
+                serde_json::from_str(&text).map_err(|err| format!("invalid message: {err}"))
+            }
+            Message::Binary(_) => Err("messages must be JSON text frames".to_owned()),
+            Message::Close(_) => return Ok(()),
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+        };
         let reply = match message {
             Ok(HostMessage::Hello(_)) => return fail(ws, bad("already said hello")).await,
             Ok(HostMessage::Session(summary)) => {
                 let host = host.clone();
-                blocking(shared, move |store| store.put_summary(&host, &summary)).await?;
+                blocking(&shared.store, move |store| {
+                    store.put_summary(&host, &summary)
+                })
+                .await?;
+                shared.fleet.refresh().await;
                 continue;
             }
             Ok(HostMessage::Batch(batch)) => {
                 let session_id = batch.session_id.clone();
-                let host = host.clone();
-                match blocking(shared, move |store| store.append(&host, &batch)).await {
-                    Ok(Outcome::Acked(after_seq)) => VaultMessage::Ack(Cursor {
-                        session_id,
-                        after_seq,
-                    }),
-                    Ok(Outcome::Rejected { held, reason }) => {
-                        warn!(host_id = %hello.host_id, %session_id, ?reason, "batch rejected");
+                let owner = host.clone();
+                let stored = blocking(&shared.store, move |store| {
+                    Ok((store.append(&owner, &batch)?, batch))
+                })
+                .await;
+                match stored {
+                    Ok((Outcome::Acked(after_seq), batch)) => {
+                        shared.fleet.publish(&batch);
+                        shared.fleet.refresh().await;
+                        VaultMessage::Ack(Cursor {
+                            session_id,
+                            after_seq,
+                        })
+                    }
+                    Ok((Outcome::Rejected { held, reason }, _)) => {
+                        warn!(host_id = %host, %session_id, ?reason, "batch rejected");
                         VaultMessage::Rejected {
                             cursor: Cursor {
                                 session_id,
@@ -178,7 +233,6 @@ async fn serve(
         };
         send(ws, reply).await?;
     }
-    Ok(())
 }
 
 fn hello_message(acked: Vec<Cursor>) -> VaultMessage {
@@ -187,42 +241,6 @@ fn hello_message(acked: Vec<Cursor>) -> VaultMessage {
         build: BUILD.to_owned(),
         acked,
     })
-}
-
-/// Runs `call` on the store on the blocking pool; a malformed batch comes back as
-/// [`store::BadBatch`].
-async fn blocking<T: Send + 'static>(
-    shared: &Shared,
-    call: impl FnOnce(&mut VaultStore) -> store::Result<T> + Send + 'static,
-) -> Result<T> {
-    let store = Arc::clone(&shared.store);
-    tokio::task::spawn_blocking(move || {
-        // Every write is one transaction, so a poisoned store is consistent.
-        let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
-        call(&mut store).map_err(|err| match err {
-            store::Error::BadBatch(bad) => anyhow::Error::new(bad),
-            err => anyhow::Error::new(err).context("the vault database failed"),
-        })
-    })
-    .await
-    .context("the vault store task panicked")?
-}
-
-/// The next host message: `Some(Err)` describes a frame that is not one.
-async fn next(ws: &mut Ws) -> Result<Option<Result<HostMessage, String>>> {
-    loop {
-        let Some(frame) = ws.next().await else {
-            return Ok(None);
-        };
-        return Ok(Some(match frame.context("reading from the host")? {
-            Message::Text(text) => {
-                serde_json::from_str(&text).map_err(|err| format!("invalid message: {err}"))
-            }
-            Message::Binary(_) => Err("messages must be JSON text frames".to_owned()),
-            Message::Close(_) => return Ok(None),
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
-        }));
-    }
 }
 
 async fn send(ws: &mut Ws, message: VaultMessage) -> Result<()> {

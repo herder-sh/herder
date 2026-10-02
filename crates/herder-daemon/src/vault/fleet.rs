@@ -1,0 +1,276 @@
+//! The fleet view the vault gives clients: every replicated session of every host, read-only.
+//!
+//! Clients pair with the vault and connect to it as to a daemon, on the port hosts replicate
+//! to. They get the session list, and replay and follow each session's journal as its host
+//! replicates it. Every command is refused: a session is driven on its host, and the error
+//! names that host and whether it is online, which the vault tells from its replication
+//! connection ([`Presence`]).
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use herder_protocol::{
+    Account, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event, EventBody,
+    HostId, Seq, SessionHead, SessionId, Timestamp,
+};
+use tracing::warn;
+
+use super::VaultStore;
+use super::blocking;
+use crate::hub::Hub;
+use crate::session::EventSink;
+use crate::ws::{Backend, Identity};
+
+/// The vault's sessions as the client server sees them.
+#[derive(Clone)]
+pub(crate) struct Fleet {
+    store: Arc<Mutex<VaultStore>>,
+    hub: Arc<Hub>,
+    presence: Arc<Presence>,
+    /// The session list clients got last.
+    listed: Arc<tokio::sync::Mutex<Vec<SessionHead>>>,
+}
+
+impl Fleet {
+    pub(crate) fn new(store: Arc<Mutex<VaultStore>>, hub: Arc<Hub>) -> Self {
+        Self {
+            store,
+            hub,
+            presence: Arc::default(),
+            listed: Arc::default(),
+        }
+    }
+
+    pub(crate) fn presence(&self) -> &Presence {
+        &self.presence
+    }
+
+    /// Sends the events of `batch`, just stored, to the session's subscribers; each client
+    /// skips the ones it has.
+    pub(crate) fn publish(&self, batch: &Batch) {
+        for record in &batch.events {
+            let event = record.to_event(batch.session_id.clone());
+            // Bodies from a newer build cannot be sent, as on replay.
+            if !matches!(event.body, EventBody::Unknown) {
+                self.hub.event(&event);
+            }
+        }
+    }
+
+    /// Sends clients the session list if anything in it but the head seqs changed, as a
+    /// daemon does.
+    pub(crate) async fn refresh(&self) {
+        // Held while reading, so a slower refresh never sends an older list after a newer one.
+        let mut listed = self.listed.lock().await;
+        let heads = match self.heads().await {
+            Ok(heads) => heads,
+            Err(err) => return warn!("cannot list the fleet: {err:#}"),
+        };
+        let headless = |heads: &[SessionHead]| -> Vec<SessionHead> {
+            heads
+                .iter()
+                .map(|head| SessionHead {
+                    head_seq: 0,
+                    ..head.clone()
+                })
+                .collect()
+        };
+        if headless(&listed) != headless(&heads) {
+            self.hub.sessions_changed(&heads);
+            *listed = heads;
+        }
+    }
+
+    async fn heads(&self) -> anyhow::Result<Vec<SessionHead>> {
+        blocking(&self.store, |store| store.fleet()).await
+    }
+
+    /// The refusal of a command on `session_id`, naming the host it belongs to.
+    async fn read_only(&self, session_id: &SessionId) -> ErrorInfo {
+        let found = {
+            let session_id = session_id.clone();
+            blocking(&self.store, move |store| {
+                let Some(host) = store.host_of(&session_id)? else {
+                    return Ok(None);
+                };
+                let record = store.hosts()?.into_iter().find(|h| h.host_id == host);
+                Ok(Some((host, record)))
+            })
+            .await
+        };
+        let (host, record) = match found {
+            Ok(Some(found)) => found,
+            Ok(None) => {
+                return error(
+                    ErrorCode::NotFound,
+                    format!("session {session_id} does not exist"),
+                );
+            }
+            Err(err) => {
+                warn!("cannot look up a session's host: {err:#}");
+                return error(ErrorCode::Internal, "cannot read the vault database".into());
+            }
+        };
+        let name = record.as_ref().map_or(host.as_str(), |r| &r.host_name);
+        let liveness = if self.presence.online(&host) {
+            "online".to_owned()
+        } else {
+            match self
+                .presence
+                .last_heard(&host)
+                .or(record.as_ref().map(|r| r.seen_at))
+            {
+                Some(seen) => format!("offline, last seen {seen}"),
+                None => "offline".to_owned(),
+            }
+        };
+        error(
+            ErrorCode::Conflict,
+            format!(
+                "session {session_id} is read-only on the vault; drive it on its host \
+                 {name} ({host}), which is {liveness}"
+            ),
+        )
+    }
+}
+
+impl Backend for Fleet {
+    async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
+        self.heads().await
+    }
+
+    fn accounts(&self) -> Vec<Account> {
+        Vec::new()
+    }
+
+    fn refresh_usage(&self) {}
+
+    async fn read_since(
+        &self,
+        session_id: &SessionId,
+        after_seq: Seq,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Event>> {
+        let session_id = session_id.clone();
+        blocking(&self.store, move |store| {
+            let Some(host) = store.host_of(&session_id)? else {
+                return Ok(Vec::new());
+            };
+            let records = store.records(&host, &session_id, after_seq, limit)?;
+            Ok(records
+                .iter()
+                .map(|record| record.to_event(session_id.clone()))
+                .collect())
+        })
+        .await
+    }
+
+    async fn command(
+        &self,
+        _: &Identity,
+        _: &CommandId,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        match target(&command) {
+            Some(session_id) => Err(self.read_only(session_id).await),
+            None => Err(error(
+                ErrorCode::Unsupported,
+                "the vault runs no sessions; do this on a host".into(),
+            )),
+        }
+    }
+
+    async fn worktree(&self, session_id: &SessionId) -> Result<PathBuf, ErrorInfo> {
+        Err(self.read_only(session_id).await)
+    }
+}
+
+/// The session a command acts on, if it acts on one.
+fn target(command: &CommandBody) -> Option<&SessionId> {
+    match command {
+        CommandBody::ArchiveSession { session_id, .. }
+        | CommandBody::SendPrompt { session_id, .. }
+        | CommandBody::Interrupt { session_id }
+        | CommandBody::SetModel { session_id, .. }
+        | CommandBody::SetPermissionMode { session_id, .. }
+        | CommandBody::AnswerApproval { session_id, .. }
+        | CommandBody::AnswerQuestion { session_id, .. }
+        | CommandBody::SwitchAccount { session_id, .. }
+        | CommandBody::SwitchProvider { session_id, .. }
+        | CommandBody::LinkPr { session_id, .. }
+        | CommandBody::UnlinkPr { session_id, .. }
+        | CommandBody::ComposeDown { session_id, .. }
+        | CommandBody::OpenTerminal { session_id, .. } => Some(session_id),
+        CommandBody::CreateSession { .. }
+        | CommandBody::AddAccount { .. }
+        | CommandBody::AttachTerminal { .. }
+        | CommandBody::DetachTerminal { .. }
+        | CommandBody::ResizeTerminal { .. }
+        | CommandBody::TerminalInput { .. } => None,
+    }
+}
+
+fn error(code: ErrorCode, message: String) -> ErrorInfo {
+    ErrorInfo { code, message }
+}
+
+/// Which hosts have a replication connection open, and when the others were last heard from
+/// since the vault started.
+#[derive(Debug, Default)]
+pub(crate) struct Presence(Mutex<HashMap<HostId, Seen>>);
+
+#[derive(Debug)]
+struct Seen {
+    /// Open connections; a reconnecting host briefly has two.
+    connections: usize,
+    /// When any of them last received a frame.
+    at: Timestamp,
+}
+
+impl Presence {
+    pub(crate) fn connected(&self, host: &HostId) {
+        let mut hosts = self.lock();
+        let seen = hosts.entry(host.clone()).or_insert(Seen {
+            connections: 0,
+            at: Timestamp::now(),
+        });
+        seen.connections += 1;
+        seen.at = Timestamp::now();
+    }
+
+    pub(crate) fn heard(&self, host: &HostId) {
+        if let Some(seen) = self.lock().get_mut(host) {
+            seen.at = Timestamp::now();
+        }
+    }
+
+    /// Ends one of `host`'s connections; returns when it was last heard from.
+    pub(crate) fn disconnected(&self, host: &HostId) -> Timestamp {
+        let mut hosts = self.lock();
+        match hosts.get_mut(host) {
+            Some(seen) => {
+                seen.connections = seen.connections.saturating_sub(1);
+                seen.at
+            }
+            None => Timestamp::now(),
+        }
+    }
+
+    /// Whether `host` has a replication connection open.
+    pub(crate) fn online(&self, host: &HostId) -> bool {
+        self.lock()
+            .get(host)
+            .is_some_and(|seen| seen.connections > 0)
+    }
+
+    /// When `host` was last heard from, if since the vault started.
+    pub(crate) fn last_heard(&self, host: &HostId) -> Option<Timestamp> {
+        self.lock().get(host).map(|seen| seen.at)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<HostId, Seen>> {
+        // Every update is a single field write, so a poisoned map is consistent.
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
