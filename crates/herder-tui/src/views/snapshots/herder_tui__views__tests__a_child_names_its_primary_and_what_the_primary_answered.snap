@@ -1,8 +1,9 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 411
 expression: "render(&mut app, 110, 20).backend()"
 ---
-"┌ sessions ────────────────────────┐┌ write the tests needs you ────────────────────────── claude-opus · ask ┐"
+"┌ sessions ────────────────────────┐┌ write the tests needs you ──────────── claude-main · claude-opus · ask ┐"
 "│● box (4)                         ││  · question for the primary session: Which port should the server use? │"
 "│ needs you ▾ app · herder/… (2) !1││  · question escalated to you: the primary session left it to you; the… │"
 "│ question  └ write the tests      ││  · allowed by the primary session                                      │"

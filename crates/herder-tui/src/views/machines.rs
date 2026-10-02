@@ -80,7 +80,7 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
 }
 
 /// A machine's connection mark, its colour, and what it says.
-fn connection(machine: &Machine) -> (&'static str, Color, String) {
+pub(super) fn connection(machine: &Machine) -> (&'static str, Color, String) {
     match &machine.connection {
         ConnectionState::Connected => ("●", Color::Green, "connected".to_owned()),
         ConnectionState::Connecting => ("◌", Color::Yellow, "connecting".to_owned()),
@@ -217,7 +217,7 @@ fn dialog(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: &AddAccount) {
+pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: &AddAccount) {
     let width = value_width(area);
     let machine = app
         .machines

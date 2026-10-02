@@ -60,7 +60,19 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
     }
     if !session.model.is_empty() && !compact {
         let mode = crate::session::mode_name(session.permission_mode);
-        let facts = format!(" {} · {mode} ", session.model);
+        // The account the session runs on, by its label where the machine lists it.
+        let account = app
+            .open
+            .as_ref()
+            .zip(session.account_id.as_ref())
+            .map(|(key, id)| {
+                crate::account_screen::find(&app.machines, &key.host_id, id)
+                    .map_or_else(|| id.to_string(), |account| account.label.clone())
+            });
+        let facts = match account {
+            Some(account) => format!(" {account} · {} · {mode} ", session.model),
+            None => format!(" {} · {mode} ", session.model),
+        };
         block = block.title(Line::styled(facts, super::dim()).right_aligned());
     }
     let inner = block.inner(area);

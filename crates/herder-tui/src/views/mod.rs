@@ -6,6 +6,7 @@
 //! Below [`NARROW`] columns, as on a phone, the screen shows one pane at a time: the session
 //! list, or what it opened, full width. Rows and titles there are compact.
 
+mod accounts;
 mod composer;
 mod help;
 mod inbox;
@@ -16,6 +17,7 @@ mod palette;
 mod prs;
 mod sessions;
 mod status;
+mod switch;
 mod terminals;
 mod transcript;
 
@@ -72,6 +74,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         status::draw(frame, status_line, app, narrow);
     }
     new_session::draw(frame, area, app);
+    if let Some(screen) = &app.account_screen {
+        accounts::draw(frame, body, app, screen);
+    }
+    switch::draw(frame, body, app);
     if let Some(panel) = &app.machine_panel {
         machines::draw(frame, body, app, panel);
     }

@@ -9,12 +9,14 @@ use herder_protocol::{CommandBody, CommandResult, HostId, SessionId};
 use ratatui::crossterm::event::KeyEvent;
 use ratatui::widgets::ListState;
 
+use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
+use crate::switch::Switch;
 use crate::terminal::{self, Picker};
 
 /// An input to the app.
@@ -194,6 +196,10 @@ pub struct App {
     pub folded: HashSet<SessionKey>,
     /// The inbox's selection and answer editor.
     pub inbox: Inbox,
+    /// The accounts screen, if shown.
+    pub account_screen: Option<AccountScreen>,
+    /// The switch dialog, while it is open.
+    pub switch: Option<Switch>,
 }
 
 impl Default for App {
@@ -215,6 +221,8 @@ impl Default for App {
             terminals: None,
             folded: HashSet::new(),
             inbox: Inbox::default(),
+            account_screen: None,
+            switch: None,
         }
     }
 }
@@ -247,7 +255,10 @@ impl App {
                 Vec::new()
             }
             Msg::Paste(text) => {
-                if !self.paste_pairing(&text) && !self.paste_inbox(&text) {
+                if !self.paste_accounts(&text)
+                    && !self.paste_pairing(&text)
+                    && !self.paste_inbox(&text)
+                {
                     self.paste(&text);
                 }
                 Vec::new()
@@ -307,6 +318,13 @@ impl App {
             Action::Pr(action) => return self.act_pr(action),
             Action::Inbox(action) => return self.act_inbox(action),
             Action::Fold => self.fold(),
+            Action::OpenAccounts => {
+                self.account_screen
+                    .get_or_insert_with(AccountScreen::default);
+            }
+            Action::Accounts(input) => return self.account_input(input),
+            Action::OpenSwitch => self.open_switch(),
+            Action::Switch(input) => return self.switch_input(input),
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {
