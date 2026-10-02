@@ -20,7 +20,7 @@ use tracing::{debug, warn};
 
 use super::journal::Journal;
 use super::{Inner, error};
-use crate::worktree;
+use crate::{handoff, worktree};
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
@@ -452,7 +452,7 @@ impl Actor {
                 session.provider.as_str()
             ))
         })?;
-        let seed = self
+        let items = self
             .inner
             .journal
             .all(session.session_id.clone())
@@ -467,6 +467,7 @@ impl Actor {
                 _ => None,
             })
             .collect();
+        let seed = handoff::transcript(items, handoff::budget(&session.provider, &session.model));
         let mcp = match self.inner.mcp.get() {
             Some(mcp) => Some(mcp.grant(&session.session_id).map_err(|err| {
                 fatal(format!(

@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
+use herder_daemon::handoff;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
@@ -1224,5 +1225,108 @@ async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session()
     daemon.manager.handle(alice(), archive).await.unwrap();
     let (_, shim) = call(session).await;
     assert!(shim.is_err());
+    daemon.stop().await;
+}
+
+/// A fake script of `turns` turns, each a prompt `Request <n>` answered by a tool call, a
+/// 6000-character tool result and a reply.
+fn long_script(dir: &Path, turns: usize) -> PathBuf {
+    let mut script = String::new();
+    for n in 1..=turns {
+        let turn = format!("turn-{n}");
+        let item = |id: String, body: serde_json::Value| serde_json::json!({"emit": {"type": "item_completed", "item": {"id": id, "turn_id": turn, "body": body}}});
+        let lines = [
+            serde_json::json!({"expect": {"type": "send_prompt", "turn_id": turn, "text": format!("Request {n}")}}),
+            serde_json::json!({"emit": {"type": "turn_started", "turn_id": turn}}),
+            item(
+                format!("call-{n}"),
+                serde_json::json!({"type": "tool_call", "name": "Bash", "input": {"command": "cargo test"}}),
+            ),
+            item(
+                format!("result-{n}"),
+                serde_json::json!({"type": "tool_result", "call_id": format!("call-{n}"), "output": "x".repeat(6_000), "is_error": false}),
+            ),
+            item(
+                format!("reply-{n}"),
+                serde_json::json!({"type": "assistant_message", "text": format!("Reply {n}")}),
+            ),
+            serde_json::json!({"emit": {"type": "turn_completed", "turn_id": turn}}),
+        ];
+        for line in lines {
+            script.push_str(&format!("{line}\n"));
+        }
+    }
+    let path = dir.join(format!("long-{turns}.jsonl"));
+    std::fs::write(&path, script).unwrap();
+    path
+}
+
+#[tokio::test]
+async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let script = long_script(dir.path(), 200);
+    let mut daemon = Daemon::open(dir.path(), script.to_str().unwrap(), turns.clone()).await;
+    let session = daemon.create().await;
+    // Queued prompts run one turn after another.
+    for n in 1..=200 {
+        daemon
+            .prompt(alice(), &session, &format!("Request {n}"))
+            .await;
+    }
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-200"))
+        .await;
+    daemon.stop().await;
+
+    let next = dir.path().join("next.jsonl");
+    std::fs::write(
+        &next,
+        r#"{"expect": {"type": "send_prompt", "turn_id": "turn-201", "text": "Next."}}"#,
+    )
+    .unwrap();
+    let daemon = Daemon::open(dir.path(), next.to_str().unwrap(), turns).await;
+    daemon.prompt(alice(), &session, "Next.").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while daemon.starts.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let seed = daemon.starts.lock().unwrap()[0].seed.clone();
+    let budget = handoff::budget(&fake(), "");
+    assert!(handoff::estimate(&seed) <= budget);
+    assert_eq!(
+        seed[0].body,
+        ItemBody::UserMessage {
+            text: "Request 1".into()
+        }
+    );
+    assert_eq!(
+        seed[1].body,
+        ItemBody::UserMessage {
+            text: handoff::NOTE.into()
+        }
+    );
+    let last: Vec<_> = seed[seed.len() - 4..]
+        .iter()
+        .map(|item| &item.body)
+        .collect();
+    assert_eq!(
+        last[0],
+        &ItemBody::UserMessage {
+            text: "Request 200".into()
+        }
+    );
+    let ItemBody::ToolResult {
+        call_id, output, ..
+    } = last[2]
+    else {
+        panic!("expected a tool result, got {:?}", last[2]);
+    };
+    assert_eq!(call_id, &ItemId::new("call-200"));
+    assert!(output.contains("[… 3000 chars elided …]"));
     daemon.stop().await;
 }

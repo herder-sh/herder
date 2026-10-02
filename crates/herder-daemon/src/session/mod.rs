@@ -64,7 +64,8 @@
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
 //! a `transient` `turn_failed` when the manager opens, after expiring its open approvals the
 //! same way as at a turn's end: the CLI that asked is gone. A session's adapter starts lazily on its
-//! next prompt, seeded with the journal's items.
+//! next prompt, seeded with the journal's items, condensed to fit the model
+//! ([`crate::handoff`]).
 
 mod actor;
 pub(crate) mod journal;

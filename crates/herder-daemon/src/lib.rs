@@ -4,6 +4,7 @@ pub mod accounts;
 pub mod auth;
 pub mod config;
 pub mod data_dir;
+pub mod handoff;
 pub mod hub;
 pub mod logging;
 pub mod mcp;
