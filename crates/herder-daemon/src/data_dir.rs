@@ -2,7 +2,7 @@
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -119,6 +119,25 @@ fn host_id(root: &Path) -> Result<Uuid> {
         .and_then(|()| File::open(root)?.sync_all())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(id)
+}
+
+/// Atomically writes `dir/name` readable by this user only; the caller syncs `dir` afterwards
+/// when the rename must survive a crash.
+pub(crate) fn write_private(dir: &Path, name: &str, contents: &[u8]) -> Result<()> {
+    let path = dir.join(name);
+    let tmp = dir.join(format!(".{name}.tmp"));
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut file| {
+            file.write_all(contents)?;
+            file.sync_all()
+        })
+        .and_then(|()| fs::rename(&tmp, &path))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 fn write_synced(path: &Path, contents: &[u8]) -> io::Result<()> {

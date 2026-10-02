@@ -1,19 +1,25 @@
 //! The daemon's self-signed TLS certificate, created on first start and reused afterwards.
 //!
-//! Clients cannot validate it against a CA; they pin its [`Tls::fingerprint`] instead.
+//! Clients cannot validate it against a CA; they pin its [`Tls::fingerprint`] instead. Every
+//! client must present a certificate of its own, its device key: the handshake only proves the
+//! client holds that certificate's key, and [`crate::auth::Auth`] decides afterwards whether the
+//! device is paired.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::fs::{self, File};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use rustls::ServerConfig;
+use rustls::client::danger::HandshakeSignatureValid;
+use rustls::crypto::WebPkiSupportedAlgorithms;
 use rustls::pki_types::pem::PemObject;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::{DigitallySignedStruct, DistinguishedName, ServerConfig, SignatureScheme};
 use sha2::{Digest, Sha256};
 use tokio_rustls::TlsAcceptor;
+
+use crate::data_dir::write_private;
 
 const CERT_FILE: &str = "cert.pem";
 const KEY_FILE: &str = "key.pem";
@@ -45,13 +51,16 @@ impl Tls {
             .and_then(|pem| Ok(PrivateKeyDer::from_pem_slice(&pem)?))
             .with_context(|| format!("reading {}", key_path.display()))?;
         let fingerprint = fingerprint(&cert);
-        let config =
-            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_protocol_versions(&[&rustls::version::TLS13])
-                .context("configuring TLS")?
-                .with_no_client_auth()
-                .with_single_cert(vec![cert], key)
-                .with_context(|| format!("loading the TLS key pair from {}", dir.display()))?;
+        let provider = rustls::crypto::ring::default_provider();
+        let devices = Arc::new(DeviceCerts {
+            algorithms: provider.signature_verification_algorithms,
+        });
+        let config = ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .context("configuring TLS")?
+            .with_client_cert_verifier(devices)
+            .with_single_cert(vec![cert], key)
+            .with_context(|| format!("loading the TLS key pair from {}", dir.display()))?;
         Ok(Self {
             config: Arc::new(config),
             fingerprint,
@@ -65,6 +74,52 @@ impl Tls {
 
     pub(crate) fn acceptor(&self) -> TlsAcceptor {
         TlsAcceptor::from(Arc::clone(&self.config))
+    }
+}
+
+/// Requires a client certificate and checks the client signed the handshake with its key, but
+/// trusts no issuer: devices use self-signed certificates and are known by fingerprint.
+#[derive(Debug)]
+struct DeviceCerts {
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ClientCertVerifier for DeviceCerts {
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        // Whether this certificate belongs to a paired device is decided after the handshake,
+        // so an unpaired device still reaches the hello and is told why it was refused.
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
     }
 }
 
@@ -98,24 +153,6 @@ fn create(dir: &Path, host_name: &str) -> Result<()> {
     File::open(dir)
         .and_then(|dir| dir.sync_all())
         .with_context(|| format!("syncing {}", dir.display()))
-}
-
-/// Atomically writes a file readable by this user only.
-fn write_private(dir: &Path, name: &str, contents: &[u8]) -> Result<()> {
-    let path = dir.join(name);
-    let tmp = dir.join(format!(".{name}.tmp"));
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)
-        .and_then(|mut file| {
-            file.write_all(contents)?;
-            file.sync_all()
-        })
-        .and_then(|()| fs::rename(&tmp, &path))
-        .with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]

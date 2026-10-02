@@ -1,7 +1,7 @@
 //! The TLS WebSocket server clients connect to.
 //!
-//! Each connection runs: TLS, WebSocket upgrade, client hello, server hello, list messages,
-//! then subscriptions and commands. A subscription replays the session's journal after the
+//! Each connection runs: TLS with a device certificate, WebSocket upgrade, client hello,
+//! authentication, server hello, list messages, then subscriptions and commands. A subscription replays the session's journal after the
 //! client's cursor, then streams live events from the [`Hub`] without gaps or duplicates.
 
 mod commands;
@@ -24,6 +24,7 @@ use tracing::{debug, warn};
 
 pub use tls::{Tls, fingerprint};
 
+use crate::auth::Auth;
 use crate::hub::Hub;
 use crate::session::SessionManager;
 use commands::Commands;
@@ -100,6 +101,7 @@ pub struct Server<B> {
 
 struct Shared<B> {
     tls: Tls,
+    auth: Arc<Auth>,
     hub: Arc<Hub>,
     backend: B,
     commands: Commands,
@@ -107,11 +109,13 @@ struct Shared<B> {
 }
 
 impl<B: Backend> Server<B> {
-    /// A server for `backend`, whose events reach clients through `hub`.
-    pub fn new(tls: Tls, hub: Arc<Hub>, backend: B, host: Host) -> Self {
+    /// A server for `backend`, whose events reach clients through `hub`; `auth` decides who
+    /// may connect.
+    pub fn new(tls: Tls, auth: Arc<Auth>, hub: Arc<Hub>, backend: B, host: Host) -> Self {
         Self {
             shared: Arc::new(Shared {
                 tls,
+                auth,
                 hub,
                 backend,
                 commands: Commands::default(),
