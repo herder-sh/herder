@@ -1,0 +1,39 @@
+# herder (the binary)
+
+The single `herder` binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
+`herder --help` lists every command.
+
+## Scripting sessions
+
+`herder session` drives sessions from scripts and other agents, through the same client
+profile as the TUI (pair a machine first with `herder connect`). It never prompts; every
+command takes `--json` for one JSON value on stdout, and `--machine <name or host id>`,
+which defaults to the only paired machine.
+
+```sh
+id=$(echo "Fix the flaky test" | herder session new --repo /src/app --account work \
+  --mode auto-edit --branch fix-flaky)
+herder session wait "$id" --timeout 3600 --json
+echo "Now open a PR" | herder session send "$id"
+herder session send "$id" --approve <approval id>      # or --deny <approval id>
+herder session send "$id" --answer <question id> 2     # a choice's text or number, or free text
+herder session status "$id" --json                     # includes linked PRs: number, state, ci
+herder session list --json
+herder session archive "$id"
+```
+
+| Command   | Does                                                                                     |
+| --------- | ---------------------------------------------------------------------------------------- |
+| `new`     | Creates a session (`--repo`, `--account`, `--model`, `--mode`, `--branch`), prompts it with stdin, prints its id |
+| `send`    | Prompts with stdin, queued behind a running turn as in the TUI; or `--approve`, `--deny`, `--answer` |
+| `wait`    | Blocks until the session is idle, needs you or failed; prints its status, last reply and open requests |
+| `status`  | Status, repo, branch, model, account, mode, linked PRs, open requests, last reply        |
+| `list`    | Every session of the machine, as `status` shows them                                     |
+| `archive` | Removes the worktree, keeps the branches, makes the session read-only (`--force`)        |
+
+`--account` takes an account id or label and defaults to the machine's only account;
+`--mode` is one of `read-only`, `ask` (the default), `auto-edit`, `full-access`.
+
+Exit codes: 0 done, 1 failed (the reason is on stderr), 64 usage error. `wait` also exits 2
+when the session needs you (an approval, a question, or a failed turn), 3 when it is in error,
+and 4 when `--timeout` passed first.
