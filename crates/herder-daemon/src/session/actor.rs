@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::Result;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
-    Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult, ErrorClass,
-    ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId, PermissionMode,
-    QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
+    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult,
+    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId,
+    PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
 };
 use herder_store::Session;
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -73,6 +73,19 @@ pub(super) enum Request {
     Archive {
         force: bool,
     },
+    /// Moves the session to another account between turns, replaying its transcript.
+    Switch {
+        account_id: AccountId,
+        to: Switch,
+    },
+}
+
+/// What a switch to another account changes.
+pub(super) enum Switch {
+    /// Another account of the same provider.
+    Account,
+    /// An account of another provider, on `model` or the provider's default.
+    Provider { model: Option<String> },
 }
 
 /// What a primary session does with a child's request, with the adapter's ids.
@@ -269,6 +282,7 @@ impl Actor {
                     .map_err(super::internal)?;
             }
             Request::Archive { force } => self.archive(by, force).await?,
+            Request::Switch { account_id, to } => self.switch(by, account_id, to).await?,
             Request::FromPrimary { .. } => {}
         }
         Ok(CommandResult::Applied)
@@ -706,6 +720,100 @@ impl Actor {
             .await
             .map_err(super::internal)?;
         self.session.status = status;
+        Ok(())
+    }
+
+    /// Moves the session to `account_id` as `to` says, between turns: stops the current CLI
+    /// and journals the switch, so the next prompt starts the new account's CLI seeded with
+    /// the transcript.
+    async fn switch(
+        &mut self,
+        by: Option<UserId>,
+        account_id: AccountId,
+        to: Switch,
+    ) -> Result<(), ErrorInfo> {
+        let accounts = &self.inner.accounts;
+        let account = accounts.get(&account_id).ok_or_else(|| {
+            error(
+                ErrorCode::NotFound,
+                format!("account {account_id} does not exist"),
+            )
+        })?;
+        let provider = account.provider.clone();
+        let same_provider = provider == self.session.provider;
+        let body = match to {
+            Switch::Account if !same_provider => {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "account {account_id} runs {}, not {}; switch the provider instead",
+                        provider.as_str(),
+                        self.session.provider.as_str()
+                    ),
+                ));
+            }
+            Switch::Account if account_id == self.session.account_id => return Ok(()),
+            Switch::Account => EventBody::AccountSwitched {
+                account_id: account_id.clone(),
+            },
+            Switch::Provider { .. } if same_provider => {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "account {account_id} runs {} already; switch the account instead",
+                        provider.as_str()
+                    ),
+                ));
+            }
+            Switch::Provider { model } => EventBody::ProviderSwitched {
+                provider: provider.clone(),
+                account_id: account_id.clone(),
+                // Empty until the new adapter reports the provider's default.
+                model: model.unwrap_or_default(),
+            },
+        };
+        if self.inner.adapters.get(&provider).is_none() {
+            return Err(error(
+                ErrorCode::Unsupported,
+                format!("no adapter runs {} sessions", provider.as_str()),
+            ));
+        }
+        if let Some(primary) = &self.session.parent {
+            let primary = self
+                .inner
+                .journal
+                .session(primary.clone())
+                .await
+                .map_err(super::internal)?
+                .ok_or_else(|| super::not_found(primary))?;
+            if account_id != primary.account_id && !account.failover {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "account {account_id} is outside the task's failover chain: a child \
+                         session runs on its primary's account or on one that opted in to \
+                         failover"
+                    ),
+                ));
+            }
+        }
+        if self.turn.is_some() {
+            return Err(error(
+                ErrorCode::Conflict,
+                "a turn is running; interrupt it or wait for it to end before switching",
+            ));
+        }
+        if let Some(adapter) = self.adapter.take() {
+            let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
+        }
+        self.record(by, body.clone())
+            .await
+            .map_err(super::internal)?;
+        self.session.account_id = account_id;
+        if let EventBody::ProviderSwitched { model, .. } = body {
+            self.session.provider = provider;
+            self.session.model = model;
+        }
         Ok(())
     }
 

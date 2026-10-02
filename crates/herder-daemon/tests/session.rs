@@ -1384,3 +1384,512 @@ async fn without_limits_the_cli_runs_directly() {
     assert!(starts.iter().all(|start| start.launcher.is_empty()));
     daemon.stop().await;
 }
+
+/// Fake adapters that play one script per start, in order, recording every start request and
+/// every command across starts.
+struct Scripted {
+    scripts: Mutex<Vec<PathBuf>>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
+    commands: Arc<Mutex<Vec<AdapterCommand>>>,
+}
+
+impl Scripted {
+    fn new(scripts: &[&str]) -> Arc<Self> {
+        Arc::new(Self {
+            scripts: Mutex::new(scripts.iter().rev().map(|name| fixture(name)).collect()),
+            starts: Default::default(),
+            commands: Default::default(),
+        })
+    }
+
+    fn starts(&self) -> Vec<StartRequest> {
+        self.starts.lock().unwrap().clone()
+    }
+
+    fn commands(&self) -> Vec<AdapterCommand> {
+        self.commands.lock().unwrap().clone()
+    }
+}
+
+impl Adapter for Scripted {
+    fn start(&self, request: StartRequest) -> StartFuture {
+        let script = self
+            .scripts
+            .lock()
+            .unwrap()
+            .pop()
+            .expect("a script per start");
+        Recording {
+            fake: FakeAdapter::new(script),
+            starts: self.starts.clone(),
+            commands: self.commands.clone(),
+        }
+        .start(request)
+    }
+}
+
+/// A manager running `adapters` on `accounts`, each `(id, provider, failover)` with its config
+/// dir under `dir`, over a store where `events` were journaled first.
+struct Switching {
+    manager: SessionManager,
+    repo: PathBuf,
+    seen: mpsc::UnboundedReceiver<Seen>,
+    shutdown: CancellationToken,
+}
+
+impl Switching {
+    async fn open(
+        dir: &Path,
+        adapters: &[(Provider, Arc<Scripted>)],
+        accounts: &[(&str, Provider, bool)],
+        events: Vec<(SessionId, EventBody)>,
+    ) -> Self {
+        let mut registry = Adapters::new();
+        for (provider, adapter) in adapters {
+            registry.register(provider.clone(), adapter.clone());
+        }
+        let accounts = accounts
+            .iter()
+            .map(|(id, provider, failover)| {
+                let config = AccountConfig {
+                    provider: provider.clone(),
+                    label: id.to_string(),
+                    config_dir: Some(dir.join(id)),
+                    failover: *failover,
+                };
+                (AccountId::new(*id), config)
+            })
+            .collect();
+        let mut store = Store::open(dir.join("herder.db")).unwrap();
+        for (session_id, body) in events {
+            let event = herder_store::NewEvent {
+                session_id,
+                at: herder_protocol::Timestamp::now(),
+                by: None,
+                body,
+            };
+            store.append(event).unwrap();
+        }
+        let turns = AtomicU64::new(0);
+        let (tx, seen) = mpsc::unbounded_channel();
+        let setup = Setup {
+            store,
+            adapters: registry,
+            accounts,
+            sink: Arc::new(Recorder(tx)),
+            turn_ids: Box::new(move || {
+                TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
+            }),
+            worktrees: Worktrees::new(dir.join("worktrees")),
+        };
+        let shutdown = CancellationToken::new();
+        let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+        let repo = dir.join("app");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "--quiet", "--initial-branch=main"]);
+        git(&repo, &["commit", "--quiet", "--allow-empty", "-m", "init"]);
+        Self {
+            manager,
+            repo,
+            seen,
+            shutdown,
+        }
+    }
+
+    async fn create(&self, account: &str) -> SessionId {
+        let create = CommandBody::CreateSession {
+            repo: self.repo.to_str().unwrap().to_owned(),
+            branch: None,
+            account_id: AccountId::new(account),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+        };
+        let Ok(CommandResult::SessionCreated { session_id }) =
+            self.manager.handle(alice(), create).await
+        else {
+            panic!("no session on {account}");
+        };
+        session_id
+    }
+
+    async fn handle(&self, command: CommandBody) -> Result<CommandResult, ErrorInfo> {
+        self.manager.handle(alice(), command).await
+    }
+
+    /// Sends a prompt and waits for its turn to end; returns how it ended.
+    async fn turn(&mut self, session_id: &SessionId, text: &str) -> EventBody {
+        let prompt = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: text.into(),
+        };
+        assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
+        self.until(|body| {
+            matches!(
+                body,
+                EventBody::TurnCompleted { .. }
+                    | EventBody::TurnInterrupted { .. }
+                    | EventBody::TurnFailed { .. }
+            )
+        })
+        .await
+    }
+
+    async fn until(&mut self, done: impl Fn(&EventBody) -> bool) -> EventBody {
+        loop {
+            let next = tokio::time::timeout(Duration::from_secs(5), self.seen.recv());
+            if let Seen::Event(event) = next.await.unwrap().unwrap()
+                && done(&event.body)
+            {
+                return event.body;
+            }
+        }
+    }
+}
+
+fn switch_account(session_id: &SessionId, account: &str) -> CommandBody {
+    CommandBody::SwitchAccount {
+        session_id: session_id.clone(),
+        account_id: AccountId::new(account),
+    }
+}
+
+fn switch_provider(session_id: &SessionId, account: &str, model: Option<&str>) -> CommandBody {
+    CommandBody::SwitchProvider {
+        session_id: session_id.clone(),
+        account_id: AccountId::new(account),
+        model: model.map(Into::into),
+    }
+}
+
+fn seed_texts(start: &StartRequest) -> Vec<String> {
+    start
+        .seed
+        .iter()
+        .map(|item| match &item.body {
+            ItemBody::UserMessage { text } => format!("user: {text}"),
+            ItemBody::AssistantMessage { text } => format!("assistant: {text}"),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn one_session_moves_from_claude_to_codex_to_cursor_and_keeps_going() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["switch_claude_a.jsonl", "switch_claude_b.jsonl"]);
+    let codex = Scripted::new(&["switch_codex.jsonl"]);
+    let cursor = Scripted::new(&["switch_cursor.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, claude.clone()),
+            (Provider::Codex, codex.clone()),
+            (Provider::Cursor, cursor.clone()),
+        ],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, false),
+            ("codex-work", Provider::Codex, false),
+            ("cursor-work", Provider::Cursor, false),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    let completed = |body: &EventBody| matches!(body, EventBody::TurnCompleted { .. });
+
+    assert!(completed(
+        &daemon.turn(&session, "Add a health check endpoint.").await
+    ));
+    let set_model = CommandBody::SetModel {
+        session_id: session.clone(),
+        model: "opus".into(),
+    };
+    assert_eq!(daemon.handle(set_model).await, Ok(CommandResult::Applied));
+    let applied = Ok(CommandResult::Applied);
+    assert_eq!(
+        daemon.handle(switch_account(&session, "claude-b")).await,
+        applied
+    );
+    assert!(completed(
+        &daemon.turn(&session, "Now add a test for it.").await
+    ));
+    let to_codex = switch_provider(&session, "codex-work", Some("gpt-5"));
+    assert_eq!(daemon.handle(to_codex).await, applied);
+    assert!(completed(
+        &daemon.turn(&session, "Document it in the README.").await
+    ));
+    let to_cursor = switch_provider(&session, "cursor-work", None);
+    assert_eq!(daemon.handle(to_cursor).await, applied);
+    assert!(completed(&daemon.turn(&session, "Commit it.").await));
+
+    // Each switch stopped the CLI it left; the model switch went to the running one.
+    let claude_commands: Vec<_> = claude
+        .commands()
+        .into_iter()
+        .filter(|command| !matches!(command, AdapterCommand::SendPrompt { .. }))
+        .collect();
+    assert_eq!(
+        claude_commands,
+        [
+            AdapterCommand::SetModel {
+                model: "opus".into()
+            },
+            AdapterCommand::Shutdown,
+            AdapterCommand::Shutdown,
+        ]
+    );
+    assert_eq!(codex.commands().last(), Some(&AdapterCommand::Shutdown));
+
+    let claude_starts = claude.starts();
+    let [on_a, on_b] = claude_starts.as_slice() else {
+        panic!("expected two Claude starts, got {claude_starts:?}");
+    };
+    assert_eq!(on_a.config_dir, Some(dir.path().join("claude-a")));
+    assert_eq!(on_b.config_dir, Some(dir.path().join("claude-b")));
+    assert_eq!(on_b.model.as_deref(), Some("opus"));
+    let [on_codex] = codex.starts().try_into().unwrap();
+    assert_eq!(on_codex.config_dir, Some(dir.path().join("codex-work")));
+    assert_eq!(on_codex.model.as_deref(), Some("gpt-5"));
+    assert_eq!(
+        seed_texts(&on_codex),
+        [
+            "user: Add a health check endpoint.",
+            "assistant: Added GET /health.",
+            "user: Now add a test for it.",
+            "assistant: Added a test for /health.",
+        ]
+    );
+    let [on_cursor] = cursor.starts().try_into().unwrap();
+    assert_eq!(on_cursor.config_dir, Some(dir.path().join("cursor-work")));
+    assert_eq!(on_cursor.model, None);
+    assert_eq!(
+        seed_texts(&on_cursor),
+        [
+            "user: Add a health check endpoint.",
+            "assistant: Added GET /health.",
+            "user: Now add a test for it.",
+            "assistant: Added a test for /health.",
+            "user: Document it in the README.",
+            "assistant: Documented /health.",
+        ]
+    );
+
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    let switches: Vec<_> = journal
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.body,
+                EventBody::ModelSwitched { .. }
+                    | EventBody::AccountSwitched { .. }
+                    | EventBody::ProviderSwitched { .. }
+            )
+        })
+        .map(|event| (event.by.clone(), event.body.clone()))
+        .collect();
+    assert_eq!(
+        switches,
+        [
+            (
+                Some(alice()),
+                EventBody::ModelSwitched {
+                    model: "opus".into()
+                }
+            ),
+            (
+                Some(alice()),
+                EventBody::AccountSwitched {
+                    account_id: AccountId::new("claude-b")
+                }
+            ),
+            (
+                Some(alice()),
+                EventBody::ProviderSwitched {
+                    provider: Provider::Codex,
+                    account_id: AccountId::new("codex-work"),
+                    model: "gpt-5".into(),
+                }
+            ),
+            (
+                Some(alice()),
+                EventBody::ProviderSwitched {
+                    provider: Provider::Cursor,
+                    account_id: AccountId::new("cursor-work"),
+                    model: String::new(),
+                }
+            ),
+        ]
+    );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let fakes = Scripted::new(&["interrupt.jsonl", "second.jsonl"]);
+    let codex = Scripted::new(&[]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(fake(), fakes.clone()), (Provider::Codex, codex.clone())],
+        &[
+            ("account-1", fake(), false),
+            ("account-2", fake(), false),
+            ("codex-work", Provider::Codex, false),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("account-1").await;
+    let prompt = CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "Work forever.".into(),
+    };
+    daemon.handle(prompt).await.unwrap();
+    daemon
+        .until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+
+    for switch in [
+        switch_account(&session, "account-2"),
+        switch_provider(&session, "codex-work", None),
+    ] {
+        let refused = daemon.handle(switch).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict, "{refused:?}");
+    }
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    daemon.handle(interrupt).await.unwrap();
+    daemon
+        .until(|body| matches!(body, EventBody::TurnInterrupted { .. }))
+        .await;
+
+    let applied = daemon.handle(switch_account(&session, "account-2")).await;
+    assert_eq!(applied, Ok(CommandResult::Applied));
+    let ended = daemon.turn(&session, "Second.").await;
+    assert!(
+        matches!(ended, EventBody::TurnCompleted { .. }),
+        "{ended:?}"
+    );
+
+    let starts = fakes.starts();
+    let [first, second] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(first.config_dir, Some(dir.path().join("account-1")));
+    assert_eq!(second.config_dir, Some(dir.path().join("account-2")));
+    assert_eq!(seed_texts(second), ["user: Work forever."]);
+    assert!(codex.starts().is_empty());
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    let switched: Vec<_> = journal
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.body,
+                EventBody::AccountSwitched { .. } | EventBody::ProviderSwitched { .. }
+            )
+        })
+        .collect();
+    assert_eq!(switched.len(), 1, "{switched:?}");
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn switches_to_the_wrong_kind_of_account_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, Scripted::new(&[]))],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, false),
+            ("codex-work", Provider::Codex, false),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    let cases = [
+        (switch_account(&session, "nowhere"), ErrorCode::NotFound),
+        (
+            switch_account(&session, "codex-work"),
+            ErrorCode::BadRequest,
+        ),
+        (
+            switch_provider(&session, "claude-b", None),
+            ErrorCode::BadRequest,
+        ),
+        // No adapter runs Codex here.
+        (
+            switch_provider(&session, "codex-work", None),
+            ErrorCode::Unsupported,
+        ),
+    ];
+    for (command, code) in cases {
+        let refused = daemon.handle(command.clone()).await.unwrap_err();
+        assert_eq!(refused.code, code, "{command:?}: {refused:?}");
+    }
+    let journal = daemon.manager.read_since(&session, 0, 1000).await.unwrap();
+    assert!(!journal.iter().any(|event| matches!(
+        event.body,
+        EventBody::AccountSwitched { .. } | EventBody::ProviderSwitched { .. }
+    )));
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_child_switches_only_within_its_tasks_failover_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let created = |account: &str, parent: Option<SessionId>| EventBody::SessionCreated {
+        repo: "/nowhere".into(),
+        worktree: "/nowhere".into(),
+        branch: "herder/x".into(),
+        provider: Provider::Claude,
+        account_id: AccountId::new(account),
+        model: String::new(),
+        permission_mode: PermissionMode::Ask,
+        task: parent.as_ref().map(|_| "help".into()),
+        parent,
+    };
+    let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
+    let daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, Scripted::new(&[])),
+            (Provider::Codex, Scripted::new(&[])),
+        ],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, false),
+            ("claude-spare", Provider::Claude, true),
+            ("codex-spare", Provider::Codex, true),
+        ],
+        vec![
+            (primary.clone(), created("claude-b", None)),
+            (child.clone(), created("claude-a", Some(primary.clone()))),
+        ],
+    )
+    .await;
+
+    let applied = Ok(CommandResult::Applied);
+    for switch in [
+        // A switch to its own account changes nothing.
+        switch_account(&child, "claude-a"),
+        switch_account(&child, "claude-spare"),
+        switch_account(&child, "claude-b"),
+        switch_provider(&child, "codex-spare", None),
+    ] {
+        assert_eq!(daemon.handle(switch).await, applied);
+    }
+    let back = switch_provider(&child, "claude-a", None);
+    let refused = daemon.handle(back).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+    assert!(refused.message.contains("failover chain"), "{refused:?}");
+    // The primary itself is not bound to a chain.
+    assert_eq!(
+        daemon.handle(switch_account(&primary, "claude-a")).await,
+        applied
+    );
+    daemon.shutdown.cancel();
+}

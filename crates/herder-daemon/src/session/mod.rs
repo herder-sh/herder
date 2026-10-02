@@ -73,6 +73,20 @@
 //! `answer_question` or the primary's `answer` answers it, whichever comes first. A turn's end
 //! drops its open questions.
 //!
+//! # Switching model, account and provider
+//!
+//! `set_model` switches natively through the running CLI and journals `model_switched`.
+//! `switch_account` (another account of the session's provider) and `switch_provider` (an
+//! account of another provider, on the given model or that provider's default) move the
+//! session to a fresh CLI instead: they apply only between turns and are refused as a
+//! `conflict` while a turn runs, since a CLI cannot be swapped under a turn; interrupt it or
+//! wait for it to end. Prompts are never held back for a switch: one sent after it starts on
+//! the new account. The switch stops the current CLI, waiting for it to exit, and journals
+//! `account_switched` or `provider_switched` `by` the user; the next prompt starts the target
+//! account's CLI seeded with the journal's transcript ([`crate::handoff`]), the same way a
+//! restart resumes. A child session may only switch to its primary's account or to an account
+//! that opted in to failover: the task's failover chain.
+//!
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
@@ -102,7 +116,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use actor::{Actor, Request, SessionCommand};
+use actor::{Actor, Request, SessionCommand, Switch};
 use journal::Journal;
 pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
@@ -312,9 +326,28 @@ impl SessionManager {
             CommandBody::UnlinkPr { session_id, number } => {
                 return self.prs()?.unlink(by, session_id, number).await;
             }
-            CommandBody::SwitchAccount { .. }
-            | CommandBody::SwitchProvider { .. }
-            | CommandBody::OpenTerminal { .. }
+            CommandBody::SwitchAccount {
+                session_id,
+                account_id,
+            } => (
+                session_id,
+                Request::Switch {
+                    account_id,
+                    to: Switch::Account,
+                },
+            ),
+            CommandBody::SwitchProvider {
+                session_id,
+                account_id,
+                model,
+            } => (
+                session_id,
+                Request::Switch {
+                    account_id,
+                    to: Switch::Provider { model },
+                },
+            ),
+            CommandBody::OpenTerminal { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }

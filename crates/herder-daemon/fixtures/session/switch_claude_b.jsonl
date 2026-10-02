@@ -1,0 +1,5 @@
+# The same session on another Claude account, replayed from the journal.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Now add a test for it."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "claude-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added a test for /health."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
