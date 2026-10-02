@@ -190,12 +190,12 @@ impl Hub {
         let Some(sub) = inner.subs.get_mut(session_id) else {
             return;
         };
-        let held = match std::mem::replace(sub, Sub::Live) {
+        let held = match std::mem::replace(sub, Sub::Live { last_seq }) {
             Sub::Replaying(held) => held,
-            Sub::Live => Vec::new(),
+            Sub::Live { .. } => Vec::new(),
         };
-        for event in held.into_iter().filter(|event| event.seq > last_seq) {
-            inner.push(ServerMessage::Event(event));
+        for event in &held {
+            inner.event(event, &state.items);
         }
         for item in state.items.get(session_id).into_iter().flatten() {
             inner.begin_item(session_id, item);
@@ -274,7 +274,8 @@ struct Inner {
 enum Sub {
     /// Replay from the journal is running; live events wait here.
     Replaying(Vec<Event>),
-    Live,
+    /// Streaming; `last_seq` is the latest event the client has been sent.
+    Live { last_seq: Seq },
 }
 
 #[derive(Debug)]
@@ -405,7 +406,11 @@ impl Inner {
                     held.push(event.clone());
                 }
             }
-            Some(Sub::Live) => {
+            // An event is published after its append commits, so replay may already have
+            // read it: the journal decides, and anything the client has is skipped.
+            Some(Sub::Live { last_seq }) if event.seq <= *last_seq => {}
+            Some(Sub::Live { last_seq }) => {
+                *last_seq = event.seq;
                 if let EventBody::ItemAdded { item } = &event.body {
                     // The event carries the final item; its pending deltas are moot.
                     let done = |session: &SessionId, id: &ItemId| {
@@ -423,7 +428,7 @@ impl Inner {
     }
 
     fn begin_item(&mut self, session_id: &SessionId, item: &Item) {
-        if !matches!(self.subs.get(session_id), Some(Sub::Live)) {
+        if !matches!(self.subs.get(session_id), Some(Sub::Live { .. })) {
             return;
         }
         self.pending
@@ -441,7 +446,7 @@ impl Inner {
     }
 
     fn delta(&mut self, session_id: &SessionId, item_id: &ItemId, text: &str) {
-        if !matches!(self.subs.get(session_id), Some(Sub::Live))
+        if !matches!(self.subs.get(session_id), Some(Sub::Live { .. }))
             || self
                 .stale
                 .iter()
@@ -654,6 +659,23 @@ mod tests {
             })
             .collect();
         assert_eq!(seqs, [3]);
+    }
+
+    #[test]
+    fn an_event_replay_already_read_is_skipped_when_published_late() {
+        let hub = Hub::default();
+        let outbox = Arc::new(Outbox::default());
+        hub.connect(&outbox);
+        hub.subscribe(&outbox, &session());
+        // Replay read seq 1 and 2 before seq 2's publish reached the hub.
+        hub.go_live(&outbox, &session(), 2);
+        hub.event(&event(2, EventBody::ModelSwitched { model: "a".into() }));
+        hub.event(&event(3, EventBody::ModelSwitched { model: "b".into() }));
+        let queued = drain(&outbox);
+        assert!(
+            matches!(queued.as_slice(), [ServerMessage::Event(e)] if e.seq == 3),
+            "{queued:?}"
+        );
     }
 
     #[test]
