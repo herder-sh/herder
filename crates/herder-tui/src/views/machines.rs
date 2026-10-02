@@ -72,7 +72,8 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
         frame.render_widget(Line::styled(hint, super::dim()), top);
         return;
     }
-    let items: Vec<ListItem> = app.machines.iter().map(row).collect();
+    let compact = area.width < 70;
+    let items: Vec<ListItem> = app.machines.iter().map(|m| row(m, compact)).collect();
     let mut state = ListState::default().with_selected(selected);
     let list = List::new(items).highlight_style(Style::new().reversed());
     frame.render_stateful_widget(list, top, &mut state);
@@ -88,18 +89,27 @@ pub(super) fn connection(machine: &Machine) -> (&'static str, Color, String) {
     }
 }
 
-fn row(machine: &Machine) -> ListItem<'static> {
+/// A machine's row; `compact` in a narrow popup, where its load replaces the session count
+/// and connection while it has figures.
+fn row(machine: &Machine, compact: bool) -> ListItem<'static> {
     let (mark, color, state) = connection(machine);
     let sessions = match machine.sessions.len() {
         1 => "1 session".to_owned(),
         n => format!("{n} sessions"),
     };
-    ListItem::new(Line::from(vec![
+    let load = super::resources::row(machine, compact);
+    let mut spans = vec![
         Span::styled(mark, Style::new().fg(color)),
         Span::styled(format!(" {:<16} ", machine.name), super::bold()),
-        Span::styled(format!("{sessions:<12} "), super::dim()),
-        Span::styled(state, super::dim()),
-    ]))
+    ];
+    if !(compact && !load.is_empty()) {
+        spans.push(Span::styled(format!("{sessions:<12} "), super::dim()));
+    }
+    spans.extend(load);
+    if !compact || machine.resources.is_none() {
+        spans.push(Span::styled(state, super::dim()));
+    }
+    ListItem::new(Line::from(spans))
 }
 
 fn details(machine: &Machine, width: usize) -> Vec<Line<'static>> {
@@ -124,6 +134,9 @@ fn details(machine: &Machine, width: usize) -> Vec<Line<'static>> {
         accounts
     };
     lines.extend(field("accounts", &accounts, Style::new(), width));
+    for (label, value, style) in super::resources::facts(machine) {
+        lines.extend(field(label, &value, style, width));
+    }
     lines.extend(field(
         "host id",
         machine.host_id.as_str(),

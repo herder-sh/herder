@@ -428,3 +428,65 @@ pub fn projects() -> App {
     }
     app
 }
+
+/// Host figures of a busy machine: `running_turns` of 4 turns, with the cap binding at 4.
+pub fn host_resources(running_turns: u32) -> herder_protocol::HostResources {
+    herder_protocol::HostResources {
+        cpu_cores: 8,
+        cpu_percent: 42.0,
+        load_1m: 3.25,
+        memory_total_bytes: 16 << 30,
+        memory_available_bytes: 6 << 30,
+        pressure: Some(herder_protocol::Pressure {
+            cpu_some: 3.0,
+            memory_some: 12.0,
+            memory_full: 1.0,
+            io_some: 0.5,
+        }),
+        running_turns,
+        max_turns: 4,
+        waiting_turns: u32::from(running_turns == 4),
+        constraint: (running_turns == 4).then_some(herder_protocol::Constraint::MaxTurns),
+    }
+}
+
+/// A session running 3 processes and a Compose project `app` of two containers.
+pub fn session_usage() -> herder_protocol::SessionUsage {
+    let container = |name: &str, image: &str, state| herder_protocol::Container {
+        id: format!("id-{name}"),
+        name: name.to_owned(),
+        compose_project: Some("app".to_owned()),
+        image: image.to_owned(),
+        state,
+    };
+    herder_protocol::SessionUsage {
+        cpu_percent: 12.0,
+        memory_bytes: 768 << 20,
+        processes: 3,
+        containers: vec![
+            container(
+                "app-db-1",
+                "postgres:16",
+                herder_protocol::ContainerState::Running,
+            ),
+            container(
+                "app-web-1",
+                "node:22",
+                herder_protocol::ContainerState::Exited,
+            ),
+        ],
+    }
+}
+
+/// Gives machine `h1` of `app` `host` figures, and `s2` the [`session_usage`] if `busy`.
+pub fn with_resources(app: &mut App, host: herder_protocol::HostResources, busy: bool) {
+    let mut machines = app.machines.clone();
+    machines[0].resources = Some(host);
+    machines[0].session_usage.clear();
+    if busy {
+        machines[0]
+            .session_usage
+            .insert(SessionId::new("s2"), session_usage());
+    }
+    app.update(Msg::Machines(machines));
+}

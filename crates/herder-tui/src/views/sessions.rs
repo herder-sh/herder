@@ -57,11 +57,13 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 ConnectionState::Connecting => ("◌", Color::Yellow),
                 ConnectionState::Disconnected { .. } => ("✗", Color::Red),
             };
-            ListItem::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(mark, Style::new().fg(color)),
                 Span::styled(format!(" {}", machine.name), super::bold()),
-                Span::styled(format!(" ({})", machine.sessions.len()), super::dim()),
-            ]))
+                Span::styled(format!(" ({}) ", machine.sessions.len()), super::dim()),
+            ];
+            spans.extend(super::resources::row(machine, true));
+            ListItem::new(Line::from(spans))
         }
         Row::Project(project) => super::projects::heading(app, project.as_ref(), width, compact),
         Row::Session { key, depth } => {

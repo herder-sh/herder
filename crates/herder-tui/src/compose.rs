@@ -101,8 +101,8 @@ pub struct Palette {
 }
 
 /// The palette's commands, for its hint and the help.
-pub const COMMANDS: &str =
-    "model <name> · mode read_only|ask|auto_edit|full_access · archive[!] · interrupt · new";
+pub const COMMANDS: &str = "model <name> · mode read_only|ask|auto_edit|full_access · archive[!] · interrupt · new · \
+     down [project]";
 
 /// The new-session dialog.
 #[derive(Debug)]
@@ -530,9 +530,37 @@ impl App {
                 force: name == "archive!",
             },
             ("interrupt", []) => CommandBody::Interrupt { session_id },
+            ("down", []) => match self.compose_projects(key).as_slice() {
+                [project] => CommandBody::ComposeDown {
+                    session_id,
+                    project: project.clone(),
+                },
+                [] => return Err("the session has no compose containers".to_owned()),
+                projects => return Err(format!("usage: down {}", projects.join("|"))),
+            },
+            ("down", [project]) => CommandBody::ComposeDown {
+                session_id,
+                project: (*project).to_owned(),
+            },
+            ("down", _) => return Err("usage: down [project]".to_owned()),
             _ => return Err(format!("unknown command: {name}")),
         };
         Ok((key.clone(), body))
+    }
+
+    /// The Compose projects of a session's tracked containers, sorted.
+    fn compose_projects(&self, key: &SessionKey) -> Vec<String> {
+        let mut projects: Vec<String> = self
+            .machines
+            .iter()
+            .filter(|machine| machine.host_id == key.host_id)
+            .filter_map(|machine| machine.session_usage.get(&key.session_id))
+            .flat_map(|usage| &usage.containers)
+            .filter_map(|container| container.compose_project.clone())
+            .collect();
+        projects.sort_unstable();
+        projects.dedup();
+        projects
     }
 
     fn new_session(&mut self) {
@@ -964,6 +992,44 @@ mod tests {
         assert!(!app.compose.quit_armed);
         assert_eq!(ctrl_c(&mut app), []);
         assert_eq!(ctrl_c(&mut app), [Effect::Quit]);
+    }
+
+    #[test]
+    fn down_brings_down_the_sessions_compose_project() {
+        let mut app = open_s2(vec![]);
+        let run = |app: &mut App, line: &str| {
+            press(app, KeyCode::Char(':'));
+            type_text(app, line);
+            press(app, KeyCode::Enter)
+        };
+        assert_eq!(run(&mut app, "down"), []);
+        let palette = app.compose.palette.take().unwrap();
+        assert_eq!(
+            palette.error.as_deref(),
+            Some("the session has no compose containers")
+        );
+
+        fake::with_resources(&mut app, fake::host_resources(1), true);
+        let down = |project: &str| {
+            [on_s2(CommandBody::ComposeDown {
+                session_id: SessionId::new("s2"),
+                project: project.into(),
+            })]
+        };
+        assert_eq!(run(&mut app, "down"), down("app"));
+        assert_eq!(run(&mut app, "down web"), down("web"));
+
+        // With several projects, the user names one.
+        let mut machines = app.machines.clone();
+        let usage = machines[0]
+            .session_usage
+            .get_mut(&SessionId::new("s2"))
+            .unwrap();
+        usage.containers[1].compose_project = Some("cache".into());
+        app.update(Msg::Machines(machines));
+        assert_eq!(run(&mut app, "down"), []);
+        let palette = app.compose.palette.as_ref().unwrap();
+        assert_eq!(palette.error.as_deref(), Some("usage: down app|cache"));
     }
 
     #[test]
