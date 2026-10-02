@@ -167,6 +167,19 @@ impl Session {
         }
     }
 
+    /// [`Session::title`] with only the branch's last part, for narrow screens.
+    pub fn short_title(&self) -> String {
+        if self.task.is_some() || !self.loaded {
+            return self.title();
+        }
+        let branch = self.branch.rsplit('/').next().unwrap_or(&self.branch);
+        let repo = self.repo.rsplit('/').find(|part| !part.is_empty());
+        match repo {
+            Some(repo) => format!("{repo} · {branch}"),
+            None => branch.to_owned(),
+        }
+    }
+
     /// Whether the session waits on a user: its status says so, or an approval or question
     /// is put to the user.
     pub fn needs_user(&self) -> bool {

@@ -27,8 +27,8 @@ pub(super) fn strip_height(app: &App) -> u16 {
     }
 }
 
-/// The open session's PRs, one row each.
-pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App) {
+/// The open session's PRs, one row each; `compact` on a narrow screen.
+pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
     let prs = app.strip_prs();
     if area.height == 0 || prs.is_empty() {
         return;
@@ -36,7 +36,7 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App) {
     let number_width = number_width(prs.iter().map(|(_, pr)| *pr));
     let items: Vec<ListItem> = prs
         .iter()
-        .map(|(_, pr)| ListItem::new(row(pr, number_width)))
+        .map(|(_, pr)| ListItem::new(row(pr, number_width, compact)))
         .collect();
     let mut block = Block::bordered()
         .title(Line::from(vec![
@@ -45,10 +45,12 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App) {
         ]))
         .border_style(super::border(app, Focus::Prs));
     if app.focus == Focus::Prs {
-        block = block.title_bottom(
-            Line::styled(" Enter open · x unlink · L link · Esc back ", super::dim())
-                .right_aligned(),
-        );
+        let hint = if compact {
+            " Enter open · x · L · ⌫ back "
+        } else {
+            " Enter open · x unlink · L link · Esc back "
+        };
+        block = block.title_bottom(Line::styled(hint, super::dim()).right_aligned());
     } else {
         block = block.title(Line::styled(" p ", super::dim()).right_aligned());
     }
@@ -62,20 +64,20 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Every session's PRs, under a heading per session, in session-list order.
-pub(super) fn all(frame: &mut Frame, area: Rect, app: &App) {
+/// Every session's PRs, under a heading per session, in session-list order; `compact` on a
+/// narrow screen.
+pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
+    let hint = if compact {
+        " Enter open · l session · ⌫ back "
+    } else {
+        " Enter open · l session · x unlink · L link · Esc back "
+    };
     let block = Block::bordered()
         .title(Line::styled(
             " pull requests · every session ",
             super::bold(),
         ))
-        .title_bottom(
-            Line::styled(
-                " Enter open · l session · x unlink · L link · Esc back ",
-                super::dim(),
-            )
-            .right_aligned(),
-        )
+        .title_bottom(Line::styled(hint, super::dim()).right_aligned())
         .border_style(super::border(app, Focus::AllPrs));
     let prs = app.all_prs();
     if prs.is_empty() {
@@ -124,7 +126,7 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App) {
         if index == selected {
             selected_item = items.len();
         }
-        let mut line = row(pr, number_width);
+        let mut line = row(pr, number_width, compact);
         line.spans.insert(0, Span::raw("  "));
         items.push(ListItem::new(line));
     }
@@ -136,13 +138,14 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// The session-list badge: the first open PRs by number with their checks, then a count of
-/// the rest. Empty for a session with no PRs.
-pub(super) fn badge(session: &Session) -> Vec<Span<'static>> {
+/// the rest; `compact` names only the first. Empty for a session with no PRs.
+pub(super) fn badge(session: &Session, compact: bool) -> Vec<Span<'static>> {
+    let named = if compact { 1 } else { BADGE_PRS };
     let mut prs: Vec<&PullRequest> = session.prs.iter().collect();
     // Live PRs first; the sort is stable, so each group keeps its link order.
     prs.sort_by_key(|pr| matches!(pr.state, PrState::Merged | PrState::Closed));
     let mut spans = Vec::new();
-    for pr in prs.iter().take(BADGE_PRS) {
+    for pr in prs.iter().take(named) {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(
             format!("#{}", pr.number),
@@ -159,7 +162,7 @@ pub(super) fn badge(session: &Session) -> Vec<Span<'static>> {
             }
         }
     }
-    if let Some(more) = prs.len().checked_sub(BADGE_PRS).filter(|more| *more > 0) {
+    if let Some(more) = prs.len().checked_sub(named).filter(|more| *more > 0) {
         spans.push(Span::styled(format!(" +{more}"), super::dim()));
     }
     spans
@@ -202,8 +205,9 @@ pub(super) fn prompt(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(line).block(block), popup);
 }
 
-/// One PR on one line: number, state, checks, review, mergeability, title.
-fn row(pr: &PullRequest, number_width: usize) -> Line<'static> {
+/// One PR on one line: number, state, checks, review, mergeability, title. `compact` keeps
+/// the number, the checks' mark, a `!` for a conflict or requested changes, and the title.
+fn row(pr: &PullRequest, number_width: usize, compact: bool) -> Line<'static> {
     let state = state_style(pr.state);
     let (state_label, review, merge) = match pr.state {
         PrState::Open => ("open", review(pr.review), merge(pr.mergeable)),
@@ -214,6 +218,21 @@ fn row(pr: &PullRequest, number_width: usize) -> Line<'static> {
     let (ci_mark, mut ci_style) = ci(pr.ci);
     if !live(pr) {
         ci_style = super::dim();
+    }
+    if compact {
+        let number = format!("{:<number_width$} ", format!("#{}", pr.number));
+        let mut spans = vec![
+            Span::styled(number, state.add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{ci_mark} "), ci_style),
+        ];
+        if live(pr)
+            && (pr.mergeable == Mergeable::Conflicting
+                || pr.review == ReviewStatus::ChangesRequested)
+        {
+            spans.push(Span::styled("! ", Style::new().fg(Color::Red)));
+        }
+        spans.push(Span::raw(pr.title.clone()));
+        return Line::from(spans);
     }
     let ci_text = if pr.ci == CiStatus::None {
         "  –  ".to_owned()

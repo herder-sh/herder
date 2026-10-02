@@ -104,6 +104,13 @@ impl Field {
 }
 
 impl Form {
+    /// Whether nothing is typed in any field.
+    fn is_empty(&self) -> bool {
+        [&self.link, &self.host, &self.fingerprint, &self.code]
+            .iter()
+            .all(|field| field.is_empty())
+    }
+
     fn field(&mut self) -> &mut String {
         match self.focus {
             Field::Link => &mut self.link,
@@ -187,9 +194,10 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     let input = match &panel.add {
         Some(AddMachine {
             step: Step::Edit | Step::Failed(_),
-            ..
+            form,
         }) => match key.code {
             KeyCode::Esc => Input::Close,
+            KeyCode::Backspace if form.is_empty() => Input::Close,
             KeyCode::Enter => Input::Submit,
             KeyCode::Tab | KeyCode::Down => Input::Down,
             KeyCode::BackTab | KeyCode::Up => Input::Up,
@@ -203,18 +211,18 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             ..
         }) => match key.code {
             KeyCode::Enter => Input::Submit,
-            KeyCode::Esc => Input::Close,
+            KeyCode::Esc | KeyCode::Backspace => Input::Close,
             _ => return None,
         },
         Some(AddMachine {
             step: Step::Pairing(_),
             ..
         }) => match key.code {
-            KeyCode::Esc => Input::Close,
+            KeyCode::Esc | KeyCode::Backspace => Input::Close,
             _ => return None,
         },
         None => match key.code {
-            KeyCode::Esc | KeyCode::Char('m' | 'q') => Input::Close,
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('m' | 'q') => Input::Close,
             KeyCode::Char('k') | KeyCode::Up => Input::Up,
             KeyCode::Char('j') | KeyCode::Down => Input::Down,
             KeyCode::Char('a') => Input::Add,

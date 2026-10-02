@@ -1,6 +1,7 @@
 //! The left pane: each machine, its sessions with their status, children under their parent.
 //! A primary shows its child count and, when any child waits on the user, how many; `z`
-//! folds its children away.
+//! folds its children away. Compact rows, on a narrow screen, show the status as one glyph,
+//! the branch's last part and one PR.
 
 use herder_client_core::ConnectionState;
 use herder_protocol::SessionStatus;
@@ -15,11 +16,14 @@ use crate::app::{App, Focus, Row};
 /// Width of the status label column.
 const BADGE: usize = 9;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
     let rows = app.rows();
     // Inside the borders.
     let width = usize::from(area.width.saturating_sub(2));
-    let items: Vec<ListItem> = rows.iter().map(|row| item(app, row, width)).collect();
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|row| item(app, row, width, compact))
+        .collect();
     let highlight = if app.focus == Focus::Sessions {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
@@ -37,7 +41,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.list);
 }
 
-fn item<'a>(app: &App, row: &Row, width: usize) -> ListItem<'a> {
+fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
     match row {
         Row::Machine(host_id) => {
             let Some(machine) = app.machines.iter().find(|m| m.host_id == *host_id) else {
@@ -82,24 +86,32 @@ fn item<'a>(app: &App, row: &Row, width: usize) -> ListItem<'a> {
                 }
             }
             let tree_width: usize = tree.iter().map(Span::width).sum();
-            let (label, style) = if session.loaded {
-                super::composer::waiting(session).unwrap_or_else(|| badge(session.status))
-            } else {
+            let (label, style) = if !session.loaded {
                 ("…", super::dim())
+            } else if compact {
+                super::composer::waiting_glyph(session).unwrap_or_else(|| glyph(session.status))
+            } else {
+                super::composer::waiting(session).unwrap_or_else(|| badge(session.status))
             };
+            let label_width = if compact { 1 } else { BADGE };
             let mut title = Style::new();
             if app.open.as_ref() == Some(key) {
                 title = title.add_modifier(Modifier::UNDERLINED);
             }
             // The PR badge stays in view: the title gives way to it.
-            let prs = super::prs::badge(session);
+            let prs = super::prs::badge(session, compact);
             let prs_width: usize = prs.iter().map(Span::width).sum();
-            let room =
-                width.saturating_sub(BADGE + 2 + indent.chars().count() + tree_width + prs_width);
+            let room = width
+                .saturating_sub(label_width + 2 + indent.chars().count() + tree_width + prs_width);
+            let name = if compact {
+                session.short_title()
+            } else {
+                session.title()
+            };
             let mut spans = vec![
-                Span::styled(format!(" {label:<BADGE$} "), style),
+                Span::styled(format!(" {label:<label_width$} "), style),
                 Span::styled(indent, super::dim()),
-                Span::styled(clip(&session.title(), room), title),
+                Span::styled(clip(&name, room), title),
             ];
             spans.extend(tree);
             spans.extend(prs);
@@ -116,6 +128,21 @@ fn clip(text: &str, width: usize) -> String {
     let mut clipped: String = text.chars().take(width.saturating_sub(1)).collect();
     clipped.push('…');
     clipped
+}
+
+/// A status as one glyph, in its label's colour, for compact rows.
+pub(super) fn glyph(status: SessionStatus) -> (&'static str, Style) {
+    let glyph = match status {
+        SessionStatus::Idle => "·",
+        SessionStatus::Running => "●",
+        SessionStatus::WaitingForCapacity => "◌",
+        SessionStatus::NeedsYou => "!",
+        SessionStatus::Error => "✗",
+        SessionStatus::Archived => "▪",
+        SessionStatus::Moved => "→",
+        SessionStatus::Unknown => "?",
+    };
+    (glyph, badge(status).1)
 }
 
 /// A status's label and colour.
