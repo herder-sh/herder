@@ -82,7 +82,7 @@
     },
     {
       "name": "send",
-      "description": "Send a follow-up prompt to an idle child, starting its next turn: a correction, the next step, or a reply to its report. Fails with `busy` while the child is working; wait_for its report first. To unblock a child waiting on a question or approval, use answer instead.",
+      "description": "Send a follow-up prompt to a child: a correction, the next step, or a reply to its report. An idle child starts its next turn on it at once; a working child gets it after its current turn ends, in the order sent, and `queued` is then true. Either way its report comes through wait_for. To unblock a child waiting on a question or approval, use answer instead.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -102,7 +102,16 @@
         ]
       },
       "outputSchema": {
-        "type": "object"
+        "type": "object",
+        "properties": {
+          "queued": {
+            "description": "True when the message waits behind the child's running turn; false when the child started a turn on it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued"
+        ]
       }
     },
     {

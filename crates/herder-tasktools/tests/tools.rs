@@ -299,7 +299,14 @@ fn outputs_match_their_schemas() {
                 branch: "herder/1a2b3c4d".into(),
             }),
         ),
-        (Tool::Send, serde_json::to_value(SendOutput {})),
+        (
+            Tool::Send,
+            serde_json::to_value(SendOutput { queued: false }),
+        ),
+        (
+            Tool::Send,
+            serde_json::to_value(SendOutput { queued: true }),
+        ),
         (
             Tool::Status,
             serde_json::to_value(StatusOutput {
@@ -412,7 +419,6 @@ fn tool_errors_carry_stable_codes() {
         (ErrorCode::NotYourChild, "not_your_child"),
         (ErrorCode::NotFound, "not_found"),
         (ErrorCode::AlreadyResolved, "already_resolved"),
-        (ErrorCode::Busy, "busy"),
         (ErrorCode::Internal, "internal"),
     ];
     for (code, wire) in codes {

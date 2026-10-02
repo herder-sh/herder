@@ -51,9 +51,12 @@ pub struct SendInput {
     pub text: String,
 }
 
-/// Result of `send`: the child started a turn on the message.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SendOutput {}
+/// Result of `send`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SendOutput {
+    /// True when the message waits behind the child's running turn; false when the child started a turn on it.
+    pub queued: bool,
+}
 
 /// Arguments of `status`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

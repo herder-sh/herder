@@ -79,10 +79,11 @@ impl Tool {
                  and a task has a limit on children (5 unless the user changed it)."
             }
             Tool::Send => {
-                "Send a follow-up prompt to an idle child, starting its next turn: a correction, \
-                 the next step, or a reply to its report. Fails with `busy` while the child is \
-                 working; wait_for its report first. To unblock a child waiting on a question or \
-                 approval, use answer instead."
+                "Send a follow-up prompt to a child: a correction, the next step, or a reply to \
+                 its report. An idle child starts its next turn on it at once; a working child \
+                 gets it after its current turn ends, in the order sent, and `queued` is then \
+                 true. Either way its report comes through wait_for. To unblock a child waiting \
+                 on a question or approval, use answer instead."
             }
             Tool::Status => {
                 "Snapshot of your children: each one's task, branch, status, latest report, and \
@@ -261,8 +262,6 @@ pub enum ErrorCode {
     NotFound,
     /// The question or approval request was already answered, by a user or by the caller.
     AlreadyResolved,
-    /// `send` to a child that is working.
-    Busy,
     /// The daemon failed.
     Internal,
 }
