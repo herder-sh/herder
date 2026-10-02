@@ -8,7 +8,9 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
-use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
+use herder_daemon::session::{
+    AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
+};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandBody,
@@ -1163,10 +1165,13 @@ async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session()
     std::fs::create_dir(&data_dir).unwrap();
     daemon
         .manager
-        .serve_mcp(mcp::Config {
-            data_dir: data_dir.clone(),
-            herder: PathBuf::from("/opt/herder"),
-        })
+        .serve_mcp(
+            mcp::Config {
+                data_dir: data_dir.clone(),
+                herder: PathBuf::from("/opt/herder"),
+            },
+            TaskLimits::default(),
+        )
         .unwrap();
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;

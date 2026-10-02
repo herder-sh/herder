@@ -97,10 +97,13 @@ pub async fn serve(
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
     let herder = herder_binary()?;
-    sessions.serve_mcp(mcp::Config {
-        data_dir: data_dir.root().to_owned(),
-        herder: herder.clone(),
-    })?;
+    sessions.serve_mcp(
+        mcp::Config {
+            data_dir: data_dir.root().to_owned(),
+            herder: herder.clone(),
+        },
+        config.tasks,
+    )?;
     sessions
         .track_prs(prs::Config {
             data_dir: data_dir.root().to_owned(),
@@ -170,6 +173,7 @@ mod tests {
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),
             binaries: Default::default(),
+            tasks: session::TaskLimits::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

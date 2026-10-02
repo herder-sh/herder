@@ -4,8 +4,9 @@
 //! and branch, created with the primary as its `parent`. It starts on the primary's account and
 //! provider, with the primary's model and permission mode unless `spawn` picks others; its
 //! permission mode may never exceed the primary's, and a child cannot spawn (a task is one
-//! level deep). Every prompt the primary sends is journaled in the child with no `by`, since
-//! the agent sent it.
+//! level deep). A primary has at most [`TaskLimits::max_children`] live (not archived)
+//! children at once; `spawn` past that is refused as `limit_exceeded`. Every prompt the
+//! primary sends is journaled in the child with no `by`, since the agent sent it.
 //!
 //! When a child's turn ends, however it ended, the child journals `child_reported` in the
 //! primary, with its final assistant message of the turn or a short failure status, and the
@@ -23,15 +24,17 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use herder_protocol::{ApprovalId, ErrorInfo, EventBody, PermissionMode, QuestionId, SessionId};
+use herder_protocol::{
+    ApprovalId, ErrorInfo, EventBody, PermissionMode, QuestionId, SessionId, SessionStatus,
+};
 use herder_store::Session;
 use herder_tasktools::{
     AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
     EscalateOutput, Request, RequestRef, SendInput, SendOutput, SpawnInput, SpawnOutput,
     StatusInput, StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
 };
-use serde::Serialize;
-use tokio::sync::{oneshot, watch};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{self, oneshot, watch};
 use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
@@ -39,12 +42,29 @@ use super::routing::{primary_id, split_id};
 use super::{CreateRequest, Inner, SessionManager};
 use crate::mcp::{ToolFuture, ToolHandler};
 
+/// Limits on every task on this daemon: the `[tasks]` table of the daemon config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskLimits {
+    /// Live (not archived) children a primary may have at once.
+    pub max_children: u32,
+}
+
+impl Default for TaskLimits {
+    fn default() -> Self {
+        Self { max_children: 5 }
+    }
+}
+
 /// What every primary session waits for: its children's reports, and which children are
 /// working.
 pub(crate) struct Tasks {
     state: Mutex<State>,
     /// Bumped on every change, waking every `wait_for` to look again.
     changed: watch::Sender<()>,
+    /// Held by each `spawn` from its admission until its child exists, so concurrent spawns
+    /// cannot both take a primary's last free slot.
+    admission: sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -64,6 +84,7 @@ impl Default for Tasks {
         Self {
             state: Mutex::default(),
             changed: watch::Sender::new(()),
+            admission: sync::Mutex::new(()),
         }
     }
 }
@@ -225,18 +246,21 @@ impl State {
 pub(crate) struct TaskTools {
     /// Weak, since the manager owns the MCP server that owns this.
     pub(super) inner: Weak<Inner>,
+    /// What `spawn` enforces.
+    pub(super) limits: TaskLimits,
 }
 
 impl ToolHandler for TaskTools {
     fn call(&self, caller: SessionId, call: ToolCall) -> ToolFuture {
         let inner = self.inner.upgrade();
+        let limits = self.limits;
         Box::pin(async move {
             let Some(inner) = inner else {
                 return ToolError::new(ErrorCode::Internal, "the daemon is shutting down").into();
             };
             let manager = SessionManager { inner };
             let result = match call {
-                ToolCall::Spawn(input) => success(manager.spawn(caller, input).await),
+                ToolCall::Spawn(input) => success(manager.spawn(caller, input, limits).await),
                 ToolCall::Send(input) => success(manager.send_child(caller, input).await),
                 ToolCall::Status(input) => success(manager.child_status(caller, input).await),
                 ToolCall::WaitFor(input) => success(manager.wait_for(caller, input).await),
@@ -278,7 +302,12 @@ fn rank(mode: PermissionMode) -> u8 {
 }
 
 impl SessionManager {
-    async fn spawn(&self, caller: SessionId, input: SpawnInput) -> Result<SpawnOutput, ToolError> {
+    async fn spawn(
+        &self,
+        caller: SessionId,
+        input: SpawnInput,
+        limits: TaskLimits,
+    ) -> Result<SpawnOutput, ToolError> {
         let primary = self.caller(&caller).await?;
         if primary.parent.is_some() {
             return Err(ToolError::new(
@@ -310,9 +339,29 @@ impl SessionManager {
                 ),
             ));
         }
-        // Admission goes here, after every check on the arguments and before anything is
-        // created: the task's child limit (P2b.5) and the host's capacity, refused as
-        // `host_busy` (P2c.3).
+        // Admission, after every check on the arguments and before anything is created: the
+        // task's child limit here, and the host's capacity, refused as `host_busy` (P2c.3).
+        let admitted = self.inner.tasks.admission.lock().await;
+        let max_children = limits.max_children;
+        let live = self
+            .inner
+            .journal
+            .children(caller.clone())
+            .await
+            .map_err(|err| tool_internal(format!("{err:#}")))?
+            .into_iter()
+            .filter(|child| child.status != SessionStatus::Archived)
+            .count();
+        if live >= max_children as usize {
+            return Err(ToolError::new(
+                ErrorCode::LimitExceeded,
+                format!(
+                    "this task already has {live} live children, and its limit is \
+                     {max_children}; give the remaining work to a child you have with `send`, \
+                     or do it yourself. A child stops counting once the user archives it"
+                ),
+            ));
+        }
         let model = input.model.unwrap_or_else(|| primary.model.clone());
         let request = CreateRequest {
             repo: primary.repo.clone(),
@@ -327,6 +376,7 @@ impl SessionManager {
             .create_session(None, request)
             .await
             .map_err(tool_error)?;
+        drop(admitted);
         let body = EventBody::ChildSpawned {
             child_session_id: child.clone(),
             task: input.task,
