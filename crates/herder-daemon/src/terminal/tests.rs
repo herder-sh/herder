@@ -43,6 +43,17 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Waits for a terminal to close; returns its id and exit code.
+    async fn next_closed(&self) -> (TerminalId, Option<i32>) {
+        match next(&self.lists).await {
+            ServerMessage::TerminalClosed {
+                terminal_id,
+                exit_code,
+            } => (terminal_id, exit_code),
+            other => panic!("expected a closed terminal, got {other:?}"),
+        }
+    }
+
     /// Waits for the next terminal list.
     async fn next_list(&self) -> Vec<Terminal> {
         match next(&self.lists).await {
@@ -166,6 +177,7 @@ async fn a_shell_exit_closes_the_terminal_and_updates_the_list() {
     );
     assert_eq!(f.terminals.list(), opened);
     f.type_line(&terminal_id, &outbox, "exit 3").await;
+    assert_eq!(f.next_closed().await, (terminal_id.clone(), Some(3)));
     assert_eq!(f.next_list().await, []);
     assert!(f.terminals.list().is_empty());
     let err = f.terminals.attach(&terminal_id, &outbox).unwrap_err();
@@ -176,7 +188,7 @@ async fn a_shell_exit_closes_the_terminal_and_updates_the_list() {
 async fn archiving_a_session_closes_its_terminals() {
     let f = fixture();
     let outbox = Arc::new(Outbox::default());
-    f.open(&outbox);
+    let terminal_id = f.open(&outbox);
     f.next_list().await;
     let sink = KillOnArchive {
         next: Arc::clone(&f.hub) as Arc<dyn EventSink>,
@@ -192,6 +204,8 @@ async fn archiving_a_session_closes_its_terminals() {
     sink.event(&status(SessionStatus::Idle));
     assert_eq!(f.terminals.list().len(), 1);
     sink.event(&status(SessionStatus::Archived));
+    // The hang-up kills the shell: a signal, not an exit code.
+    assert_eq!(f.next_closed().await, (terminal_id, None));
     assert_eq!(f.next_list().await, []);
 }
 

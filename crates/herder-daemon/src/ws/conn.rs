@@ -16,14 +16,13 @@ use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{Backend, Shared, fingerprint};
-use crate::auth::{self, PAIRING_CODE_HEADER};
+use crate::auth;
 use crate::hub::{Outbox, OutboxState};
 
 /// Time a client gets for the TLS and WebSocket handshakes, and again for its hello.
@@ -38,14 +37,6 @@ const REPLAY_PAGE: usize = 256;
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
-/// What the client presented before its hello.
-struct Credentials {
-    /// Fingerprint of its device certificate.
-    device: String,
-    /// Pairing code from the upgrade request, sent by a device that is not paired yet.
-    pairing_code: Option<String>,
-}
-
 pub(super) async fn run<B: Backend>(
     stream: TcpStream,
     peer: SocketAddr,
@@ -59,7 +50,7 @@ pub(super) async fn run<B: Backend>(
         () = cancel.cancelled() => return,
         ws = tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(stream, &shared)) => ws,
     };
-    let (ws, credentials) = match ws {
+    let (ws, device) = match ws {
         Ok(Ok(ws)) => ws,
         Ok(Err(err)) => {
             debug!(%peer, "handshake failed: {err:#}");
@@ -75,7 +66,7 @@ pub(super) async fn run<B: Backend>(
     let writer = tokio::spawn(write(sink, Arc::clone(&outbox), cancel.clone()));
     let result = tokio::select! {
         () = cancel.cancelled() => Ok(()),
-        result = read(stream, &shared, &outbox, &credentials, &cancel) => result,
+        result = read(stream, &shared, &outbox, &device, &cancel) => result,
     };
     if let Err(err) = result {
         debug!(%peer, "connection failed: {err:#}");
@@ -87,7 +78,8 @@ pub(super) async fn run<B: Backend>(
     debug!(%peer, "connection closed");
 }
 
-async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, Credentials)> {
+/// The TLS and WebSocket handshakes; returns the fingerprint of the client's device certificate.
+async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, String)> {
     let tls = shared.tls.acceptor().accept(stream).await?;
     // The verifier makes a client certificate mandatory; this only guards against a change there.
     let device = tls
@@ -97,25 +89,8 @@ async fn handshake<B>(stream: TcpStream, shared: &Shared<B>) -> Result<(Ws, Cred
         .and_then(|certs| certs.first())
         .map(|cert| fingerprint(cert))
         .context("the client sent no device certificate")?;
-    let mut pairing_code = None;
-    // tungstenite's handshake callback fixes the error type; this closure never fails.
-    #[allow(clippy::result_large_err)]
-    let ws = tokio_tungstenite::accept_hdr_async(tls, |request: &Request, response: Response| {
-        pairing_code = request
-            .headers()
-            .get(PAIRING_CODE_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        Ok(response)
-    })
-    .await?;
-    Ok((
-        ws,
-        Credentials {
-            device,
-            pairing_code,
-        },
-    ))
+    let ws = tokio_tungstenite::accept_async(tls).await?;
+    Ok((ws, device))
 }
 
 /// Handles the client's messages until it closes the connection.
@@ -123,7 +98,7 @@ async fn read<B: Backend>(
     mut stream: SplitStream<Ws>,
     shared: &Arc<Shared<B>>,
     outbox: &Arc<Outbox>,
-    credentials: &Credentials,
+    device: &str,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let first = tokio::time::timeout(HANDSHAKE_TIMEOUT, next(&mut stream))
@@ -144,18 +119,17 @@ async fn read<B: Backend>(
             ),
         );
     }
-    let identity = match shared.auth.authenticate(
-        &credentials.device,
-        credentials.pairing_code.as_deref(),
-        &hello.client,
-        cancel,
-    ) {
-        Ok(identity) => identity,
-        Err(error) => {
-            outbox.push(ServerMessage::Error { error });
-            bail!("device {} refused", credentials.device);
-        }
-    };
+    let identity =
+        match shared
+            .auth
+            .authenticate(device, hello.pairing_code.as_deref(), &hello.client, cancel)
+        {
+            Ok(identity) => identity,
+            Err(error) => {
+                outbox.push(ServerMessage::Error { error });
+                bail!("device {device} refused");
+            }
+        };
     info!(
         client = %hello.client,
         user_id = %identity.user_id,

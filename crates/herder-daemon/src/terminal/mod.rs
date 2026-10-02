@@ -13,7 +13,8 @@
 //!
 //! A terminal closes when its shell exits, or when its session is archived ([`KillOnArchive`])
 //! or the daemon stops ([`Terminals::close_all`]), which hang the shell up. The owners'
-//! terminal list ([`Hub::terminals_changed`]) is updated on every open and close.
+//! terminal list ([`Hub::terminals_changed`]) is updated on every open and close; a close is
+//! announced first with the shell's exit code ([`Hub::terminal_closed`]).
 //!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
 
@@ -272,17 +273,27 @@ impl Terminals {
                 }
             }
         }
-        match child.wait() {
-            Ok(status) => info!(
-                %terminal_id,
-                session_id = %term.session_id,
-                exit_code = status.exit_code(),
-                signal = status.signal(),
-                "terminal closed"
-            ),
-            Err(err) => warn!(%terminal_id, "cannot wait for the terminal's shell: {err}"),
-        }
-        self.inner.remove(terminal_id);
+        let exit_code = match child.wait() {
+            Ok(status) => {
+                info!(
+                    %terminal_id,
+                    session_id = %term.session_id,
+                    exit_code = status.exit_code(),
+                    signal = status.signal(),
+                    "terminal closed"
+                );
+                // portable-pty reports a signal death as exit code 1 with the signal's name.
+                match status.signal() {
+                    Some(_) => None,
+                    None => i32::try_from(status.exit_code()).ok(),
+                }
+            }
+            Err(err) => {
+                warn!(%terminal_id, "cannot wait for the terminal's shell: {err}");
+                None
+            }
+        };
+        self.inner.close(terminal_id, exit_code);
     }
 
     fn get(&self, terminal_id: &TerminalId) -> Result<Arc<Term>, ErrorInfo> {
@@ -314,6 +325,15 @@ impl Terminals {
 }
 
 impl Inner {
+    /// Forgets a terminal whose shell exited, and announces it with the new list.
+    fn close(&self, terminal_id: &TerminalId, exit_code: Option<i32>) {
+        let mut open = self.lock();
+        if open.remove(terminal_id).is_some() {
+            self.hub
+                .terminal_closed(terminal_id, exit_code, &list(&open));
+        }
+    }
+
     /// Forgets a terminal and announces the new list.
     fn remove(&self, terminal_id: &TerminalId) -> Option<Arc<Term>> {
         let mut open = self.lock();

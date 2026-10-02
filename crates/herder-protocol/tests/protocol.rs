@@ -62,6 +62,13 @@ fn client_fixtures() -> Vec<ClientMessage> {
                 session_id: session_id(),
                 after_seq: 7,
             }],
+            pairing_code: None,
+        }),
+        ClientMessage::Hello(ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: "herder-ios/0.0.0".into(),
+            resume: Vec::new(),
+            pairing_code: Some("ABCDE-FGHJK".into()),
         }),
         ClientMessage::Subscribe(Cursor {
             session_id: session_id(),
@@ -211,6 +218,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
             terminal_id: terminal_id(),
             data: Bytes(b"\x1b[32mok\x1b[0m\r\n\xc3".to_vec()),
         },
+        ServerMessage::TerminalClosed {
+            terminal_id: terminal_id(),
+            exit_code: Some(1),
+        },
+        ServerMessage::TerminalClosed {
+            terminal_id: terminal_id(),
+            exit_code: None,
+        },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::Applied,
@@ -355,10 +370,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
             }],
         },
     ];
-    for (seq, decision) in [(7, ApprovalDecision::Allow), (7, ApprovalDecision::Deny)] {
+    for (by, decision) in [
+        (owner, ApprovalOutcome::Allow),
+        (owner, ApprovalOutcome::Deny),
+        (None, ApprovalOutcome::Expired),
+    ] {
         messages.push(event(
-            seq,
-            owner,
+            7,
+            by,
             EventBody::ApprovalResolved {
                 approval_id: ApprovalId::new("01J9APPROVAL"),
                 decision,
@@ -550,7 +569,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
             None,
             EventBody::ApprovalResolved {
                 approval_id: approval_id(),
-                decision: ApprovalDecision::Allow,
+                decision: ApprovalOutcome::Allow,
                 answered_by: Answerer::Primary {
                     session_id: primary(),
                 },
@@ -603,17 +622,22 @@ fn task_fixtures() -> Vec<ServerMessage> {
             },
         ),
     ];
-    for reason in [
-        EscalationReason::MarkedByPrimary,
-        EscalationReason::ExceedsAuthority,
-        EscalationReason::Timeout,
+    for (reason, note) in [
+        (
+            EscalationReason::MarkedByPrimary,
+            Some("This drops the **production** table; your call."),
+        ),
+        (EscalationReason::ExceedsAuthority, None),
+        (EscalationReason::Timeout, None),
     ] {
+        let note = note.map(str::to_owned);
         messages.push(event(
             8,
             None,
             EventBody::QuestionEscalated {
                 question_id: question_id(),
                 reason,
+                note: note.clone(),
             },
         ));
         messages.push(event(
@@ -622,6 +646,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
             EventBody::ApprovalEscalated {
                 approval_id: approval_id(),
                 reason,
+                note,
             },
         ));
     }
@@ -855,6 +880,56 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
         panic!("expected approval_resolved");
     };
     assert_eq!(answered_by, Answerer::User);
+}
+
+#[test]
+fn optional_fields_may_be_absent() {
+    let body: EventBody = serde_json::from_value(json!({
+        "type": "approval_escalated",
+        "approval_id": "ap",
+        "reason": "timeout"
+    }))
+    .unwrap();
+    let EventBody::ApprovalEscalated { note, .. } = body else {
+        panic!("expected approval_escalated");
+    };
+    assert_eq!(note, None);
+
+    let body: EventBody = serde_json::from_value(json!({
+        "type": "question_escalated",
+        "question_id": "q",
+        "reason": "timeout"
+    }))
+    .unwrap();
+    let EventBody::QuestionEscalated { note, .. } = body else {
+        panic!("expected question_escalated");
+    };
+    assert_eq!(note, None);
+
+    let message: ClientMessage = serde_json::from_value(json!({
+        "type": "hello",
+        "protocol_version": PROTOCOL_VERSION,
+        "client": "c",
+        "resume": []
+    }))
+    .unwrap();
+    let ClientMessage::Hello(hello) = message else {
+        panic!("expected a hello");
+    };
+    assert_eq!(hello.pairing_code, None);
+
+    let message: ServerMessage = serde_json::from_value(json!({
+        "type": "terminal_closed",
+        "terminal_id": "t"
+    }))
+    .unwrap();
+    assert_eq!(
+        message,
+        ServerMessage::TerminalClosed {
+            terminal_id: TerminalId::new("t"),
+            exit_code: None
+        }
+    );
 }
 
 #[test]

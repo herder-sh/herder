@@ -207,8 +207,9 @@ impl Client {
             protocol_version: PROTOCOL_VERSION,
             client: self.inner.client.clone(),
             resume: Vec::new(),
+            pairing_code: Some(uri.code),
         };
-        let (ws, hello) = supervisor::connect(&saved, &device, Some(&uri.code), hello)
+        let (ws, hello) = supervisor::connect(&saved, &device, hello)
             .await
             .map_err(Error::Pairing)?;
         // The supervisor opens its own connection; this one only proved the code.

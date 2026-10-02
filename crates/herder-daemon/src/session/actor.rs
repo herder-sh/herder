@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::Result;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
-    Answer, Answerer, ApprovalDecision, ApprovalId, CommandResult, ErrorClass, ErrorCode,
-    ErrorInfo, EventBody, Item, ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionStatus,
-    TurnError, TurnId, UserId,
+    Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult, ErrorClass,
+    ErrorCode, ErrorInfo, EventBody, Item, ItemBody, ItemId, PermissionMode, QuestionId, Route,
+    SessionStatus, TurnError, TurnId, UserId,
 };
 use herder_store::Session;
 use tokio::sync::{mpsc, oneshot};
@@ -232,7 +232,7 @@ impl Actor {
         };
         let body = EventBody::ApprovalResolved {
             approval_id: approval_id.clone(),
-            decision,
+            decision: decision.into(),
             answered_by: Answerer::User,
         };
         self.record(Some(by), body).await.map_err(super::internal)?;
@@ -291,8 +291,8 @@ impl Actor {
         self.set_status(status).await;
     }
 
-    /// Journals every open approval as denied by the daemon: the turn that asked has ended, so
-    /// no answer can reach the agent any more.
+    /// Journals every open approval as expired: the turn that asked has ended, so no answer
+    /// can reach the agent any more.
     async fn void_approvals(&mut self) {
         for (approval_id, _) in std::mem::take(&mut self.approvals) {
             self.log(voided(approval_id)).await;
@@ -651,10 +651,10 @@ async fn stop(mut adapter: AdapterSession) {
     while adapter.events.recv().await.is_some() {}
 }
 
-/// Closes a turn left open by a daemon that stopped mid-turn, denying its open approvals, and
+/// Closes a turn left open by a daemon that stopped mid-turn, expiring its open approvals, and
 /// settles the session's status.
 ///
-/// An open approval is denied, not left open: the CLI that asked is gone with the old daemon,
+/// An open approval expires, not left open: the CLI that asked is gone with the old daemon,
 /// so no answer can reach it, and the next turn starts a new CLI that asks afresh if it still
 /// needs to.
 pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -> Result<()> {
@@ -701,12 +701,11 @@ pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -
     Ok(())
 }
 
-/// An approval the daemon denied because no answer can reach the agent any more; `by` is
-/// absent, which tells it from a user's answer.
+/// An approval the daemon closed because no answer can reach the agent any more.
 fn voided(approval_id: ApprovalId) -> EventBody {
     EventBody::ApprovalResolved {
         approval_id,
-        decision: ApprovalDecision::Deny,
+        decision: ApprovalOutcome::Expired,
         answered_by: Answerer::User,
     }
 }

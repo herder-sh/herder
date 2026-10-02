@@ -118,14 +118,19 @@ pub enum EventBody {
         approval_id: ApprovalId,
         /// Why it was escalated.
         reason: EscalationReason,
+        /// What the primary session told the user about it, as Markdown; absent when it said nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
-    /// A user or the primary session answered an approval request.
+    /// A user or the primary session answered an approval request, or the daemon closed it
+    /// as `expired`.
     ApprovalResolved {
-        /// The answered request.
+        /// The resolved request.
         approval_id: ApprovalId,
-        /// The answer.
-        decision: ApprovalDecision,
-        /// Who answered; `by` names the user when it is a user.
+        /// How it was resolved.
+        decision: ApprovalOutcome,
+        /// Who answered; `by` names the user when it is a user. An `expired` request has no `by`
+        /// and is `user`.
         #[serde(default)]
         answered_by: Answerer,
     },
@@ -151,6 +156,9 @@ pub enum EventBody {
         question_id: QuestionId,
         /// Why it was escalated.
         reason: EscalationReason,
+        /// What the primary session told the user about it, as Markdown; absent when it said nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// A user or the primary session answered a question.
     QuestionAnswered {
@@ -327,6 +335,28 @@ pub enum ApprovalDecision {
     Allow,
     /// Refuse the tool call.
     Deny,
+}
+
+/// How an approval request was resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalOutcome {
+    /// The tool call ran once.
+    Allow,
+    /// The tool call was refused.
+    Deny,
+    /// Nobody answered before its turn ended or the daemon restarted; the agent no longer waits
+    /// for it, and asks again in a later turn if it still needs to.
+    Expired,
+}
+
+impl From<ApprovalDecision> for ApprovalOutcome {
+    fn from(decision: ApprovalDecision) -> Self {
+        match decision {
+            ApprovalDecision::Allow => ApprovalOutcome::Allow,
+            ApprovalDecision::Deny => ApprovalOutcome::Deny,
+        }
+    }
 }
 
 /// Who an approval request or question is put to first.

@@ -144,6 +144,13 @@
           "description": "Client name and version, for logs, e.g. `herder-tui/0.1.0`.",
           "type": "string"
         },
+        "pairing_code": {
+          "description": "One-time code from `herder pair`, sent by a device that is not paired yet; ignored once\nit is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "protocol_version": {
           "description": "Must equal the daemon's [`crate::PROTOCOL_VERSION`].",
           "type": "integer",

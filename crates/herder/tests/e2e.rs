@@ -19,7 +19,6 @@ use herder_adapters::fixture::Fixture;
 use herder_adapters::transport::Transport;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_client_core::auth::{DeviceKey, PairingUri, client_config};
-use herder_daemon::auth::PAIRING_CODE_HEADER;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     Account, AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command,
@@ -184,27 +183,17 @@ struct Client {
 }
 
 impl Client {
-    /// Connects to `addr` as `device`, pinning `fingerprint` and sending `code` if given.
-    async fn connect(
-        addr: &str,
-        fingerprint: &str,
-        device: &DeviceKey,
-        code: Option<&str>,
-    ) -> std::io::Result<Self> {
+    /// Connects to `addr` as `device`, pinning `fingerprint`.
+    async fn connect(addr: &str, fingerprint: &str, device: &DeviceKey) -> std::io::Result<Self> {
         let config = client_config(fingerprint, device).unwrap();
         let addr: SocketAddr = addr.parse().unwrap();
         let tcp = TcpStream::connect(addr).await?;
         let tls = TlsConnector::from(Arc::new(config))
             .connect(ServerName::try_from("localhost").unwrap(), tcp)
             .await?;
-        let mut request = format!("wss://localhost:{}/", addr.port())
+        let request = format!("wss://localhost:{}/", addr.port())
             .into_client_request()
             .unwrap();
-        if let Some(code) = code {
-            request
-                .headers_mut()
-                .insert(PAIRING_CODE_HEADER, code.parse().unwrap());
-        }
         let (ws, _) = tokio_tungstenite::client_async(request, tls)
             .await
             .map_err(std::io::Error::other)?;
@@ -351,12 +340,10 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     let device = DeviceKey::generate().unwrap();
     let wrong_pin = "0".repeat(64);
     assert!(
-        Client::connect(host, &wrong_pin, &device, Some(&link.code))
-            .await
-            .is_err(),
+        Client::connect(host, &wrong_pin, &device).await.is_err(),
         "a daemon whose certificate is not the pinned one was trusted"
     );
-    let mut client = Client::connect(host, &link.fingerprint, &device, Some(&link.code))
+    let mut client = Client::connect(host, &link.fingerprint, &device)
         .await
         .unwrap();
     client
@@ -364,6 +351,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             protocol_version: PROTOCOL_VERSION,
             client: "herder-e2e".into(),
             resume: Vec::new(),
+            pairing_code: Some(link.code.clone()),
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {

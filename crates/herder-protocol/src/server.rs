@@ -47,6 +47,15 @@ pub enum ServerMessage {
         /// Text to append to the item's text or output.
         text: String,
     },
+    /// A terminal's shell exited; sent to owners only, before the terminal list without it.
+    TerminalClosed {
+        /// The terminal, now gone.
+        terminal_id: TerminalId,
+        /// The shell's exit status; absent when a signal ended it, as the hang-up on an archive
+        /// or a daemon stop usually does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
     /// Bytes a terminal wrote; ephemeral, never journaled.
     TerminalOutput {
         /// Terminal that wrote them.
