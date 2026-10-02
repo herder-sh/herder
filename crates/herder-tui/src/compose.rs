@@ -102,7 +102,7 @@ pub struct Palette {
 
 /// The palette's commands, for its hint and the help.
 pub const COMMANDS: &str = "model <name> · mode read_only|ask|auto_edit|full_access · archive[!] · interrupt · new · \
-     down [project]";
+     down [project] · mouse on|off";
 
 /// The new-session dialog.
 #[derive(Debug)]
@@ -491,6 +491,19 @@ impl App {
         if name == "new" {
             self.new_session();
             return Vec::new();
+        }
+        if name == "mouse" {
+            let on = match rest.as_slice() {
+                ["on"] => true,
+                ["off"] => false,
+                _ => {
+                    palette.error = Some("usage: mouse on|off".to_owned());
+                    self.compose.palette = Some(palette);
+                    return Vec::new();
+                }
+            };
+            self.mouse = on;
+            return vec![Effect::Mouse(on)];
         }
         match self.command(palette.target.as_ref(), name, &rest) {
             Ok((key, body)) => vec![send(&key, body, Origin::Session(key.clone()))],

@@ -5,6 +5,10 @@
 //!
 //! Below [`NARROW`] columns, as on a phone, the screen shows one pane at a time: the session
 //! list, or what it opened, full width. Rows and titles there are compact.
+//!
+//! A tappable header tops the screen; on a narrow screen a bar of buttons for what can be done
+//! now sits over the status line ([`touch`]). Each view records where its taps and swipes land
+//! ([`crate::mouse::Hits`]) as it draws; dialogs cover what they hide.
 
 mod accounts;
 mod composer;
@@ -21,6 +25,7 @@ mod sessions;
 mod status;
 mod switch;
 mod terminals;
+mod touch;
 mod transcript;
 
 use ratatui::backend::Backend;
@@ -29,6 +34,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal};
 
 use crate::app::{App, Focus};
+use crate::mouse::Hits;
 
 /// Screens narrower than this show one pane at a time.
 pub const NARROW: u16 = 80;
@@ -55,48 +61,66 @@ pub fn paint<B: Backend>(
 
 /// Draws the whole screen.
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let mut hits = Hits::default();
     let area = frame.area();
     let narrow = area.width < NARROW;
-    let [body, status_line] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+    let [header, body, bar, status_line] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(u16::from(narrow)),
+        Constraint::Length(1),
+    ])
+    .areas(area);
     if app.machines.is_empty() {
         pairing::draw(frame, body);
     } else if narrow && app.focus == Focus::Sessions {
-        sessions::draw(frame, body, app, true);
+        sessions::draw(frame, body, app, true, &mut hits);
     } else if narrow {
-        main(frame, body, app, true);
+        main(frame, body, app, true, &mut hits);
     } else {
         let list_width = (body.width / 3).clamp(30, 44);
         let [list, rest] =
             Layout::horizontal([Constraint::Length(list_width), Constraint::Fill(1)]).areas(body);
-        sessions::draw(frame, list, app, false);
-        main(frame, rest, app, false);
+        sessions::draw(frame, list, app, false, &mut hits);
+        main(frame, rest, app, false, &mut hits);
     }
     if !palette::draw(frame, status_line, app) {
         status::draw(frame, status_line, app, narrow);
     }
+    // Under the dialogs, but their taps over everything.
+    let mut touch = Hits::default();
+    touch::header(frame, header, app, narrow, &mut touch);
+    if narrow {
+        touch::bar(frame, bar, app, &mut touch);
+    }
+    // A dialog takes taps for itself and what it hides; the header and the bar stay.
+    if app.dialog_open() {
+        hits.cover(area);
+    }
     new_session::draw(frame, area, app);
     if let Some(screen) = &app.account_screen {
-        accounts::draw(frame, body, app, screen);
+        accounts::draw(frame, body, app, screen, &mut hits);
     }
-    switch::draw(frame, body, app);
+    switch::draw(frame, body, app, &mut hits);
     if let Some(panel) = &app.machine_panel {
-        machines::draw(frame, body, app, panel);
+        machines::draw(frame, body, app, panel, &mut hits);
     }
-    terminals::draw(frame, body, app);
+    terminals::draw(frame, body, app, &mut hits);
     if app.help {
-        help::draw(frame, area, app);
+        help::draw(frame, area, app, &mut hits);
     }
     prs::prompt(frame, area, app);
+    hits.append(touch);
+    app.hits = hits;
 }
 
 /// The main pane: every session's PRs, the inbox, or the open session; `compact` on a narrow
 /// screen.
-fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
+fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut Hits) {
     if app.focus == Focus::AllPrs {
-        prs::all(frame, area, app, compact);
+        prs::all(frame, area, app, compact, hits);
     } else if app.focus == Focus::Inbox {
-        inbox::draw(frame, area, app, compact);
+        inbox::draw(frame, area, app, compact, hits);
     } else {
         let (area, controls) = composer::split(area, app);
         let [strip, usage, area] = Layout::vertical([
@@ -105,11 +129,11 @@ fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
             Constraint::Fill(1),
         ])
         .areas(area);
-        prs::strip(frame, strip, app, compact);
+        prs::strip(frame, strip, app, compact, hits);
         resources::strip(frame, usage, app, compact);
-        transcript::draw(frame, area, app, compact);
+        transcript::draw(frame, area, app, compact, hits);
         if let Some(controls) = controls {
-            composer::draw(frame, controls, app, compact);
+            composer::draw(frame, controls, app, compact, hits);
         }
     }
 }

@@ -13,15 +13,22 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragra
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
 use crate::machines::{AddMachine, Field, Form, MachinePanel, PanelEdit, Step};
+use crate::mouse::{Click, Hits, List as Rows};
 
 /// Width of the label column of details and form fields.
 const LABEL: usize = 13;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
+pub(super) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    panel: &MachinePanel,
+    hits: &mut Hits,
+) {
     match (&panel.account, &panel.add) {
         (Some(account), _) => account_dialog(frame, area, app, account),
         (None, Some(add)) => dialog(frame, area, app, add),
-        (None, None) => list(frame, area, app, panel),
+        (None, None) => list(frame, area, app, panel, hits),
     }
 }
 
@@ -45,7 +52,7 @@ fn keys(text: &str) -> Line<'_> {
     Line::styled(format!(" {text} "), super::dim()).centered()
 }
 
-fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
+fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &mut Hits) {
     let selected = panel.selected(&app.machines);
     let mut details =
         selected.map_or_else(Vec::new, |at| details(&app.machines[at], value_width(area)));
@@ -101,6 +108,11 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel) {
     let list = List::new(items).highlight_style(Style::new().reversed());
     frame.render_stateful_widget(list, top, &mut state);
     frame.render_widget(Paragraph::new(details), bottom);
+    if panel.edit.is_none() {
+        hits.list(top, state.offset(), &vec![1; app.machines.len()], |at| {
+            Some(Click::Row(Rows::Machines, at))
+        });
+    }
 }
 
 /// A machine's connection mark, its colour, and what it says.

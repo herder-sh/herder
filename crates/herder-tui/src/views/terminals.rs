@@ -7,9 +7,10 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding};
 
 use crate::app::App;
+use crate::mouse::{Click, Hits, List as Rows};
 use crate::terminal::{self, Target};
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let Some(picker) = &app.terminals else {
         return;
     };
@@ -29,17 +30,20 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
         .collect();
     let height = u16::try_from(rows.len() + 4).unwrap_or(u16::MAX);
     let popup = super::centered(area, 52, height);
+    let block = Block::bordered()
+        .title(format!(" terminals · {title} "))
+        .title_bottom(Line::styled(" Enter attach  Esc close ", super::dim()).centered())
+        .padding(Padding::uniform(1));
+    let inner = block.inner(popup);
     let list = List::new(items)
-        .block(
-            Block::bordered()
-                .title(format!(" terminals · {title} "))
-                .title_bottom(Line::styled(" Enter attach  Esc close ", super::dim()).centered())
-                .padding(Padding::uniform(1)),
-        )
+        .block(block)
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     let mut state = ListState::default().with_selected(Some(picker.selected.min(rows.len() - 1)));
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(list, popup, &mut state);
+    hits.list(inner, state.offset(), &vec![1; rows.len()], |at| {
+        Some(Click::Row(Rows::Picker, at))
+    });
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(app, width, height).backend()"
 ---
+" herder                                                                                                      inbox 0  + "
 "┌ sessions · by project ───────────────┐┌ pull requests · by project ──────────────────────────────────────────────────┐"
 "│◆ app (4) · box, laptop               ││◆ app                                                                         │"
 "│ running   ▾ herder/c… (1) #12… laptop││  laptop · app · herder/cache  running                                        │"
@@ -12,7 +13,6 @@ expression: "render(app, width, height).backend()"
 "│ running   herder/guide #3 box        ││◆ docs                                                                        │"
 "│◆ scratch (1) · laptop                ││  box · docs · herder/guide  running                                          │"
 "│ idle      herder/try laptop          ││    #3  open     –             ? merge    Write the health guide  fix-3       │"
-"│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"
 "│                                      ││                                                                              │"

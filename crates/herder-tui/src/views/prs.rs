@@ -9,12 +9,13 @@
 
 use herder_protocol::{CiStatus, Mergeable, PrState, PullRequest, ReviewStatus};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, Focus};
+use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::session::Session;
 
 /// Most PRs the strip shows at once; more scroll.
@@ -31,7 +32,7 @@ pub(super) fn strip_height(app: &App) -> u16 {
 }
 
 /// The open session's PRs, one row each; `compact` on a narrow screen.
-pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
+pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool, hits: &mut Hits) {
     let prs = app.strip_prs();
     if area.height == 0 || prs.is_empty() {
         return;
@@ -65,11 +66,18 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
         .block(block)
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, area, &mut state);
+    hits.wheel(area, Wheel::Strip);
+    hits.list(
+        area.inner(Margin::new(1, 1)),
+        state.offset(),
+        &vec![1; prs.len()],
+        |at| Some(Click::Row(Rows::Strip, at)),
+    );
 }
 
 /// Every session's PRs, under a heading per session, in session-list order; `compact` on a
 /// narrow screen.
-pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
+pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool, hits: &mut Hits) {
     let hint = if compact {
         " Enter open · l session · ⌫ back "
     } else {
@@ -99,6 +107,8 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
     let number_width = number_width(prs.iter().map(|(_, pr)| *pr));
     let selected = app.pr_index();
     let mut items = Vec::new();
+    // The PR of each item, by index; headings have none.
+    let mut rows = Vec::new();
     let mut selected_item = 0;
     let mut previous = None;
     let mut project = None;
@@ -115,6 +125,7 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
                 Span::styled("◆ ", Style::new().fg(Color::Cyan)),
                 Span::styled(name, super::bold()),
             ])));
+            rows.resize(items.len(), None);
             previous = None;
         }
         if previous != Some(*key) {
@@ -146,6 +157,7 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
                 heading.insert(0, Span::raw("  "));
             }
             items.push(ListItem::new(Line::from(heading)));
+            rows.resize(items.len(), None);
         }
         if index == selected {
             selected_item = items.len();
@@ -154,12 +166,20 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
         line.spans
             .insert(0, Span::raw(if by_project { "    " } else { "  " }));
         items.push(ListItem::new(line));
+        rows.push(Some(index));
     }
     let mut state = ListState::default().with_selected(Some(selected_item));
     let list = List::new(items)
         .block(block)
         .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
     frame.render_stateful_widget(list, area, &mut state);
+    hits.wheel(area, Wheel::Keys);
+    hits.list(
+        area.inner(Margin::new(1, 1)),
+        state.offset(),
+        &vec![1; rows.len()],
+        |at| rows[at].map(|index| Click::Row(Rows::AllPrs, index)),
+    );
 }
 
 /// The session-list badge: the first open PRs by number with their checks, then a count of

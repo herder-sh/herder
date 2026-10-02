@@ -81,8 +81,8 @@ fn sessions_show_status_and_the_task_tree() {
     insta::assert_snapshot!(terminal.backend());
     // Badges carry their colour: "needs you" stands out.
     let buffer = terminal.backend().buffer();
-    let needs_you = (0..80).find(|&x| buffer[(x, 2)].symbol() == "n").unwrap();
-    assert_eq!(buffer[(needs_you, 2)].fg, Color::Magenta);
+    let needs_you = (0..80).find(|&x| buffer[(x, 3)].symbol() == "n").unwrap();
+    assert_eq!(buffer[(needs_you, 3)].fg, Color::Magenta);
 }
 
 #[test]

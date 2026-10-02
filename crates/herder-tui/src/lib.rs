@@ -7,6 +7,7 @@
 //! - `action`: what keys mean. Keys become `action::Action`s before they touch the state.
 //! - `session`: one session as folded from its events: list facts and transcript entries.
 //! - `views`: drawing, one module per screen area.
+//! - `mouse`: taps and swipes, matched against where the last frame drew what.
 //! - `run` (this module): the terminal, the client, and the tasks that feed the loop.
 //!
 //! Everything network-related goes through [`herder_client_core::Client`].
@@ -20,6 +21,7 @@ mod compose;
 mod fake;
 mod inbox;
 mod machines;
+mod mouse;
 mod projects;
 mod prs;
 mod session;
@@ -32,7 +34,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use herder_client_core::Client;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, MouseEventKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -48,8 +50,12 @@ pub fn run() -> Result<()> {
 }
 
 async fn run_in(config_dir: PathBuf) -> Result<()> {
+    let mut app = App {
+        mouse: mouse::load(&config_dir),
+        ..App::default()
+    };
     let client = Client::open(
-        config_dir,
+        config_dir.clone(),
         format!("herder-tui/{}", env!("CARGO_PKG_VERSION")),
     )?;
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -57,12 +63,17 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     let raw = terminal::RawInput::default();
 
     let mut terminal = ratatui::init();
-    let mut enhanced = enable_input_modes();
+    // ratatui's panic hook restores the screen, but not mouse reporting.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = mouse::report(false);
+        hook(info);
+    }));
+    let mut modes = enable_input_modes(app.mouse);
     if let Err(err) = forward_input(tx.clone(), raw.clone()) {
-        restore(enhanced);
+        restore(modes);
         return Err(err);
     }
-    let mut app = App::default();
     let mut subscriptions = Subscriptions::default();
     let mut repaint = false;
     let result = loop {
@@ -100,15 +111,23 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         }
                     }
                     Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
+                    Effect::Mouse(on) => {
+                        modes.mouse = mouse::report(on).is_ok() && on;
+                        if let Err(err) = mouse::save(&config_dir, on) {
+                            let _ =
+                                tx.send(Msg::Notice(format!("saving the mouse setting: {err}")));
+                        }
+                    }
                 }
             }
             next = rx.try_recv().ok();
         }
         if let Some((host_id, target)) = attach.filter(|_| !quit) {
-            // The attached program gets plain keys and sets its own modes.
-            disable_input_modes(enhanced);
+            // The attached program gets plain keys and no mouse reports, and sets its own
+            // modes.
+            disable_input_modes(modes);
             let ended = terminal::attach(&client, &host_id, target, &raw, &mut terminal).await;
-            enhanced = enable_input_modes();
+            modes = enable_input_modes(app.mouse);
             app.update(Msg::TerminalEnded(ended));
         }
         if quit {
@@ -116,41 +135,57 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         }
         subscriptions.sync(&client, &app, &tx);
     };
-    restore(enhanced);
+    restore(modes);
     result
 }
 
-/// Turns on bracketed paste, so a pasted prompt is one edit and not a key per character, and
-/// where the terminal supports it, disambiguated keys, so Shift-Enter is not Enter. Returns
-/// whether the keyboard enhancement was pushed.
-fn enable_input_modes() -> bool {
+/// The input modes [`enable_input_modes`] turned on.
+#[derive(Clone, Copy, Debug)]
+struct Modes {
+    /// The keyboard enhancement was pushed.
+    enhanced: bool,
+    /// Mouse reporting is on.
+    mouse: bool,
+}
+
+/// Turns on bracketed paste, so a pasted prompt is one edit and not a key per character;
+/// where the terminal supports it, disambiguated keys, so Shift-Enter is not Enter; and with
+/// `mouse`, mouse reporting, so a phone's taps and swipes reach the TUI.
+fn enable_input_modes(mouse: bool) -> Modes {
     use ratatui::crossterm::event::{
         EnableBracketedPaste, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     };
     use ratatui::crossterm::{execute, terminal};
     let mut out = std::io::stdout();
-    // Both are conveniences: without them typing still works, only less well.
+    // All are conveniences: without them typing still works, only less well.
     let _ = execute!(out, EnableBracketedPaste);
-    terminal::supports_keyboard_enhancement().unwrap_or(false)
+    let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false)
         && execute!(
             out,
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )
-        .is_ok()
+        .is_ok();
+    Modes {
+        enhanced,
+        mouse: mouse && mouse::report(true).is_ok(),
+    }
 }
 
 /// Undoes [`enable_input_modes`] and restores the terminal.
-fn restore(enhanced: bool) {
-    disable_input_modes(enhanced);
+fn restore(modes: Modes) {
+    disable_input_modes(modes);
     ratatui::restore();
 }
 
 /// Undoes [`enable_input_modes`].
-fn disable_input_modes(enhanced: bool) {
+fn disable_input_modes(modes: Modes) {
     use ratatui::crossterm::event::{DisableBracketedPaste, PopKeyboardEnhancementFlags};
     use ratatui::crossterm::execute;
     let mut out = std::io::stdout();
-    if enhanced {
+    if modes.mouse {
+        let _ = mouse::report(false);
+    }
+    if modes.enhanced {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
     let _ = execute!(out, DisableBracketedPaste);
@@ -243,8 +278,8 @@ fn forward_machines(client: &Client, tx: mpsc::UnboundedSender<Msg>) {
     });
 }
 
-/// Reads terminal input on its own thread, as crossterm's read blocks: key events, or raw
-/// bytes while a terminal is attached.
+/// Reads terminal input on its own thread, as crossterm's read blocks: key and mouse events,
+/// or raw bytes while a terminal is attached.
 fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Result<()> {
     let wait = std::time::Duration::from_millis(50);
     std::thread::Builder::new()
@@ -263,6 +298,17 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Res
                     Ok(Event::Key(key)) => Msg::Key(key),
                     Ok(Event::Resize(..)) => Msg::Resize,
                     Ok(Event::Paste(text)) => Msg::Paste(text),
+                    Ok(Event::Mouse(mouse))
+                        if matches!(
+                            mouse.kind,
+                            MouseEventKind::Down(_)
+                                | MouseEventKind::Up(_)
+                                | MouseEventKind::ScrollUp
+                                | MouseEventKind::ScrollDown
+                        ) =>
+                    {
+                        Msg::Mouse(mouse)
+                    }
                     Ok(_) => continue,
                     Err(_) => return,
                 };

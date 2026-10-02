@@ -1,15 +1,14 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 155
 expression: terminal.backend()
 ---
+" box › app · herder/api                                                                  inbox 2  + "
 "┌ sessions ─────────────────────┐┌ app · herder/api needs you ──── claude-main · claude-opus · ask ┐"
 "│● box (4)                      ││you                                                              │"
 "│ approve?  ▾ app · herder/… (2)││  Clean the build.                                               │"
 "│ running   └ write the tests   ││  · approval needed: Bash: rm -rf target                         │"
 "│ error     └ document it       ││  · approval needed: Bash: cargo build                           │"
 "│ idle      app · herder/fix-lo…││                                                                 │"
-"│                               ││                                                                 │"
 "│                               ││                                                                 │"
 "│                               ││                                                                 │"
 "│                               ││                                                                 │"

@@ -13,13 +13,14 @@ use ratatui::widgets::{Block, Paragraph};
 use textwrap::Options;
 
 use crate::app::{App, Focus};
+use crate::mouse::{Click, Hits, Wheel};
 use crate::session::{Entry, Session, Tone};
 
 /// Marks the end of an item still streaming.
 const CURSOR: &str = "▌";
 
-/// `compact`, on a narrow screen, titles the pane with only the machine and the session.
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
+/// `compact`, on a narrow screen, leaves the title to the header.
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut Hits) {
     let mut block = Block::bordered().border_style(super::border(app, Focus::Transcript));
     let Some(session) = app.open_session() else {
         let hint = Line::styled("Select a session and press Enter.", super::dim());
@@ -28,18 +29,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
         frame.render_widget(hint.centered(), super::centered(inner, inner.width, 1));
         return;
     };
-    if compact {
-        let machine = app
-            .open
-            .as_ref()
-            .and_then(|key| app.machines.iter().find(|m| m.host_id == key.host_id))
-            .map_or("", |machine| machine.name.as_str());
-        block = block.title(Line::from(vec![
-            Span::styled(format!(" {machine} › "), super::dim()),
-            Span::styled(session.short_title(), super::bold()),
-            Span::raw(" "),
-        ]));
-    } else {
+    // On a narrow screen, the header names the machine and the session.
+    if !compact {
         let (label, style) = super::sessions::badge(session.status);
         block = block.title(Line::from(vec![
             Span::raw(" "),
@@ -91,6 +82,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
         .collect();
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(shown), inner);
+    hits.click(area, Click::Open);
+    hits.wheel(area, Wheel::Transcript);
 }
 
 /// The transcript as lines `width` wide.

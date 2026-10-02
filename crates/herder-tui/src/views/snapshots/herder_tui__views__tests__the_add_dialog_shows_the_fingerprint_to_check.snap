@@ -2,9 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 90, 16).backend()"
 ---
+" ‹ back  herder                                                                inbox 0  + "
 "┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                          │"
-"│ needs you ▾ app · herd… (2)││                                                          │"
 "│ ┌ add a machine ─────────────────────────────────────────────────────────────────────┐ │"
 "│ │                                                                                    │ │"
 "│ │ Pair with this daemon?                                                             │ │"

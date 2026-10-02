@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
 use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId};
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::widgets::ListState;
 
 use crate::account_screen::AccountScreen;
@@ -14,6 +14,7 @@ use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
+use crate::mouse::{Click, Hits};
 use crate::projects::Grouping;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
@@ -25,6 +26,8 @@ use crate::terminal::{self, Picker};
 pub enum Msg {
     /// A key was pressed.
     Key(KeyEvent),
+    /// A click, a release or a wheel step: a tap or a swipe on a phone.
+    Mouse(MouseEvent),
     /// The terminal changed size: the screen is repainted from scratch.
     Resize,
     /// The paired machines, as [`herder_client_core::Client::machines`] now lists them.
@@ -91,6 +94,8 @@ pub enum Effect {
         /// What to attach to.
         target: terminal::Target,
     },
+    /// Turn the terminal's mouse reporting on or off, and save that in the client profile.
+    Mouse(bool),
 }
 
 /// Which pane keys go to.
@@ -162,7 +167,7 @@ impl Scroll {
         self.top.map_or(last_page, |top| top.min(last_page))
     }
 
-    fn by(&mut self, lines: isize) {
+    pub(crate) fn by(&mut self, lines: isize) {
         let last_page = self.total.saturating_sub(self.height);
         let top = self.first_line().saturating_add_signed(lines);
         // Scrolling to the end follows it again.
@@ -215,6 +220,12 @@ pub struct App {
     pub switch: Option<Switch>,
     /// How the session list groups sessions.
     pub grouping: Grouping,
+    /// Whether taps and the wheel drive the TUI; `:mouse off` hands them to the terminal.
+    pub mouse: bool,
+    /// Where the last frame's tappable and scrollable spots are.
+    pub hits: Hits,
+    /// What the press of a tap in progress landed on.
+    pub(crate) pressed: Option<Click>,
 }
 
 impl Default for App {
@@ -239,6 +250,9 @@ impl Default for App {
             account_screen: None,
             switch: None,
             grouping: Grouping::default(),
+            mouse: true,
+            hits: Hits::default(),
+            pressed: None,
         }
     }
 }
@@ -254,6 +268,7 @@ impl App {
                     None => Vec::new(),
                 }
             }
+            Msg::Mouse(event) => self.on_mouse(event),
             Msg::TerminalEnded(ended) => {
                 self.notice = Some(ended.notice());
                 Vec::new()
@@ -610,7 +625,7 @@ impl App {
         self.chosen = Some(row);
     }
 
-    fn select_by(&mut self, step: isize) {
+    pub(crate) fn select_by(&mut self, step: isize) {
         let rows = self.rows();
         let Some(last) = rows.len().checked_sub(1) else {
             return;

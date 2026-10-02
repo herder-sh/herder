@@ -2,6 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(app, width, height).backend()"
 ---
+" ‹ back  herder                                                                                              inbox 0  + "
 "┌ accounts ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ ● box  connected · pinned · then codex                                                                               │"
 "│   Main  claude · claude-main · 4 sessions                                                                            │"
@@ -15,7 +16,6 @@ expression: "render(app, width, height).backend()"
 "│     Weekly   ██████░░░░░░░░░░░░░░░░░░░░░░░░   20%  resets in 1d 0h                                                   │"
 "│ ✗ laptop  connection refused                                                                                         │"
 "│   no accounts: n adds one                                                                                            │"
-"│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
