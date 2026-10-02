@@ -3,7 +3,8 @@
 
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
-    Answer, ApprovalOutcome, Event, EventBody, HostId, Item, SessionId, SessionStatus,
+    AccountId, Answer, ApprovalId, ApprovalOutcome, Event, EventBody, HostId, Item, ItemBody,
+    PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -38,6 +39,44 @@ pub struct Session {
     pub entries: Vec<Entry>,
     /// Items streaming now, with their text so far.
     pub streaming: Vec<Item>,
+    /// Account it runs on.
+    pub account_id: Option<AccountId>,
+    /// Current permission mode.
+    pub permission_mode: PermissionMode,
+    /// The turn running now, from its start to its end.
+    pub turn: Option<TurnId>,
+    /// Approval requests nobody answered yet, oldest first.
+    pub approvals: Vec<PendingApproval>,
+    /// Questions nobody answered yet, oldest first.
+    pub questions: Vec<PendingQuestion>,
+    /// Prompts this TUI sent while a turn ran, not yet started; the daemon queues them.
+    pub queued: Vec<String>,
+}
+
+/// An approval request waiting for an answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingApproval {
+    /// The request.
+    pub id: ApprovalId,
+    /// What the agent wants to do.
+    pub summary: String,
+    /// Who is asked first; a user can always answer.
+    pub routed_to: Route,
+}
+
+/// A question waiting for an answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingQuestion {
+    /// The question.
+    pub id: QuestionId,
+    /// Turn it blocks; the question is cleared when that turn ends.
+    pub turn_id: TurnId,
+    /// The question, as Markdown.
+    pub text: String,
+    /// Answers to pick from; empty for free text.
+    pub choices: Vec<String>,
+    /// Who is asked first; a user can always answer.
+    pub routed_to: Route,
 }
 
 /// One completed line of the transcript.
@@ -79,6 +118,12 @@ impl Session {
             status: SessionStatus::Idle,
             entries: Vec::new(),
             streaming: Vec::new(),
+            account_id: None,
+            permission_mode: PermissionMode::Ask,
+            turn: None,
+            approvals: Vec::new(),
+            questions: Vec::new(),
+            queued: Vec::new(),
         }
     }
 
@@ -115,8 +160,12 @@ impl Session {
                 model,
                 parent,
                 task,
+                account_id,
+                permission_mode,
                 ..
             } => {
+                self.account_id = Some(account_id);
+                self.permission_mode = permission_mode;
                 self.repo = repo;
                 self.branch = branch;
                 self.model = model;
@@ -133,19 +182,76 @@ impl Session {
                 self.branch = branch;
                 Some(notice(text, Tone::Info))
             }
-            EventBody::ItemAdded { item } => Some(Entry::Item(item)),
-            EventBody::TurnInterrupted { .. } => {
+            EventBody::ItemAdded { item } => {
+                if let ItemBody::UserMessage { text } = &item.body
+                    && let Some(at) = self.queued.iter().position(|queued| queued == text)
+                {
+                    self.queued.remove(at);
+                }
+                Some(Entry::Item(item))
+            }
+            EventBody::TurnStarted { turn_id } => {
+                self.turn = Some(turn_id);
+                None
+            }
+            EventBody::TurnCompleted { turn_id } => {
+                self.turn_ended(&turn_id);
+                None
+            }
+            EventBody::TurnInterrupted { turn_id } => {
+                self.turn_ended(&turn_id);
                 Some(notice("turn interrupted".to_owned(), Tone::Info))
             }
-            EventBody::TurnFailed { error, .. } => Some(notice(
-                format!("turn failed: {}", error.message),
-                Tone::Error,
-            )),
-            EventBody::ApprovalRequested { summary, .. } => Some(notice(
-                format!("approval needed: {summary}"),
-                Tone::Attention,
-            )),
-            EventBody::ApprovalResolved { decision, .. } => {
+            EventBody::TurnFailed { turn_id, error } => {
+                self.turn_ended(&turn_id);
+                Some(notice(
+                    format!("turn failed: {}", error.message),
+                    Tone::Error,
+                ))
+            }
+            EventBody::ApprovalRequested {
+                approval_id,
+                summary,
+                routed_to,
+                ..
+            } => {
+                let text = format!("approval needed: {summary}");
+                self.approvals.push(PendingApproval {
+                    id: approval_id,
+                    summary,
+                    routed_to,
+                });
+                Some(notice(text, Tone::Attention))
+            }
+            EventBody::ApprovalEscalated { approval_id, .. } => {
+                for approval in &mut self.approvals {
+                    if approval.id == approval_id {
+                        approval.routed_to = Route::User;
+                    }
+                }
+                None
+            }
+            EventBody::QuestionEscalated { question_id, .. } => {
+                for question in &mut self.questions {
+                    if question.id == question_id {
+                        question.routed_to = Route::User;
+                    }
+                }
+                None
+            }
+            EventBody::PermissionModeChanged { mode } => {
+                self.permission_mode = mode;
+                Some(notice(
+                    format!("permission mode set to {}", mode_name(mode)),
+                    Tone::Info,
+                ))
+            }
+            EventBody::ApprovalResolved {
+                approval_id,
+                decision,
+                ..
+            } => {
+                self.approvals.retain(|approval| approval.id != approval_id);
                 let decision = match decision {
                     ApprovalOutcome::Allow => "allowed",
                     ApprovalOutcome::Deny => "denied",
@@ -153,13 +259,36 @@ impl Session {
                 };
                 Some(notice(decision.to_owned(), Tone::Info))
             }
-            EventBody::QuestionAsked { text, .. } => {
-                Some(notice(format!("question: {text}"), Tone::Attention))
+            EventBody::QuestionAsked {
+                question_id,
+                turn_id,
+                text,
+                choices,
+                routed_to,
+                ..
+            } => {
+                let line = format!("question: {text}");
+                self.questions.push(PendingQuestion {
+                    id: question_id,
+                    turn_id,
+                    text,
+                    choices,
+                    routed_to,
+                });
+                Some(notice(line, Tone::Attention))
             }
-            EventBody::QuestionAnswered { answer, .. } => {
+            EventBody::QuestionAnswered {
+                question_id,
+                answer,
+                ..
+            } => {
+                let asked = self.questions.iter().position(|q| q.id == question_id);
+                let asked = asked.map(|at| self.questions.remove(at));
                 let answer = match answer {
                     Answer::Text { text } => text,
-                    Answer::Choice { index } => format!("choice {}", u64::from(index) + 1),
+                    Answer::Choice { index } => asked
+                        .and_then(|q| q.choices.get(index as usize).cloned())
+                        .unwrap_or_else(|| format!("choice {}", u64::from(index) + 1)),
                 };
                 Some(notice(format!("answered: {answer}"), Tone::Info))
             }
@@ -189,18 +318,37 @@ impl Session {
                 format!("pull request #{} linked: {}", pr.number, pr.title),
                 Tone::Info,
             )),
-            EventBody::TurnStarted { .. }
-            | EventBody::TurnCompleted { .. }
-            | EventBody::ApprovalEscalated { .. }
-            | EventBody::QuestionEscalated { .. }
-            | EventBody::PermissionModeChanged { .. }
-            | EventBody::PrUpdated { .. }
-            | EventBody::PrUnlinked { .. }
-            | EventBody::Unknown => None,
+            EventBody::PrUpdated { .. } | EventBody::PrUnlinked { .. } | EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }
+
+    fn turn_ended(&mut self, turn_id: &TurnId) {
+        if self.turn.as_ref() == Some(turn_id) {
+            self.turn = None;
+        }
+        self.questions
+            .retain(|question| question.turn_id != *turn_id);
+    }
 }
+
+/// A permission mode as typed in the palette and shown in the session view.
+pub fn mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::ReadOnly => "read_only",
+        PermissionMode::Ask => "ask",
+        PermissionMode::AutoEdit => "auto_edit",
+        PermissionMode::FullAccess => "full_access",
+    }
+}
+
+/// Every permission mode, least permissive first.
+pub const MODES: [PermissionMode; 4] = [
+    PermissionMode::ReadOnly,
+    PermissionMode::Ask,
+    PermissionMode::AutoEdit,
+    PermissionMode::FullAccess,
+];
 
 #[cfg(test)]
 mod tests {

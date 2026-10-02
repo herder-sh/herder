@@ -13,6 +13,7 @@
 
 mod action;
 mod app;
+mod compose;
 #[cfg(test)]
 mod fake;
 mod session;
@@ -45,9 +46,13 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     )?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     forward_machines(&client, tx.clone());
-    forward_input(tx.clone())?;
 
     let mut terminal = ratatui::init();
+    let enhanced = enable_input_modes();
+    if let Err(err) = forward_input(tx.clone()) {
+        restore(enhanced);
+        return Err(err);
+    }
     let mut app = App::default();
     let mut subscriptions = Subscriptions::default();
     let result = loop {
@@ -65,6 +70,11 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                 match effect {
                     Effect::Quit => quit = true,
                     Effect::Wake => client.wake(),
+                    Effect::Send {
+                        host_id,
+                        command,
+                        origin,
+                    } => send(&client, host_id, command, origin, tx.clone()),
                 }
             }
             next = rx.try_recv().ok();
@@ -74,8 +84,57 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         }
         subscriptions.sync(&client, &app, &tx);
     };
-    ratatui::restore();
+    restore(enhanced);
     result
+}
+
+/// Turns on bracketed paste, so a pasted prompt is one edit and not a key per character, and
+/// where the terminal supports it, disambiguated keys, so Shift-Enter is not Enter. Returns
+/// whether the keyboard enhancement was pushed.
+fn enable_input_modes() -> bool {
+    use ratatui::crossterm::event::{
+        EnableBracketedPaste, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    };
+    use ratatui::crossterm::{execute, terminal};
+    let mut out = std::io::stdout();
+    // Both are conveniences: without them typing still works, only less well.
+    let _ = execute!(out, EnableBracketedPaste);
+    terminal::supports_keyboard_enhancement().unwrap_or(false)
+        && execute!(
+            out,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok()
+}
+
+/// Undoes [`enable_input_modes`] and restores the terminal.
+fn restore(enhanced: bool) {
+    use ratatui::crossterm::event::{DisableBracketedPaste, PopKeyboardEnhancementFlags};
+    use ratatui::crossterm::execute;
+    let mut out = std::io::stdout();
+    if enhanced {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
+    let _ = execute!(out, DisableBracketedPaste);
+    ratatui::restore();
+}
+
+/// Sends a command on its own task and feeds the daemon's answer back to the loop.
+fn send(
+    client: &Client,
+    host_id: herder_protocol::HostId,
+    command: herder_protocol::CommandBody,
+    origin: compose::Origin,
+    tx: mpsc::UnboundedSender<Msg>,
+) {
+    let client = client.clone();
+    tokio::spawn(async move {
+        let result = client
+            .send(&host_id, command)
+            .await
+            .map_err(|err| err.to_string());
+        let _ = tx.send(Msg::Sent { origin, result });
+    });
 }
 
 /// Sends the machines now and after every change.
@@ -103,6 +162,7 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
                 let msg = match event::read() {
                     Ok(Event::Key(key)) => Msg::Key(key),
                     Ok(Event::Resize(..)) => Msg::Resize,
+                    Ok(Event::Paste(text)) => Msg::Paste(text),
                     Ok(_) => continue,
                     Err(_) => return,
                 };

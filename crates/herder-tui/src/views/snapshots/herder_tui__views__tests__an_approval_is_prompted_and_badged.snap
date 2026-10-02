@@ -1,0 +1,24 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: terminal.backend()
+---
+"┌ sessions ─────────────────────┐┌ app · herder/api needs you ────────────────── claude-opus · ask ┐"
+"│● box (4)                      ││you                                                              │"
+"│ approve?  app · herder/api    ││  Clean the build.                                               │"
+"│ running   └ write the tests   ││  · approval needed: Bash: rm -rf target                         │"
+"│ error     └ document it       ││  · approval needed: Bash: cargo build                           │"
+"│ idle      app · herder/fix-log││                                                                 │"
+"│                               ││                                                                 │"
+"│                               ││                                                                 │"
+"│                               ││                                                                 │"
+"│                               ││                                                                 │"
+"│                               ││                                                                 │"
+"│                               │└─────────────────────────────────────────────────────────────────┘"
+"│                               │┌ approval needed ─────────────────────────────────────── +1 more ┐"
+"│                               ││Bash: rm -rf target                                              │"
+"│                               ││y allow · n deny                                                 │"
+"│                               │└─────────────────────────────────────────────────────────────────┘"
+"│                               │┌ message · queues behind the turn ───────────────────────────────┐"
+"│                               ││ Write a prompt…                                                 │"
+"└───────────────────────────────┘└───────────────────────────────────────────────────── i to write ┘"
+" ● box connected                                                                     ? help  q quit "

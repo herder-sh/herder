@@ -6,7 +6,10 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use herder_protocol::ApprovalDecision;
+
 use crate::app::{App, Focus};
+use crate::compose::{self, Act};
 
 /// Something the user asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +38,8 @@ pub enum Action {
     Back,
     /// Reconnect every disconnected machine now.
     Reconnect,
+    /// Write to, answer or control a session; see [`crate::compose`].
+    Compose(Act),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -44,13 +49,29 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl && key.code == KeyCode::Char('c') {
-        return Some(Action::Quit);
+        return Some(Action::Compose(Act::CtrlC));
     }
     if app.help {
         // Any key closes the help.
         return Some(Action::ToggleHelp);
     }
+    if let Some(action) = compose::for_key(key, app) {
+        return action;
+    }
+    let in_transcript = app.focus == Focus::Transcript;
     let action = match key.code {
+        KeyCode::Char('i') | KeyCode::Enter if in_transcript => Action::Compose(Act::Write),
+        KeyCode::Char('y') if in_transcript => {
+            Action::Compose(Act::Approve(ApprovalDecision::Allow))
+        }
+        KeyCode::Char('n') if in_transcript => {
+            Action::Compose(Act::Approve(ApprovalDecision::Deny))
+        }
+        KeyCode::Char(digit @ '1'..='9') if in_transcript => {
+            Action::Compose(Act::Choose(u32::from(digit) - u32::from('1')))
+        }
+        KeyCode::Char(':') => Action::Compose(Act::Palette),
+        KeyCode::Char('n') => Action::Compose(Act::NewSession),
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('?') => Action::ToggleHelp,
         KeyCode::Char('k') | KeyCode::Up => Action::Up,
@@ -82,7 +103,15 @@ pub const HELP: &[(&str, &str)] = &[
     ("Esc, h", "back to the sessions"),
     ("PgUp / PgDn", "scroll a page (also Ctrl-u / Ctrl-d)"),
     ("g / G", "first / last; G follows the transcript"),
+    ("i, Enter", "write in the open session"),
+    ("Enter / Alt-Enter", "send / new line, in the composer"),
+    ("Esc", "leave the composer or close a dialog"),
+    ("y / n", "allow / deny the pending approval"),
+    ("1-9", "pick an answer to the pending question"),
+    ("Ctrl-c", "interrupt the running turn"),
+    (":", "commands: model, mode, archive, new"),
+    ("n", "new session"),
     ("r", "reconnect now"),
     ("?", "show or hide this help"),
-    ("q, Ctrl-c", "quit"),
+    ("q, Ctrl-c twice", "quit"),
 ];

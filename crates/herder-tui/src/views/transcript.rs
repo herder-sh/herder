@@ -36,8 +36,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         Span::raw(" "),
     ]));
     if !session.model.is_empty() {
-        block =
-            block.title(Line::styled(format!(" {} ", session.model), super::dim()).right_aligned());
+        let mode = crate::session::mode_name(session.permission_mode);
+        let facts = format!(" {} · {mode} ", session.model);
+        block = block.title(Line::styled(facts, super::dim()).right_aligned());
     }
     let inner = block.inner(area);
     let lines = if session.loaded {
@@ -69,6 +70,19 @@ pub(crate) fn lines(session: &Session, width: usize) -> Vec<Line<'static>> {
     }
     for item in &session.streaming {
         self::item(&mut out, item, width, true);
+    }
+    for prompt in &session.queued {
+        if !out.is_empty() {
+            out.push(Line::raw(""));
+        }
+        out.push(Line::from(vec![
+            Span::styled(
+                "you",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · queued", Style::new().fg(Color::Yellow)),
+        ]));
+        plain(&mut out, prompt, super::dim(), width);
     }
     out
 }
