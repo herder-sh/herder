@@ -560,6 +560,7 @@ name = "herder-adapters"
 version = "0.0.0"
 dependencies = [
  "herder-protocol",
+ "jsonschema",
  "regex",
  "serde",
  "serde_json",
