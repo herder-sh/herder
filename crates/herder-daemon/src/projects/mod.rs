@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, Event, HostId, Item, ItemId, Project, ProjectId, SessionHead, SessionId,
+    Account, AccountId, Event, HostId, Item, ItemId, Project, ProjectId, SessionHead, SessionId,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -172,6 +172,10 @@ impl EventSink for OnSessionsChanged {
     fn sessions_changed(&self, sessions: &[SessionHead]) {
         self.notify.notify_one();
         self.next.sessions_changed(sessions);
+    }
+
+    fn accounts_changed(&self, accounts: &[Account]) {
+        self.next.accounts_changed(accounts);
     }
 }
 
