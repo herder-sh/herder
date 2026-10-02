@@ -44,6 +44,20 @@
 //! worktree, keeps its branches and journals the `archived` status; an archived session takes
 //! no further commands.
 //!
+//! # Setup
+//!
+//! Once [`SessionManager::set_up_worktrees`] runs, a new session whose project has a
+//! `setup_command` runs it with `sh -c` once in its new worktree, in the session's resource
+//! scope, before any turn. It is journaled as a turn of its own, made by herder (no `by`): a
+//! `tool_call` item named `herder_setup` with `{"command": ...}` as its input, then its
+//! `tool_result` with the output's tail, stdout and stderr interleaved, and `turn_completed`.
+//! Prompts sent meanwhile queue and start once it succeeded. A non-zero exit, a timeout
+//! ([`ProjectsConfig::setup_timeout`]) or an `interrupt` kills the command's process group,
+//! fails the turn as `fatal` with the output's last lines and leaves the session `error`; the
+//! prompts queued behind it are dropped, and a later prompt starts the agent in the worktree as
+//! it is. `archive_session` is refused while it runs. A daemon restart closes a setup it left
+//! running like any open turn, without running it again.
+//!
 //! # Pull requests
 //!
 //! Once [`SessionManager::track_prs`] runs, each new worktree gets herder's git hooks, archive
@@ -120,6 +134,7 @@ mod actor;
 pub mod failover;
 pub(crate) mod journal;
 mod routing;
+mod setup;
 mod tasks;
 
 pub use routing::{Escalation, Notifier};
@@ -131,8 +146,8 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, Item,
-    ItemId, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId, UsageWindow,
+    Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, HostId,
+    Item, ItemId, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId, UsageWindow,
     UserId,
 };
 use herder_store::Store;
@@ -148,6 +163,7 @@ pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
 
 use crate::mcp::{self, Mcp};
+use crate::projects::{self, ProjectsConfig};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Scopes};
 use crate::usage::{self, Usage};
@@ -275,6 +291,8 @@ struct Inner {
     failover: OnceLock<FailoverConfig>,
     /// Accounts that hit a limit, until they reset.
     limits: Limits,
+    /// This host and the projects whose setup commands new worktrees run, once set.
+    projects: OnceLock<(HostId, ProjectsConfig)>,
     shutdown: CancellationToken,
 }
 
@@ -354,6 +372,7 @@ impl SessionManager {
                 admission: OnceLock::new(),
                 failover: OnceLock::new(),
                 limits: Limits::default(),
+                projects: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -520,6 +539,27 @@ impl SessionManager {
             .failover
             .set(config)
             .map_err(|_| anyhow::anyhow!("failover is configured already"))
+    }
+
+    /// Runs the setup command of its project, as `projects` on `host` resolves it, in every new
+    /// session's worktree from now on; once per manager. Without it, worktrees get no setup.
+    pub fn set_up_worktrees(&self, host: HostId, projects: ProjectsConfig) -> anyhow::Result<()> {
+        self.inner
+            .projects
+            .set((host, projects))
+            .map_err(|_| anyhow::anyhow!("worktree setup is configured already"))
+    }
+
+    /// The setup command of `repo`'s project and how long it may run, if it has one.
+    async fn setup_command(&self, repo: &Path) -> Option<(String, std::time::Duration)> {
+        let (host, config) = self.inner.projects.get()?.clone();
+        let timeout = config.setup_timeout;
+        let repo = repo.to_owned();
+        let project =
+            tokio::task::spawn_blocking(move || projects::of_repo(&host, &repo, &config.entries))
+                .await
+                .ok()??;
+        Some((project.setup_command?, timeout))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to
@@ -713,6 +753,7 @@ impl SessionManager {
             ));
         }
         let session_id = SessionId::new(ulid::Ulid::new().to_string());
+        let repo = PathBuf::from(&request.repo);
         let worktree = inner
             .worktrees
             .create(
@@ -745,6 +786,15 @@ impl SessionManager {
         match inner.journal.heads().await {
             Ok(heads) => inner.journal.sink().sessions_changed(&heads),
             Err(err) => warn!("cannot list sessions after creating {session_id}: {err:#}"),
+        }
+        // Before the reply, so the session's first prompt queues behind the setup.
+        if let Some((command, timeout)) = self.setup_command(&repo).await {
+            self.send(
+                session_id.clone(),
+                None,
+                Request::SetUp { command, timeout },
+            )
+            .await?;
         }
         Ok((session_id, worktree.branch))
     }

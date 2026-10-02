@@ -32,13 +32,28 @@ use crate::session::{EventSink, SessionManager};
 /// How often the roots are scanned again and every remote re-read.
 pub const RESCAN_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
+/// How long a project's setup command may run in a new worktree unless configured otherwise.
+pub const SETUP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// The `[projects]` table and the `[[project]]` entries, resolved.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectsConfig {
     /// Directories scanned for repositories.
     pub roots: Vec<PathBuf>,
+    /// How long a setup command may run before it is killed and the setup fails.
+    pub setup_timeout: Duration,
     /// Overrides, in file order.
     pub entries: Vec<ProjectEntry>,
+}
+
+impl Default for ProjectsConfig {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            setup_timeout: SETUP_TIMEOUT,
+            entries: Vec::new(),
+        }
+    }
 }
 
 /// One `[[project]]` entry.
@@ -135,6 +150,16 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
             }
         })
         .collect()
+}
+
+/// The project of the repository at `repo` under the `entries` overrides, reading its remote;
+/// blocks on the file system.
+pub fn of_repo(host: &HostId, repo: &Path, entries: &[ProjectEntry]) -> Option<Project> {
+    let repo = Repo {
+        path: repo.to_owned(),
+        origin: scan::origin(repo),
+    };
+    resolve(host, &[repo], entries).pop()
 }
 
 /// The last segment of a project id: the repository name of `github.com/org/repo`, the

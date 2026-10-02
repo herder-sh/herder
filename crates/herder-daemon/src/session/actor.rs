@@ -23,6 +23,7 @@ use tracing::warn;
 
 use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
+use super::setup::{self, Outcome};
 use super::tasks::Tasks;
 use super::{Inner, error};
 use crate::resources::{Permit, Ticket, processes};
@@ -30,6 +31,9 @@ use crate::{handoff, worktree};
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// The tool name of the setup command's tool call item, which herder makes, not the agent.
+const SETUP_TOOL: &str = "herder_setup";
 
 /// A command for one session, from the user `by` (`None` for the primary session's agent),
 /// answered on `reply`.
@@ -79,6 +83,12 @@ pub(super) enum Request {
         account_id: AccountId,
         to: Switch,
     },
+    /// Runs the project's setup command in the new worktree, for at most `timeout`; no turn
+    /// starts until it succeeded.
+    SetUp {
+        command: String,
+        timeout: Duration,
+    },
 }
 
 /// What a switch to another account changes.
@@ -104,6 +114,16 @@ struct Prompt {
     text: String,
     /// Whether it retries a turn that hit a limit, on the account failover moved to.
     retry: bool,
+}
+
+/// The setup command running in the worktree, as the tool call `call_id` of the turn `turn_id`.
+struct SetUp {
+    turn_id: TurnId,
+    call_id: ItemId,
+    command: String,
+    /// Kills it.
+    cancel: CancellationToken,
+    done: oneshot::Receiver<Outcome>,
 }
 
 /// An open question or approval request: who it waits for.
@@ -138,6 +158,8 @@ pub(super) struct Actor {
     questions: HashMap<QuestionId, (usize, Open)>,
     /// A child's tool calls of the running turn, by item: what its approval requests ask for.
     tool_calls: HashMap<ItemId, (String, Value)>,
+    /// The setup command, while it runs.
+    setup: Option<SetUp>,
 }
 
 enum Next {
@@ -145,6 +167,8 @@ enum Next {
     Adapter(Option<AdapterEvent>),
     /// The host admitted the next turn; an error means its permit was withdrawn.
     Admitted(Result<Permit, oneshot::error::RecvError>),
+    /// The setup command ended; an error means its task is gone.
+    SetUp(Result<Outcome, oneshot::error::RecvError>),
     /// A request routed to the primary session ran out of time.
     Overdue,
     Stop,
@@ -165,6 +189,7 @@ impl Actor {
             approvals: Vec::new(),
             questions: HashMap::new(),
             tool_calls: HashMap::new(),
+            setup: None,
         }
     }
 
@@ -182,7 +207,8 @@ impl Actor {
                         None => std::future::pending().await,
                     }
                 };
-                let (adapter, waiting) = (&mut self.adapter, &mut self.waiting);
+                let (adapter, waiting, setup) =
+                    (&mut self.adapter, &mut self.waiting, &mut self.setup);
                 let adapter_event = async {
                     match adapter.as_mut() {
                         Some(adapter) => adapter.events.recv().await,
@@ -195,11 +221,18 @@ impl Actor {
                         None => std::future::pending().await,
                     }
                 };
+                let set_up = async {
+                    match setup.as_mut() {
+                        Some(setup) => (&mut setup.done).await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     () = shutdown.cancelled() => Next::Stop,
                     command = commands.recv() => command.map_or(Next::Stop, Next::Command),
                     event = adapter_event => Next::Adapter(event),
                     permit = admitted => Next::Admitted(permit),
+                    outcome = set_up => Next::SetUp(outcome),
                     () = overdue => Next::Overdue,
                 }
             };
@@ -224,7 +257,11 @@ impl Actor {
                     }
                 }
                 Next::Overdue => self.escalate_overdue().await,
+                Next::SetUp(outcome) => self.set_up_ended(outcome).await,
                 Next::Stop => {
+                    if let Some(setup) = self.setup.take() {
+                        setup.cancel.cancel();
+                    }
                     if let Some(adapter) = self.adapter.take() {
                         let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
                     }
@@ -263,8 +300,9 @@ impl Actor {
                     let _ = queued.send(busy);
                 }
             }
-            Request::Interrupt => match (&self.turn, &self.adapter) {
-                (Some(_), Some(adapter)) => {
+            Request::Interrupt => match (&self.turn, &self.adapter, &self.setup) {
+                (_, _, Some(setup)) => setup.cancel.cancel(),
+                (Some(_), Some(adapter), _) => {
                     let _ = adapter.commands.send(AdapterCommand::Interrupt);
                 }
                 _ => return Err(error(ErrorCode::Conflict, "no turn is running")),
@@ -324,6 +362,7 @@ impl Actor {
             }
             Request::Archive { force } => self.archive(by, force).await?,
             Request::Switch { account_id, to } => self.switch(by, account_id, to).await?,
+            Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::FromPrimary { .. } => {}
         }
         Ok(CommandResult::Applied)
@@ -729,6 +768,12 @@ impl Actor {
                 "a turn is running; interrupt it before archiving",
             ));
         }
+        if self.setup.is_some() {
+            return Err(error(
+                ErrorCode::Conflict,
+                "the setup command is running; interrupt it before archiving",
+            ));
+        }
         // The reflog goes with the worktree: journal what it knows first.
         self.record_branches().await;
         let session = &self.session;
@@ -925,7 +970,7 @@ impl Actor {
     /// Starts queued prompts while no turn runs and the host admits them, starting the adapter
     /// when it is not running; `waiting_for_capacity` while the host has no room.
     async fn start_next(&mut self) {
-        while self.turn.is_none() && !self.queue.is_empty() {
+        while self.turn.is_none() && self.setup.is_none() && !self.queue.is_empty() {
             if !self.admitted() {
                 self.set_status(SessionStatus::WaitingForCapacity).await;
                 return;
@@ -972,6 +1017,99 @@ impl Actor {
             self.prompt = Some(Prompt { by, text, retry });
             self.last_reply = None;
         }
+    }
+
+    /// Starts the setup command in the worktree, in the session's scope, as a turn of its own:
+    /// `turn_started` and a tool call item now, the result and the turn's end once it ends.
+    async fn set_up(&mut self, command: String, timeout: Duration) {
+        let session_id = self.session.session_id.clone();
+        let turn_id = (self.inner.turn_ids)();
+        self.set_status(SessionStatus::Running).await;
+        self.log(EventBody::TurnStarted {
+            turn_id: turn_id.clone(),
+        })
+        .await;
+        let call = Item {
+            id: ItemId::new(ulid::Ulid::new().to_string()),
+            turn_id: turn_id.clone(),
+            body: ItemBody::ToolCall {
+                name: SETUP_TOOL.to_owned(),
+                input: serde_json::json!({ "command": command }),
+            },
+        };
+        let call_id = call.id.clone();
+        self.log(EventBody::ItemAdded { item: call }).await;
+        let launcher = match self.inner.scopes.get() {
+            Some(scopes) => {
+                let limits = scopes.limits(self.session.parent.is_some());
+                scopes.launch(&session_id, &limits)
+            }
+            None => Vec::new(),
+        };
+        // Marks what it leaves running, such as a dev server, as the session's.
+        let env = [(processes::SESSION_ENV.to_owned(), session_id.to_string())];
+        let cwd = PathBuf::from(&self.session.worktree);
+        let cancel = CancellationToken::new();
+        let (outcome, done) = oneshot::channel();
+        tokio::spawn({
+            let (command, cancel) = (command.clone(), cancel.clone());
+            async move {
+                let ended = setup::run(&command, &cwd, &launcher, &env, timeout, cancel).await;
+                let _ = outcome.send(ended);
+            }
+        });
+        self.setup = Some(SetUp {
+            turn_id,
+            call_id,
+            command,
+            cancel,
+            done,
+        });
+    }
+
+    /// Journals how the setup command ended. Success lets queued prompts start; a failure
+    /// leaves the session `error` with the output's tail and drops the prompts queued behind
+    /// it, which were meant for a worktree that is not set up.
+    async fn set_up_ended(&mut self, outcome: Result<Outcome, oneshot::error::RecvError>) {
+        let Some(setup) = self.setup.take() else {
+            return;
+        };
+        let outcome = outcome.unwrap_or_else(|_| Outcome {
+            output: String::new(),
+            failure: Some("stopped unexpectedly".to_owned()),
+        });
+        let message = outcome.error_message(&setup.command);
+        let result = Item {
+            id: ItemId::new(ulid::Ulid::new().to_string()),
+            turn_id: setup.turn_id.clone(),
+            body: ItemBody::ToolResult {
+                call_id: setup.call_id,
+                output: outcome.output,
+                is_error: message.is_some(),
+            },
+        };
+        self.log(EventBody::ItemAdded { item: result }).await;
+        let turn_id = setup.turn_id;
+        let Some(message) = message else {
+            self.log(EventBody::TurnCompleted { turn_id }).await;
+            if self.queue.is_empty() {
+                self.set_status(SessionStatus::Idle).await;
+            }
+            return self.start_next().await;
+        };
+        let error = TurnError {
+            class: ErrorClass::Fatal,
+            message,
+        };
+        let summary = failed(&error);
+        self.log(EventBody::TurnFailed {
+            turn_id: turn_id.clone(),
+            error,
+        })
+        .await;
+        self.queue.clear();
+        self.set_status(SessionStatus::Error).await;
+        self.report(turn_id, summary).await;
     }
 
     /// Whether the next turn may start: it holds a permit or the host grants one now. Otherwise
