@@ -118,6 +118,7 @@ pub async fn serve(
     );
     let scopes = Arc::new(resources::Scopes::detect(config.resources.clone()).await);
     sessions.limit_resources(Arc::clone(&scopes))?;
+    sessions.configure_failover(config.failover.clone())?;
     tokio::spawn({
         let hub = Arc::clone(&hub);
         let shutdown = shutdown.clone();
@@ -233,6 +234,7 @@ mod tests {
             accounts: session::Accounts::new(),
             binaries: Default::default(),
             tasks: session::TaskLimits::default(),
+            failover: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
         };

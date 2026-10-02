@@ -97,6 +97,17 @@
 //! restart resumes. A child session may only switch to its primary's account or to an account
 //! that opted in to failover: the task's failover chain.
 //!
+//! # Failover
+//!
+//! When a turn fails with `limit_reached`, and only then, the session fails over: it switches
+//! to the next eligible account ([`failover`]) the same way, journaling the switch with no
+//! `by` since the daemon caused it, and retries the failed turn's prompt there, once, ahead of
+//! any queued prompt. The failed turn stays journaled and its partial items are replayed with
+//! the transcript. A child does not report the failed turn to its primary, only the retry. The
+//! account that hit its limit is passed over by every session until it resets. With no eligible
+//! account, with the session pinned ([`FailoverConfig::pin`]), or when the retry hits a limit
+//! too, the session is `needs_you` with the limit error.
+//!
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
@@ -106,6 +117,7 @@
 //! ([`crate::handoff`]).
 
 mod actor;
+pub mod failover;
 pub(crate) mod journal;
 mod routing;
 mod tasks;
@@ -120,7 +132,8 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, Item,
-    ItemId, Provider, SessionHead, SessionId, SessionStatus, TurnId, UsageWindow, UserId,
+    ItemId, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId, UsageWindow,
+    UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -128,6 +141,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use actor::{Actor, Request, SessionCommand, Switch};
+pub use failover::FailoverConfig;
+use failover::Limits;
 use journal::Journal;
 pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
@@ -243,6 +258,10 @@ struct Inner {
     refresh_usage: Arc<Notify>,
     /// What admits turns within the host's capacity, once set.
     admission: OnceLock<Arc<Admission>>,
+    /// How sessions fail over, once set; the default otherwise.
+    failover: OnceLock<FailoverConfig>,
+    /// Accounts that hit a limit, until they reset.
+    limits: Limits,
     shutdown: CancellationToken,
 }
 
@@ -254,6 +273,36 @@ impl Inner {
             let accounts = crate::accounts::list(&self.accounts, &usage);
             self.journal.sink().accounts_changed(&accounts);
         }
+    }
+
+    /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
+    pub(super) fn limit_hit(&self, account_id: &AccountId) {
+        let usage = self.usage.all();
+        let windows = usage.get(account_id).map_or(&[][..], Vec::as_slice);
+        self.limits.hit(account_id, windows, Timestamp::now());
+    }
+
+    /// The account a session of `provider` on `failing` fails over to, if any is eligible.
+    pub(super) fn failover_target(
+        &self,
+        provider: &Provider,
+        failing: &AccountId,
+    ) -> Option<AccountId> {
+        let config = self.failover.get().cloned().unwrap_or_default();
+        let choice = failover::Choice {
+            config: &config,
+            accounts: &self.accounts,
+            adapters: &self.adapters,
+            usage: &self.usage.all(),
+            limits: &self.limits,
+            now: Timestamp::now(),
+        };
+        failover::next(&choice, provider, failing)
+    }
+
+    /// Whether sessions stay on their account when it hits a limit.
+    pub(super) fn pinned(&self) -> bool {
+        self.failover.get().is_some_and(|config| config.pin)
     }
 }
 
@@ -289,6 +338,8 @@ impl SessionManager {
                 usage: Usage::default(),
                 refresh_usage: Arc::new(Notify::new()),
                 admission: OnceLock::new(),
+                failover: OnceLock::new(),
+                limits: Limits::default(),
                 shutdown,
             }),
         })
@@ -446,6 +497,15 @@ impl SessionManager {
             .admission
             .set(admission)
             .map_err(|_| anyhow::anyhow!("turns are admitted already"))
+    }
+
+    /// Fails sessions over as `config` says ([`failover`]); once per manager. Without it,
+    /// sessions fail over to their own provider's accounts only.
+    pub fn configure_failover(&self, config: FailoverConfig) -> anyhow::Result<()> {
+        self.inner
+            .failover
+            .set(config)
+            .map_err(|_| anyhow::anyhow!("failover is configured already"))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to

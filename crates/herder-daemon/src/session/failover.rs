@@ -1,0 +1,261 @@
+//! Reactive failover: which account a session moves to when its turn hits a usage limit.
+//!
+//! Only a turn that fails with `limit_reached` triggers it, never usage percentages alone. The
+//! session then moves to the first eligible account ([`next`]) and retries the failed turn's
+//! prompt there, once ([`super::actor`]). An account is eligible when it opted in
+//! (`failover = true`), is not the failing one, has an adapter, and is not limited: no window of
+//! its usage ([`crate::usage`]) is at 100% before it resets, and it has not hit a limit since
+//! its reset time ([`Limits`]). Accounts of the session's provider come first, then those of each
+//! provider in [`FailoverConfig::providers`] in order; within a provider, most quota left first,
+//! then by id. A session pinned to its account ([`FailoverConfig::pin`]) never fails over.
+
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
+
+use herder_protocol::{AccountId, Provider, Timestamp, UsageWindow};
+use serde::Deserialize;
+
+use super::{Accounts, Adapters};
+use crate::usage::Windows;
+
+/// How long an account that hit its limit is passed over when its provider gives no reset time.
+pub const UNKNOWN_RESET: Duration = Duration::from_secs(30 * 60);
+
+/// How sessions fail over: the `[failover]` table.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FailoverConfig {
+    /// Providers to fail over to once no account of the session's own provider is eligible,
+    /// in order; empty keeps sessions on their provider.
+    pub providers: Vec<Provider>,
+    /// Whether sessions stay on their account when it hits a limit.
+    pub pin: bool,
+}
+
+/// When each account that hit a limit may be chosen again.
+#[derive(Debug, Default)]
+pub(crate) struct Limits(Mutex<HashMap<AccountId, Timestamp>>);
+
+impl Limits {
+    /// `account_id` hit its limit at `now`: it is passed over until the latest reset of its
+    /// windows at 100%, or for [`UNKNOWN_RESET`] when none says.
+    pub(crate) fn hit(&self, account_id: &AccountId, windows: &[UsageWindow], now: Timestamp) {
+        let until = windows
+            .iter()
+            .filter(|window| window.used_percent >= 100.0)
+            .filter_map(|window| window.resets_at)
+            .filter(|resets_at| *resets_at > now)
+            .max()
+            .unwrap_or_else(|| now + UNKNOWN_RESET);
+        self.lock().insert(account_id.clone(), until);
+    }
+
+    /// Whether `account_id` hit a limit that has not reset by `now`.
+    fn limited(&self, account_id: &AccountId, now: Timestamp) -> bool {
+        self.lock()
+            .get(account_id)
+            .is_some_and(|until| *until > now)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<AccountId, Timestamp>> {
+        // Every update is a single insert that leaves the map consistent, even mid-panic.
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What failover picks from.
+pub(crate) struct Choice<'a> {
+    pub(crate) config: &'a FailoverConfig,
+    pub(crate) accounts: &'a Accounts,
+    pub(crate) adapters: &'a Adapters,
+    pub(crate) usage: &'a Windows,
+    pub(crate) limits: &'a Limits,
+    pub(crate) now: Timestamp,
+}
+
+/// The account a session of `provider` on `failing` moves to, if any is eligible.
+pub(crate) fn next(
+    choice: &Choice<'_>,
+    provider: &Provider,
+    failing: &AccountId,
+) -> Option<AccountId> {
+    let mut providers = vec![provider];
+    for fallback in &choice.config.providers {
+        if !providers.contains(&fallback) {
+            providers.push(fallback);
+        }
+    }
+    providers.into_iter().find_map(|provider| {
+        choice
+            .accounts
+            .iter()
+            .filter(|(id, account)| {
+                account.provider == *provider
+                    && account.failover
+                    && *id != failing
+                    && choice.adapters.get(provider).is_some()
+                    && !choice.limits.limited(id, choice.now)
+            })
+            .filter_map(|(id, _)| Some((left(choice.usage.get(id), choice.now)?, id)))
+            // Most quota left first; ids break ties, as the map is ordered by id.
+            .min_by(|(a, _), (b, _)| b.total_cmp(a))
+            .map(|(_, id)| id.clone())
+    })
+}
+
+/// Quota left on an account with `windows`: its fullest window's share left, in percent, or
+/// `None` when a window is used up and has not reset by `now`. Windows that reset are empty.
+fn left(windows: Option<&Vec<UsageWindow>>, now: Timestamp) -> Option<f64> {
+    let mut used: f64 = 0.0;
+    for window in windows.into_iter().flatten() {
+        if window.resets_at.is_some_and(|resets_at| resets_at <= now) {
+            continue;
+        }
+        if window.used_percent >= 100.0 {
+            return None;
+        }
+        used = used.max(window.used_percent);
+    }
+    Some(100.0 - used)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use herder_adapters::fake::FakeAdapter;
+
+    use super::*;
+    use crate::session::AccountConfig;
+
+    fn at(time: &str) -> Timestamp {
+        time.parse().unwrap()
+    }
+
+    fn window(used_percent: f64, resets_at: &str) -> UsageWindow {
+        UsageWindow {
+            window: "five_hour".into(),
+            used_percent,
+            resets_at: Some(at(resets_at)),
+        }
+    }
+
+    fn accounts(entries: &[(&str, Provider, bool)]) -> Accounts {
+        entries
+            .iter()
+            .map(|(id, provider, failover)| {
+                let account = AccountConfig {
+                    provider: provider.clone(),
+                    label: id.to_string(),
+                    config_dir: None,
+                    failover: *failover,
+                };
+                (AccountId::new(*id), account)
+            })
+            .collect()
+    }
+
+    fn adapters(providers: &[Provider]) -> Adapters {
+        let mut adapters = Adapters::new();
+        for provider in providers {
+            adapters.register(provider.clone(), Arc::new(FakeAdapter::new("/nowhere")));
+        }
+        adapters
+    }
+
+    struct Case {
+        config: FailoverConfig,
+        accounts: Accounts,
+        adapters: Adapters,
+        usage: Windows,
+        limits: Limits,
+        now: Timestamp,
+    }
+
+    impl Case {
+        fn new(entries: &[(&str, Provider, bool)]) -> Self {
+            Self {
+                config: FailoverConfig::default(),
+                accounts: accounts(entries),
+                adapters: adapters(&[Provider::Claude, Provider::Codex, Provider::Cursor]),
+                usage: Windows::new(),
+                limits: Limits::default(),
+                now: at("2026-10-02T12:00:00Z"),
+            }
+        }
+
+        fn next(&self, failing: &str) -> Option<String> {
+            let choice = Choice {
+                config: &self.config,
+                accounts: &self.accounts,
+                adapters: &self.adapters,
+                usage: &self.usage,
+                limits: &self.limits,
+                now: self.now,
+            };
+            let provider = &self.accounts[&AccountId::new(failing)].provider;
+            next(&choice, provider, &AccountId::new(failing)).map(|id| id.to_string())
+        }
+
+        fn usage(&mut self, id: &str, windows: Vec<UsageWindow>) {
+            self.usage.insert(AccountId::new(id), windows);
+        }
+    }
+
+    #[test]
+    fn the_same_providers_account_with_most_quota_left_comes_first() {
+        let mut case = Case::new(&[
+            ("a", Provider::Claude, true),
+            ("b", Provider::Claude, true),
+            ("c", Provider::Claude, true),
+            ("d", Provider::Claude, false),
+        ]);
+        // Unknown usage counts as untouched; ties go by id.
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+        case.usage("b", vec![window(80.0, "2026-10-02T15:00:00Z")]);
+        case.usage("c", vec![window(10.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.next("a").as_deref(), Some("c"));
+        // A window used up excludes the account until it resets.
+        case.usage("c", vec![window(100.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+        case.usage("c", vec![window(100.0, "2026-10-02T11:00:00Z")]);
+        assert_eq!(case.next("a").as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn other_providers_follow_in_the_configured_order_only() {
+        let mut case = Case::new(&[
+            ("claude-a", Provider::Claude, true),
+            ("claude-b", Provider::Claude, false),
+            ("codex", Provider::Codex, true),
+            ("cursor", Provider::Cursor, true),
+        ]);
+        assert_eq!(case.next("claude-a"), None);
+        case.config.providers = vec![Provider::Cursor, Provider::Codex];
+        assert_eq!(case.next("claude-a").as_deref(), Some("cursor"));
+        // A provider with no adapter is passed over.
+        case.adapters = adapters(&[Provider::Claude, Provider::Codex]);
+        assert_eq!(case.next("claude-a").as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn an_account_that_hit_its_limit_waits_for_its_reset() {
+        let mut case = Case::new(&[
+            ("a", Provider::Claude, true),
+            ("b", Provider::Claude, true),
+            ("c", Provider::Claude, true),
+        ]);
+        // The reset of its used-up window, as reported.
+        let used_up = [window(100.0, "2026-10-02T14:00:00Z")];
+        case.limits.hit(&AccountId::new("b"), &used_up, case.now);
+        // No reset time known: thirty minutes.
+        case.limits.hit(&AccountId::new("a"), &[], case.now);
+        assert_eq!(case.next("c"), None);
+        case.now = at("2026-10-02T12:31:00Z");
+        assert_eq!(case.next("c").as_deref(), Some("a"));
+        assert_eq!(case.next("a").as_deref(), Some("c"));
+        case.now = at("2026-10-02T14:00:01Z");
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+    }
+}

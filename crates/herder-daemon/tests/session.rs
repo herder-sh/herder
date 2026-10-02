@@ -10,7 +10,7 @@ use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
 use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
+    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup, TaskLimits,
 };
 use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::Worktrees;
@@ -363,6 +363,17 @@ fn describe(events: &[Event]) -> Vec<String> {
                 } => format!("question_answered {question_id} {answer:?}"),
                 EventBody::BranchCheckedOut { branch } => format!("branch_checked_out {branch}"),
                 EventBody::ModelSwitched { model } => format!("model_switched {model}"),
+                EventBody::AccountSwitched { account_id } => {
+                    format!("account_switched {account_id}")
+                }
+                EventBody::ProviderSwitched {
+                    provider,
+                    account_id,
+                    model,
+                } => format!(
+                    "provider_switched {} {account_id} {model:?}",
+                    provider.as_str()
+                ),
                 other => format!("{other:?}"),
             };
             match &event.by {
@@ -2157,4 +2168,240 @@ async fn restart_settles_a_session_left_waiting_for_capacity_idle() {
     let journal = describe(&daemon.journal(&session).await);
     assert_eq!(journal.last().unwrap(), "-: status Idle", "{journal:#?}");
     daemon.stop().await;
+}
+
+impl Switching {
+    /// Sends a prompt from alice.
+    async fn send(&self, session_id: &SessionId, text: &str) {
+        let prompt = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: text.into(),
+        };
+        assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
+    }
+
+    /// Waits for `session_id` to settle on `status`; returns its whole journal.
+    async fn settled(&mut self, session_id: &SessionId, status: SessionStatus) -> Vec<Event> {
+        self.until(|body| *body == EventBody::SessionStatusChanged { status })
+            .await;
+        self.manager.read_since(session_id, 0, 1000).await.unwrap()
+    }
+}
+
+/// The journal from the first turn on, without the session's creation and worktree events.
+fn from_first_turn(journal: &[Event]) -> Vec<String> {
+    let described = describe(journal);
+    let start = described
+        .iter()
+        .position(|line| line.contains("status Running"))
+        .unwrap();
+    described[start..].to_vec()
+}
+
+#[tokio::test]
+async fn a_limit_on_one_account_retries_the_turn_on_the_next_opted_in_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, false),
+            // Not opted in: skipped, though it comes first by id.
+            ("claude-b", Provider::Claude, false),
+            ("claude-c", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert_eq!(
+        from_first_turn(&journal),
+        [
+            "-: status Running",
+            "alice: user turn-1 Refactor the parser.",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 Splitting the lexer out.",
+            "-: turn_failed turn-1 LimitReached",
+            "-: account_switched claude-c",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Refactored the parser.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = claude.starts();
+    let [on_a, on_c] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_a.config_dir, Some(dir.path().join("claude-a")));
+    assert_eq!(on_c.config_dir, Some(dir.path().join("claude-c")));
+    assert_eq!(
+        seed_texts(on_c),
+        [
+            "user: Refactor the parser.",
+            "assistant: Splitting the lexer out."
+        ]
+    );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_pinned_session_does_not_fail_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let pin = FailoverConfig {
+        providers: Vec::new(),
+        pin: true,
+    };
+    daemon.manager.configure_failover(pin).unwrap();
+    let session = daemon.create("claude-a").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["-: turn_failed turn-1 LimitReached", "-: status NeedsYou"]
+    );
+    assert_eq!(claude.starts().len(), 1);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_account_that_hit_its_limit_is_passed_over_and_with_none_left_the_session_needs_you() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&[
+        "failover_limit.jsonl",
+        "failover_retry.jsonl",
+        "failover_limit_again.jsonl",
+    ]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, true),
+            ("claude-b", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let first = daemon.create("claude-a").await;
+    daemon.send(&first, "Refactor the parser.").await;
+    daemon.settled(&first, SessionStatus::Idle).await;
+
+    // claude-a, which just hit its limit, is not chosen again before it resets.
+    let second = daemon.create("claude-b").await;
+    daemon.send(&second, "Add tests.").await;
+    let journal = daemon.settled(&second, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["-: turn_failed turn-3 LimitReached", "-: status NeedsYou"]
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("switched")),
+        "{lines:?}"
+    );
+    assert_eq!(claude.starts().len(), 3);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_retry_that_hits_a_limit_too_is_not_retried_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry_limit.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, true),
+            ("claude-b", Provider::Claude, true),
+            ("claude-c", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[4..],
+        [
+            "-: turn_failed turn-1 LimitReached",
+            "-: account_switched claude-b",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: turn_failed turn-2 LimitReached",
+            "-: status NeedsYou",
+        ]
+    );
+    assert_eq!(claude.starts().len(), 2);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl"]);
+    let codex = Scripted::new(&["failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, claude.clone()),
+            (Provider::Codex, codex.clone()),
+        ],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, false),
+            ("codex-spare", Provider::Codex, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let fallback = FailoverConfig {
+        providers: vec![Provider::Codex],
+        pin: false,
+    };
+    daemon.manager.configure_failover(fallback).unwrap();
+    let session = daemon.create("claude-a").await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[4..7],
+        [
+            "-: turn_failed turn-1 LimitReached",
+            "-: provider_switched codex codex-spare \"\"",
+            "alice: user turn-2 Refactor the parser.",
+        ]
+    );
+    let [on_codex] = codex.starts().try_into().unwrap();
+    assert_eq!(on_codex.config_dir, Some(dir.path().join("codex-spare")));
+    assert_eq!(on_codex.model, None);
+    assert_eq!(
+        seed_texts(&on_codex),
+        [
+            "user: Refactor the parser.",
+            "assistant: Splitting the lexer out."
+        ]
+    );
+    daemon.shutdown.cancel();
 }
