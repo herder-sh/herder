@@ -3048,22 +3048,25 @@ async fn a_new_worktree_runs_its_setup_command_once_before_the_first_turn() {
 async fn a_failing_setup_command_marks_the_session_error_and_blocks_the_first_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
-    set_up_with(
-        &daemon,
-        "echo missing .env; exit 2",
-        Duration::from_secs(60),
+    // Fails only once the test lets it, so the prompt surely arrives while it runs.
+    let go = dir.path().join("go");
+    let command = format!(
+        "until [ -e '{}' ]; do sleep 0.01; done; echo missing .env; exit 2",
+        go.display()
     );
+    set_up_with(&daemon, &command, Duration::from_secs(60));
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
+    std::fs::write(&go, "").unwrap();
     let events = daemon.until_status(SessionStatus::Error).await;
 
     assert_eq!(
         turn_error(&events),
         TurnError {
             class: ErrorClass::Fatal,
-            message: "the setup command `echo missing .env; exit 2` failed (exit status: 2):\n\
-                      missing .env"
-                .to_owned(),
+            message: format!(
+                "the setup command `{command}` failed (exit status: 2):\nmissing .env"
+            ),
         }
     );
     let result = events.iter().find_map(|event| match &event.body {
@@ -3077,13 +3080,17 @@ async fn a_failing_setup_command_marks_the_session_error_and_blocks_the_first_tu
     // The prompt sent during the setup never reached an agent.
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(daemon.starts.lock().unwrap().is_empty());
-    let journal = daemon.journal(&session).await;
-    assert!(
-        !describe(&journal)
-            .iter()
-            .any(|line| line.contains("First.")),
-        "{:#?}",
-        describe(&journal)
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "-: turn_started turn-1",
+            "-: tool_call herder_setup",
+            "-: tool_result missing .env\n",
+            "-: turn_failed turn-1 Fatal",
+            "-: status Error",
+        ]
     );
     daemon.stop().await;
 }
