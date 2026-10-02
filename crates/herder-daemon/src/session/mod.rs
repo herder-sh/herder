@@ -21,6 +21,12 @@
 //! failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
 //! nothing queued. Every change is journaled as `session_status_changed`.
 //!
+//! # Worktrees and archive
+//!
+//! Creating a session adds its worktree and branch ([`crate::worktree`]).
+//! [`SessionManager::archive`] removes the worktree, keeps its branches and journals the
+//! `archived` status; an archived session takes no further commands.
+//!
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
@@ -46,6 +52,8 @@ use tracing::warn;
 
 use actor::{Actor, Request, SessionCommand};
 use journal::Journal;
+
+use crate::worktree::{self, Worktrees};
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
 /// order; implementations must not block.
@@ -112,6 +120,8 @@ pub struct Setup {
     pub sink: Arc<dyn EventSink>,
     /// Turn id minting; [`ulid_turn_ids`] outside tests.
     pub turn_ids: TurnIds,
+    /// Where session worktrees go.
+    pub worktrees: Worktrees,
 }
 
 /// Creates, lists and drives every session on this host. Cheap to clone.
@@ -125,6 +135,7 @@ struct Inner {
     adapters: Adapters,
     accounts: Accounts,
     turn_ids: TurnIds,
+    worktrees: Worktrees,
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
     shutdown: CancellationToken,
 }
@@ -148,6 +159,7 @@ impl SessionManager {
                 adapters: setup.adapters,
                 accounts: setup.accounts,
                 turn_ids: setup.turn_ids,
+                worktrees: setup.worktrees,
                 actors: Mutex::new(HashMap::new()),
                 shutdown,
             }),
@@ -219,6 +231,33 @@ impl SessionManager {
         self.send(session_id, by, request).await
     }
 
+    /// Archives `session_id` for `by`: removes its worktree, keeping its branches, and makes it
+    /// read-only. Refuses while a turn runs, and while the worktree has uncommitted or untracked
+    /// changes unless `force`.
+    pub async fn archive(
+        &self,
+        by: UserId,
+        session_id: SessionId,
+        force: bool,
+    ) -> Result<CommandResult, ErrorInfo> {
+        self.send(session_id, by, Request::Archive { force }).await
+    }
+
+    /// Every branch `session_id`'s worktree has had checked out, its own first; only its own
+    /// once archived.
+    pub async fn branches(&self, session_id: &SessionId) -> Result<Vec<String>, ErrorInfo> {
+        let session = self
+            .inner
+            .journal
+            .session(session_id.clone())
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| not_found(session_id))?;
+        worktree::branches(Path::new(&session.worktree), &session.branch)
+            .await
+            .map_err(worktree_error)
+    }
+
     /// Every session with its latest seq, ordered by session id.
     pub async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         self.inner.journal.heads().await
@@ -251,12 +290,20 @@ impl SessionManager {
                 format!("no adapter runs {} sessions", account.provider.as_str()),
             ));
         }
-        let (worktree, branch) = existing_worktree(&request.repo, request.branch)?;
         let session_id = SessionId::new(ulid::Ulid::new().to_string());
+        let worktree = inner
+            .worktrees
+            .create(
+                Path::new(&request.repo),
+                &worktree::slug(&session_id),
+                request.branch,
+            )
+            .await
+            .map_err(worktree_error)?;
         let body = EventBody::SessionCreated {
             repo: request.repo,
-            worktree,
-            branch,
+            worktree: worktree.path.to_string_lossy().into_owned(),
+            branch: worktree.branch,
             provider: account.provider.clone(),
             account_id: request.account_id,
             // Empty until the adapter reports the provider's default.
@@ -309,12 +356,7 @@ impl SessionManager {
             .session(session_id.clone())
             .await
             .map_err(internal)?
-            .ok_or_else(|| {
-                error(
-                    ErrorCode::NotFound,
-                    format!("session {session_id} does not exist"),
-                )
-            })?;
+            .ok_or_else(|| not_found(session_id))?;
         let (commands, queue) = mpsc::unbounded_channel();
         let actor = Actor::new(session, self.inner.clone());
         tokio::spawn(actor.run(queue, inner.shutdown.clone()));
@@ -332,25 +374,6 @@ struct CreateRequest {
     permission_mode: herder_protocol::PermissionMode,
 }
 
-/// Seam for worktree and branch creation (P1.5): for now the repository directory is used as
-/// the worktree as it is, and no branch is created or recorded.
-fn existing_worktree(repo: &str, branch: Option<String>) -> Result<(String, String), ErrorInfo> {
-    if branch.is_some() {
-        return Err(error(
-            ErrorCode::Unsupported,
-            "creating a branch is not supported yet; omit `branch`",
-        ));
-    }
-    let path = Path::new(repo);
-    if !path.is_absolute() || !path.is_dir() {
-        return Err(error(
-            ErrorCode::BadRequest,
-            format!("{repo} is not an absolute path to a directory"),
-        ));
-    }
-    Ok((repo.to_owned(), String::new()))
-}
-
 fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {
     ErrorInfo {
         code,
@@ -361,4 +384,23 @@ fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {
 fn internal(err: anyhow::Error) -> ErrorInfo {
     warn!("session command failed: {err:#}");
     error(ErrorCode::Internal, format!("{err:#}"))
+}
+
+fn not_found(session_id: &SessionId) -> ErrorInfo {
+    error(
+        ErrorCode::NotFound,
+        format!("session {session_id} does not exist"),
+    )
+}
+
+fn worktree_error(err: worktree::Error) -> ErrorInfo {
+    let code = match err {
+        worktree::Error::BadRequest(_) => ErrorCode::BadRequest,
+        worktree::Error::Conflict(_) => ErrorCode::Conflict,
+        worktree::Error::Git(_) => {
+            warn!("git failed: {err}");
+            ErrorCode::Internal
+        }
+    };
+    error(code, err.to_string())
 }

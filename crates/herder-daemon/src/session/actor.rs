@@ -2,7 +2,7 @@
 //! what the agent does.
 
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -48,6 +48,10 @@ pub(super) enum Request {
     AnswerApproval {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
+    },
+    /// Removes the worktree, keeping its branches, and makes the session read-only.
+    Archive {
+        force: bool,
     },
 }
 
@@ -120,6 +124,12 @@ impl Actor {
     }
 
     async fn apply(&mut self, by: UserId, request: Request) -> Result<CommandResult, ErrorInfo> {
+        if self.session.status == SessionStatus::Archived {
+            return Err(error(
+                ErrorCode::Conflict,
+                "the session is archived and read-only",
+            ));
+        }
         match request {
             Request::SendPrompt { text } => {
                 self.queue.push_back((by, text));
@@ -183,8 +193,37 @@ impl Actor {
                     self.set_status(SessionStatus::Running).await;
                 }
             }
+            Request::Archive { force } => self.archive(by, force).await?,
         }
         Ok(CommandResult::Applied)
+    }
+
+    async fn archive(&mut self, by: UserId, force: bool) -> Result<(), ErrorInfo> {
+        if self.turn.is_some() {
+            return Err(error(
+                ErrorCode::Conflict,
+                "a turn is running; interrupt it before archiving",
+            ));
+        }
+        let session = &self.session;
+        self.inner
+            .worktrees
+            .remove(
+                Path::new(&session.repo),
+                Path::new(&session.worktree),
+                force,
+            )
+            .await
+            .map_err(super::worktree_error)?;
+        if let Some(adapter) = self.adapter.take() {
+            let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
+        }
+        let status = SessionStatus::Archived;
+        self.record(Some(by), EventBody::SessionStatusChanged { status })
+            .await
+            .map_err(super::internal)?;
+        self.session.status = status;
+        Ok(())
     }
 
     /// Prepares a setting change: sends `command` when the running adapter applies it natively,

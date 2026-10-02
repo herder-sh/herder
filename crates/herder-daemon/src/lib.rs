@@ -4,6 +4,7 @@ pub mod config;
 pub mod data_dir;
 pub mod logging;
 pub mod session;
+pub mod worktree;
 
 use std::sync::Arc;
 
@@ -56,6 +57,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         accounts: session::Accounts::new(),
         sink: Arc::new(NoClients),
         turn_ids: session::ulid_turn_ids(),
+        worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let _sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
     info!(
