@@ -1,0 +1,592 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClientMessage",
+  "description": "A client-to-daemon message.",
+  "oneOf": [
+    {
+      "description": "First message on every connection.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "hello"
+        }
+      },
+      "$ref": "#/$defs/ClientHello",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Stream a session's events after a cursor, then live; replaces any existing subscription.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "subscribe"
+        }
+      },
+      "$ref": "#/$defs/Cursor",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Stop streaming a session.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "Session to stop.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "type": {
+          "type": "string",
+          "const": "unsubscribe"
+        }
+      },
+      "required": [
+        "type",
+        "session_id"
+      ]
+    },
+    {
+      "description": "Ask the daemon to change something.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "command"
+        }
+      },
+      "$ref": "#/$defs/Command",
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "$defs": {
+    "AccountId": {
+      "description": "Identifies a provider account on a host; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "ApprovalDecision": {
+      "description": "A user's answer to an approval request.",
+      "oneOf": [
+        {
+          "description": "Run the tool call once.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Refuse the tool call.",
+          "type": "string",
+          "const": "deny"
+        }
+      ]
+    },
+    "ApprovalId": {
+      "description": "Identifies an approval request within a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "Bytes": {
+      "description": "Raw bytes, encoded as a standard padded base64 string.",
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "ClientHello": {
+      "description": "Opening message of a client connection.",
+      "type": "object",
+      "properties": {
+        "client": {
+          "description": "Client name and version, for logs, e.g. `herder-tui/0.1.0`.",
+          "type": "string"
+        },
+        "protocol_version": {
+          "description": "Must equal the daemon's [`crate::PROTOCOL_VERSION`].",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "resume": {
+          "description": "Subscriptions to restore, each resuming after its last seen event.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cursor"
+          }
+        }
+      },
+      "required": [
+        "protocol_version",
+        "client",
+        "resume"
+      ]
+    },
+    "Command": {
+      "description": "A request to change state, applied at most once per `id`.",
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "What to do.",
+          "$ref": "#/$defs/CommandBody"
+        },
+        "id": {
+          "description": "Idempotency key: a resend with the same id is answered without being applied again.",
+          "$ref": "#/$defs/CommandId"
+        }
+      },
+      "required": [
+        "id",
+        "body"
+      ]
+    },
+    "CommandBody": {
+      "description": "What a command asks for.",
+      "oneOf": [
+        {
+          "description": "Create a session on a new worktree and branch of a repository.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Account to run on.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "branch": {
+              "description": "Branch to create; the daemon picks a name when absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "Model to use; the provider's default when absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "permission_mode": {
+              "description": "Starting permission mode.",
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "repo": {
+              "description": "Absolute path of the repository on the host.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "create_session"
+            }
+          },
+          "required": [
+            "type",
+            "repo",
+            "account_id",
+            "permission_mode"
+          ]
+        },
+        {
+          "description": "Start a turn with a prompt.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "text": {
+              "description": "Prompt text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "send_prompt"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "text"
+          ]
+        },
+        {
+          "description": "Stop the running turn.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "interrupt"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        },
+        {
+          "description": "Change the model within the current provider.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "description": "New model, in the provider's own naming.",
+              "type": "string"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_model"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "model"
+          ]
+        },
+        {
+          "description": "Change the permission mode.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "description": "New permission mode.",
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_permission_mode"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "mode"
+          ]
+        },
+        {
+          "description": "Answer a pending approval request.",
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "description": "Request to answer.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "decision": {
+              "description": "The answer.",
+              "$ref": "#/$defs/ApprovalDecision"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "answer_approval"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "approval_id",
+            "decision"
+          ]
+        },
+        {
+          "description": "Move to another account of the same provider.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "New account.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "switch_account"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "account_id"
+          ]
+        },
+        {
+          "description": "Move to an account of another provider, replaying the transcript.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "New account; its provider is the new provider.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "model": {
+              "description": "Model to use; the new provider's default when absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "switch_provider"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "account_id"
+          ]
+        },
+        {
+          "description": "Track a pull request for the session.",
+          "type": "object",
+          "properties": {
+            "number": {
+              "description": "Number of the pull request in the session's repository.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "link_pr"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "number"
+          ]
+        },
+        {
+          "description": "Stop tracking a pull request for the session.",
+          "type": "object",
+          "properties": {
+            "number": {
+              "description": "Number of the pull request in the session's repository.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "unlink_pr"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "number"
+          ]
+        },
+        {
+          "description": "Open a shell in the session's worktree and attach to it; owners only.",
+          "type": "object",
+          "properties": {
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "open_terminal"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "cols",
+            "rows"
+          ]
+        },
+        {
+          "description": "Start streaming a terminal's output; owners only.",
+          "type": "object",
+          "properties": {
+            "terminal_id": {
+              "description": "Target terminal.",
+              "$ref": "#/$defs/TerminalId"
+            },
+            "type": {
+              "type": "string",
+              "const": "attach_terminal"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id"
+          ]
+        },
+        {
+          "description": "Stop streaming a terminal's output; the shell keeps running.",
+          "type": "object",
+          "properties": {
+            "terminal_id": {
+              "description": "Target terminal.",
+              "$ref": "#/$defs/TerminalId"
+            },
+            "type": {
+              "type": "string",
+              "const": "detach_terminal"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id"
+          ]
+        },
+        {
+          "description": "Change a terminal's size.",
+          "type": "object",
+          "properties": {
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "terminal_id": {
+              "description": "Target terminal.",
+              "$ref": "#/$defs/TerminalId"
+            },
+            "type": {
+              "type": "string",
+              "const": "resize_terminal"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id",
+            "cols",
+            "rows"
+          ]
+        },
+        {
+          "description": "Write bytes to a terminal's input.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "description": "Bytes to write.",
+              "$ref": "#/$defs/Bytes"
+            },
+            "terminal_id": {
+              "description": "Target terminal.",
+              "$ref": "#/$defs/TerminalId"
+            },
+            "type": {
+              "type": "string",
+              "const": "terminal_input"
+            }
+          },
+          "required": [
+            "type",
+            "terminal_id",
+            "data"
+          ]
+        }
+      ]
+    },
+    "CommandId": {
+      "description": "Client-chosen idempotency key of a command; a ULID string, opaque to the daemon.",
+      "type": "string"
+    },
+    "Cursor": {
+      "description": "A position in a session's journal.",
+      "type": "object",
+      "properties": {
+        "after_seq": {
+          "description": "Last event seq the client holds; 0 for none.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "session_id": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "after_seq"
+      ]
+    },
+    "PermissionMode": {
+      "description": "How much the agent may do without asking.",
+      "oneOf": [
+        {
+          "description": "Reads only; every write or command is refused.",
+          "type": "string",
+          "const": "read_only"
+        },
+        {
+          "description": "Asks before every write or command.",
+          "type": "string",
+          "const": "ask"
+        },
+        {
+          "description": "Edits files freely; asks before commands.",
+          "type": "string",
+          "const": "auto_edit"
+        },
+        {
+          "description": "Does anything without asking.",
+          "type": "string",
+          "const": "full_access"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "Identifies a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "TerminalId": {
+      "description": "Identifies a terminal on a host; a ULID string, opaque to receivers.",
+      "type": "string"
+    }
+  }
+}
