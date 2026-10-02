@@ -5,6 +5,7 @@ mod dev;
 mod hook;
 mod pair;
 mod service;
+mod session;
 mod update;
 
 use std::path::PathBuf;
@@ -38,6 +39,8 @@ enum Command {
         /// The `herder://pair?...` link.
         link: String,
     },
+    /// Create, prompt, wait on and archive sessions from scripts.
+    Session(session::Args),
     /// Manage the systemd user service that runs the daemon at boot.
     Service {
         #[command(subcommand)]
@@ -79,10 +82,24 @@ enum Command {
 }
 
 fn main() -> ExitCode {
-    let result = match Cli::parse().command {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let _ = err.print();
+            // Usage errors exit 64 (EX_USAGE), not clap's 2, which `herder session wait`
+            // means as "needs you".
+            return if err.use_stderr() {
+                ExitCode::from(64)
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+    };
+    let result = match cli.command {
         Some(Command::Daemon { config }) => daemon(config).map(|()| ExitCode::SUCCESS),
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
+        Some(Command::Session(args)) => session::run(args),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Update {
             version,
@@ -165,6 +182,56 @@ mod tests {
             &["herder", "pair", "--list", "--revoke", "01J"][..],
             &["herder", "pair", "--list", "--user", "bob"],
             &["herder", "pair", "--role", "admin"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn parses_session_commands() {
+        for args in [
+            &[
+                "herder",
+                "session",
+                "new",
+                "--repo",
+                "/r",
+                "--mode",
+                "full-access",
+            ][..],
+            &["herder", "session", "list", "--json", "--machine", "box"],
+            &[
+                "herder",
+                "session",
+                "--json",
+                "wait",
+                "01J",
+                "--timeout",
+                "60",
+            ],
+            &["herder", "session", "send", "01J"],
+            &["herder", "session", "send", "01J", "--approve", "a1"],
+            &[
+                "herder", "session", "send", "01J", "--answer", "q1", "SQLite",
+            ],
+            &["herder", "session", "archive", "01J", "--force"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
+        }
+        for args in [
+            &["herder", "session", "new"][..],
+            &[
+                "herder",
+                "session",
+                "send",
+                "01J",
+                "--approve",
+                "a1",
+                "--deny",
+                "a2",
+            ],
+            &["herder", "session", "send", "01J", "--answer", "q1"],
+            &["herder", "session", "new", "--repo", "/r", "--mode", "yolo"],
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }
