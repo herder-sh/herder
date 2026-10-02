@@ -1,0 +1,8 @@
+# A tool call that blocks on an approval until it is allowed.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Run the tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "cargo test"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "approval-1", "turn_id": "turn-1", "tool_call_id": "item-1", "summary": "Run cargo test"}}
+{"expect": {"type": "answer_approval", "approval_id": "approval-1", "decision": "allow"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "tool_result", "call_id": "item-1", "output": "test result: ok", "is_error": false}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
