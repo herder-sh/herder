@@ -459,6 +459,13 @@ dependencies = [
 [[package]]
 name = "herder-adapters"
 version = "0.0.0"
+dependencies = [
+ "herder-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "herder-client-core"

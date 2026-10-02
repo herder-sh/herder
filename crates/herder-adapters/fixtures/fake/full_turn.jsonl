@@ -1,0 +1,13 @@
+# One prompt answered with a streamed assistant message, then usage, then shutdown.
+{"emit": {"type": "model_changed", "model": "fake-model-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Say hello."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_started", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
+{"sleep_ms": 10}
+{"emit": {"type": "item_delta", "item_id": "item-1", "text": "Hello"}}
+{"sleep_ms": 10}
+{"emit": {"type": "item_delta", "item_id": "item-1", "text": ", world."}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Hello, world."}}}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 12.5}]}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "shutdown"}}
