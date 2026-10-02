@@ -1,11 +1,13 @@
 //! The store behind an async face: every call runs on the blocking pool, and every stored
 //! event is published to the sink.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    Event, EventBody, PullRequest, Seq, SessionHead, SessionId, Timestamp, UserId,
+    Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead, SessionId, Timestamp,
+    UserId,
 };
 use herder_store::{NewEvent, Session, Store};
 
@@ -16,6 +18,8 @@ use super::EventSink;
 pub(crate) struct Journal {
     store: Arc<Mutex<Store>>,
     sink: Arc<dyn EventSink>,
+    /// The project of every clone discovery knows, by repository path.
+    projects: Arc<RwLock<HashMap<String, ProjectId>>>,
 }
 
 impl Journal {
@@ -23,6 +27,7 @@ impl Journal {
         Self {
             store: Arc::new(Mutex::new(store)),
             sink,
+            projects: Arc::default(),
         }
     }
 
@@ -97,14 +102,35 @@ impl Journal {
 
     pub(super) async fn heads(&self) -> Result<Vec<SessionHead>> {
         let sessions = self.sessions().await?;
+        let projects = self.projects.read().unwrap_or_else(PoisonError::into_inner);
         Ok(sessions
             .into_iter()
             .map(|session| SessionHead {
+                project_id: projects.get(&session.repo).cloned(),
                 session_id: session.session_id,
                 head_seq: session.last_seq,
-                project_id: None,
             })
             .collect())
+    }
+
+    /// Resolves sessions' projects from `projects` from now on; returns whether any clone's
+    /// project changed.
+    pub(super) fn set_projects(&self, projects: &[Project]) -> bool {
+        let by_path: HashMap<String, ProjectId> = projects
+            .iter()
+            .flat_map(|p| {
+                p.paths
+                    .iter()
+                    .map(|path| (path.clone(), p.project_id.clone()))
+            })
+            .collect();
+        let mut current = self
+            .projects
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let changed = *current != by_path;
+        *current = by_path;
+        changed
     }
 
     async fn with_store<T: Send + 'static>(

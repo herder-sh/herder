@@ -599,3 +599,24 @@ fn the_switch_dialog_on_narrow_and_wide_screens() {
     press(&mut app, KeyCode::Char('j'));
     narrow_and_wide("switch", &mut app);
 }
+
+#[test]
+fn projects_across_machines_on_narrow_and_wide_screens() {
+    let mut app = fake::projects();
+    narrow_and_wide("projects", &mut app);
+}
+
+#[test]
+fn each_projects_prs_on_narrow_and_wide_screens() {
+    let mut app = fake::projects();
+    press(&mut app, KeyCode::Char('P'));
+    narrow_and_wide("project_prs", &mut app);
+}
+
+#[test]
+fn a_new_session_from_a_project_on_narrow_and_wide_screens() {
+    let mut app = fake::projects();
+    press(&mut app, KeyCode::Char('g'));
+    press(&mut app, KeyCode::Char('n'));
+    narrow_and_wide("project_new_session", &mut app);
+}

@@ -14,6 +14,7 @@ mod machines;
 mod new_session;
 mod pairing;
 mod palette;
+mod projects;
 mod prs;
 mod sessions;
 mod status;

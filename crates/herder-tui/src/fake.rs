@@ -39,8 +39,12 @@ pub fn key(host: &str, session: &str) -> SessionKey {
 }
 
 pub fn created(branch: &str, parent: Option<&str>, task: Option<&str>) -> EventBody {
+    created_in("/home/ann/src/app", branch, parent, task)
+}
+
+pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&str>) -> EventBody {
     EventBody::SessionCreated {
-        repo: "/home/ann/src/app".to_owned(),
+        repo: repo.to_owned(),
         worktree: format!("/home/ann/.herder/worktrees/{branch}"),
         branch: branch.to_owned(),
         provider: Provider::Claude,
@@ -109,8 +113,12 @@ pub fn feed(app: &mut App, host: &str, session: &str, update: SessionUpdate) {
 
 /// One machine with a task tree and a lone session, every session loaded:
 /// `s1` (idle), `s2` (needs you, a primary) with children `s3` (running) and `s4` (error).
+/// The list groups by machine; [`projects`] has the project grouping.
 pub fn tree() -> App {
-    let mut app = App::default();
+    let mut app = App {
+        grouping: crate::projects::Grouping::Machines,
+        ..App::default()
+    };
     app.update(Msg::Machines(vec![machine(
         "h1",
         "box",
@@ -305,5 +313,116 @@ pub fn escalated() -> App {
             200,
         ),
     );
+    app
+}
+
+/// Two machines with clones of `github.com/acme/app`, every session loaded, grouped by
+/// project. `box` (h1) runs `s1` (idle) and `s3` (needs you) on its clone at
+/// `/home/ann/src/app`, and `s2` (running) on `github.com/acme/docs`. `laptop` (h2) runs `s4`
+/// (running) with its child `s6` on its clone at `/work/app`, and `s5` (idle) in
+/// `/work/scratch`, which has no remote and which its daemon has not resolved yet. Each
+/// machine has one account. `s3` has PR #7 and `s4` #12, both of `acme/app`; `s2` has #3.
+pub fn projects() -> App {
+    let app_id = Some("github.com/acme/app");
+    let docs_id = Some("github.com/acme/docs");
+    let sessions = [
+        (
+            "h1",
+            "s1",
+            app_id,
+            "/home/ann/src/app",
+            "herder/fix-login",
+            None,
+            SessionStatus::Idle,
+        ),
+        (
+            "h1",
+            "s2",
+            docs_id,
+            "/home/ann/src/docs",
+            "herder/guide",
+            None,
+            SessionStatus::Running,
+        ),
+        (
+            "h1",
+            "s3",
+            app_id,
+            "/home/ann/src/app",
+            "herder/api",
+            None,
+            SessionStatus::NeedsYou,
+        ),
+        (
+            "h2",
+            "s4",
+            app_id,
+            "/work/app",
+            "herder/cache",
+            None,
+            SessionStatus::Running,
+        ),
+        (
+            "h2",
+            "s5",
+            None,
+            "/work/scratch",
+            "herder/try",
+            None,
+            SessionStatus::Idle,
+        ),
+        (
+            "h2",
+            "s6",
+            app_id,
+            "/work/app",
+            "herder/cache-tests",
+            Some("s4"),
+            SessionStatus::Running,
+        ),
+    ];
+    let mut machines = vec![machine("h1", "box", &[]), machine("h2", "laptop", &[])];
+    for machine in &mut machines {
+        machine.accounts = vec![account("claude-main", "Main")];
+        for (host, id, project, ..) in &sessions {
+            if machine.host_id.as_str() == *host {
+                machine.sessions.push(SessionHead {
+                    session_id: SessionId::new(*id),
+                    head_seq: 0,
+                    project_id: project.map(herder_protocol::ProjectId::new),
+                });
+            }
+        }
+    }
+    let mut app = App::default();
+    app.update(Msg::Machines(machines));
+    for (host, id, _, repo, branch, parent, state) in sessions {
+        let task = parent.map(|_| "test the cache");
+        let created = created_in(repo, branch, parent, task);
+        feed(
+            &mut app,
+            host,
+            id,
+            update(id, 1, vec![created, status(state)], Vec::new()),
+        );
+    }
+    let mut seven = pr(7, "Add a health endpoint", PrState::Open);
+    seven.ci = CiStatus::Passing;
+    let mut twelve = pr(12, "Cache the health checks", PrState::Draft);
+    twelve.ci = CiStatus::Pending;
+    let mut three = pr(3, "Write the health guide", PrState::Open);
+    three.url = "https://github.com/acme/docs/pull/3".to_owned();
+    for (host, session, pr) in [
+        ("h1", "s3", seven),
+        ("h2", "s4", twelve),
+        ("h1", "s2", three),
+    ] {
+        feed(
+            &mut app,
+            host,
+            session,
+            update(session, 3, vec![EventBody::PrLinked { pr }], Vec::new()),
+        );
+    }
     app
 }

@@ -147,8 +147,8 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, HostId,
-    Item, ItemId, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId, UsageWindow,
-    UserId,
+    Item, ItemId, Project, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
+    UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -711,6 +711,19 @@ impl SessionManager {
     /// Every session with its latest seq, ordered by session id.
     pub async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         self.inner.journal.heads().await
+    }
+
+    /// Resolves each session's project from the clones in `projects`, and sends the session
+    /// list again when that changes a session's project.
+    pub async fn set_projects(&self, projects: &[Project]) {
+        let journal = &self.inner.journal;
+        if !journal.set_projects(projects) {
+            return;
+        }
+        match journal.heads().await {
+            Ok(heads) => journal.sink().sessions_changed(&heads),
+            Err(err) => warn!("cannot list sessions after the projects changed: {err:#}"),
+        }
     }
 
     /// The repository of every session, each once.

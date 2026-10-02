@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, PermissionMode, SessionStatus,
+    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, PermissionMode, ProjectId,
+    SessionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -106,6 +107,8 @@ pub const COMMANDS: &str =
 /// The new-session dialog.
 #[derive(Debug)]
 pub struct NewSession {
+    /// Project the session starts from; the machine field then picks among its clones.
+    pub project: Option<ProjectId>,
     /// Machine to create on.
     pub host_id: HostId,
     /// Field with focus.
@@ -538,13 +541,30 @@ impl App {
         let host_id = match &selected {
             Some(Row::Machine(host_id)) => Some(host_id.clone()),
             Some(Row::Session { key, .. }) => Some(key.host_id.clone()),
-            None => None,
+            Some(Row::Project(_)) | None => None,
         };
+        let mut repo = line("/absolute/path/to/repo");
+        // From a project, on the clone used last.
+        let project = self.selected_project();
+        if let Some(clone) = project.as_ref().and_then(|p| self.last_used_clone(p)) {
+            repo.insert_str(&clone.repo);
+            self.compose.dialog = Some(NewSession {
+                project,
+                host_id: clone.host_id,
+                field: Field::Machine,
+                repo,
+                account: 0,
+                model: line("provider default"),
+                mode: PermissionMode::Ask,
+                error: None,
+                sending: false,
+            });
+            return;
+        }
         let Some(host_id) = host_id.or_else(|| self.machines.first().map(|m| m.host_id.clone()))
         else {
             return;
         };
-        let mut repo = line("/absolute/path/to/repo");
         let known = self
             .open
             .as_ref()
@@ -555,6 +575,7 @@ impl App {
             repo.insert_str(&session.repo);
         }
         self.compose.dialog = Some(NewSession {
+            project: None,
             host_id,
             field: Field::Repo,
             repo,
@@ -567,10 +588,28 @@ impl App {
     }
 
     fn cycle(&mut self, step: i8) {
+        let clones = self
+            .compose
+            .dialog
+            .as_ref()
+            .and_then(|dialog| dialog.project.as_ref())
+            .map(|project| self.clones(project));
         let Some(dialog) = &mut self.compose.dialog else {
             return;
         };
         match dialog.field {
+            Field::Machine if let Some(clones) = clones => {
+                let at = clones
+                    .iter()
+                    .position(|c| c.host_id == dialog.host_id)
+                    .unwrap_or(0);
+                if let Some(clone) = clones.get(cycle(at, clones.len(), step)) {
+                    dialog.host_id = clone.host_id.clone();
+                    dialog.repo = line("/absolute/path/to/repo");
+                    dialog.repo.insert_str(&clone.repo);
+                    dialog.account = 0;
+                }
+            }
             Field::Machine => {
                 let at = self
                     .machines

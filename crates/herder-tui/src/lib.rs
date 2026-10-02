@@ -20,6 +20,7 @@ mod compose;
 mod fake;
 mod inbox;
 mod machines;
+mod projects;
 mod prs;
 mod session;
 mod switch;

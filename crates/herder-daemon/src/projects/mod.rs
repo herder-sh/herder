@@ -281,6 +281,7 @@ impl Discovery {
             if published.as_ref() != Some(&projects) {
                 debug!(projects = projects.len(), "project list changed");
                 self.hub.projects_changed(projects.clone());
+                self.sessions.set_projects(&projects).await;
                 published = Some(projects);
             }
         }

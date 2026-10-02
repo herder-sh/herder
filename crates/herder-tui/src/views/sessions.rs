@@ -1,4 +1,5 @@
-//! The left pane: each machine, its sessions with their status, children under their parent.
+//! The left pane: each project, its sessions with their status and machine, or with `v`
+//! each machine and its sessions ([`crate::projects`]); children under their parent.
 //! A primary shows its child count and, when any child waits on the user, how many; `z`
 //! folds its children away. Compact rows, on a narrow screen, show the status as one glyph,
 //! the branch's last part and one PR.
@@ -12,6 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem};
 
 use crate::app::{App, Focus, Row};
+use crate::projects::Grouping;
 
 /// Width of the status label column.
 const BADGE: usize = 9;
@@ -32,7 +34,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) 
     let list = List::new(items)
         .block(
             Block::bordered()
-                .title(" sessions ")
+                .title(match app.grouping {
+                    Grouping::Projects => " sessions · by project ",
+                    Grouping::Machines => " sessions ",
+                })
                 .border_style(super::border(app, Focus::Sessions)),
         )
         .highlight_style(highlight);
@@ -58,6 +63,7 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 Span::styled(format!(" ({})", machine.sessions.len()), super::dim()),
             ]))
         }
+        Row::Project(project) => super::projects::heading(app, project.as_ref(), width, compact),
         Row::Session { key, depth } => {
             let Some(session) = app.sessions.get(key) else {
                 return ListItem::new("");
@@ -101,9 +107,16 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             // The PR badge stays in view: the title gives way to it.
             let prs = super::prs::badge(session, compact);
             let prs_width: usize = prs.iter().map(Span::width).sum();
-            let room = width
-                .saturating_sub(label_width + 2 + indent.chars().count() + tree_width + prs_width);
-            let name = if compact {
+            // Grouped by project, each session says which machine it runs on.
+            let machine = (app.grouping == Grouping::Projects)
+                .then(|| super::projects::machine_label(app, key));
+            let machine_width = machine.as_ref().map_or(0, Span::width);
+            let room = width.saturating_sub(
+                label_width + 2 + indent.chars().count() + tree_width + prs_width + machine_width,
+            );
+            let name = if machine.is_some() {
+                super::projects::session_name(session, compact)
+            } else if compact {
                 session.short_title()
             } else {
                 session.title()
@@ -115,13 +128,14 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             ];
             spans.extend(tree);
             spans.extend(prs);
+            spans.extend(machine);
             ListItem::new(Line::from(spans))
         }
     }
 }
 
 /// `text` cut to `width` characters, with an ellipsis when cut.
-fn clip(text: &str, width: usize) -> String {
+pub(super) fn clip(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_owned();
     }
