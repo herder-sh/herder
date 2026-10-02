@@ -68,6 +68,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<PrAction> {
         return match key.code {
             KeyCode::Enter => Some(PrAction::Submit),
             KeyCode::Esc => Some(PrAction::Cancel),
+            KeyCode::Backspace if app.prs.prompt.as_ref().is_some_and(|p| p.text.is_empty()) => {
+                Some(PrAction::Cancel)
+            }
             KeyCode::Backspace => Some(PrAction::Erase),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(PrAction::Type(c))
@@ -88,7 +91,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<PrAction> {
         KeyCode::Char('x') if list => PrAction::Unlink,
         KeyCode::Char('l') | KeyCode::Right if app.focus == Focus::AllPrs => PrAction::OpenSession,
         // Back to the transcript from the strip, out of the view from the cross-session one.
-        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left if list => PrAction::Close,
+        KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left if list => {
+            PrAction::Close
+        }
         _ => return None,
     };
     Some(action)

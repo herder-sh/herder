@@ -60,8 +60,9 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     }
     let mut app = App::default();
     let mut subscriptions = Subscriptions::default();
+    let mut repaint = false;
     let result = loop {
-        if let Err(err) = terminal.draw(|frame| views::draw(frame, &mut app)) {
+        if let Err(err) = views::paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
             break Err(err.into());
         }
         let Some(msg) = rx.recv().await else {
@@ -76,6 +77,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                 match effect {
                     Effect::Quit => quit = true,
                     Effect::Wake => client.wake(),
+                    Effect::Repaint => repaint = true,
                     Effect::Send {
                         host_id,
                         command,

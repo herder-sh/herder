@@ -18,7 +18,8 @@ use crate::session::{Entry, Session, Tone};
 /// Marks the end of an item still streaming.
 const CURSOR: &str = "▌";
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+/// `compact`, on a narrow screen, titles the pane with only the machine and the session.
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool) {
     let mut block = Block::bordered().border_style(super::border(app, Focus::Transcript));
     let Some(session) = app.open_session() else {
         let hint = Line::styled("Select a session and press Enter.", super::dim());
@@ -27,14 +28,27 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         frame.render_widget(hint.centered(), super::centered(inner, inner.width, 1));
         return;
     };
-    let (label, style) = super::sessions::badge(session.status);
-    block = block.title(Line::from(vec![
-        Span::raw(" "),
-        Span::styled(session.title(), super::bold()),
-        Span::raw(" "),
-        Span::styled(label, style),
-        Span::raw(" "),
-    ]));
+    if compact {
+        let machine = app
+            .open
+            .as_ref()
+            .and_then(|key| app.machines.iter().find(|m| m.host_id == key.host_id))
+            .map_or("", |machine| machine.name.as_str());
+        block = block.title(Line::from(vec![
+            Span::styled(format!(" {machine} › "), super::dim()),
+            Span::styled(session.short_title(), super::bold()),
+            Span::raw(" "),
+        ]));
+    } else {
+        let (label, style) = super::sessions::badge(session.status);
+        block = block.title(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(session.title(), super::bold()),
+            Span::raw(" "),
+            Span::styled(label, style),
+            Span::raw(" "),
+        ]));
+    }
     // A child names its primary session, which may have answered some of its requests.
     if let Some(parent) = &session.parent {
         let primary = app
@@ -44,7 +58,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
             .map_or_else(|| parent.to_string(), |(_, primary)| primary.title());
         block = block.title_bottom(Line::styled(format!(" child of {primary} "), super::dim()));
     }
-    if !session.model.is_empty() {
+    if !session.model.is_empty() && !compact {
         let mode = crate::session::mode_name(session.permission_mode);
         let facts = format!(" {} · {mode} ", session.model);
         block = block.title(Line::styled(facts, super::dim()).right_aligned());
