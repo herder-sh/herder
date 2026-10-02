@@ -1,10 +1,10 @@
 //! Who may connect, and as whom: named users with owner or member roles, their paired devices,
 //! and the one-time codes that pair a new device.
 //!
-//! A device is a key pair the client generates once ([`client::DeviceKey`]). It presents a
-//! self-signed certificate for that key as its TLS client certificate, and TLS 1.3 makes it sign
-//! the handshake transcript, which includes the daemon's fresh random: every connection proves
-//! the client holds the key. The daemon knows a device by the SHA-256 fingerprint of that
+//! A device is a key pair the client generates once (`herder_client_core::DeviceKey`). It
+//! presents a self-signed certificate for that key as its TLS client certificate, and TLS 1.3
+//! makes it sign the handshake transcript, which includes the daemon's fresh random: every
+//! connection proves the client holds the key. The daemon knows a device by the SHA-256 fingerprint of that
 //! certificate.
 //!
 //! An unknown device pairs by sending a code minted by `herder pair` in the
@@ -13,7 +13,6 @@
 //!
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
-pub mod client;
 pub mod control;
 
 use std::collections::HashMap;

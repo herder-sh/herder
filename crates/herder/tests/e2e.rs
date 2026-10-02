@@ -18,8 +18,8 @@ use herder_adapters::claude;
 use herder_adapters::fixture::Fixture;
 use herder_adapters::transport::Transport;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
+use herder_client_core::auth::{DeviceKey, PairingUri, client_config};
 use herder_daemon::auth::PAIRING_CODE_HEADER;
-use herder_daemon::auth::client::{DeviceKey, PairingUri, client_config};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command, CommandBody,

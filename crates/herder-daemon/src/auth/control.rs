@@ -21,7 +21,6 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use super::client::PairingUri;
 use super::{Auth, PAIRING_TTL};
 
 /// File name of the socket in the data dir.
@@ -88,17 +87,6 @@ pub struct PairingInfo {
     pub fingerprint: String,
     /// Addresses the daemon listens on, as `host:port`, most likely reachable first.
     pub addresses: Vec<String>,
-}
-
-impl PairingInfo {
-    /// The payload of the pairing QR code.
-    pub fn uri(&self) -> PairingUri {
-        PairingUri {
-            hosts: self.addresses.clone(),
-            fingerprint: self.fingerprint.clone(),
-            code: self.code.clone(),
-        }
-    }
 }
 
 /// A paired device, as `herder pair --list` shows it.
@@ -351,7 +339,6 @@ mod tests {
         };
         assert_eq!((info.user.as_str(), info.role), ("alice", Role::Owner));
         assert_eq!(info.addresses, ["127.0.0.1:7447"]);
-        assert_eq!(info.uri().code, info.code);
         let member = Request::Pair {
             user: "bob".into(),
             role: Some(Role::Member),

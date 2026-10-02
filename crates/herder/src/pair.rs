@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
+use herder_client_core::auth::PairingUri;
 use herder_daemon::auth::control::{self, DeviceInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp};
 use qrcode::QrCode;
@@ -69,7 +70,12 @@ pub fn run(args: Args) -> Result<()> {
 }
 
 fn print_pairing(info: &PairingInfo) -> Result<()> {
-    let uri = info.uri().to_string();
+    let uri = PairingUri {
+        hosts: info.addresses.clone(),
+        fingerprint: info.fingerprint.clone(),
+        code: info.code.clone(),
+    }
+    .to_string();
     let qr = QrCode::new(uri.as_bytes())?
         .render::<Dense1x2>()
         .quiet_zone(true)

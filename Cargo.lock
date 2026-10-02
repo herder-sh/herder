@@ -668,6 +668,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "herder-adapters",
+ "herder-client-core",
  "herder-daemon",
  "herder-protocol",
  "herder-store",
@@ -703,6 +704,30 @@ dependencies = [
 [[package]]
 name = "herder-client-core"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "herder-adapters",
+ "herder-daemon",
+ "herder-protocol",
+ "herder-store",
+ "jiff",
+ "rcgen",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "ulid",
+ "url",
+]
 
 [[package]]
 name = "herder-daemon"
@@ -711,6 +736,7 @@ dependencies = [
  "anyhow",
  "futures-util",
  "herder-adapters",
+ "herder-client-core",
  "herder-protocol",
  "herder-store",
  "jiff",
@@ -732,7 +758,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
- "url",
  "uuid",
 ]
 

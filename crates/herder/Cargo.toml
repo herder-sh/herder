@@ -15,6 +15,7 @@ anyhow.workspace = true
 clap.workspace = true
 flate2.workspace = true
 herder-adapters.workspace = true
+herder-client-core.workspace = true
 herder-daemon.workspace = true
 herder-protocol.workspace = true
 herder-tui.workspace = true
