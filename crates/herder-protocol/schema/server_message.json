@@ -146,6 +146,32 @@
       ]
     },
     {
+      "description": "A terminal's shell exited; sent to owners only, before the terminal list without it.",
+      "type": "object",
+      "properties": {
+        "exit_code": {
+          "description": "The shell's exit status; absent when a signal ended it, as the hang-up on an archive\nor a daemon stop usually does.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "terminal_id": {
+          "description": "The terminal, now gone.",
+          "$ref": "#/$defs/TerminalId"
+        },
+        "type": {
+          "type": "string",
+          "const": "terminal_closed"
+        }
+      },
+      "required": [
+        "type",
+        "terminal_id"
+      ]
+    },
+    {
       "description": "Bytes a terminal wrote; ephemeral, never journaled.",
       "type": "object",
       "properties": {
@@ -348,24 +374,29 @@
         }
       ]
     },
-    "ApprovalDecision": {
-      "description": "An answer to an approval request.",
+    "ApprovalId": {
+      "description": "Identifies an approval request within a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "ApprovalOutcome": {
+      "description": "How an approval request was resolved.",
       "oneOf": [
         {
-          "description": "Run the tool call once.",
+          "description": "The tool call ran once.",
           "type": "string",
           "const": "allow"
         },
         {
-          "description": "Refuse the tool call.",
+          "description": "The tool call was refused.",
           "type": "string",
           "const": "deny"
+        },
+        {
+          "description": "Nobody answered before its turn ended or the daemon restarted; the agent no longer waits\nfor it, and asks again in a later turn if it still needs to.",
+          "type": "string",
+          "const": "expired"
         }
       ]
-    },
-    "ApprovalId": {
-      "description": "Identifies an approval request within a session; a ULID string, opaque to receivers.",
-      "type": "string"
     },
     "Bytes": {
       "description": "Raw bytes, encoded as a standard padded base64 string.",
@@ -856,6 +887,13 @@
               "description": "The escalated request.",
               "$ref": "#/$defs/ApprovalId"
             },
+            "note": {
+              "description": "What the primary session told the user about it, as Markdown; absent when it said nothing.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "reason": {
               "description": "Why it was escalated.",
               "$ref": "#/$defs/EscalationReason"
@@ -872,23 +910,23 @@
           ]
         },
         {
-          "description": "A user or the primary session answered an approval request.",
+          "description": "A user or the primary session answered an approval request, or the daemon closed it\nas `expired`.",
           "type": "object",
           "properties": {
             "answered_by": {
-              "description": "Who answered; `by` names the user when it is a user.",
+              "description": "Who answered; `by` names the user when it is a user. An `expired` request has no `by`\nand is `user`.",
               "$ref": "#/$defs/Answerer",
               "default": {
                 "type": "user"
               }
             },
             "approval_id": {
-              "description": "The answered request.",
+              "description": "The resolved request.",
               "$ref": "#/$defs/ApprovalId"
             },
             "decision": {
-              "description": "The answer.",
-              "$ref": "#/$defs/ApprovalDecision"
+              "description": "How it was resolved.",
+              "$ref": "#/$defs/ApprovalOutcome"
             },
             "type": {
               "type": "string",
@@ -957,6 +995,13 @@
           "description": "A question routed to the primary session now waits for the user.",
           "type": "object",
           "properties": {
+            "note": {
+              "description": "What the primary session told the user about it, as Markdown; absent when it said nothing.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "question_id": {
               "description": "The escalated question.",
               "$ref": "#/$defs/QuestionId"

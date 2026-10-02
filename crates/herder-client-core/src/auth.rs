@@ -14,9 +14,6 @@ use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, OtherError, 
 use sha2::{Digest, Sha256};
 use url::Url;
 
-/// WebSocket upgrade request header an unpaired device sends its pairing code in.
-pub const PAIRING_CODE_HEADER: &str = "herder-pairing-code";
-
 /// A client device's Ed25519 key and the self-signed certificate it presents to daemons.
 ///
 /// Generate it once per device and keep it: a new key is a new, unpaired device.
@@ -156,7 +153,7 @@ pub struct PairingUri {
     pub hosts: Vec<String>,
     /// SHA-256 of the daemon's certificate, lowercase hex: the client pins it.
     pub fingerprint: String,
-    /// One-time pairing code, sent in [`PAIRING_CODE_HEADER`].
+    /// One-time pairing code, sent as the `pairing_code` of the client's hello.
     pub code: String,
 }
 

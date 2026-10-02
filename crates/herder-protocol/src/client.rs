@@ -34,6 +34,10 @@ pub struct ClientHello {
     pub client: String,
     /// Subscriptions to restore, each resuming after its last seen event.
     pub resume: Vec<Cursor>,
+    /// One-time code from `herder pair`, sent by a device that is not paired yet; ignored once
+    /// it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_code: Option<String>,
 }
 
 /// A position in a session's journal.

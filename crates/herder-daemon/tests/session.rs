@@ -10,9 +10,9 @@ use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, CommandBody, CommandResult,
-    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody, ItemId, PermissionMode,
-    Provider, QuestionId, SessionHead, SessionId, SessionStatus, TurnId, UserId,
+    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandBody,
+    CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody, ItemId,
+    PermissionMode, Provider, QuestionId, SessionHead, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -594,7 +594,7 @@ async fn concurrent_answers_to_one_approval_apply_exactly_once() {
         resolved.body,
         EventBody::ApprovalResolved {
             approval_id: ApprovalId::new("approval-1"),
-            decision: ApprovalDecision::Allow,
+            decision: ApprovalOutcome::Allow,
             answered_by: Answerer::User,
         }
     );
@@ -682,7 +682,7 @@ async fn needs_you_holds_until_the_last_of_several_approvals_is_answered() {
 }
 
 #[tokio::test]
-async fn ending_a_turn_denies_its_open_approvals() {
+async fn ending_a_turn_expires_its_open_approvals() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon =
         Daemon::open(dir.path(), "approval_interrupted.jsonl", Default::default()).await;
@@ -701,7 +701,7 @@ async fn ending_a_turn_denies_its_open_approvals() {
     assert_eq!(
         describe(&events),
         [
-            "-: approval_resolved approval-1 Deny",
+            "-: approval_resolved approval-1 Expired",
             "-: turn_interrupted turn-1",
             "-: status Idle",
         ]
@@ -712,7 +712,7 @@ async fn ending_a_turn_denies_its_open_approvals() {
 }
 
 #[tokio::test]
-async fn restart_denies_an_approval_the_previous_daemon_left_open() {
+async fn restart_expires_an_approval_the_previous_daemon_left_open() {
     let dir = tempfile::tempdir().unwrap();
     let turns = Arc::new(AtomicU64::new(0));
     let mut daemon = Daemon::open(dir.path(), "approval.jsonl", turns.clone()).await;
@@ -723,13 +723,13 @@ async fn restart_denies_an_approval_the_previous_daemon_left_open() {
 
     let daemon = Daemon::open(dir.path(), "approval.jsonl", turns).await;
     let journal = daemon.journal(&session).await;
-    // Still needs-you: the turn failed. The denial carries no `by`: the daemon made it.
+    // Still needs-you: the turn failed. The expiry carries no `by`: the daemon made it.
     assert_eq!(
         describe(&journal[5..]),
         [
             "-: approval_requested approval-1",
             "-: status NeedsYou",
-            "-: approval_resolved approval-1 Deny",
+            "-: approval_resolved approval-1 Expired",
             "-: turn_failed turn-1 Transient",
         ]
     );

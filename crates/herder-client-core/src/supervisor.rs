@@ -23,11 +23,10 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use crate::auth::{DeviceKey, PAIRING_CODE_HEADER, client_config};
+use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
 use crate::profile::SavedMachine;
 use crate::{ConnectionState, Error, Machine, SessionUpdate};
@@ -268,9 +267,10 @@ impl Supervisor {
                 let machine = &self.saved.name;
                 return warn!(%machine, "the daemon reported an error: {}", error.message);
             }
-            // Terminal output has no consumer yet; hellos and answers are handled by the
-            // connection.
+            // Terminal output and exits have no consumer yet; hellos and answers are handled
+            // by the connection.
             ServerMessage::TerminalOutput { .. }
+            | ServerMessage::TerminalClosed { .. }
             | ServerMessage::Hello(_)
             | ServerMessage::CommandAccepted { .. }
             | ServerMessage::CommandRejected { .. }
@@ -381,10 +381,11 @@ async fn run(
             protocol_version: PROTOCOL_VERSION,
             client: client.clone(),
             resume: supervisor.cursors(),
+            pairing_code: None,
         };
         let connected = tokio::select! {
             () = supervisor.stop.cancelled() => return,
-            connected = connect(saved, &device, None, hello) => connected,
+            connected = connect(saved, &device, hello) => connected,
         };
         let error = match connected {
             Ok((ws, hello)) => {
@@ -530,19 +531,17 @@ fn answer(pending: &mut Vec<Pending>, command_id: &CommandId, result: Answer) {
     }
 }
 
-/// Connects to the first of `saved`'s addresses that answers, as `device`, sending the pairing
-/// `code` if given, and exchanges hellos.
+/// Connects to the first of `saved`'s addresses that answers, as `device`, and exchanges hellos.
 pub(crate) async fn connect(
     saved: &SavedMachine,
     device: &DeviceKey,
-    code: Option<&str>,
     hello: ClientHello,
 ) -> Result<(Ws, ServerHello), String> {
     let config = client_config(&saved.fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
     let mut errors = Vec::new();
     for address in &saved.addresses {
-        let attempt = connect_to(address, &connector, code, &hello);
+        let attempt = connect_to(address, &connector, &hello);
         match tokio::time::timeout(CONNECT_TIMEOUT, attempt).await {
             Ok(Ok(connected)) => return Ok(connected),
             Ok(Err(err)) => errors.push(format!("{address}: {err:#}")),
@@ -558,7 +557,6 @@ pub(crate) async fn connect(
 async fn connect_to(
     address: &str,
     connector: &TlsConnector,
-    code: Option<&str>,
     hello: &ClientHello,
 ) -> anyhow::Result<(Ws, ServerHello)> {
     let tcp = TcpStream::connect(address).await.context("connecting")?;
@@ -566,11 +564,7 @@ async fn connect_to(
     // The certificate is pinned by fingerprint, so the name is never checked.
     let name = ServerName::try_from("herder").context("the TLS server name")?;
     let tls = connector.connect(name, tcp).await.context("TLS")?;
-    let mut request = format!("wss://{address}/").into_client_request()?;
-    if let Some(code) = code {
-        let value = HeaderValue::from_str(code).context("the pairing code")?;
-        request.headers_mut().insert(PAIRING_CODE_HEADER, value);
-    }
+    let request = format!("wss://{address}/").into_client_request()?;
     let (mut ws, _) = tokio_tungstenite::client_async(request, tls)
         .await
         .context("the WebSocket upgrade")?;

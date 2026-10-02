@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Identity, Server, Tls};
-use crate::auth::{Auth, PAIRING_CODE_HEADER, PAIRING_TTL};
+use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::session::EventSink;
 use crate::terminal::Terminals;
@@ -306,6 +306,8 @@ impl View {
 struct Client {
     ws: WebSocketStream<TlsStream<TcpStream>>,
     view: View,
+    /// Sent in the hello.
+    pairing_code: Option<String>,
 }
 
 impl Client {
@@ -331,19 +333,16 @@ impl Client {
         let ws_config = WebSocketConfig::default()
             .max_message_size(None)
             .max_frame_size(None);
-        let mut request = format!("wss://localhost:{}/", addr.port())
+        let request = format!("wss://localhost:{}/", addr.port())
             .into_client_request()
             .unwrap();
-        if let Some(code) = code {
-            let headers = request.headers_mut();
-            headers.insert(PAIRING_CODE_HEADER, code.parse().unwrap());
-        }
         let (ws, _) = tokio_tungstenite::client_async_with_config(request, tls, Some(ws_config))
             .await
             .unwrap();
         Ok(Self {
             ws,
             view: View::default(),
+            pairing_code: code.map(str::to_owned),
         })
     }
 
@@ -378,6 +377,7 @@ impl Client {
             protocol_version: PROTOCOL_VERSION,
             client: "test".into(),
             resume,
+            pairing_code: self.pairing_code.clone(),
         }))
         .await;
         let ServerMessage::Hello(hello) = self.recv().await else {
@@ -434,6 +434,7 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
             protocol_version: PROTOCOL_VERSION,
             client: "test".into(),
             resume: Vec::new(),
+            pairing_code: None,
         }))
         .await;
     let ServerMessage::Hello(hello) = client.recv().await else {
@@ -465,6 +466,7 @@ async fn a_wrong_protocol_version_is_refused() {
             protocol_version: PROTOCOL_VERSION + 1,
             client: "test".into(),
             resume: Vec::new(),
+            pairing_code: None,
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -683,6 +685,7 @@ async fn refused(mut client: Client) -> ErrorInfo {
             protocol_version: PROTOCOL_VERSION,
             client: "test".into(),
             resume: Vec::new(),
+            pairing_code: client.pairing_code.clone(),
         }))
         .await;
     let ServerMessage::Error { error } = client.recv().await else {
@@ -906,6 +909,7 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
             protocol_version: PROTOCOL_VERSION,
             client: "test".into(),
             resume: Vec::new(),
+            pairing_code: None,
         }))
         .await;
     assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
@@ -939,16 +943,27 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     client
         .send(&ClientMessage::Command(Command {
             id: CommandId::new("c4"),
-            body: input("exit"),
+            body: input("exit 3"),
         }))
         .await;
-    loop {
+    // The input's acceptance may arrive before or after the shell exits.
+    let (mut closed, mut listed, mut accepted) = (None, false, false);
+    while !(listed && accepted) {
         match client.recv().await {
-            ServerMessage::Terminals { terminals } if terminals.is_empty() => break,
-            ServerMessage::TerminalOutput { .. } | ServerMessage::CommandAccepted { .. } => {}
+            ServerMessage::TerminalClosed {
+                terminal_id: id,
+                exit_code,
+            } => closed = Some((id, exit_code)),
+            ServerMessage::Terminals { terminals } => {
+                assert!(terminals.is_empty() && closed.is_some(), "{terminals:?}");
+                listed = true;
+            }
+            ServerMessage::CommandAccepted { .. } => accepted = true,
+            ServerMessage::TerminalOutput { .. } => {}
             other => panic!("unexpected {other:?}"),
         }
     }
+    assert_eq!(closed, Some((terminal_id.clone(), Some(3))));
     let attach = CommandBody::AttachTerminal { terminal_id };
     assert!(matches!(
         client.command("c5", attach).await,

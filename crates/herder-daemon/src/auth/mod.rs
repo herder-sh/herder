@@ -7,9 +7,9 @@
 //! connection proves the client holds the key. The daemon knows a device by the SHA-256 fingerprint of that
 //! certificate.
 //!
-//! An unknown device pairs by sending a code minted by `herder pair` in the
-//! [`PAIRING_CODE_HEADER`] of its WebSocket upgrade request. A code names a user and a role, works
-//! once and expires after [`PAIRING_TTL`]; codes live in memory only, so a restart voids them.
+//! An unknown device pairs by sending a code minted by `herder pair` as the `pairing_code` of
+//! its hello. A code names a user and a role, works once and expires after [`PAIRING_TTL`];
+//! codes live in memory only, so a restart voids them.
 //!
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
@@ -34,9 +34,6 @@ use crate::ws::Identity;
 
 /// How long a pairing code stays valid.
 pub const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
-
-/// WebSocket upgrade request header an unpaired device sends its pairing code in.
-pub const PAIRING_CODE_HEADER: &str = "herder-pairing-code";
 
 /// Crockford's base32 alphabet: no I, L, O or U to misread. 256 is a multiple of its length, so
 /// a random byte maps onto it without bias.

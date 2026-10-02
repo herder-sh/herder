@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead, SessionId,
-    Terminal,
+    Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -167,16 +167,41 @@ impl Hub {
 
     /// Sends the new terminal list to every owner.
     pub(crate) fn terminals_changed(&self, terminals: &[Terminal]) {
-        let message = ServerMessage::Terminals {
+        self.to_owners(&[ServerMessage::Terminals {
             terminals: terminals.to_vec(),
-        };
+        }]);
+    }
+
+    /// Tells every owner that a terminal's shell exited with `exit_code`, then sends the
+    /// remaining `terminals`.
+    pub(crate) fn terminal_closed(
+        &self,
+        terminal_id: &TerminalId,
+        exit_code: Option<i32>,
+        terminals: &[Terminal],
+    ) {
+        self.to_owners(&[
+            ServerMessage::TerminalClosed {
+                terminal_id: terminal_id.clone(),
+                exit_code,
+            },
+            ServerMessage::Terminals {
+                terminals: terminals.to_vec(),
+            },
+        ]);
+    }
+
+    /// Queues `messages`, the last of them a terminal list, to every owner.
+    fn to_owners(&self, messages: &[ServerMessage]) {
         let state = self.lock();
         for outbox in &state.outboxes {
             let mut inner = outbox.lock();
             if !inner.owner {
                 continue;
             }
-            inner.push(message.clone());
+            for message in messages {
+                inner.push(message.clone());
+            }
             inner.terminals_sent = true;
             drop(inner);
             outbox.wake();
@@ -770,7 +795,7 @@ mod tests {
         hub.connect(&owner, Role::Owner);
         hub.connect(&member, Role::Member);
         let terminals = vec![Terminal {
-            terminal_id: herder_protocol::TerminalId::new("t1"),
+            terminal_id: TerminalId::new("t1"),
             session_id: session(),
         }];
         hub.terminals_changed(&terminals);
@@ -778,6 +803,21 @@ mod tests {
         // Read before the change landed, queued after it.
         hub.initial_terminals(&owner, Vec::new());
         assert_eq!(drain(&owner), [ServerMessage::Terminals { terminals }]);
+        assert!(drain(&member).is_empty());
+
+        hub.terminal_closed(&TerminalId::new("t1"), Some(1), &[]);
+        assert_eq!(
+            drain(&owner),
+            [
+                ServerMessage::TerminalClosed {
+                    terminal_id: TerminalId::new("t1"),
+                    exit_code: Some(1),
+                },
+                ServerMessage::Terminals {
+                    terminals: Vec::new()
+                },
+            ]
+        );
         assert!(drain(&member).is_empty());
     }
 
