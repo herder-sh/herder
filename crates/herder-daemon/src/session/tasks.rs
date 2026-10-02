@@ -12,21 +12,30 @@
 //! report joins the primary's queue in [`Tasks`]. `wait_for` takes events from that queue
 //! oldest first, each once. The queue lives in memory: a daemon restart drops reports no
 //! `wait_for` took, which stay in the primary's journal and in `status`.
+//!
+//! A child's question or approval request routed to the primary ([`super::routing`]) joins
+//! the same queue, and stays in `status.open_questions` until it is answered, escalated, or
+//! its turn ends; a request that leaves the primary before a `wait_for` took it leaves the
+//! queue too. `answer` and `escalate` go to the child's actor, which settles them in order
+//! with any user's answer.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use herder_protocol::{ErrorInfo, EventBody, PermissionMode, SessionId};
+use herder_protocol::{ApprovalId, ErrorInfo, EventBody, PermissionMode, QuestionId, SessionId};
 use herder_store::Session;
 use herder_tasktools::{
-    CallToolResult, ChildStatus, ErrorCode, SendInput, SendOutput, SpawnInput, SpawnOutput,
+    AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
+    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SpawnInput, SpawnOutput,
     StatusInput, StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
 };
 use serde::Serialize;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
+use super::actor::{self, PrimaryAct};
+use super::routing::{primary_id, split_id};
 use super::{CreateRequest, Inner, SessionManager};
 use crate::mcp::{ToolFuture, ToolHandler};
 
@@ -43,8 +52,11 @@ struct State {
     /// Each child with a turn running or a prompt queued, with its primary.
     working: HashMap<SessionId, SessionId>,
     /// Each primary's events no `wait_for` returned yet, oldest first, with the child each is
-    /// from. Requests routed to the primary (P2b.4) join the same queue.
+    /// from: reports, and requests routed to the primary.
     events: HashMap<SessionId, VecDeque<(SessionId, WaitForOutput)>>,
+    /// Each child's requests waiting for its primary's answer, oldest first, with the ids the
+    /// primary sees.
+    open: HashMap<SessionId, Vec<Request>>,
 }
 
 impl Default for Tasks {
@@ -96,6 +108,61 @@ impl Tasks {
         }
         drop(state);
         self.changed.send_modify(|()| {});
+    }
+
+    /// `request` of `child` now waits for `primary`'s answer: through `wait_for` and `status`.
+    pub(super) fn route(&self, primary: &SessionId, child: &SessionId, request: &Request) {
+        let request = primary_id(child, request);
+        let mut state = self.lock();
+        state
+            .open
+            .entry(child.clone())
+            .or_default()
+            .push(request.clone());
+        let output = WaitForOutput::Request {
+            child: child.clone(),
+            request,
+        };
+        state
+            .events
+            .entry(primary.clone())
+            .or_default()
+            .push_back((child.clone(), output));
+        drop(state);
+        self.changed.send_modify(|()| {});
+    }
+
+    /// `request` of `child` no longer waits for `primary`: it was answered or escalated, or its
+    /// turn ended. A `wait_for` that has not returned it yet never will.
+    pub(super) fn withdraw(&self, primary: &SessionId, child: &SessionId, request: &RequestRef) {
+        let id = match request {
+            RequestRef::Question(id) => format!("{child}/{id}"),
+            RequestRef::Approval(id) => format!("{child}/{id}"),
+        };
+        let matches = |open: &Request| match (open, request) {
+            (Request::Question { question_id, .. }, RequestRef::Question(_)) => {
+                question_id.as_str() == id
+            }
+            (Request::Approval { approval_id, .. }, RequestRef::Approval(_)) => {
+                approval_id.as_str() == id
+            }
+            _ => false,
+        };
+        let mut state = self.lock();
+        if let Some(open) = state.open.get_mut(child) {
+            open.retain(|open| !matches(open));
+        }
+        if let Some(events) = state.events.get_mut(primary) {
+            events.retain(|(_, event)| {
+                !matches!(event, WaitForOutput::Request { child: from, request }
+                    if from == child && matches(request))
+            });
+        }
+    }
+
+    /// `child`'s requests waiting for its primary's answer, oldest first.
+    fn open(&self, child: &SessionId) -> Vec<Request> {
+        self.lock().open.get(child).cloned().unwrap_or_default()
     }
 
     /// The oldest event of `primary`'s, from `child` when given, that no earlier call
@@ -173,14 +240,8 @@ impl ToolHandler for TaskTools {
                 ToolCall::Send(input) => success(manager.send_child(caller, input).await),
                 ToolCall::Status(input) => success(manager.child_status(caller, input).await),
                 ToolCall::WaitFor(input) => success(manager.wait_for(caller, input).await),
-                call @ (ToolCall::Answer(_) | ToolCall::Escalate(_)) => Err(ToolError::new(
-                    ErrorCode::Internal,
-                    format!(
-                        "not implemented: this herder cannot run `{}` yet; children's \
-                         questions and approvals go to the user",
-                        call.tool().name()
-                    ),
-                )),
+                ToolCall::Answer(input) => success(manager.answer(caller, input).await),
+                ToolCall::Escalate(input) => success(manager.escalate(caller, input).await),
             };
             result.unwrap_or_else(CallToolResult::from)
         })
@@ -331,12 +392,11 @@ impl SessionManager {
             .into_iter()
             .map(|child| ChildStatus {
                 last_report: reports.remove(&child.session_id),
+                open_questions: self.inner.tasks.open(&child.session_id),
                 task: child.task.unwrap_or_default(),
                 child: child.session_id,
                 branch: child.branch,
                 status: child.status,
-                // Children's questions and approvals go to the user until P2b.4.
-                open_questions: Vec::new(),
             })
             .collect();
         Ok(StatusOutput { children })
@@ -362,6 +422,82 @@ impl SessionManager {
             .tasks
             .wait(&caller, input.child.as_ref(), timeout)
             .await)
+    }
+
+    async fn answer(
+        &self,
+        caller: SessionId,
+        input: AnswerInput,
+    ) -> Result<AnswerOutput, ToolError> {
+        let (child, input) = match input {
+            AnswerInput::Question {
+                question_id,
+                answer,
+            } => {
+                let (child, id) = request_of(question_id.as_str(), "question")?;
+                let question_id = QuestionId::new(id);
+                let input = AnswerInput::Question {
+                    question_id,
+                    answer,
+                };
+                (child, input)
+            }
+            AnswerInput::Approval {
+                approval_id,
+                decision,
+            } => {
+                let (child, id) = request_of(approval_id.as_str(), "approval request")?;
+                let approval_id = ApprovalId::new(id);
+                let input = AnswerInput::Approval {
+                    approval_id,
+                    decision,
+                };
+                (child, input)
+            }
+        };
+        self.act(caller, child, PrimaryAct::Answer(input)).await?;
+        Ok(AnswerOutput {})
+    }
+
+    async fn escalate(
+        &self,
+        caller: SessionId,
+        input: EscalateInput,
+    ) -> Result<EscalateOutput, ToolError> {
+        let (child, request) = match &input.request {
+            RequestRef::Question(id) => {
+                let (child, id) = request_of(id.as_str(), "question")?;
+                (child, RequestRef::Question(QuestionId::new(id)))
+            }
+            RequestRef::Approval(id) => {
+                let (child, id) = request_of(id.as_str(), "approval request")?;
+                (child, RequestRef::Approval(ApprovalId::new(id)))
+            }
+        };
+        let note = input.note.filter(|note| !note.trim().is_empty());
+        self.act(caller, child, PrimaryAct::Escalate { request, note })
+            .await?;
+        Ok(EscalateOutput {})
+    }
+
+    /// Has `child`, when it is one of `caller`'s children, apply `act` from `caller`.
+    async fn act(
+        &self,
+        caller: SessionId,
+        child: SessionId,
+        act: PrimaryAct,
+    ) -> Result<(), ToolError> {
+        self.child(&caller, &child).await?;
+        let (done, result) = oneshot::channel();
+        let request = actor::Request::FromPrimary {
+            primary: caller,
+            act,
+            done,
+        };
+        self.send(child, None, request).await.map_err(tool_error)?;
+        result
+            .await
+            .map_err(|_| tool_internal("the child session stopped"))?
     }
 
     /// The calling session; it holds a token, so it exists.
@@ -396,6 +532,18 @@ impl SessionManager {
         }
         Ok(session)
     }
+}
+
+/// The child and adapter id in `id`, a `kind`'s id as `wait_for` and `status` give it.
+fn request_of<'a>(id: &'a str, kind: &str) -> Result<(SessionId, &'a str), ToolError> {
+    split_id(id).ok_or_else(|| {
+        ToolError::new(
+            ErrorCode::NotFound,
+            format!(
+                "{kind} {id} does not exist; pass the id exactly as wait_for or status gave it"
+            ),
+        )
+    })
 }
 
 fn mode_name(mode: PermissionMode) -> &'static str {
