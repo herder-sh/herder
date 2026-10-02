@@ -12,7 +12,7 @@ use herder_adapters::{
 use herder_daemon::mcp;
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
-    ulid_turn_ids,
+    TaskLimits, ulid_turn_ids,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
@@ -192,6 +192,11 @@ struct Daemon {
 impl Daemon {
     /// A daemon on `dir`, which a later daemon may open again.
     async fn open(dir: &Path) -> Self {
+        Self::open_with(dir, TaskLimits::default()).await
+    }
+
+    /// A daemon on `dir` whose tasks have `limits`.
+    async fn open_with(dir: &Path, limits: TaskLimits) -> Self {
         let mut adapters = Adapters::new();
         adapters.register(Provider::Other("echo".into()), Arc::new(Echo));
         let mut accounts = Accounts::new();
@@ -217,10 +222,13 @@ impl Daemon {
         let data_dir = dir.join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
         manager
-            .serve_mcp(mcp::Config {
-                data_dir: data_dir.clone(),
-                herder: PathBuf::from("/opt/herder"),
-            })
+            .serve_mcp(
+                mcp::Config {
+                    data_dir: data_dir.clone(),
+                    herder: PathBuf::from("/opt/herder"),
+                },
+                limits,
+            )
             .unwrap();
         let notifier = Arc::new(Recorder::default());
         manager.notify_escalations(notifier.clone()).unwrap();
@@ -570,6 +578,59 @@ async fn a_child_never_gets_a_permission_mode_above_its_primarys() {
             ..
         }
     ));
+}
+
+#[tokio::test]
+async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 2 }).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+    let first = id(&tools.ok("spawn", spawn.clone()).await["child"]);
+    tools.ok("spawn", spawn.clone()).await;
+    for _ in 0..2 {
+        let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(report["kind"], "report");
+    }
+
+    let refused = tools.call("spawn", spawn.clone()).await;
+    assert!(refused.is_error, "{refused:?}");
+    let error: Value = serde_json::from_str(&refused.content[0].text).unwrap();
+    assert_eq!(error["code"], "limit_exceeded");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("its limit is 2"), "{message}");
+    let status = tools.ok("status", json!({})).await;
+    assert_eq!(status["children"].as_array().unwrap().len(), 2);
+
+    // The limit is per task: another primary spawns freely.
+    let other = daemon.primary(PermissionMode::Ask).await;
+    daemon.connect(&other).ok("spawn", spawn.clone()).await;
+
+    // An archived child no longer counts.
+    let archive = CommandBody::ArchiveSession {
+        session_id: first,
+        force: false,
+    };
+    daemon.manager.handle(alice(), archive).await.unwrap();
+    tools.ok("spawn", spawn.clone()).await;
+    assert_eq!(tools.fails("spawn", spawn).await, "limit_exceeded");
+}
+
+#[tokio::test]
+async fn concurrent_spawns_cannot_both_take_the_last_free_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 1 }).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let (mut a, mut b) = (daemon.connect(&primary), daemon.connect(&primary));
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+    let (a, b) = tokio::join!(a.call("spawn", spawn.clone()), b.call("spawn", spawn));
+    assert_ne!(a.is_error, b.is_error, "{a:?} {b:?}");
+    let refused = if a.is_error { a } else { b };
+    assert!(
+        refused.content[0].text.contains("limit_exceeded"),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]

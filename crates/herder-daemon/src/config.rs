@@ -22,6 +22,15 @@
 //! herder never looks inside. Two accounts of one provider cannot share a config dir, as they
 //! would be one login, and a Claude account cannot name `~/.claude`: `CLAUDE_CONFIG_DIR`
 //! pointed there is not Claude's default login, so omit `config_dir` for that.
+//!
+//! # Tasks
+//!
+//! The `[tasks]` table limits every task a session runs through the task tools:
+//!
+//! ```toml
+//! [tasks]
+//! max_children = 5 # live (not archived) children a primary may have at once
+//! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -34,7 +43,7 @@ use herder_protocol::{AccountId, Provider};
 use serde::Deserialize;
 
 use crate::accounts;
-use crate::session::{AccountConfig, Accounts};
+use crate::session::{AccountConfig, Accounts, TaskLimits};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -52,6 +61,8 @@ pub struct Config {
     pub accounts: Accounts,
     /// The CLI to run per provider, where it is not the provider's own name on `PATH`.
     pub binaries: HashMap<Provider, PathBuf>,
+    /// Limits on every task.
+    pub tasks: TaskLimits,
 }
 
 /// Logging settings: the `[log]` table.
@@ -92,6 +103,7 @@ struct ConfigFile {
     log: LogConfig,
     accounts: Vec<AccountFile>,
     providers: BTreeMap<String, ProviderFile>,
+    tasks: TaskLimits,
 }
 
 impl Default for ConfigFile {
@@ -102,6 +114,7 @@ impl Default for ConfigFile {
             log: LogConfig::default(),
             accounts: Vec::new(),
             providers: BTreeMap::new(),
+            tasks: TaskLimits::default(),
         }
     }
 }
@@ -155,6 +168,7 @@ impl Config {
             log: file.log,
             accounts: resolve_accounts(file.accounts, &env)?,
             binaries: resolve_binaries(file.providers, &env)?,
+            tasks: file.tasks,
         })
     }
 }
@@ -333,6 +347,7 @@ mod tests {
         assert_eq!(config.data_dir, Path::new(home).join(".local/share/herder"));
         assert_eq!(config.log, LogConfig::default());
         assert_eq!(config.log.format, LogFormat::Pretty);
+        assert_eq!(config.tasks.max_children, 5);
     }
 
     #[test]
@@ -377,6 +392,9 @@ mod tests {
             [log]
             level = "debug"
             format = "json"
+
+            [tasks]
+            max_children = 2
             "#,
         );
         let config = Config::load_with_env(Some(&path), env(&[])).unwrap();
@@ -391,6 +409,7 @@ mod tests {
                 },
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
+                tasks: TaskLimits { max_children: 2 },
             }
         );
     }
@@ -407,7 +426,12 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        for text in ["port = 1\n", "[log]\ncolour = true\n", "[tls]\n"] {
+        for text in [
+            "port = 1\n",
+            "[log]\ncolour = true\n",
+            "[tls]\n",
+            "[tasks]\nmax_depth = 2\n",
+        ] {
             let path = write(tmp.path(), text);
             let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
             assert!(

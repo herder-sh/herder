@@ -98,6 +98,7 @@ use tracing::warn;
 
 use actor::{Actor, Request, SessionCommand};
 use journal::Journal;
+pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
 
 use crate::mcp::{self, Mcp};
@@ -330,16 +331,17 @@ impl SessionManager {
         Ok(tracker)
     }
 
-    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]) until the
-    /// manager's shutdown, and registers it with every session's CLI from its next start; once
-    /// per manager.
-    pub fn serve_mcp(&self, config: mcp::Config) -> anyhow::Result<()> {
+    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]), enforcing
+    /// `limits`, until the manager's shutdown, and registers it with every session's CLI from
+    /// its next start; once per manager.
+    pub fn serve_mcp(&self, config: mcp::Config, limits: TaskLimits) -> anyhow::Result<()> {
         let inner = &self.inner;
         if inner.mcp.get().is_some() {
             anyhow::bail!("the MCP server runs already");
         }
         let tools = Arc::new(TaskTools {
             inner: Arc::downgrade(inner),
+            limits,
         });
         let _ = inner
             .mcp
