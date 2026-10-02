@@ -1,8 +1,9 @@
 //! Runs the ACP adapter against fixtures recorded from real agents, through `Box<dyn Adapter>`.
 //!
 //! `fixtures/opencode/` was recorded from `opencode acp` 1.18.21 with `herder dev record`, except
-//! the files whose first line says they are hand-built; `fixtures/grok/` from `grok agent
-//! stdio` 1.0.46, logged out.
+//! the files whose first line says they are hand-built; `fixtures/grok/auth_required.jsonl` from
+//! `grok agent stdio` 1.0.46, logged out. The other Grok fixtures are hand-built around that
+//! recorded `initialize`, since no Grok login was available.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -479,6 +480,112 @@ async fn permission_mode_switch_is_acknowledged() {
         Some(&AdapterEvent::PermissionModeChanged {
             mode: PermissionMode::FullAccess
         })
+    );
+    shutdown(session).await;
+}
+
+async fn start_grok(path: &str, request: StartRequest) -> AdapterSession {
+    try_start(AgentProfile::grok(), path, request)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn grok_streams_the_reply_and_switches_models_natively() {
+    let mut session = start_grok("grok/prompt.jsonl", request(PermissionMode::Ask)).await;
+    assert!(session.capabilities.native_model_switch);
+    prompt(&session, "reply with the word ok");
+    let events = until(&mut session, is_turn_end).await;
+    let completed: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AdapterEvent::ItemCompleted { item } => Some(item.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(events[0], model("grok-4.6"));
+    assert_eq!(
+        completed,
+        [
+            item(
+                "item-1",
+                ItemBody::Reasoning {
+                    text: "The user wants ok.".into()
+                }
+            ),
+            message("item-2", "ok"),
+        ]
+    );
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+    );
+    shutdown(session).await;
+
+    let mut session = start_grok("grok/set_model.jsonl", request(PermissionMode::Ask)).await;
+    session
+        .commands
+        .send(AdapterCommand::SetModel {
+            model: "grok-4.5".into(),
+        })
+        .unwrap();
+    let events = until(&mut session, |event| *event == model("grok-4.5")).await;
+    assert_eq!(events[0], model("grok-4.6"));
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn grok_asks_before_a_command_and_runs_it_once_allowed() {
+    let mut session = start_grok("grok/approval_allow.jsonl", request(PermissionMode::Ask)).await;
+    prompt(
+        &session,
+        "Run the shell command: echo hi > out.txt  then reply with the word done",
+    );
+    let events = until(&mut session, |event| {
+        matches!(event, AdapterEvent::ApprovalRequested { .. })
+    })
+    .await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::ApprovalRequested {
+            approval_id: ApprovalId::new("approval-1"),
+            turn_id: turn(),
+            tool_call_id: ItemId::new("item-1"),
+            summary: "echo hi > out.txt".into(),
+        })
+    );
+    session
+        .commands
+        .send(AdapterCommand::AnswerApproval {
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Allow,
+        })
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    let completed: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AdapterEvent::ItemCompleted { item } => Some(item.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        completed,
+        [
+            item(
+                "item-2",
+                ItemBody::ToolResult {
+                    call_id: ItemId::new("item-1"),
+                    output: "exit code 0".into(),
+                    is_error: false,
+                }
+            ),
+            message("item-3", "done"),
+        ]
+    );
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
     );
     shutdown(session).await;
 }

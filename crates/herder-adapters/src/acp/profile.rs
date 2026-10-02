@@ -3,7 +3,7 @@
 //! | Agent    | Command            | Account config dir                         | Verified                                 |
 //! | -------- | ------------------ | ------------------------------------------ | ---------------------------------------- |
 //! | OpenCode | `opencode acp`     | `XDG_DATA_HOME` (`opencode/auth.json`)     | 1.18.21, credentials path moves          |
-//! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | 1.0.46, config moves; login not tried    |
+//! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | 1.0.46 logged out, config and sessions move |
 //! | Cursor   | `agent acp`        | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | no: from Cursor's docs, CLI not available |
 //!
 //! Each agent must ask before every write or command, so the adapter can apply the session's
@@ -13,6 +13,10 @@
 //! None of them reports limit windows over ACP, so no account of theirs shows usage. OpenCode
 //! has none to report either: `opencode stats` totals tokens and cost from its own sessions,
 //! not the model provider's quota, so its limits surface only as turn errors.
+//!
+//! An agent may also take a login from the environment, which the daemon passes on whole; when
+//! the account has a config dir those variables are removed, so the account's own login is the
+//! only one the agent can use.
 
 use std::process::Stdio;
 
@@ -39,6 +43,8 @@ pub struct AgentProfile {
     pub config_dir_vars: Vec<String>,
     /// Variables every launch sets, to make the agent ask before every write or command.
     pub launch_env: Vec<(String, String)>,
+    /// Variables that hold a login outside the config dir, removed when the account has one.
+    pub login_env: Vec<String>,
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -60,12 +66,15 @@ impl AgentProfile {
             trailing_args: Vec::new(),
             config_dir_vars: strings(&["XDG_DATA_HOME"]),
             launch_env: vec![("OPENCODE_PERMISSION".into(), r#"{"*":"ask"}"#.into())],
+            login_env: Vec::new(),
         }
     }
 
     /// Grok, `grok agent [-m <model>] stdio`.
     ///
-    /// `GROK_HOME` replaces `~/.grok`, where its config and login live.
+    /// `GROK_HOME` replaces `~/.grok`, where its config, sessions and login (`auth.json`) live.
+    /// Grok falls back to `XAI_API_KEY` (or the older `GROK_CODE_XAI_API_KEY`) when signed out,
+    /// which would run a signed-out account on someone else's key.
     pub fn grok() -> Self {
         Self {
             provider: Provider::Grok,
@@ -75,6 +84,7 @@ impl AgentProfile {
             trailing_args: strings(&["stdio"]),
             config_dir_vars: strings(&["GROK_HOME"]),
             launch_env: Vec::new(),
+            login_env: strings(&["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
         }
     }
 
@@ -92,6 +102,7 @@ impl AgentProfile {
             trailing_args: strings(&["acp"]),
             config_dir_vars: strings(&["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"]),
             launch_env: Vec::new(),
+            login_env: Vec::new(),
         }
     }
 
@@ -101,8 +112,8 @@ impl AgentProfile {
     }
 
     /// The command that runs the agent for `request`: its environment is exactly the request's,
-    /// plus the config dir variables when the account has a config dir, and the launch
-    /// variables. Stderr is discarded.
+    /// plus the config dir variables and minus the login variables when the account has a
+    /// config dir, and the launch variables. Stderr is discarded.
     pub fn command(&self, request: &StartRequest) -> Command {
         let mut command = request.command(&self.program);
         command.args(&self.args);
@@ -122,6 +133,11 @@ impl AgentProfile {
             .envs(self.launch_env.iter().map(|(var, value)| (var, value)))
             .current_dir(&request.cwd)
             .stderr(Stdio::null());
+        if request.config_dir.is_some() {
+            for var in &self.login_env {
+                command.env_remove(var);
+            }
+        }
         command
     }
 }
@@ -217,6 +233,31 @@ mod tests {
         let mut vars = env(&command);
         vars.sort();
         assert_eq!(vars, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
+    }
+
+    #[test]
+    fn grok_drops_an_api_key_login_only_for_an_account_with_its_own_dir() {
+        let with_key = |config_dir: Option<&str>| StartRequest {
+            config_dir: config_dir.map(PathBuf::from),
+            env: BTreeMap::from([
+                ("PATH".into(), "/usr/bin".into()),
+                ("XAI_API_KEY".into(), "xai-key".into()),
+                ("GROK_CODE_XAI_API_KEY".into(), "xai-key".into()),
+            ]),
+            ..request(None)
+        };
+        let grok = AgentProfile::grok();
+        let command = grok.command(&with_key(Some("/accounts/work")));
+        let set: Vec<_> = env(&command)
+            .into_iter()
+            .filter(|(_, value)| value.is_some())
+            .map(|(var, _)| var)
+            .collect();
+        assert_eq!(set, ["GROK_HOME", "PATH"]);
+        let command = grok.command(&with_key(None));
+        let mut vars: Vec<_> = env(&command).into_iter().map(|(var, _)| var).collect();
+        vars.sort();
+        assert_eq!(vars, ["GROK_CODE_XAI_API_KEY", "PATH", "XAI_API_KEY"]);
     }
 
     #[test]
