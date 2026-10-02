@@ -1,0 +1,5 @@
+# The session moved on to Cursor finishes the task.
+{"expect": {"type": "send_prompt", "turn_id": "turn-4", "text": "Commit it."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-4"}}
+{"emit": {"type": "item_completed", "item": {"id": "cursor-1", "turn_id": "turn-4", "body": {"type": "assistant_message", "text": "Committed."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-4"}}

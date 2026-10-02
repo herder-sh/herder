@@ -1,0 +1,6 @@
+# A Claude session's first turn, then a native model switch before it moves to another account.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Add a health check endpoint."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "claude-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Added GET /health."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "set_model", "model": "opus"}}

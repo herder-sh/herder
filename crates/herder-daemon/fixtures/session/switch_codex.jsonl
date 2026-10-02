@@ -1,0 +1,5 @@
+# The session moved to Codex continues the task.
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Document it in the README."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "codex-1", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Documented /health."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}
