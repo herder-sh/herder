@@ -24,23 +24,30 @@
 //! Support is probed once at startup ([`Scopes::detect`]). Without a systemd user session the
 //! CLIs run unwrapped, a warning is logged, and [`Scopes::limits_on`] is false.
 //!
-//! [`Scopes::run_sampler`] reads each scope's cgroup every [`SAMPLE_INTERVAL`] and publishes
+//! [`run_sampler`] reads each scope's cgroup every [`SAMPLE_INTERVAL`], adds the containers
+//! [`Docker`] tracks for the session, and publishes
 //! [`ServerMessage::SessionResources`](herder_protocol::ServerMessage::SessionResources)
-//! through the [`Hub`] when it changed; once a scope is gone, it publishes one zero usage.
+//! through the [`Hub`] when it changed; once neither is left, it publishes one zero usage.
+//!
+//! Archiving a session stops what it left running ([`Scopes::stop`], [`processes`]); its
+//! containers stay up and listed, for the user to bring down.
 //!
 //! Scopes bound each session; [`Admission`] bounds their sum: a turn starts only while the
 //! host has room for it ([`admission`]).
 
 pub mod admission;
 mod cgroup;
+pub mod docker;
+pub mod processes;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use herder_protocol::{SessionId, SessionUsage};
+use herder_protocol::{Container, SessionId, SessionUsage};
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -50,6 +57,7 @@ use crate::hub::Hub;
 
 pub use admission::{Admission, Budget, Parked, Permit, ProcHost, ReadHost, Reading, Ticket};
 pub use cgroup::Sample;
+pub use docker::Docker;
 
 /// How often scopes are read; the contract's limit for `session_resources`.
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -281,6 +289,8 @@ struct State {
     /// an earlier daemon never has the name of a new one.
     next: u64,
     scopes: HashMap<SessionId, Live>,
+    /// The last usage published for each session still showing something.
+    published: HashMap<SessionId, SessionUsage>,
 }
 
 /// One session's latest scope.
@@ -292,8 +302,6 @@ struct Live {
     cgroup: Option<PathBuf>,
     /// The previous reading, for the CPU share since then.
     last: Option<(Instant, Sample)>,
-    /// The last usage published.
-    published: Option<SessionUsage>,
 }
 
 impl Scopes {
@@ -309,6 +317,7 @@ impl Scopes {
             state: Mutex::new(State {
                 next,
                 scopes: HashMap::new(),
+                published: HashMap::new(),
             }),
         }
     }
@@ -369,7 +378,6 @@ impl Scopes {
         let unit = unit_name(session, state.next);
         state.next += 1;
         let launcher = launcher(&unit, limits);
-        let published = state.scopes.remove(session).and_then(|live| live.published);
         state.scopes.insert(
             session.clone(),
             Live {
@@ -377,7 +385,6 @@ impl Scopes {
                 launched: Instant::now(),
                 cgroup: None,
                 last: None,
-                published,
             },
         );
         launcher
@@ -391,23 +398,34 @@ impl Scopes {
             .map(|live| live.unit.clone())
     }
 
-    /// Publishes every scope's usage to `hub` each [`SAMPLE_INTERVAL`] until `shutdown`.
-    pub async fn run_sampler(&self, hub: &Hub, shutdown: CancellationToken) {
-        if !self.on {
-            return;
+    /// The pids of `session`'s live processes: those in its scopes, or with limits off,
+    /// those started with its id in [`processes::SESSION_ENV`].
+    pub async fn processes(&self, session: &SessionId) -> Vec<u32> {
+        processes::list(self.source(session, &unit_prefix(session))).await
+    }
+
+    /// Stops everything `session` still runs, once its CLI is gone: `SIGTERM`, then `SIGKILL`
+    /// after [`processes::TERM_GRACE`]. Returns how many processes there were.
+    pub async fn stop(&self, session: &SessionId) -> usize {
+        let prefix = unit_prefix(session);
+        let stopped = processes::stop(self.source(session, &prefix)).await;
+        if !stopped.is_empty() {
+            info!(session_id = %session, pids = ?stopped, "stopped the archived session's leftover processes");
         }
-        let mut tick = tokio::time::interval(SAMPLE_INTERVAL);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => return,
-                _ = tick.tick() => self.sample(hub).await,
-            }
+        stopped.len()
+    }
+
+    fn source<'a>(&self, session: &'a SessionId, prefix: &'a str) -> processes::Source<'a> {
+        if self.on {
+            processes::Source::Scopes(prefix)
+        } else {
+            processes::Source::Env(session)
         }
     }
 
-    /// Reads every scope once and publishes the usages that changed.
-    async fn sample(&self, hub: &Hub) {
+    /// Reads every scope once, adds each session's `containers`, and publishes the usages
+    /// that changed.
+    async fn sample(&self, hub: &Hub, containers: &HashMap<SessionId, Vec<Container>>) {
         let pending: Vec<(SessionId, String)> = self
             .lock()
             .scopes
@@ -427,25 +445,45 @@ impl Scopes {
         let mut publish = Vec::new();
         {
             let mut state = self.lock();
+            let mut usages = HashMap::new();
             state.scopes.retain(|session, live| {
                 let Some(dir) = &live.cgroup else {
                     return now.duration_since(live.launched) < APPEAR_TIMEOUT;
                 };
-                let (usage, keep) = match Sample::read(dir) {
+                match Sample::read(dir) {
                     Ok(sample) => {
                         let usage = cgroup::usage(live.last.as_ref(), now, &sample, self.host);
                         live.last = Some((now, sample));
-                        (usage, true)
+                        usages.insert(session.clone(), usage);
+                        true
                     }
                     // The scope is gone: every process in it exited.
-                    Err(_) => (cgroup::zero(), false),
-                };
-                if live.published.as_ref() != Some(&usage) && (keep || live.published.is_some()) {
-                    live.published = Some(usage.clone());
-                    publish.push((session.clone(), usage));
+                    Err(_) => false,
                 }
-                keep
             });
+            for (session, list) in containers {
+                usages
+                    .entry(session.clone())
+                    .or_insert_with(cgroup::zero)
+                    .containers
+                    .clone_from(list);
+            }
+            let gone: Vec<SessionId> = state
+                .published
+                .keys()
+                .filter(|session| !usages.contains_key(*session))
+                .cloned()
+                .collect();
+            for session in gone {
+                state.published.remove(&session);
+                publish.push((session, cgroup::zero()));
+            }
+            for (session, usage) in usages {
+                if state.published.get(&session) != Some(&usage) {
+                    state.published.insert(session.clone(), usage.clone());
+                    publish.push((session, usage));
+                }
+            }
         }
         for (session, usage) in publish {
             hub.session_resources(&session, usage);
@@ -459,6 +497,37 @@ impl Scopes {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Publishes every session's usage, from `scopes` and `docker`, to `hub` each
+/// [`SAMPLE_INTERVAL`] until `shutdown`; `worktrees` lists every session's worktree.
+pub async fn run_sampler<F, Fut>(
+    scopes: &Scopes,
+    docker: &Docker,
+    worktrees: F,
+    hub: &Hub,
+    shutdown: CancellationToken,
+) where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<Vec<(SessionId, PathBuf)>>>,
+{
+    let mut tick = tokio::time::interval(SAMPLE_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => return,
+            _ = tick.tick() => {
+                let containers = docker.poll(&worktrees).await;
+                scopes.sample(hub, &containers).await;
+            }
+        }
+    }
+}
+
+/// The start of every scope unit name of `session`.
+fn unit_prefix(session: &SessionId) -> String {
+    let unit = unit_name(session, 0);
+    unit.strip_suffix("0.scope").unwrap_or(&unit).to_owned()
 }
 
 /// Runs a no-op command in a scope, the way sessions will.

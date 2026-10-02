@@ -25,7 +25,7 @@ use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::tasks::Tasks;
 use super::{Inner, error};
-use crate::resources::{Permit, Ticket};
+use crate::resources::{Permit, Ticket, processes};
 use crate::{handoff, worktree};
 
 /// How long a stopping session waits for its CLI to exit.
@@ -738,6 +738,10 @@ impl Actor {
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
         }
+        // Whatever the agent left running, such as a dev server, goes with the session.
+        if let Some(scopes) = self.inner.scopes.get() {
+            scopes.stop(&self.session.session_id).await;
+        }
         if let Some(mcp) = self.inner.mcp.get() {
             mcp.revoke(&self.session.session_id);
         }
@@ -1026,9 +1030,15 @@ impl Actor {
             }
             None => Vec::new(),
         };
+        let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        // Marks everything the CLI starts as the session's, for archive to find.
+        env.insert(
+            processes::SESSION_ENV.to_owned(),
+            session.session_id.to_string(),
+        );
         let request = StartRequest {
             config_dir: account.config_dir.clone(),
-            env: std::env::vars().collect(),
+            env,
             cwd: PathBuf::from(&session.worktree),
             model: Some(session.model.clone()).filter(|model| !model.is_empty()),
             permission_mode: session.permission_mode,

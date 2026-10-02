@@ -2,7 +2,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::sync::Arc;
 
-use herder_protocol::{Role, ServerMessage};
+use herder_protocol::{ContainerState, Role, ServerMessage};
+use tokio::process::Child;
 
 use super::*;
 use crate::hub::Outbox;
@@ -190,16 +191,16 @@ async fn the_sampler_publishes_changes_then_one_zero_once_the_scope_is_gone() {
         },
     };
 
-    scopes.sample(&hub).await;
+    scopes.sample(&hub, &HashMap::new()).await;
     assert_eq!(drain(&outbox), [usage(4096, 2)]);
     // Unchanged: nothing to send.
-    scopes.sample(&hub).await;
+    scopes.sample(&hub, &HashMap::new()).await;
     assert!(drain(&outbox).is_empty());
 
     std::fs::remove_dir_all(&dir).unwrap();
-    scopes.sample(&hub).await;
+    scopes.sample(&hub, &HashMap::new()).await;
     assert_eq!(drain(&outbox), [usage(0, 0)]);
-    scopes.sample(&hub).await;
+    scopes.sample(&hub, &HashMap::new()).await;
     assert!(drain(&outbox).is_empty());
     assert_eq!(scopes.unit(&session), None);
 }
@@ -269,4 +270,220 @@ async fn a_runaway_child_is_killed_in_its_scope_and_everything_else_keeps_runnin
         || (lines.len() == 1 && status.signal() == Some(nix::sys::signal::Signal::SIGKILL as i32));
     assert!(killed, "{context}");
     assert_eq!(String::from_utf8_lossy(&other.stdout), "other alive\n");
+}
+
+/// `sleep` started the way a session's CLI starts everything: with the session's id in its
+/// environment. `ignore_term` makes it survive `SIGTERM`.
+fn leftover(session: &SessionId, ignore_term: bool) -> Child {
+    let script = if ignore_term {
+        "trap '' TERM; sleep 60"
+    } else {
+        "exec sleep 60"
+    };
+    Command::new("sh")
+        .args(["-c", script])
+        .env(processes::SESSION_ENV, session.as_str())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap()
+}
+
+async fn exited(child: &mut Child) -> std::process::ExitStatus {
+    tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .expect("the leftover is still running")
+        .unwrap()
+}
+
+#[tokio::test]
+async fn without_scopes_a_sessions_leftovers_are_found_by_its_environment_and_stopped() {
+    let session = SessionId::new(format!("leftover-{}", std::process::id()));
+    let other = SessionId::new(format!("other-{}", std::process::id()));
+    let scopes = Scopes::new(ResourcesConfig::default(), host(), false);
+    let mut polite = leftover(&session, false);
+    let mut stubborn = leftover(&session, true);
+    let mut bystander = leftover(&other, false);
+    // `sh` execs `sleep` or traps first: wait until both carry the marker.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let found = scopes.processes(&session).await;
+    for child in [&polite, &stubborn] {
+        assert!(found.contains(&child.id().unwrap()), "{found:?}");
+    }
+
+    assert!(scopes.stop(&session).await >= 2);
+    assert_eq!(exited(&mut polite).await.signal(), Some(nix::libc::SIGTERM));
+    assert_eq!(
+        exited(&mut stubborn).await.signal(),
+        Some(nix::libc::SIGKILL)
+    );
+    assert!(scopes.processes(&session).await.is_empty());
+    assert_eq!(bystander.try_wait().unwrap(), None);
+    bystander.kill().await.unwrap();
+}
+
+/// A `docker` that prints `ps` and appends its arguments to `calls`.
+fn fake_docker(dir: &Path, ps: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("docker");
+    let calls = dir.join("calls");
+    std::fs::write(dir.join("ps"), ps).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\nif [ \"$1\" = ps ]; then cat '{}'; fi\n",
+            calls.display(),
+            dir.join("ps").display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+fn ps_line(id: &str, state: &str, project: &str, working_dir: &Path) -> String {
+    serde_json::json!({
+        "id": id,
+        "name": format!("{project}-{id}-1"),
+        "image": "postgres:16",
+        "state": state,
+        "project": project,
+        "working_dir": working_dir,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn compose_containers_started_in_a_worktree_are_tracked_and_can_be_brought_down() {
+    let dir = tempfile::tempdir().unwrap();
+    let worktree = dir.path().join("worktrees/app-s1");
+    let elsewhere = dir.path().join("elsewhere");
+    let ps = [
+        ps_line("c1", "running", "app", &worktree),
+        ps_line("c2", "exited", "app", &worktree.join("services/db")),
+        ps_line("c3", "running", "other", &elsewhere),
+        "not json".to_owned(),
+    ]
+    .join("\n");
+    let docker = Docker::new(fake_docker(dir.path(), &ps));
+    let session = SessionId::new("s1");
+    let worktrees = || async { Ok(vec![(session.clone(), worktree.clone())]) };
+
+    let containers = docker.poll(worktrees).await;
+    let tracked = &containers[&session];
+    assert_eq!(containers.len(), 1);
+    assert_eq!(
+        tracked
+            .iter()
+            .map(|c| (c.id.as_str(), c.state))
+            .collect::<Vec<_>>(),
+        [
+            ("c1", ContainerState::Running),
+            ("c2", ContainerState::Exited)
+        ]
+    );
+    assert_eq!(tracked[0].compose_project.as_deref(), Some("app"));
+    assert_eq!(tracked[0].image, "postgres:16");
+    // Within the poll interval the last list stands, without running docker again.
+    assert_eq!(docker.poll(worktrees).await, containers);
+
+    docker.compose_down("app").await.unwrap();
+    std::fs::write(dir.path().join("ps"), "").unwrap();
+    assert!(docker.poll(worktrees).await.is_empty());
+    let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+    let calls: Vec<&str> = calls.lines().collect();
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert!(calls[0].starts_with(
+        "ps --all --no-trunc --filter label=com.docker.compose.project.working_dir --format "
+    ));
+    assert_eq!(calls[1], "compose --project-name app down");
+}
+
+#[tokio::test]
+async fn without_docker_no_containers_are_tracked_and_nothing_fails() {
+    let docker = Docker::new("/nonexistent/herder-test/docker");
+    let asked = std::sync::atomic::AtomicBool::new(false);
+    let worktrees = || async {
+        asked.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(Vec::new())
+    };
+    assert!(docker.poll(worktrees).await.is_empty());
+    assert!(docker.poll(worktrees).await.is_empty());
+    assert!(!asked.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(docker.compose_down("app").await.is_err());
+}
+
+#[tokio::test]
+async fn a_sessions_containers_are_published_without_a_scope_and_cleared_once_gone() {
+    let session = SessionId::new("s1");
+    let scopes = Scopes::new(ResourcesConfig::default(), host(), false);
+    let hub = Hub::default();
+    let outbox = Arc::new(Outbox::default());
+    hub.connect(&outbox, Role::Member);
+    let container = Container {
+        id: "c1".into(),
+        name: "app-db-1".into(),
+        compose_project: Some("app".into()),
+        image: "postgres:16".into(),
+        state: ContainerState::Running,
+    };
+    let usage = |containers: Vec<Container>| ServerMessage::SessionResources {
+        session_id: session.clone(),
+        usage: SessionUsage {
+            cpu_percent: 0.0,
+            memory_bytes: 0,
+            processes: 0,
+            containers,
+        },
+    };
+
+    let tracked = HashMap::from([(session.clone(), vec![container.clone()])]);
+    scopes.sample(&hub, &tracked).await;
+    assert_eq!(drain(&outbox), [usage(vec![container.clone()])]);
+    scopes.sample(&hub, &tracked).await;
+    assert!(drain(&outbox).is_empty());
+
+    scopes.sample(&hub, &HashMap::new()).await;
+    assert_eq!(drain(&outbox), [usage(Vec::new())]);
+    scopes.sample(&hub, &HashMap::new()).await;
+    assert!(drain(&outbox).is_empty());
+}
+
+/// Archive's stop reaches a session's processes in every scope it had, including an earlier
+/// one the daemon no longer tracks.
+///
+/// Needs a systemd user session, so CI does not run it:
+/// `cargo test -p herder-daemon -- --ignored leftover`.
+#[tokio::test]
+#[ignore = "needs a systemd user session"]
+async fn a_sessions_leftovers_in_its_scopes_are_stopped() {
+    let session = SessionId::new(format!("leftover{}", std::process::id()));
+    let scopes = Scopes::new(ResourcesConfig::default(), Host::read().unwrap(), true);
+    let limits = scopes.limits(false);
+    let mut children = Vec::new();
+    for _ in 0..2 {
+        let argv = scopes.launch(&session, &limits);
+        children.push(
+            Command::new(&argv[0])
+                .args(&argv[1..])
+                .args(["sh", "-c", "trap '' TERM; sleep 60 & wait"])
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap(),
+        );
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while scopes.processes(&session).await.len() < 4 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the scopes never filled"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert_eq!(scopes.stop(&session).await, 4);
+    for child in &mut children {
+        exited(child).await;
+    }
+    assert!(scopes.processes(&session).await.is_empty());
 }

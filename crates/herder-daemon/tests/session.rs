@@ -1421,6 +1421,54 @@ async fn without_limits_the_cli_runs_directly() {
     daemon.stop().await;
 }
 
+#[tokio::test]
+async fn archive_stops_what_the_session_left_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    // Limits off, as on a host without a systemd user session: the CLI's environment marks it.
+    let scopes = Arc::new(Scopes::new(
+        ResourcesConfig::default(),
+        Host {
+            memory_total: 10_000,
+            cores: 2,
+            nice: 0,
+        },
+        false,
+    ));
+    daemon.manager.limit_resources(Arc::clone(&scopes)).unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    // A dev server the agent started and left behind, with the environment it inherited.
+    let start = daemon.starts.lock().unwrap()[0].clone();
+    assert_eq!(
+        start.env.get(resources::processes::SESSION_ENV),
+        Some(&session.to_string())
+    );
+    let mut leftover = tokio::process::Command::new("sleep")
+        .arg("60")
+        .env_clear()
+        .envs(&start.env)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    assert_eq!(scopes.processes(&session).await, [leftover.id().unwrap()]);
+
+    let archive = CommandBody::ArchiveSession {
+        session_id: session.clone(),
+        force: true,
+    };
+    daemon.manager.handle(alice(), archive).await.unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), leftover.wait())
+        .await
+        .expect("archive left the process running")
+        .unwrap();
+    assert!(!status.success());
+    assert!(scopes.processes(&session).await.is_empty());
+    daemon.stop().await;
+}
+
 /// Fake adapters that play one script per start, in order, recording every start request and
 /// every command across starts.
 struct Scripted {
