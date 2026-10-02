@@ -26,8 +26,9 @@ use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
 use super::tasks::Tasks;
 use super::{Inner, error};
+use crate::handoff;
 use crate::resources::{Permit, Ticket, processes};
-use crate::{handoff, worktree};
+use crate::worktree::{self, checkpoint};
 
 /// How long a stopping session waits for its CLI to exit.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
@@ -1010,6 +1011,26 @@ impl Actor {
         }
     }
 
+    /// Commits the worktree as the checkpoint after `turn_id`, when checkpoints are on, and
+    /// publishes it in the background. A failure is logged: the turn ended all the same.
+    async fn checkpoint(&self, turn_id: &TurnId) {
+        let Some(config) = self.inner.checkpoints.get() else {
+            return;
+        };
+        let session_id = &self.session.session_id;
+        let worktree = PathBuf::from(&self.session.worktree);
+        if let Err(err) = checkpoint::snapshot(config, &worktree, session_id, turn_id).await {
+            warn!(%session_id, "cannot checkpoint the worktree: {err}");
+            return;
+        }
+        let (config, session_id, turn_id) = (config.clone(), session_id.clone(), turn_id.clone());
+        tokio::spawn(async move {
+            if let Err(err) = checkpoint::publish(&config, &worktree, &session_id, &turn_id).await {
+                warn!(%session_id, "cannot publish the checkpoint: {err}");
+            }
+        });
+    }
+
     /// Prepares a setting change: sends `command` when the running adapter applies it natively,
     /// otherwise stops an idle adapter so the next start picks the setting up.
     fn change(
@@ -1451,6 +1472,7 @@ impl Actor {
         self.void_requests().await;
         self.log(body).await;
         self.record_branches().await;
+        self.checkpoint(&turn_id).await;
         self.turn = None;
         // The next turn asks again, behind every turn already waiting.
         self.permit = None;
@@ -1492,6 +1514,7 @@ impl Actor {
         })
         .await;
         self.record_branches().await;
+        self.checkpoint(&turn_id).await;
         self.turn = None;
         let to = if self.inner.account(&account_id).map(|a| a.provider)
             == Some(self.session.provider.clone())

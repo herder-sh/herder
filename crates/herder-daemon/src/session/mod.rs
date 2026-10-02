@@ -49,6 +49,13 @@
 //! worktree, keeps its branches and journals the `archived` status; an archived session takes
 //! no further commands.
 //!
+//! # Checkpoints
+//!
+//! Once [`SessionManager::checkpoint_turns`] runs, every agent turn's end, however it ended,
+//! commits the worktree to `refs/herder/<session>/<turn>` before the next turn starts, then
+//! pushes it to `origin` or bundles it in the background ([`checkpoint`]). The setup turn
+//! makes none. A checkpoint that fails is logged and never fails the turn.
+//!
 //! # Setup
 //!
 //! Once [`SessionManager::set_up_worktrees`] runs, a new session whose project has a
@@ -182,7 +189,7 @@ use crate::projects::{self, ProjectsConfig};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Docker, Scopes};
 use crate::usage::{self, Usage};
-use crate::worktree::{self, Worktrees};
+use crate::worktree::{self, Worktrees, checkpoint};
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
 /// order; implementations must not block.
@@ -310,6 +317,8 @@ struct Inner {
     limits: Limits,
     /// This host and the projects whose setup commands new worktrees run, once set.
     projects: OnceLock<(HostId, ProjectsConfig)>,
+    /// Where turn-end checkpoints go, once set.
+    checkpoints: OnceLock<checkpoint::Config>,
     shutdown: CancellationToken,
 }
 
@@ -403,6 +412,7 @@ impl SessionManager {
                 failover: OnceLock::new(),
                 limits: Limits::default(),
                 projects: OnceLock::new(),
+                checkpoints: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -633,6 +643,15 @@ impl SessionManager {
             .projects
             .set((host, projects))
             .map_err(|_| anyhow::anyhow!("worktree setup is configured already"))
+    }
+
+    /// Checkpoints every session's worktree at each turn's end from now on, into `config`;
+    /// once per manager. Without it, no checkpoints are made.
+    pub fn checkpoint_turns(&self, config: checkpoint::Config) -> anyhow::Result<()> {
+        self.inner
+            .checkpoints
+            .set(config)
+            .map_err(|_| anyhow::anyhow!("checkpoints are configured already"))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to
