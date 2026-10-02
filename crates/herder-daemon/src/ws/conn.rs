@@ -159,6 +159,7 @@ async fn read<B: Backend>(
     shared
         .hub
         .initial_terminals(outbox, shared.terminals.list());
+    shared.hub.initial_projects(outbox);
     for cursor in hello.resume {
         subscribe(shared, outbox, cursor).await;
     }

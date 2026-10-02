@@ -12,8 +12,8 @@
 //! - the session list whenever it changes, sent to every client.
 //! - the account list whenever an account's usage changes, sent to every client.
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
-//! - the project list whenever it changes, sent to every client, and on connect once there is
-//!   one ([`crate::projects`]).
+//! - the project list whenever it changes, sent to every client, and after the other lists
+//!   on connect once there is one ([`crate::projects`]).
 //! - each session's resource usage whenever it changes, sent to every client, and on connect
 //!   for every session with something running ([`crate::resources`]).
 //! - the host's resources and turns whenever they change, sent to every client, and the latest
@@ -199,11 +199,6 @@ impl Hub {
                 usage: usage.clone(),
             });
         }
-        if let Some(projects) = &state.projects {
-            inner.push(ServerMessage::Projects {
-                projects: projects.clone(),
-            });
-        }
         drop(inner);
         outbox.wake();
         state.outboxes.push(Arc::clone(outbox));
@@ -239,7 +234,7 @@ impl Hub {
         }
     }
 
-    /// Sends the new project list to every client, and to every client that connects later.
+    /// Sends the new project list to every client, and keeps it for clients that connect later.
     pub(crate) fn projects_changed(&self, projects: Vec<Project>) {
         let mut state = self.lock();
         let message = ServerMessage::Projects {
@@ -247,9 +242,28 @@ impl Hub {
         };
         state.projects = Some(projects);
         for outbox in &state.outboxes {
-            outbox.lock().push(message.clone());
+            let mut inner = outbox.lock();
+            inner.push(message.clone());
+            inner.projects_sent = true;
+            drop(inner);
             outbox.wake();
         }
+    }
+
+    /// Queues the latest project list to a client after [`Hub::connect`], unless a change
+    /// already reached it or discovery has published none yet.
+    pub(crate) fn initial_projects(&self, outbox: &Outbox) {
+        let state = self.lock();
+        let mut inner = outbox.lock();
+        if let Some(projects) = &state.projects
+            && !inner.projects_sent
+        {
+            inner.push(ServerMessage::Projects {
+                projects: projects.clone(),
+            });
+        }
+        drop(inner);
+        outbox.wake();
     }
 
     /// Sends the new terminal list to every owner.
@@ -437,6 +451,8 @@ struct Inner {
     owner: bool,
     /// Whether a terminal list change has been queued since the client connected.
     terminals_sent: bool,
+    /// Whether a project list change has been queued since the client connected.
+    projects_sent: bool,
     state: OutboxState,
     #[cfg(test)]
     peak: usize,
@@ -989,6 +1005,7 @@ mod tests {
         let hub = Hub::default();
         let before = Arc::new(Outbox::default());
         hub.connect(&before, Role::Member);
+        hub.initial_projects(&before);
         assert!(
             drain(&before).is_empty(),
             "no list before discovery publishes one"
@@ -1005,7 +1022,12 @@ mod tests {
         assert_eq!(drain(&before), std::slice::from_ref(&message));
         let later = Arc::new(Outbox::default());
         hub.connect(&later, Role::Member);
-        assert_eq!(drain(&later), [message]);
+        assert!(drain(&later).is_empty());
+        hub.initial_projects(&later);
+        assert_eq!(drain(&later), std::slice::from_ref(&message));
+        // A list that already reached a client is not sent again.
+        hub.initial_projects(&before);
+        assert!(drain(&before).is_empty());
     }
 
     #[test]
