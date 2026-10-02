@@ -12,6 +12,7 @@ mod palette;
 mod prs;
 mod sessions;
 mod status;
+mod terminals;
 mod transcript;
 
 use ratatui::Frame;
@@ -55,6 +56,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(panel) = &app.machine_panel {
         machines::draw(frame, body, app, panel);
     }
+    terminals::draw(frame, body, app);
     if app.help {
         help::draw(frame, area);
     }

@@ -1107,6 +1107,7 @@ dependencies = [
  "herder-client-core",
  "herder-protocol",
  "insta",
+ "nix 0.31.3",
  "ratatui",
  "ratatui-textarea",
  "serde_json",

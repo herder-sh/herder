@@ -31,7 +31,7 @@ herder-tui = { path = "crates/herder-tui" }
 insta = "1"
 jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
-nix = { version = "0.31", features = ["hostname", "net", "signal"] }
+nix = { version = "0.31", features = ["hostname", "net", "poll", "signal"] }
 portable-pty = "0.9"
 proptest = "1"
 ratatui = "0.30"

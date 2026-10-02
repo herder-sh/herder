@@ -10,11 +10,12 @@ repository.workspace = true
 anyhow.workspace = true
 herder-client-core.workspace = true
 herder-protocol.workspace = true
+nix.workspace = true
 ratatui.workspace = true
 ratatui-textarea.workspace = true
 serde_json.workspace = true
 textwrap.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["signal", "sync", "time"] }
 
 [dev-dependencies]
 insta.workspace = true

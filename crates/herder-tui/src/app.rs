@@ -14,6 +14,7 @@ use crate::compose::{Compose, Origin};
 use crate::machines::MachinePanel;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
+use crate::terminal::{self, Picker};
 
 /// An input to the app.
 #[derive(Clone, Debug)]
@@ -44,6 +45,8 @@ pub enum Msg {
     Notice(String),
     /// Pairing a machine ended: the machine, or why it failed.
     Paired(Result<Machine, String>),
+    /// An attached terminal gave the screen back.
+    TerminalEnded(terminal::Ended),
 }
 
 /// Something the event loop does for the app.
@@ -66,6 +69,13 @@ pub enum Effect {
     OpenUrl(String),
     /// Pair with the daemon of a `herder://pair` link, answering with [`Msg::Paired`].
     Pair(String),
+    /// Suspend the TUI and attach the local terminal to a daemon terminal.
+    AttachTerminal {
+        /// The machine.
+        host_id: HostId,
+        /// What to attach to.
+        target: terminal::Target,
+    },
 }
 
 /// Which pane keys go to.
@@ -171,6 +181,8 @@ pub struct App {
     pub notice: Option<String>,
     /// The machines panel, if shown.
     pub machine_panel: Option<MachinePanel>,
+    /// The terminal picker, while it is open.
+    pub terminals: Option<Picker>,
 }
 
 impl Default for App {
@@ -188,6 +200,7 @@ impl Default for App {
             prs: Prs::default(),
             notice: None,
             machine_panel: None,
+            terminals: None,
         }
     }
 }
@@ -202,6 +215,10 @@ impl App {
                     Some(action) => self.act(action),
                     None => Vec::new(),
                 }
+            }
+            Msg::TerminalEnded(ended) => {
+                self.notice = Some(ended.notice());
+                Vec::new()
             }
             Msg::Resize => Vec::new(),
             Msg::Machines(machines) => {
@@ -248,8 +265,12 @@ impl App {
             return self.compose(act);
         }
         self.compose.quit_armed = false;
+        if self.terminals.is_some() {
+            return self.act_in_picker(action);
+        }
         match action {
             Action::Compose(_) => {}
+            Action::Terminals => self.open_picker(),
             Action::Quit => return vec![Effect::Quit],
             Action::Reconnect => return vec![Effect::Wake],
             Action::Machines(input) => return self.machine_input(input),
@@ -308,6 +329,48 @@ impl App {
                 Focus::Transcript | Focus::Composer => self.scroll.top = None,
                 Focus::Prs | Focus::AllPrs => {}
             },
+        }
+        Vec::new()
+    }
+
+    /// Opens the terminal picker for the selected session, or says why it cannot.
+    fn open_picker(&mut self) {
+        let Some(session) = self.selected().as_ref().and_then(Row::session).cloned() else {
+            return;
+        };
+        match terminal::refusal(&self.machines, &session.host_id) {
+            Some(refusal) => self.notice = Some(refusal.to_owned()),
+            None => {
+                self.terminals = Some(Picker {
+                    session,
+                    selected: 0,
+                })
+            }
+        }
+    }
+
+    /// Carries out an action while the terminal picker is open.
+    fn act_in_picker(&mut self, action: Action) -> Vec<Effect> {
+        let Some(picker) = self.terminals.as_mut() else {
+            return Vec::new();
+        };
+        let rows = terminal::rows(self.machines.as_slice(), &picker.session);
+        let last = rows.len().saturating_sub(1);
+        picker.selected = picker.selected.min(last);
+        match action {
+            Action::Quit => return vec![Effect::Quit],
+            Action::Up => picker.selected = picker.selected.saturating_sub(1),
+            Action::Down => picker.selected = (picker.selected + 1).min(last),
+            Action::Top => picker.selected = 0,
+            Action::Bottom => picker.selected = last,
+            Action::Open => {
+                let host_id = picker.session.host_id.clone();
+                let target = rows[picker.selected].clone();
+                self.terminals = None;
+                return vec![Effect::AttachTerminal { host_id, target }];
+            }
+            Action::Back | Action::Terminals => self.terminals = None,
+            _ => {}
         }
         Vec::new()
     }
