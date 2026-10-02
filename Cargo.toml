@@ -17,6 +17,7 @@ all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 anyhow = "1"
+base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 herder-adapters = { path = "crates/herder-adapters" }
 herder-client-core = { path = "crates/herder-client-core" }
@@ -24,8 +25,12 @@ herder-daemon = { path = "crates/herder-daemon" }
 herder-protocol = { path = "crates/herder-protocol" }
 herder-store = { path = "crates/herder-store" }
 herder-tui = { path = "crates/herder-tui" }
+jiff = { version = "0.2", features = ["serde"] }
+jsonschema = { version = "0.58", default-features = false }
 nix = { version = "0.31", features = ["signal"] }
+schemars = { version = "1.2", features = ["jiff02"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros"] }
 tokio-util = "0.7"
