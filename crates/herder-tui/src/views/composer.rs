@@ -1,6 +1,6 @@
 //! Under the open transcript: the pending approval or question, then the composer.
 
-use herder_protocol::{Route, SessionStatus};
+use herder_protocol::{EscalationReason, Route, SessionStatus};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -139,6 +139,7 @@ fn prompt(session: &Session, width: usize, typing: bool) -> Option<Vec<Line<'sta
     let esc = if typing { "Esc, then " } else { "" };
     if let Some(approval) = session.approvals.first() {
         wrap(&mut out, &approval.summary, super::bold(), width);
+        escalation(&mut out, approval.reason, approval.note.as_deref(), width);
         let hint = if approval.routed_to == Route::Primary {
             format!("asked the primary session first; {esc}y allow · n deny to answer yourself")
         } else {
@@ -157,6 +158,7 @@ fn prompt(session: &Session, width: usize, typing: bool) -> Option<Vec<Line<'sta
             width,
         );
     }
+    escalation(&mut out, question.reason, question.note.as_deref(), width);
     let routed = if question.routed_to == Route::Primary {
         "asked the primary session first; "
     } else {
@@ -174,6 +176,27 @@ fn prompt(session: &Session, width: usize, typing: bool) -> Option<Vec<Line<'sta
     Some(out)
 }
 
+/// Why a child's request is the user's, and what its primary session said, when known.
+fn escalation(
+    out: &mut Vec<Line<'static>>,
+    reason: Option<EscalationReason>,
+    note: Option<&str>,
+    width: usize,
+) {
+    if let Some(reason) = reason {
+        wrap(
+            out,
+            crate::session::reason_text(reason),
+            super::dim(),
+            width,
+        );
+    }
+    if let Some(note) = note {
+        let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::ITALIC);
+        wrap(out, &format!("the primary says: {note}"), style, width);
+    }
+}
+
 fn wrap(out: &mut Vec<Line<'static>>, text: &str, style: Style, width: usize) {
     for line in text.lines() {
         for part in textwrap::wrap(line, width) {
@@ -186,11 +209,13 @@ fn attention() -> Style {
     Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
 }
 
-/// The session list's badge for a session waiting on the user, instead of its status.
+/// The session list's badge for a session waiting on the user, instead of its status. A
+/// child's request put to its primary session first does not wait on the user yet.
 pub(super) fn waiting(session: &Session) -> Option<(&'static str, Style)> {
-    if !session.approvals.is_empty() {
+    let user = |route: &Route| *route == Route::User;
+    if session.approvals.iter().any(|a| user(&a.routed_to)) {
         Some(("approve?", attention()))
-    } else if !session.questions.is_empty() {
+    } else if session.questions.iter().any(|q| user(&q.routed_to)) {
         Some(("question", attention()))
     } else {
         None

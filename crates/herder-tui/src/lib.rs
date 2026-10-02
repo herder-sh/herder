@@ -16,6 +16,7 @@ mod app;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod inbox;
 mod machines;
 mod prs;
 mod session;

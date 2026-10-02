@@ -3,8 +3,9 @@
 
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
-    AccountId, Answer, ApprovalId, ApprovalOutcome, Event, EventBody, HostId, Item, ItemBody,
-    PermissionMode, PullRequest, QuestionId, Route, SessionId, SessionStatus, TurnId,
+    AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, EscalationReason, Event, EventBody,
+    HostId, Item, ItemBody, PermissionMode, PullRequest, QuestionId, Route, SessionId,
+    SessionStatus, Timestamp, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -64,6 +65,12 @@ pub struct PendingApproval {
     pub summary: String,
     /// Who is asked first; a user can always answer.
     pub routed_to: Route,
+    /// Why it went to the user rather than the primary session, for a child's request.
+    pub reason: Option<EscalationReason>,
+    /// What the primary session told the user when it escalated the request.
+    pub note: Option<String>,
+    /// When it was put to whoever it waits on now: asked, or escalated.
+    pub since: Timestamp,
 }
 
 /// A question waiting for an answer.
@@ -79,6 +86,12 @@ pub struct PendingQuestion {
     pub choices: Vec<String>,
     /// Who is asked first; a user can always answer.
     pub routed_to: Route,
+    /// Why it went to the user rather than the primary session, for a child's question.
+    pub reason: Option<EscalationReason>,
+    /// What the primary session told the user when it escalated the question.
+    pub note: Option<String>,
+    /// When it was put to whoever it waits on now: asked, or escalated.
+    pub since: Timestamp,
 }
 
 /// One completed line of the transcript.
@@ -154,8 +167,17 @@ impl Session {
         }
     }
 
+    /// Whether the session waits on a user: its status says so, or an approval or question
+    /// is put to the user.
+    pub fn needs_user(&self) -> bool {
+        self.status == SessionStatus::NeedsYou
+            || self.approvals.iter().any(|a| a.routed_to == Route::User)
+            || self.questions.iter().any(|q| q.routed_to == Route::User)
+    }
+
     fn event(&mut self, event: Event) {
         let notice = |text: String, tone| Entry::Notice { text, tone };
+        let at = event.at;
         let entry = match event.body {
             EventBody::SessionCreated {
                 repo,
@@ -216,31 +238,51 @@ impl Session {
                 approval_id,
                 summary,
                 routed_to,
+                reason,
                 ..
             } => {
-                let text = format!("approval needed: {summary}");
+                let line = asked("approval", &summary, routed_to, reason);
                 self.approvals.push(PendingApproval {
                     id: approval_id,
                     summary,
                     routed_to,
+                    reason,
+                    note: None,
+                    since: at,
                 });
-                Some(notice(text, Tone::Attention))
+                Some(line)
             }
-            EventBody::ApprovalEscalated { approval_id, .. } => {
+            EventBody::ApprovalEscalated {
+                approval_id,
+                reason,
+                note,
+            } => {
+                let line = escalated("approval", reason, note.as_deref());
                 for approval in &mut self.approvals {
                     if approval.id == approval_id {
                         approval.routed_to = Route::User;
+                        approval.reason = Some(reason);
+                        approval.note.clone_from(&note);
+                        approval.since = at;
                     }
                 }
-                None
+                Some(line)
             }
-            EventBody::QuestionEscalated { question_id, .. } => {
+            EventBody::QuestionEscalated {
+                question_id,
+                reason,
+                note,
+            } => {
+                let line = escalated("question", reason, note.as_deref());
                 for question in &mut self.questions {
                     if question.id == question_id {
                         question.routed_to = Route::User;
+                        question.reason = Some(reason);
+                        question.note.clone_from(&note);
+                        question.since = at;
                     }
                 }
-                None
+                Some(line)
             }
             EventBody::PermissionModeChanged { mode } => {
                 self.permission_mode = mode;
@@ -252,7 +294,7 @@ impl Session {
             EventBody::ApprovalResolved {
                 approval_id,
                 decision,
-                ..
+                answered_by,
             } => {
                 self.approvals.retain(|approval| approval.id != approval_id);
                 let decision = match decision {
@@ -260,7 +302,11 @@ impl Session {
                     ApprovalOutcome::Deny => "denied",
                     ApprovalOutcome::Expired => "approval expired",
                 };
-                Some(notice(decision.to_owned(), Tone::Info))
+                let text = match answered_by {
+                    Answerer::Primary { .. } => format!("{decision} by the primary session"),
+                    Answerer::User => decision.to_owned(),
+                };
+                Some(notice(text, Tone::Info))
             }
             EventBody::QuestionAsked {
                 question_id,
@@ -268,22 +314,25 @@ impl Session {
                 text,
                 choices,
                 routed_to,
-                ..
+                reason,
             } => {
-                let line = format!("question: {text}");
+                let line = asked("question", &text, routed_to, reason);
                 self.questions.push(PendingQuestion {
                     id: question_id,
                     turn_id,
                     text,
                     choices,
                     routed_to,
+                    reason,
+                    note: None,
+                    since: at,
                 });
-                Some(notice(line, Tone::Attention))
+                Some(line)
             }
             EventBody::QuestionAnswered {
                 question_id,
                 answer,
-                ..
+                answered_by,
             } => {
                 let asked = self.questions.iter().position(|q| q.id == question_id);
                 let asked = asked.map(|at| self.questions.remove(at));
@@ -293,7 +342,11 @@ impl Session {
                         .and_then(|q| q.choices.get(index as usize).cloned())
                         .unwrap_or_else(|| format!("choice {}", u64::from(index) + 1)),
                 };
-                Some(notice(format!("answered: {answer}"), Tone::Info))
+                let text = match answered_by {
+                    Answerer::Primary { .. } => format!("the primary session answered: {answer}"),
+                    Answerer::User => format!("answered: {answer}"),
+                };
+                Some(notice(text, Tone::Info))
             }
             EventBody::ChildSpawned { task, .. } => {
                 Some(notice(format!("spawned child: {task}"), Tone::Info))
@@ -352,6 +405,47 @@ impl Session {
             Some(known) => *known = pr,
             None => self.prs.push(pr),
         }
+    }
+}
+
+/// The transcript line for an approval or question being asked: put to the primary session
+/// first, or to the user, with why when a child's went straight to the user.
+fn asked(what: &str, text: &str, routed_to: Route, reason: Option<EscalationReason>) -> Entry {
+    let (text, tone) = match (routed_to, reason) {
+        (Route::Primary, _) => (
+            format!("{what} for the primary session: {text}"),
+            Tone::Info,
+        ),
+        (Route::User, Some(reason)) => (
+            format!("{what} for you ({}): {text}", reason_text(reason)),
+            Tone::Attention,
+        ),
+        (Route::User, None) if what == "approval" => {
+            (format!("approval needed: {text}"), Tone::Attention)
+        }
+        (Route::User, None) => (format!("{what}: {text}"), Tone::Attention),
+    };
+    Entry::Notice { text, tone }
+}
+
+/// The transcript line for a request the primary session handed to the user.
+fn escalated(what: &str, reason: EscalationReason, note: Option<&str>) -> Entry {
+    let mut text = format!("{what} escalated to you: {}", reason_text(reason));
+    if let Some(note) = note {
+        text.push_str(&format!("; the primary says: {note}"));
+    }
+    Entry::Notice {
+        text,
+        tone: Tone::Attention,
+    }
+}
+
+/// Why a child's request is the user's, in words.
+pub fn reason_text(reason: EscalationReason) -> &'static str {
+    match reason {
+        EscalationReason::MarkedByPrimary => "the primary session left it to you",
+        EscalationReason::ExceedsAuthority => "beyond what the primary session may decide",
+        EscalationReason::Timeout => "the primary session did not answer in time",
     }
 }
 
@@ -432,5 +526,108 @@ mod tests {
         ));
         assert_eq!(session.title(), "write the tests");
         assert_eq!(session.parent, Some(SessionId::new("s2")));
+    }
+
+    #[test]
+    fn an_escalation_puts_a_childs_request_to_the_user_with_why() {
+        use crate::fake::{approval, at, question, to_primary};
+        use herder_protocol::EscalationReason;
+
+        let mut session = Session::new(SessionId::new("s3"));
+        session.apply(at(
+            update(
+                "s3",
+                1,
+                vec![
+                    created("herder/t", Some("s2"), Some("write the tests")),
+                    to_primary(question("q1", "Which port?", &[])),
+                    to_primary(approval("a1", "Edit src/lib.rs")),
+                ],
+                vec![],
+            ),
+            100,
+        ));
+        assert!(!session.needs_user());
+        assert_eq!(session.questions[0].routed_to, Route::Primary);
+        session.apply(at(
+            update(
+                "s3",
+                4,
+                vec![EventBody::QuestionEscalated {
+                    question_id: QuestionId::new("q1"),
+                    reason: EscalationReason::MarkedByPrimary,
+                    note: Some("Your call.".into()),
+                }],
+                vec![],
+            ),
+            200,
+        ));
+        let question = &session.questions[0];
+        assert_eq!(question.routed_to, Route::User);
+        assert_eq!(question.reason, Some(EscalationReason::MarkedByPrimary));
+        assert_eq!(question.note.as_deref(), Some("Your call."));
+        assert_eq!(question.since, Timestamp::from_second(200).unwrap());
+        assert!(session.needs_user());
+
+        // The primary answers the approval.
+        session.apply(update(
+            "s3",
+            5,
+            vec![EventBody::ApprovalResolved {
+                approval_id: ApprovalId::new("a1"),
+                decision: ApprovalOutcome::Allow,
+                answered_by: Answerer::Primary {
+                    session_id: SessionId::new("s2"),
+                },
+            }],
+            vec![],
+        ));
+        let notices: Vec<&str> = session
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Notice { text, .. } => Some(text.as_str()),
+                Entry::Item(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                "question for the primary session: Which port?",
+                "approval for the primary session: Edit src/lib.rs",
+                "question escalated to you: the primary session left it to you; \
+                 the primary says: Your call.",
+                "allowed by the primary session",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_question_the_primary_answered_says_so() {
+        use crate::fake::{question, to_primary};
+        let mut session = Session::new(SessionId::new("s3"));
+        session.apply(update(
+            "s3",
+            1,
+            vec![
+                to_primary(question("q1", "Which port?", &["8080", "3000"])),
+                EventBody::QuestionAnswered {
+                    question_id: QuestionId::new("q1"),
+                    answer: Answer::Choice { index: 1 },
+                    answered_by: Answerer::Primary {
+                        session_id: SessionId::new("s2"),
+                    },
+                },
+            ],
+            vec![],
+        ));
+        assert!(session.questions.is_empty());
+        assert_eq!(
+            session.entries.last(),
+            Some(&Entry::Notice {
+                text: "the primary session answered: 3000".into(),
+                tone: Tone::Info,
+            })
+        );
     }
 }

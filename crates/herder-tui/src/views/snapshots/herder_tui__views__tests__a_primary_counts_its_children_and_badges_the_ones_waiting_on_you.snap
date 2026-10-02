@@ -1,14 +1,14 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-expression: terminal.backend()
+expression: "render(&mut app, 80, 10).backend()"
 ---
 "┌ sessions ──────────────────┐┌────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                │"
-"│ needs you ▾ a… (2) #7✓ #9✗!││                                                │"
-"│ running   └ write the t… #8││                                                │"
-"│ error     └ document it    ││       Select a session and press Enter.        │"
-"│ idle      app · herder/fix…││                                                │"
+"│ needs you ▸ app · h… (2) !1││                                                │"
+"│ approve?  app · herder/fix…││                                                │"
+"│                            ││       Select a session and press Enter.        │"
+"│                            ││                                                │"
 "│                            ││                                                │"
 "│                            ││                                                │"
 "└────────────────────────────┘└────────────────────────────────────────────────┘"
-" ● box connected                                                 ? help  q quit "
+" 2 waiting on you · I inbox  ● box connected                     ? help  q quit "

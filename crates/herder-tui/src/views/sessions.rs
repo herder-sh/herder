@@ -1,4 +1,6 @@
 //! The left pane: each machine, its sessions with their status, children under their parent.
+//! A primary shows its child count and, when any child waits on the user, how many; `z`
+//! folds its children away.
 
 use herder_client_core::ConnectionState;
 use herder_protocol::SessionStatus;
@@ -56,10 +58,30 @@ fn item<'a>(app: &App, row: &Row, width: usize) -> ListItem<'a> {
             let Some(session) = app.sessions.get(key) else {
                 return ListItem::new("");
             };
+            let children = app.children(key);
             let indent = match depth {
-                0 => String::new(),
+                0 if children.is_empty() => String::new(),
+                0 if app.folded.contains(key) => "▸ ".to_owned(),
+                0 => "▾ ".to_owned(),
                 depth => format!("{}└ ", "  ".repeat(depth - 1)),
             };
+            // A primary counts its children, and how many of them wait on the user.
+            let mut tree = Vec::new();
+            if !children.is_empty() {
+                tree.push(Span::styled(format!(" ({})", children.len()), super::dim()));
+                let waiting = children
+                    .iter()
+                    .filter_map(|child| app.sessions.get(*child))
+                    .filter(|child| child.needs_user())
+                    .count();
+                if waiting > 0 {
+                    tree.push(Span::styled(
+                        format!(" !{waiting}"),
+                        Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    ));
+                }
+            }
+            let tree_width: usize = tree.iter().map(Span::width).sum();
             let (label, style) = if session.loaded {
                 super::composer::waiting(session).unwrap_or_else(|| badge(session.status))
             } else {
@@ -72,12 +94,14 @@ fn item<'a>(app: &App, row: &Row, width: usize) -> ListItem<'a> {
             // The PR badge stays in view: the title gives way to it.
             let prs = super::prs::badge(session);
             let prs_width: usize = prs.iter().map(Span::width).sum();
-            let room = width.saturating_sub(BADGE + 2 + indent.chars().count() + prs_width);
+            let room =
+                width.saturating_sub(BADGE + 2 + indent.chars().count() + tree_width + prs_width);
             let mut spans = vec![
                 Span::styled(format!(" {label:<BADGE$} "), style),
                 Span::styled(indent, super::dim()),
                 Span::styled(clip(&session.title(), room), title),
             ];
+            spans.extend(tree);
             spans.extend(prs);
             ListItem::new(Line::from(spans))
         }

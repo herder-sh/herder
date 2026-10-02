@@ -19,6 +19,13 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(Color::Yellow),
         ));
     }
+    let waiting = app.waiting().len();
+    if waiting > 0 && app.notice.is_none() {
+        spans.push(Span::styled(
+            format!(" {waiting} waiting on you · I inbox "),
+            Style::new().fg(Color::Magenta),
+        ));
+    }
     for machine in app.machines.iter().filter(|_| app.notice.is_none()) {
         let (mark, color, text) = match &machine.connection {
             ConnectionState::Connected => ("●", Color::Green, "connected".to_owned()),

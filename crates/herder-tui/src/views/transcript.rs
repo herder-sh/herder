@@ -35,6 +35,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         Span::styled(label, style),
         Span::raw(" "),
     ]));
+    // A child names its primary session, which may have answered some of its requests.
+    if let Some(parent) = &session.parent {
+        let primary = app
+            .open
+            .as_ref()
+            .and_then(|key| app.primary(key))
+            .map_or_else(|| parent.to_string(), |(_, primary)| primary.title());
+        block = block.title_bottom(Line::styled(format!(" child of {primary} "), super::dim()));
+    }
     if !session.model.is_empty() {
         let mode = crate::session::mode_name(session.permission_mode);
         let facts = format!(" {} · {mode} ", session.model);
