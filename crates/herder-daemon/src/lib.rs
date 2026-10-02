@@ -117,6 +117,7 @@ pub async fn serve(
         max_turns = budget.max_turns,
         min_memory_available = budget.min_memory_available,
         max_memory_pressure = budget.max_memory_pressure,
+        max_load = budget.max_load,
         "agent turns are admitted within this host's capacity"
     );
     tokio::spawn({

@@ -268,6 +268,7 @@ impl Client {
         self.ws.send(Message::text(text)).await.unwrap();
     }
 
+    /// The next message, skipping resource figures, which arrive whenever they change.
     async fn recv(&mut self) -> ServerMessage {
         loop {
             let frame = tokio::time::timeout(TIMEOUT, self.ws.next())
@@ -277,6 +278,9 @@ impl Client {
                 .unwrap();
             if let Message::Text(text) = frame {
                 let message: ServerMessage = serde_json::from_str(&text).unwrap();
+                if resources(&message) {
+                    continue;
+                }
                 if let ServerMessage::Event(event) = &message {
                     self.events
                         .entry(event.session_id.clone())
@@ -415,7 +419,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     std::fs::write(
         &config_path,
         format!(
-            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n",
+            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n# Admission by the turn limit only, whatever the CI host's cores and load.\n[resources]\nmax_turns = 8\nmin_memory_available_mib = 0\nmax_memory_pressure = 100\nmax_load_percent = 10000\n",
             data_dir.to_str().unwrap()
         ),
     )
@@ -669,4 +673,12 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     assert!(ever_needed_you(&sudo_journal));
     // What Alice's client saw of the child is the journal as recorded.
     assert!(sudo_journal.starts_with(&client.events[&sudo]));
+}
+
+/// Whether `message` is a host's or session's resource figures.
+fn resources(message: &ServerMessage) -> bool {
+    matches!(
+        message,
+        ServerMessage::HostResources(_) | ServerMessage::SessionResources { .. }
+    )
 }

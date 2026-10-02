@@ -6,7 +6,8 @@
 //!
 //! 1. fewer than [`Budget::max_turns`] turns run (`max_turns`);
 //! 2. `MemAvailable` is at least [`Budget::min_memory_available`] (`memory`);
-//! 3. the one-minute load average is below the core count (`load`);
+//! 3. the one-minute load average is below [`Budget::max_load`], the core count by default
+//!    (`load`);
 //! 4. PSI memory `some avg10` is below [`Budget::max_memory_pressure`] (`pressure`); skipped
 //!    on kernels without `/proc/pressure`.
 //!
@@ -44,7 +45,7 @@ pub const RETRY_AFTER_SECS: u32 = 30;
 /// What the host may run: from the `[resources]` table and the host's cores.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
-    /// CPUs this process may run on; the load average must stay below it.
+    /// CPUs this process may run on.
     pub cores: u32,
     /// Most turns running at once.
     pub max_turns: u32,
@@ -52,6 +53,8 @@ pub struct Budget {
     pub min_memory_available: u64,
     /// PSI memory `some avg10`, in percent, at which no turn starts.
     pub max_memory_pressure: f64,
+    /// One-minute load average at which no turn starts.
+    pub max_load: f64,
 }
 
 /// One reading of the host.
@@ -247,7 +250,10 @@ impl Admission {
                 "less than {} MiB of memory is available",
                 budget.min_memory_available / MIB
             ),
-            Constraint::Load => format!("its load average is above its {} CPU cores", budget.cores),
+            Constraint::Load => format!(
+                "its load average is above {} on {} CPU cores",
+                budget.max_load, budget.cores
+            ),
             Constraint::Pressure => "its processes stall waiting for memory".to_owned(),
         }
     }
@@ -371,7 +377,7 @@ impl Budget {
         let reading = reading?;
         if reading.memory_available < self.min_memory_available {
             Some(Constraint::Memory)
-        } else if reading.load_1m >= f64::from(self.cores) {
+        } else if reading.load_1m >= self.max_load {
             Some(Constraint::Load)
         } else if reading
             .pressure

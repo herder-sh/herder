@@ -53,6 +53,7 @@ fn budget(max_turns: u32) -> Budget {
         max_turns,
         min_memory_available: 2 * GIB,
         max_memory_pressure: 20.0,
+        max_load: 4.0,
     }
 }
 
@@ -86,11 +87,17 @@ fn the_default_budget_is_a_quarter_of_the_cores_and_2_gib() {
     let budget = config.budget(12);
     assert_eq!(budget.min_memory_available, 2 * GIB);
     assert_eq!(budget.max_memory_pressure, 20.0);
+    assert_eq!(budget.max_load, 12.0);
     let config = ResourcesConfig {
         max_turns: Some(5),
         ..ResourcesConfig::default()
     };
     assert_eq!(config.budget(12).max_turns, 5);
+    let config = ResourcesConfig {
+        max_load_percent: 150,
+        ..ResourcesConfig::default()
+    };
+    assert_eq!(config.budget(12).max_load, 18.0);
 }
 
 #[test]

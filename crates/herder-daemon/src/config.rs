@@ -416,6 +416,7 @@ mod tests {
             max_turns = 2
             min_memory_available_mib = 1024
             max_memory_pressure = 30
+            max_load_percent = 200
             "#,
         );
         let config = Config::load_with_env(Some(&path), env(&[])).unwrap();
@@ -440,6 +441,7 @@ mod tests {
                     max_turns: Some(2),
                     min_memory_available_mib: 1024,
                     max_memory_pressure: 30,
+                    max_load_percent: 200,
                 },
             }
         );
@@ -482,6 +484,7 @@ mod tests {
             ("nice = 20", "nice"),
             ("max_turns = 0", "max_turns"),
             ("max_memory_pressure = 0", "max_memory_pressure"),
+            ("max_load_percent = 0", "max_load_percent"),
         ] {
             let path = write(tmp.path(), &format!("[resources]\n{text}\n"));
             let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();

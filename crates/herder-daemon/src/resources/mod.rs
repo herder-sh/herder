@@ -72,6 +72,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// max_turns = 3             # turns running at once; max(1, cores / 4) when absent
 /// min_memory_available_mib = 2048  # MemAvailable a new turn needs
 /// max_memory_pressure = 20  # PSI memory `some avg10`, in percent, that stops new turns
+/// max_load_percent = 100    # 1-min load, in percent of the cores, that stops new turns
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -92,6 +93,8 @@ pub struct ResourcesConfig {
     pub min_memory_available_mib: u64,
     /// PSI memory `some avg10`, in percent, at which no new turn starts, 1 to 100.
     pub max_memory_pressure: u8,
+    /// One-minute load average, in percent of the cores, at which no new turn starts.
+    pub max_load_percent: u16,
 }
 
 impl Default for ResourcesConfig {
@@ -105,6 +108,7 @@ impl Default for ResourcesConfig {
             max_turns: None,
             min_memory_available_mib: 2048,
             max_memory_pressure: 20,
+            max_load_percent: 100,
         }
     }
 }
@@ -141,6 +145,10 @@ impl ResourcesConfig {
             (1..=100).contains(&self.max_memory_pressure),
             "resources.max_memory_pressure must be 1 to 100"
         );
+        anyhow::ensure!(
+            self.max_load_percent >= 1,
+            "resources.max_load_percent must be at least 1"
+        );
         Ok(())
     }
 
@@ -169,6 +177,7 @@ impl ResourcesConfig {
             max_turns: self.max_turns.unwrap_or((cores / 4).max(1)),
             min_memory_available: self.min_memory_available_mib.saturating_mul(1024 * 1024),
             max_memory_pressure: f64::from(self.max_memory_pressure),
+            max_load: f64::from(cores) * f64::from(self.max_load_percent) / 100.0,
         }
     }
 }
