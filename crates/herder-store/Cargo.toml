@@ -8,3 +8,14 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+herder-protocol.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true

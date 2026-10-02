@@ -1,0 +1,122 @@
+//! Projections: the read models each appended event updates, inside the append's transaction.
+
+use herder_protocol::{Event, EventBody, PullRequest, SessionStatus};
+use rusqlite::{Transaction, params};
+
+use crate::{Result, tag};
+
+/// Applies `event` to the `sessions` and `session_prs` read models.
+pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
+    let id = event.session_id.as_str();
+    match &event.body {
+        EventBody::SessionCreated {
+            repo,
+            worktree,
+            branch,
+            provider,
+            account_id,
+            model,
+            permission_mode,
+        } => {
+            tx.prepare_cached(
+                "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
+                     model, permission_mode, status, last_seq, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )?
+            .execute(params![
+                id,
+                repo,
+                worktree,
+                branch,
+                provider.as_str(),
+                account_id.as_str(),
+                model,
+                tag(permission_mode)?,
+                tag(&SessionStatus::Idle)?,
+                event.seq,
+                event.at,
+            ])?;
+        }
+        EventBody::SessionStatusChanged { status } => {
+            tx.prepare_cached("UPDATE sessions SET status = ?2 WHERE session_id = ?1")?
+                .execute(params![id, tag(status)?])?;
+        }
+        EventBody::ModelSwitched { model } => {
+            tx.prepare_cached("UPDATE sessions SET model = ?2 WHERE session_id = ?1")?
+                .execute(params![id, model])?;
+        }
+        EventBody::AccountSwitched { account_id } => {
+            tx.prepare_cached("UPDATE sessions SET account_id = ?2 WHERE session_id = ?1")?
+                .execute(params![id, account_id.as_str()])?;
+        }
+        EventBody::ProviderSwitched {
+            provider,
+            account_id,
+            model,
+        } => {
+            tx.prepare_cached(
+                "UPDATE sessions SET provider = ?2, account_id = ?3, model = ?4
+                 WHERE session_id = ?1",
+            )?
+            .execute(params![id, provider.as_str(), account_id.as_str(), model])?;
+        }
+        EventBody::PermissionModeChanged { mode } => {
+            tx.prepare_cached("UPDATE sessions SET permission_mode = ?2 WHERE session_id = ?1")?
+                .execute(params![id, tag(mode)?])?;
+        }
+        EventBody::PrLinked { pr } => {
+            write_pr(
+                tx,
+                "INSERT INTO session_prs (session_id, number, url, title, state, ci, review,
+                     mergeable)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT (session_id, number) DO UPDATE SET url = excluded.url,
+                     title = excluded.title, state = excluded.state, ci = excluded.ci,
+                     review = excluded.review, mergeable = excluded.mergeable",
+                id,
+                pr,
+            )?;
+        }
+        // An update for a pull request that is not tracked (e.g. it arrives after an unlink) is
+        // journaled but does not bring the pull request back.
+        EventBody::PrUpdated { pr } => {
+            write_pr(
+                tx,
+                "UPDATE session_prs SET url = ?3, title = ?4, state = ?5, ci = ?6, review = ?7,
+                     mergeable = ?8
+                 WHERE session_id = ?1 AND number = ?2",
+                id,
+                pr,
+            )?;
+        }
+        EventBody::PrUnlinked { number } => {
+            tx.prepare_cached("DELETE FROM session_prs WHERE session_id = ?1 AND number = ?2")?
+                .execute(params![id, number])?;
+        }
+        EventBody::TurnStarted { .. }
+        | EventBody::TurnCompleted { .. }
+        | EventBody::TurnInterrupted { .. }
+        | EventBody::TurnFailed { .. }
+        | EventBody::ItemAdded { .. }
+        | EventBody::ApprovalRequested { .. }
+        | EventBody::ApprovalResolved { .. }
+        | EventBody::Unknown => {}
+    }
+    tx.prepare_cached("UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE session_id = ?1")?
+        .execute(params![id, event.seq, event.at])?;
+    Ok(())
+}
+
+fn write_pr(tx: &Transaction<'_>, sql: &str, session_id: &str, pr: &PullRequest) -> Result<()> {
+    tx.prepare_cached(sql)?.execute(params![
+        session_id,
+        pr.number,
+        pr.url,
+        pr.title,
+        tag(&pr.state)?,
+        tag(&pr.ci)?,
+        tag(&pr.review)?,
+        tag(&pr.mergeable)?,
+    ])?;
+    Ok(())
+}
