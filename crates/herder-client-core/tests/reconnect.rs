@@ -69,7 +69,9 @@ impl Daemon {
                 account(),
                 AccountConfig {
                     provider: fake,
-                    config_dir: dir.join("account"),
+                    label: "Account 1".into(),
+                    config_dir: Some(dir.join("account")),
+                    failover: false,
                 },
             );
             let setup = Setup {

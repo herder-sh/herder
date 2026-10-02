@@ -22,9 +22,9 @@ use herder_client_core::auth::{DeviceKey, PairingUri, client_config};
 use herder_daemon::auth::PAIRING_CODE_HEADER;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
-    AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command, CommandBody,
-    CommandId, CommandResult, Cursor, Event, EventBody, Item, ItemBody, ItemId, PROTOCOL_VERSION,
-    PermissionMode, Provider, Role, ServerMessage, SessionStatus, UserId,
+    Account, AccountId, ApprovalDecision, ApprovalId, ClientHello, ClientMessage, Command,
+    CommandBody, CommandId, CommandResult, Cursor, Event, EventBody, Item, ItemBody, ItemId,
+    PROTOCOL_VERSION, PermissionMode, Provider, Role, ServerMessage, SessionStatus, UserId,
 };
 use herder_store::Store;
 use rustls::pki_types::ServerName;
@@ -332,7 +332,9 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
         account.clone(),
         AccountConfig {
             provider: Provider::Claude,
-            config_dir: account_dir.clone(),
+            label: "Work".into(),
+            config_dir: Some(account_dir.clone()),
+            failover: false,
         },
     )]);
     let shutdown = CancellationToken::new();
@@ -370,6 +372,22 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     // The daemon's first user is its owner; `by` names them by user id.
     assert_eq!(hello.role, Role::Owner);
     let alice = hello.user_id;
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Sessions { .. }
+    ));
+    let ServerMessage::Accounts { accounts } = client.recv().await else {
+        panic!("expected the accounts list");
+    };
+    assert_eq!(
+        accounts,
+        [Account {
+            account_id: account.clone(),
+            provider: Provider::Claude,
+            label: "Work".into(),
+            usage: Vec::new(),
+        }]
+    );
 
     // Create a session on the repository and stream it.
     let CommandResult::SessionCreated { session_id } = client
@@ -456,7 +474,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
 
     // The CLI ran in the session's own worktree on the account's config dir.
     let start = starts.lock().unwrap()[0].clone();
-    assert_eq!(start.config_dir, account_dir);
+    assert_eq!(start.config_dir, Some(account_dir));
     assert!(
         start.cwd.starts_with(&data_dir) && start.cwd.join(".git").exists(),
         "{}",

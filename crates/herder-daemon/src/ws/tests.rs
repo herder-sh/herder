@@ -10,10 +10,10 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
-    ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
-    PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead, SessionId,
-    Terminal, TurnId,
+    Account, AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
+    Cursor, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
+    PROTOCOL_VERSION, PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
+    SessionId, Terminal, TurnId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -48,6 +48,15 @@ struct TestBackend {
 }
 
 impl Backend for TestBackend {
+    fn accounts(&self) -> Vec<Account> {
+        vec![Account {
+            account_id: AccountId::new("claude-main"),
+            provider: Provider::Claude,
+            label: "Main".into(),
+            usage: Vec::new(),
+        }]
+    }
+
     async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         let sessions = self.store.lock().unwrap().sessions()?;
         Ok(sessions
@@ -375,6 +384,7 @@ impl Client {
             panic!("expected a hello");
         };
         assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
+        assert!(matches!(self.recv().await, ServerMessage::Accounts { .. }));
         if hello.role == Role::Owner {
             assert!(matches!(self.recv().await, ServerMessage::Terminals { .. }));
         }
@@ -439,6 +449,11 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
         (&sessions[0].session_id, sessions[0].head_seq),
         (&session, 1)
     );
+    let ServerMessage::Accounts { accounts } = client.recv().await else {
+        panic!("expected the accounts list");
+    };
+    let ids: Vec<_> = accounts.iter().map(|a| a.account_id.as_str()).collect();
+    assert_eq!(ids, ["claude-main"]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -897,6 +912,10 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     assert!(matches!(
         client.recv().await,
         ServerMessage::Sessions { .. }
+    ));
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Accounts { .. }
     ));
     assert_eq!(
         client.recv().await,

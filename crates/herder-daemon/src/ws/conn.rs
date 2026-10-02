@@ -178,6 +178,9 @@ async fn read<B: Backend>(
             error(outbox, ErrorCode::Internal, "cannot list sessions");
         }
     }
+    outbox.push(ServerMessage::Accounts {
+        accounts: shared.backend.accounts(),
+    });
     shared
         .hub
         .initial_terminals(outbox, shared.terminals.list());

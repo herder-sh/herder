@@ -266,7 +266,7 @@
       ]
     },
     "AccountId": {
-      "description": "Identifies a provider account on a host; a ULID string, opaque to receivers.",
+      "description": "Identifies a provider account on a host; the name its owner gave it, opaque to receivers.",
       "type": "string"
     },
     "Answer": {

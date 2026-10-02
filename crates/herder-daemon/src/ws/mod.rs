@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_protocol::{
-    CommandBody, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq, SessionHead,
-    SessionId, UserId,
+    Account, CommandBody, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq,
+    SessionHead, SessionId, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -48,6 +48,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Every session with its latest seq, sent after hello.
     fn sessions(&self) -> impl Future<Output = anyhow::Result<Vec<SessionHead>>> + Send;
 
+    /// Every account sessions may run on, sent after the sessions.
+    fn accounts(&self) -> Vec<Account>;
+
     /// Up to `limit` events of a session after `after_seq`, oldest first; for replay.
     fn read_since(
         &self,
@@ -74,6 +77,10 @@ pub trait Backend: Send + Sync + 'static {
 impl Backend for SessionManager {
     async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         SessionManager::sessions(self).await
+    }
+
+    fn accounts(&self) -> Vec<Account> {
+        SessionManager::accounts(self)
     }
 
     async fn read_since(

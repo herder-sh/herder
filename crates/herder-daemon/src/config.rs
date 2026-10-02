@@ -1,12 +1,40 @@
 //! Daemon configuration, loaded from a TOML file.
+//!
+//! # Accounts
+//!
+//! Each `[[accounts]]` entry is one provider login on this machine:
+//!
+//! ```toml
+//! [[accounts]]
+//! id = "claude-main"            # unique on this daemon; clients and sessions name it
+//! provider = "claude"           # claude, codex, cursor, grok or opencode
+//! label = "Main"                # shown to clients; the id when absent
+//! config_dir = "~/.claude-main" # the CLI's own default location when absent
+//! failover = false              # whether sessions may fail over to it on a limit; opt-in
+//!
+//! [providers.claude]
+//! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
+//! ```
+//!
+//! `config_dir` is handed to the CLI as its config dir variable (`CLAUDE_CONFIG_DIR`,
+//! `CODEX_HOME`, ...); without one the variable is not set and the CLI uses its default. It may
+//! start with `~/`, must otherwise be absolute, and need not exist yet: logging in creates it.
+//! herder never looks inside. Two accounts of one provider cannot share a config dir, as they
+//! would be one login, and a Claude account cannot name `~/.claude`: `CLAUDE_CONFIG_DIR`
+//! pointed there is not Claude's default login, so omit `config_dir` for that.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
+use herder_protocol::{AccountId, Provider};
 use serde::Deserialize;
+
+use crate::accounts;
+use crate::session::{AccountConfig, Accounts};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -20,6 +48,10 @@ pub struct Config {
     pub data_dir: PathBuf,
     /// Logging settings.
     pub log: LogConfig,
+    /// The provider accounts sessions may run on.
+    pub accounts: Accounts,
+    /// The CLI to run per provider, where it is not the provider's own name on `PATH`.
+    pub binaries: HashMap<Provider, PathBuf>,
 }
 
 /// Logging settings: the `[log]` table.
@@ -58,6 +90,8 @@ struct ConfigFile {
     listen: SocketAddr,
     data_dir: Option<PathBuf>,
     log: LogConfig,
+    accounts: Vec<AccountFile>,
+    providers: BTreeMap<String, ProviderFile>,
 }
 
 impl Default for ConfigFile {
@@ -66,8 +100,29 @@ impl Default for ConfigFile {
             listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DEFAULT_PORT)),
             data_dir: None,
             log: LogConfig::default(),
+            accounts: Vec::new(),
+            providers: BTreeMap::new(),
         }
     }
+}
+
+/// One `[[accounts]]` entry as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AccountFile {
+    id: String,
+    provider: String,
+    label: Option<String>,
+    config_dir: Option<PathBuf>,
+    #[serde(default)]
+    failover: bool,
+}
+
+/// One `[providers.<name>]` table as written.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderFile {
+    binary: PathBuf,
 }
 
 impl Config {
@@ -98,8 +153,125 @@ impl Config {
             listen: file.listen,
             data_dir,
             log: file.log,
+            accounts: resolve_accounts(file.accounts, &env)?,
+            binaries: resolve_binaries(file.providers, &env)?,
         })
     }
+}
+
+/// Validates the `[[accounts]]` entries and resolves their config dirs.
+fn resolve_accounts(
+    entries: Vec<AccountFile>,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Accounts> {
+    let mut accounts = Accounts::new();
+    let mut logins = HashSet::new();
+    for entry in entries {
+        let id = entry.id;
+        ensure!(
+            !accounts.contains_key(&AccountId::new(&id)),
+            "account id {id} is used twice"
+        );
+        ensure!(
+            !id.is_empty()
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+            "account id {id:?} must be letters, digits, '-', '_' or '.'"
+        );
+        let provider = supported(entry.provider).with_context(|| format!("account {id}"))?;
+        let config_dir = entry
+            .config_dir
+            .map(|dir| resolve_path(&dir, env))
+            .transpose()
+            .with_context(|| format!("account {id}: config_dir"))?;
+        if let Some(dir) = &config_dir {
+            ensure!(
+                !dir.exists() || dir.is_dir(),
+                "account {id}: config_dir {} is not a directory",
+                dir.display()
+            );
+            if provider == Provider::Claude {
+                let default = resolve_path(Path::new("~/.claude"), env)?;
+                ensure!(
+                    *dir != default,
+                    "account {id}: config_dir {} is where claude keeps its default login, \
+                     which CLAUDE_CONFIG_DIR does not reach; omit config_dir to use it",
+                    dir.display()
+                );
+            }
+        }
+        ensure!(
+            logins.insert((provider.clone(), config_dir.clone())),
+            "account {id}: another {} account already uses {}",
+            provider.as_str(),
+            config_dir
+                .as_ref()
+                .map_or("the default location".to_owned(), |dir| dir
+                    .display()
+                    .to_string())
+        );
+        let account = AccountConfig {
+            provider,
+            label: entry.label.unwrap_or_else(|| id.clone()),
+            config_dir,
+            failover: entry.failover,
+        };
+        accounts.insert(AccountId::new(id), account);
+    }
+    Ok(accounts)
+}
+
+/// Validates the `[providers.<name>]` tables into the binary each provider runs.
+fn resolve_binaries(
+    tables: BTreeMap<String, ProviderFile>,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<HashMap<Provider, PathBuf>> {
+    tables
+        .into_iter()
+        .map(|(name, table)| {
+            let provider = supported(name)?;
+            let binary = if table.binary.components().count() == 1 {
+                // A bare name, looked up on `PATH`.
+                table.binary
+            } else {
+                resolve_path(&table.binary, env)
+                    .with_context(|| format!("providers.{}.binary", provider.as_str()))?
+            };
+            Ok((provider, binary))
+        })
+        .collect()
+}
+
+/// The provider named `name`, if herder can run its sessions.
+fn supported(name: String) -> Result<Provider> {
+    let provider = Provider::from(name);
+    ensure!(
+        accounts::runs(&provider),
+        "herder cannot run {} sessions; the providers are {}",
+        provider.as_str(),
+        accounts::PROVIDERS
+            .map(|p| p.as_str().to_owned())
+            .join(", ")
+    );
+    Ok(provider)
+}
+
+/// `path` with a leading `~/` replaced by `$HOME`; it must then be absolute.
+fn resolve_path(path: &Path, env: &impl Fn(&str) -> Option<OsString>) -> Result<PathBuf> {
+    let path = match path.strip_prefix("~") {
+        Ok(rest) => match env("HOME").map(PathBuf::from) {
+            Some(home) if home.is_absolute() => home.join(rest),
+            _ => bail!("cannot expand ~ in {}: $HOME is not set", path.display()),
+        },
+        Err(_) => path.to_owned(),
+    };
+    ensure!(
+        path.is_absolute(),
+        "{} must be absolute or start with ~/",
+        path.display()
+    );
+    Ok(path)
 }
 
 /// Reads and parses a config file; `None` when it does not exist.
@@ -217,6 +389,8 @@ mod tests {
                     level: "debug".to_owned(),
                     format: LogFormat::Json,
                 },
+                accounts: Accounts::new(),
+                binaries: HashMap::new(),
             }
         );
     }
@@ -257,5 +431,162 @@ mod tests {
             Config::load_with_env(Some(&tmp.path().join("nope.toml")), env(&[("HOME", "/h")]))
                 .unwrap_err();
         assert!(err.to_string().contains("not found"), "{err:#}");
+    }
+
+    /// Loads `text` as the config file with `$HOME` at `home`; the error text on failure.
+    fn load(home: &Path, text: &str) -> Result<Config, String> {
+        let path = write(home, text);
+        Config::load_with_env(Some(&path), env(&[("HOME", home.to_str().unwrap())]))
+            .map_err(|err| format!("{err:#}"))
+    }
+
+    #[test]
+    fn accounts_are_loaded_with_defaults_and_home_expanded() {
+        let home = tempfile::tempdir().unwrap();
+        let config = load(
+            home.path(),
+            r#"
+            [[accounts]]
+            id = "claude-main"
+            provider = "claude"
+            label = "Main"
+
+            [[accounts]]
+            id = "claude-work"
+            provider = "claude"
+            config_dir = "~/.claude-work"
+            failover = true
+
+            [[accounts]]
+            id = "codex"
+            provider = "codex"
+            config_dir = "/srv/codex"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.accounts,
+            Accounts::from([
+                (
+                    AccountId::new("claude-main"),
+                    AccountConfig {
+                        provider: Provider::Claude,
+                        label: "Main".into(),
+                        config_dir: None,
+                        failover: false,
+                    }
+                ),
+                (
+                    AccountId::new("claude-work"),
+                    AccountConfig {
+                        provider: Provider::Claude,
+                        label: "claude-work".into(),
+                        config_dir: Some(home.path().join(".claude-work")),
+                        failover: true,
+                    }
+                ),
+                (
+                    AccountId::new("codex"),
+                    AccountConfig {
+                        provider: Provider::Codex,
+                        label: "codex".into(),
+                        config_dir: Some(PathBuf::from("/srv/codex")),
+                        failover: false,
+                    }
+                ),
+            ])
+        );
+        assert!(config.binaries.is_empty());
+    }
+
+    #[test]
+    fn provider_binaries_are_bare_names_or_resolved_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let config = load(
+            home.path(),
+            r#"
+            [providers.claude]
+            binary = "~/bin/claude"
+            [providers.codex]
+            binary = "codex-nightly"
+            [providers.opencode]
+            binary = "/opt/opencode"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.binaries,
+            HashMap::from([
+                (Provider::Claude, home.path().join("bin/claude")),
+                (Provider::Codex, PathBuf::from("codex-nightly")),
+                (Provider::Opencode, PathBuf::from("/opt/opencode")),
+            ])
+        );
+    }
+
+    #[test]
+    fn invalid_accounts_are_rejected() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(home.path().join("file"), "").unwrap();
+        let account = |fields: &[&str]| format!("[[accounts]]\n{}\n", fields.join("\n"));
+        let claude = |id: &str, extra: &str| {
+            account(&[&format!("id = {id:?}"), "provider = \"claude\"", extra])
+        };
+        let cases = [
+            (
+                claude("a", "") + &account(&["id = \"a\"", "provider = \"codex\""]),
+                "account id a is used twice",
+            ),
+            (
+                account(&["id = \"a\"", "provider = \"gemini\""]),
+                "herder cannot run gemini sessions",
+            ),
+            (
+                account(&["id = \"a\"", "provider = \"nope\""]),
+                "herder cannot run nope sessions",
+            ),
+            (claude("a b", ""), "must be letters"),
+            (claude("", ""), "must be letters"),
+            (
+                claude("a", "config_dir = \"rel/dir\""),
+                "must be absolute or start with ~/",
+            ),
+            (
+                claude("a", "config_dir = \"~/.claude\""),
+                "omit config_dir to use it",
+            ),
+            (claude("a", "config_dir = \"~/file\""), "is not a directory"),
+            (
+                claude("a", "") + &claude("b", ""),
+                "another claude account already uses the default location",
+            ),
+            (
+                claude("a", "config_dir = \"/x\"") + &claude("b", "config_dir = \"/x/\""),
+                "another claude account already uses /x",
+            ),
+            (account(&["id = \"a\""]), "missing field `provider`"),
+            (claude("a", "token = \"x\""), "unknown field `token`"),
+            (
+                "[providers.nope]\nbinary = \"x\"\n".to_owned(),
+                "herder cannot run nope",
+            ),
+            ("[providers.claude]\n".to_owned(), "missing field `binary`"),
+        ];
+        for (text, expected) in cases {
+            let err = load(home.path(), &text).unwrap_err();
+            assert!(err.contains(expected), "{text}: {err}");
+        }
+    }
+
+    #[test]
+    fn accounts_of_different_providers_may_both_use_the_default_location() {
+        let home = tempfile::tempdir().unwrap();
+        let config = load(
+            home.path(),
+            "[[accounts]]\nid = \"a\"\nprovider = \"claude\"\n\
+             [[accounts]]\nid = \"b\"\nprovider = \"codex\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.accounts.len(), 2);
     }
 }

@@ -38,7 +38,7 @@ fn fixture(name: &str) -> Fixture {
 
 fn request(seed: Vec<Item>) -> StartRequest {
     StartRequest {
-        config_dir: PathBuf::from("/nonexistent/account"),
+        config_dir: Some(PathBuf::from("/nonexistent/account")),
         env: BTreeMap::new(),
         cwd: PathBuf::from(CWD),
         model: None,

@@ -97,7 +97,8 @@ impl AgentProfile {
     }
 
     /// The command that runs the agent for `request`: its environment is exactly the request's,
-    /// plus the config dir variables and the launch variables. Stderr is discarded.
+    /// plus the config dir variables when the account has a config dir, and the launch
+    /// variables. Stderr is discarded.
     pub fn command(&self, request: &StartRequest) -> Command {
         let mut command = Command::new(&self.program);
         command.args(&self.args);
@@ -109,9 +110,10 @@ impl AgentProfile {
             .env_clear()
             .envs(&request.env)
             .envs(
-                self.config_dir_vars
+                request
+                    .config_dir
                     .iter()
-                    .map(|var| (var, &request.config_dir)),
+                    .flat_map(|dir| self.config_dir_vars.iter().map(move |var| (var, dir))),
             )
             .envs(self.launch_env.iter().map(|(var, value)| (var, value)))
             .current_dir(&request.cwd)
@@ -132,7 +134,7 @@ mod tests {
 
     fn request(model: Option<&str>) -> StartRequest {
         StartRequest {
-            config_dir: PathBuf::from("/accounts/work"),
+            config_dir: Some(PathBuf::from("/accounts/work")),
             env: BTreeMap::from([("PATH".into(), "/usr/bin".into())]),
             cwd: PathBuf::from("/worktrees/s1"),
             model: model.map(Into::into),
@@ -196,5 +198,17 @@ mod tests {
             .map(|(var, _)| var)
             .collect();
         assert_eq!(vars, ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"]);
+    }
+
+    #[test]
+    fn without_a_config_dir_no_config_dir_variable_is_set() {
+        let request = StartRequest {
+            config_dir: None,
+            ..request(None)
+        };
+        let command = AgentProfile::cursor().command(&request);
+        let mut vars = env(&command);
+        vars.sort();
+        assert_eq!(vars, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
     }
 }

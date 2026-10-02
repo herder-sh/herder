@@ -17,7 +17,7 @@
 //! - Model and permission mode switch natively, with `set_model` and `set_permission_mode`.
 //!
 //! The process runs with exactly [`StartRequest::env`] plus `CLAUDE_CONFIG_DIR` set to the
-//! account's config dir, in the session's worktree. The adapter never looks inside that dir:
+//! account's config dir, when it has one, in the session's worktree. The adapter never looks inside that dir:
 //! the CLI's own login is the only credential involved.
 //!
 //! # Permission modes
@@ -132,7 +132,7 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 }
 
 /// The `claude` command for `request`: its environment is exactly the request's plus
-/// `CLAUDE_CONFIG_DIR`, in the session's worktree.
+/// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree.
 pub fn command(program: &Path, request: &StartRequest) -> Command {
     let mut command = Command::new(program);
     command
@@ -152,8 +152,10 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
         ])
         .env_clear()
         .envs(&request.env)
-        .env("CLAUDE_CONFIG_DIR", &request.config_dir)
         .current_dir(&request.cwd);
+    if let Some(dir) = &request.config_dir {
+        command.env("CLAUDE_CONFIG_DIR", dir);
+    }
     if let Some(model) = &request.model {
         command.args(["--model", model]);
     }
@@ -343,7 +345,7 @@ mod tests {
     #[test]
     fn command_sets_exactly_the_request_env_and_config_dir() {
         let request = StartRequest {
-            config_dir: PathBuf::from("/accounts/work/claude"),
+            config_dir: Some(PathBuf::from("/accounts/work/claude")),
             env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
             cwd: PathBuf::from("/worktrees/s1"),
             model: Some("sonnet".into()),
@@ -386,5 +388,20 @@ mod tests {
                 (OsStr::new("PATH"), Some(OsStr::new("/usr/bin"))),
             ]
         );
+    }
+
+    #[test]
+    fn command_without_a_config_dir_leaves_claude_config_dir_unset() {
+        let request = StartRequest {
+            config_dir: None,
+            env: BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+        };
+        let command = command(Path::new("claude"), &request);
+        let envs: Vec<_> = command.as_std().get_envs().collect();
+        assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
     }
 }
