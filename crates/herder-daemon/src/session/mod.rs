@@ -60,6 +60,12 @@
 //! Through the MCP server's task tools a session becomes a task's primary and spawns child
 //! sessions; each child's turn ends with a report to the primary ([`tasks`]).
 //!
+//! # Resources
+//!
+//! Once [`SessionManager::limit_resources`] runs, each start of a session's CLI runs it in a
+//! systemd scope of its own ([`crate::resources`]); a child's scope gets the smaller CPU
+//! weight.
+//!
 //! # Questions
 //!
 //! A question the agent asks is journaled as `question_asked`, routed like an approval request
@@ -103,6 +109,7 @@ use tasks::{TaskTools, Tasks};
 
 use crate::mcp::{self, Mcp};
 use crate::prs::{self, PrTracker};
+use crate::resources::Scopes;
 use crate::worktree::{self, Worktrees};
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
@@ -199,6 +206,8 @@ struct Inner {
     tasks: Tasks,
     /// Where children's requests that go to the user are announced, once set.
     notifier: OnceLock<Arc<dyn Notifier>>,
+    /// The scopes sessions' CLIs run in, once set.
+    scopes: OnceLock<Arc<Scopes>>,
     shutdown: CancellationToken,
 }
 
@@ -228,6 +237,7 @@ impl SessionManager {
                 mcp: OnceLock::new(),
                 tasks,
                 notifier: OnceLock::new(),
+                scopes: OnceLock::new(),
                 shutdown,
             }),
         })
@@ -347,6 +357,15 @@ impl SessionManager {
             .mcp
             .set(Mcp::start(config, tools, inner.shutdown.clone())?);
         Ok(())
+    }
+
+    /// Runs every session's CLI in a scope of `scopes` from its next start; once per manager.
+    /// Without it, CLIs run without resource limits.
+    pub fn limit_resources(&self, scopes: Arc<Scopes>) -> anyhow::Result<()> {
+        self.inner
+            .scopes
+            .set(scopes)
+            .map_err(|_| anyhow::anyhow!("resources are limited already"))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to

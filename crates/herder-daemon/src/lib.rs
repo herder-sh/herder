@@ -9,6 +9,7 @@ pub mod hub;
 pub mod logging;
 pub mod mcp;
 pub mod prs;
+pub mod resources;
 pub mod session;
 pub mod terminal;
 pub mod worktree;
@@ -96,6 +97,13 @@ pub async fn serve(
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    let scopes = Arc::new(resources::Scopes::detect(config.resources.clone()).await);
+    sessions.limit_resources(Arc::clone(&scopes))?;
+    tokio::spawn({
+        let hub = Arc::clone(&hub);
+        let shutdown = shutdown.clone();
+        async move { scopes.run_sampler(&hub, shutdown).await }
+    });
     let herder = herder_binary()?;
     sessions.serve_mcp(
         mcp::Config {
@@ -174,6 +182,7 @@ mod tests {
             accounts: session::Accounts::new(),
             binaries: Default::default(),
             tasks: session::TaskLimits::default(),
+            resources: Default::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

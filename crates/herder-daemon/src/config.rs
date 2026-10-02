@@ -16,6 +16,11 @@
 //! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
 //! ```
 //!
+//! # Resources
+//!
+//! The `[resources]` table sets the limits every session's CLI runs under; see
+//! [`ResourcesConfig`] for its keys and defaults.
+//!
 //! `config_dir` is handed to the CLI as its config dir variable (`CLAUDE_CONFIG_DIR`,
 //! `CODEX_HOME`, ...); without one the variable is not set and the CLI uses its default. It may
 //! start with `~/`, must otherwise be absolute, and need not exist yet: logging in creates it.
@@ -43,6 +48,7 @@ use herder_protocol::{AccountId, Provider};
 use serde::Deserialize;
 
 use crate::accounts;
+use crate::resources::ResourcesConfig;
 use crate::session::{AccountConfig, Accounts, TaskLimits};
 
 /// Port the daemon listens on unless configured otherwise.
@@ -63,6 +69,8 @@ pub struct Config {
     pub binaries: HashMap<Provider, PathBuf>,
     /// Limits on every task.
     pub tasks: TaskLimits,
+    /// Limits for the systemd scopes sessions run in.
+    pub resources: ResourcesConfig,
 }
 
 /// Logging settings: the `[log]` table.
@@ -104,6 +112,7 @@ struct ConfigFile {
     accounts: Vec<AccountFile>,
     providers: BTreeMap<String, ProviderFile>,
     tasks: TaskLimits,
+    resources: ResourcesConfig,
 }
 
 impl Default for ConfigFile {
@@ -115,6 +124,7 @@ impl Default for ConfigFile {
             accounts: Vec::new(),
             providers: BTreeMap::new(),
             tasks: TaskLimits::default(),
+            resources: ResourcesConfig::default(),
         }
     }
 }
@@ -162,6 +172,7 @@ impl Config {
             Some(dir) => dir,
             None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
         };
+        file.resources.validate()?;
         Ok(Self {
             listen: file.listen,
             data_dir,
@@ -169,6 +180,7 @@ impl Config {
             accounts: resolve_accounts(file.accounts, &env)?,
             binaries: resolve_binaries(file.providers, &env)?,
             tasks: file.tasks,
+            resources: file.resources,
         })
     }
 }
@@ -395,6 +407,12 @@ mod tests {
 
             [tasks]
             max_children = 2
+            [resources]
+            memory_max_percent = 25
+            memory_high_percent = 90
+            cpu_weight = 200
+            child_cpu_weight = 20
+            nice = 5
             "#,
         );
         let config = Config::load_with_env(Some(&path), env(&[])).unwrap();
@@ -410,6 +428,13 @@ mod tests {
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
                 tasks: TaskLimits { max_children: 2 },
+                resources: ResourcesConfig {
+                    memory_max_percent: 25,
+                    memory_high_percent: 90,
+                    cpu_weight: 200,
+                    child_cpu_weight: 20,
+                    nice: 5,
+                },
             }
         );
     }
@@ -438,6 +463,21 @@ mod tests {
                 format!("{err:#}").contains("unknown field"),
                 "{text}: {err:#}"
             );
+        }
+    }
+
+    #[test]
+    fn out_of_range_resources_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (text, key) in [
+            ("memory_max_percent = 0", "memory_max_percent"),
+            ("memory_high_percent = 101", "memory_high_percent"),
+            ("child_cpu_weight = 0", "child_cpu_weight"),
+            ("nice = 20", "nice"),
+        ] {
+            let path = write(tmp.path(), &format!("[resources]\n{text}\n"));
+            let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+            assert!(format!("{err:#}").contains(key), "{text}: {err:#}");
         }
     }
 

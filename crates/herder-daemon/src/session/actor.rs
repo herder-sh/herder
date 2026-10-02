@@ -851,6 +851,13 @@ impl Actor {
             })?),
             None => None,
         };
+        let launcher = match self.inner.scopes.get() {
+            Some(scopes) => {
+                let limits = scopes.limits(session.parent.is_some());
+                scopes.launch(&session.session_id, &limits)
+            }
+            None => Vec::new(),
+        };
         let request = StartRequest {
             config_dir: account.config_dir.clone(),
             env: std::env::vars().collect(),
@@ -859,7 +866,7 @@ impl Actor {
             permission_mode: session.permission_mode,
             seed,
             mcp,
-            launcher: Vec::new(),
+            launcher,
         };
         adapter.start(request).await
     }
