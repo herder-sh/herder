@@ -539,15 +539,17 @@ impl Actor {
     }
 
     /// Who a new request of this session goes to, and why it skips the primary session.
-    fn route(&self, request: &tasktools::Request, tool_call: Option<&ItemId>) -> Open {
+    async fn route(&self, request: &tasktools::Request, tool_call: Option<&ItemId>) -> Open {
         let (route, deadline) = match (&self.session.parent, request, tool_call) {
             (None, ..) => (Route::User, None),
             (Some(_), tasktools::Request::Approval { .. }, tool_call) => {
-                let within = tool_call
-                    .and_then(|id| self.tool_calls.get(id))
-                    .is_some_and(|(name, input)| {
-                        within_authority(name, input, Path::new(&self.session.worktree))
-                    });
+                let within = match tool_call.and_then(|id| self.tool_calls.get(id)) {
+                    Some((name, input)) => {
+                        let worktree = Path::new(&self.session.worktree);
+                        within_authority(&self.session.provider, name, input, worktree).await
+                    }
+                    None => false,
+                };
                 if within {
                     (Route::Primary, Some(Instant::now() + PRIMARY_TIMEOUT))
                 } else {
@@ -934,7 +936,7 @@ impl Actor {
                     approval_id: approval_id.clone(),
                     summary: summary.clone(),
                 };
-                let open = self.route(&request, Some(&tool_call_id));
+                let open = self.route(&request, Some(&tool_call_id)).await;
                 // Journaled before the primary can see it, so an answer finds it asked.
                 let reason = (self.session.parent.is_some() && open.route == Route::User)
                     .then_some(EscalationReason::ExceedsAuthority);
@@ -962,7 +964,7 @@ impl Actor {
                     text: text.clone(),
                     choices: choices.clone(),
                 };
-                let open = self.route(&request, None);
+                let open = self.route(&request, None).await;
                 self.log(EventBody::QuestionAsked {
                     question_id: question_id.clone(),
                     turn_id,
