@@ -21,6 +21,18 @@
 //! pending or after a failed turn; `error` after the agent exited with an error; `idle` once a turn ends with
 //! nothing queued. Every change is journaled as `session_status_changed`.
 //!
+//! # Approvals
+//!
+//! An approval request is journaled as `approval_requested` and so reaches every subscribed
+//! client. Every request is routed to the user for now; the route is kept per request so the
+//! primary session can be asked first later. The session is `needs_you` while any open request
+//! is routed to a user, and back to `running` once the last one is answered; a turn may have
+//! several open at once. The first `answer_approval` for an open request wins: it is journaled
+//! as `approval_resolved` (`by` the answering user) and then sent to the agent. A later answer
+//! is refused as a `conflict` (already resolved), one for an id never requested as
+//! `not_found`. When a turn ends, however it ended, its open requests are journaled as denied
+//! with no `by`: the daemon denied them, since no answer can reach the agent any more.
+//!
 //! # Worktrees and archive
 //!
 //! Creating a session adds its worktree and branch ([`crate::worktree`]). Every other branch
@@ -38,7 +50,8 @@
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
-//! a `transient` `turn_failed` when the manager opens. A session's adapter starts lazily on its
+//! a `transient` `turn_failed` when the manager opens, after denying its open approvals the
+//! same way as at a turn's end: the CLI that asked is gone. A session's adapter starts lazily on its
 //! next prompt, seeded with the journal's items.
 
 mod actor;

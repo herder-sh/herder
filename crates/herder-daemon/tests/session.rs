@@ -6,13 +6,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_adapters::{Adapter, StartFuture, StartRequest};
+use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, CommandResult, ErrorClass,
-    ErrorCode, Event, EventBody, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId,
-    SessionHead, SessionId, SessionStatus, TurnId, UserId,
+    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, CommandBody, CommandResult,
+    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody, ItemId, PermissionMode,
+    Provider, QuestionId, SessionHead, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -44,16 +44,33 @@ impl EventSink for Recorder {
     }
 }
 
-/// The fake adapter, keeping every start request so tests can check the seed.
+/// The fake adapter, keeping every start request so tests can check the seed, and every
+/// command the daemon sent it.
 struct Recording {
     fake: FakeAdapter,
     starts: Arc<Mutex<Vec<StartRequest>>>,
+    commands: Arc<Mutex<Vec<AdapterCommand>>>,
 }
 
 impl Adapter for Recording {
     fn start(&self, request: StartRequest) -> StartFuture {
         self.starts.lock().unwrap().push(request.clone());
-        self.fake.start(request)
+        let started = self.fake.start(request);
+        let commands = self.commands.clone();
+        Box::pin(async move {
+            let mut session = started.await?;
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let fake = std::mem::replace(&mut session.commands, tx);
+            tokio::spawn(async move {
+                while let Some(command) = rx.recv().await {
+                    commands.lock().unwrap().push(command.clone());
+                    if fake.send(command).is_err() {
+                        return;
+                    }
+                }
+            });
+            Ok(session)
+        })
     }
 }
 
@@ -108,6 +125,8 @@ struct Daemon {
     /// Everything `events_until` has received so far.
     log: Vec<Seen>,
     starts: Arc<Mutex<Vec<StartRequest>>>,
+    /// Every command the adapter received, across starts.
+    commands: Arc<Mutex<Vec<AdapterCommand>>>,
     shutdown: CancellationToken,
 }
 
@@ -117,12 +136,14 @@ impl Daemon {
     async fn open(dir: &Path, script: &str, turns: Arc<AtomicU64>) -> Self {
         let (tx, seen) = mpsc::unbounded_channel();
         let starts = Arc::new(Mutex::new(Vec::new()));
+        let commands = Arc::new(Mutex::new(Vec::new()));
         let mut adapters = Adapters::new();
         adapters.register(
             fake(),
             Arc::new(Recording {
                 fake: FakeAdapter::new(fixture(script)),
                 starts: starts.clone(),
+                commands: commands.clone(),
             }),
         );
         let mut accounts = Accounts::new();
@@ -157,6 +178,7 @@ impl Daemon {
             seen,
             log: Vec::new(),
             starts,
+            commands,
             shutdown,
         }
     }
@@ -218,6 +240,31 @@ impl Daemon {
             |body| matches!(body, EventBody::SessionStatusChanged { status: s } if *s == status),
         )
         .await
+    }
+
+    async fn answer(
+        &self,
+        by: UserId,
+        session_id: &SessionId,
+        approval_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let command = CommandBody::AnswerApproval {
+            session_id: session_id.clone(),
+            approval_id: ApprovalId::new(approval_id),
+            decision,
+        };
+        self.manager.handle(by, command).await
+    }
+
+    /// The approval answers the adapter received.
+    fn answers(&self) -> Vec<AdapterCommand> {
+        let commands = self.commands.lock().unwrap();
+        commands
+            .iter()
+            .filter(|command| matches!(command, AdapterCommand::AnswerApproval { .. }))
+            .cloned()
+            .collect()
     }
 
     async fn journal(&self, session_id: &SessionId) -> Vec<Event> {
@@ -491,42 +538,203 @@ async fn limit_reached_fails_the_turn_and_needs_you() {
     assert_eq!(error.message, "5-hour limit reached");
 }
 
-#[tokio::test]
-async fn approval_is_journaled_and_its_answer_reaches_the_adapter() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_answers_to_one_approval_apply_exactly_once() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "approval.jsonl", Default::default()).await;
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "Run the tests.").await;
     daemon.until_status(SessionStatus::NeedsYou).await;
 
-    let answer = |approval_id: &str| CommandBody::AnswerApproval {
-        session_id: session.clone(),
-        approval_id: ApprovalId::new(approval_id),
-        decision: ApprovalDecision::Allow,
+    // Every client saw the request; each answers it at once, from its own task.
+    let clients: Vec<UserId> = (0..8).map(|n| UserId::new(format!("user-{n}"))).collect();
+    let answers: Vec<_> = clients
+        .iter()
+        .map(|user| {
+            let manager = daemon.manager.clone();
+            let command = CommandBody::AnswerApproval {
+                session_id: session.clone(),
+                approval_id: ApprovalId::new("approval-1"),
+                decision: ApprovalDecision::Allow,
+            };
+            let user = user.clone();
+            tokio::spawn(async move { (user.clone(), manager.handle(user, command).await) })
+        })
+        .collect();
+    let mut applied = Vec::new();
+    for answer in answers {
+        match answer.await.unwrap() {
+            (user, Ok(result)) => {
+                assert_eq!(result, CommandResult::Applied);
+                applied.push(user);
+            }
+            (_, Err(error)) => {
+                assert_eq!(error.code, ErrorCode::Conflict);
+                assert_eq!(error.message, "approval approval-1 is already resolved");
+            }
+        }
+    }
+    let [winner] = applied.as_slice() else {
+        panic!("expected exactly one applied answer, got {applied:?}");
     };
-    let unknown = daemon.manager.handle(bob(), answer("approval-9")).await;
-    assert_eq!(unknown.unwrap_err().code, ErrorCode::NotFound);
-    let result = daemon.manager.handle(bob(), answer("approval-1")).await;
-    assert_eq!(result.unwrap(), CommandResult::Applied);
     daemon.until_status(SessionStatus::Idle).await;
 
+    let journal = daemon.journal(&session).await;
+    let resolved: Vec<_> = journal
+        .iter()
+        .filter(|event| matches!(event.body, EventBody::ApprovalResolved { .. }))
+        .collect();
+    let [resolved] = resolved.as_slice() else {
+        panic!("expected one approval_resolved, got {resolved:?}");
+    };
+    assert_eq!(resolved.by.as_ref(), Some(winner));
     assert_eq!(
-        describe(&daemon.journal(&session).await),
+        resolved.body,
+        EventBody::ApprovalResolved {
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Allow,
+            answered_by: Answerer::User,
+        }
+    );
+    assert_eq!(
+        describe(&journal)[5..],
         [
-            "alice: session_created",
-            "-: status Running",
-            "alice: user turn-1 Run the tests.",
-            "-: turn_started turn-1",
-            "-: tool_call Bash",
             "-: approval_requested approval-1",
             "-: status NeedsYou",
-            "bob: approval_resolved approval-1 Allow",
+            &format!("{winner}: approval_resolved approval-1 Allow"),
             "-: status Running",
             "-: tool_result test result: ok",
             "-: turn_completed turn-1",
             "-: status Idle",
         ]
     );
+    // Only the winning answer reached the agent.
+    assert_eq!(
+        daemon.answers(),
+        [AdapterCommand::AnswerApproval {
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Allow,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn answers_to_unknown_or_resolved_approvals_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "approval.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Run the tests.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+
+    let allow = ApprovalDecision::Allow;
+    let unknown = daemon.answer(bob(), &session, "approval-9", allow).await;
+    let unknown = unknown.unwrap_err();
+    assert_eq!(unknown.code, ErrorCode::NotFound);
+    assert_eq!(unknown.message, "approval approval-9 does not exist");
+    let result = daemon.answer(bob(), &session, "approval-1", allow).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+    // After the turn has ended too.
+    let late = daemon.answer(alice(), &session, "approval-1", ApprovalDecision::Deny);
+    assert_eq!(late.await.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(daemon.answers().len(), 1);
+}
+
+#[tokio::test]
+async fn needs_you_holds_until_the_last_of_several_approvals_is_answered() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "two_approvals.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Build and deploy.").await;
+    daemon
+        .events_until(
+            |body| matches!(body, EventBody::ApprovalRequested { approval_id, .. } if approval_id.as_str() == "approval-2"),
+        )
+        .await;
+
+    let first = daemon.answer(alice(), &session, "approval-1", ApprovalDecision::Allow);
+    assert_eq!(first.await, Ok(CommandResult::Applied));
+    let second = daemon.answer(bob(), &session, "approval-2", ApprovalDecision::Deny);
+    assert_eq!(second.await, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+
+    assert_eq!(
+        describe(&daemon.journal(&session).await)[3..],
+        [
+            "-: turn_started turn-1",
+            "-: tool_call Bash",
+            "-: approval_requested approval-1",
+            "-: status NeedsYou",
+            "-: tool_call Bash",
+            // Already needs-you: the second request journals no status change.
+            "-: approval_requested approval-2",
+            "alice: approval_resolved approval-1 Allow",
+            "-: tool_result built",
+            "bob: approval_resolved approval-2 Deny",
+            "-: status Running",
+            "-: tool_result denied",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn ending_a_turn_denies_its_open_approvals() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon =
+        Daemon::open(dir.path(), "approval_interrupted.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Run the tests.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    assert_eq!(
+        daemon.manager.handle(bob(), interrupt).await,
+        Ok(CommandResult::Applied)
+    );
+    let events = daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&events),
+        [
+            "-: approval_resolved approval-1 Deny",
+            "-: turn_interrupted turn-1",
+            "-: status Idle",
+        ]
+    );
+    let late = daemon.answer(alice(), &session, "approval-1", ApprovalDecision::Allow);
+    assert_eq!(late.await.unwrap_err().code, ErrorCode::Conflict);
+    assert!(daemon.answers().is_empty());
+}
+
+#[tokio::test]
+async fn restart_denies_an_approval_the_previous_daemon_left_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "approval.jsonl", turns.clone()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Run the tests.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+    daemon.stop().await;
+
+    let daemon = Daemon::open(dir.path(), "approval.jsonl", turns).await;
+    let journal = daemon.journal(&session).await;
+    // Still needs-you: the turn failed. The denial carries no `by`: the daemon made it.
+    assert_eq!(
+        describe(&journal[5..]),
+        [
+            "-: approval_requested approval-1",
+            "-: status NeedsYou",
+            "-: approval_resolved approval-1 Deny",
+            "-: turn_failed turn-1 Transient",
+        ]
+    );
+    let late = daemon.answer(bob(), &session, "approval-1", ApprovalDecision::Allow);
+    let late = late.await.unwrap_err();
+    assert_eq!(late.code, ErrorCode::Conflict);
+    assert!(daemon.starts.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

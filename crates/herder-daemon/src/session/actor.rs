@@ -1,7 +1,7 @@
 //! One task per live session: owns the adapter session, applies commands in order, journals
 //! what the agent does.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,8 +44,7 @@ pub(super) enum Request {
     SetPermissionMode {
         mode: PermissionMode,
     },
-    /// Passed to the adapter as given. Who may answer first, and fanning the request out to
-    /// other answerers, is P1.7.
+    /// The first answer to an open approval applies; any later one is refused.
     AnswerApproval {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
@@ -70,8 +69,9 @@ pub(super) struct Actor {
     turn: Option<TurnId>,
     /// Prompts waiting for the running turn to end, oldest first.
     queue: VecDeque<(UserId, String)>,
-    /// Approval requests of the running turn not yet answered.
-    approvals: HashSet<ApprovalId>,
+    /// Approval requests of the running turn not yet answered, oldest first, with who each is
+    /// put to.
+    approvals: Vec<(ApprovalId, Route)>,
     /// Questions of the running turn not yet answered, with how many choices each offers.
     questions: HashMap<QuestionId, usize>,
 }
@@ -90,7 +90,7 @@ impl Actor {
             adapter: None,
             turn: None,
             queue: VecDeque::new(),
-            approvals: HashSet::new(),
+            approvals: Vec::new(),
             questions: HashMap::new(),
         }
     }
@@ -179,27 +179,7 @@ impl Actor {
             Request::AnswerApproval {
                 approval_id,
                 decision,
-            } => {
-                if !self.approvals.remove(&approval_id) {
-                    return Err(error(
-                        ErrorCode::NotFound,
-                        format!("approval {approval_id} is not pending"),
-                    ));
-                }
-                if let Some(adapter) = &self.adapter {
-                    let _ = adapter.commands.send(AdapterCommand::AnswerApproval {
-                        approval_id: approval_id.clone(),
-                        decision,
-                    });
-                }
-                let body = EventBody::ApprovalResolved {
-                    approval_id,
-                    decision,
-                    answered_by: Answerer::User,
-                };
-                self.record(Some(by), body).await.map_err(super::internal)?;
-                self.unblocked().await;
-            }
+            } => self.answer_approval(by, approval_id, decision).await?,
             Request::AnswerQuestion {
                 question_id,
                 answer,
@@ -231,11 +211,92 @@ impl Actor {
                     answered_by: Answerer::User,
                 };
                 self.record(Some(by), body).await.map_err(super::internal)?;
-                self.unblocked().await;
+                self.settle().await;
             }
             Request::Archive { force } => self.archive(by, force).await?,
         }
         Ok(CommandResult::Applied)
+    }
+
+    /// Applies the first answer to an open approval: journals it, then lets the agent go on.
+    /// The actor takes one command at a time, so of concurrent answers exactly one gets here
+    /// while the approval is open.
+    async fn answer_approval(
+        &mut self,
+        by: UserId,
+        approval_id: ApprovalId,
+        decision: ApprovalDecision,
+    ) -> Result<(), ErrorInfo> {
+        let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id) else {
+            return Err(self.not_open(&approval_id).await);
+        };
+        let body = EventBody::ApprovalResolved {
+            approval_id: approval_id.clone(),
+            decision,
+            answered_by: Answerer::User,
+        };
+        self.record(Some(by), body).await.map_err(super::internal)?;
+        self.approvals.remove(open);
+        if let Some(adapter) = &self.adapter {
+            // A closed channel means the CLI is gone; its `exited` fails the turn.
+            let _ = adapter.commands.send(AdapterCommand::AnswerApproval {
+                approval_id,
+                decision,
+            });
+        }
+        self.settle().await;
+        Ok(())
+    }
+
+    /// Why an answer to `approval_id`, which is not open, is refused: already resolved, or
+    /// never requested.
+    async fn not_open(&self, approval_id: &ApprovalId) -> ErrorInfo {
+        let journal = match self
+            .inner
+            .journal
+            .all(self.session.session_id.clone())
+            .await
+        {
+            Ok(journal) => journal,
+            Err(err) => return super::internal(err),
+        };
+        let resolved = journal.iter().any(|event| {
+            matches!(&event.body, EventBody::ApprovalResolved { approval_id: id, .. } if id == approval_id)
+        });
+        if resolved {
+            error(
+                ErrorCode::Conflict,
+                format!("approval {approval_id} is already resolved"),
+            )
+        } else {
+            error(
+                ErrorCode::NotFound,
+                format!("approval {approval_id} does not exist"),
+            )
+        }
+    }
+
+    /// `needs_you` while an open approval or question waits for a user, `running` once none
+    /// does.
+    async fn settle(&mut self) {
+        let for_user = self
+            .approvals
+            .iter()
+            .any(|(_, route)| *route == Route::User);
+        let status = if for_user || !self.questions.is_empty() {
+            SessionStatus::NeedsYou
+        } else {
+            SessionStatus::Running
+        };
+        self.set_status(status).await;
+    }
+
+    /// Journals every open approval as denied by the daemon: the turn that asked has ended, so
+    /// no answer can reach the agent any more.
+    async fn void_approvals(&mut self) {
+        for (approval_id, _) in std::mem::take(&mut self.approvals) {
+            self.log(voided(approval_id)).await;
+        }
     }
 
     async fn archive(&mut self, by: UserId, force: bool) -> Result<(), ErrorInfo> {
@@ -266,13 +327,6 @@ impl Actor {
             .map_err(super::internal)?;
         self.session.status = status;
         Ok(())
-    }
-
-    /// Back to `running` once nothing of the turn waits for a user.
-    async fn unblocked(&mut self) {
-        if self.approvals.is_empty() && self.questions.is_empty() {
-            self.set_status(SessionStatus::Running).await;
-        }
     }
 
     /// Journals each branch the worktree has had checked out that the session does not own
@@ -453,17 +507,20 @@ impl Actor {
                 tool_call_id,
                 summary,
             } => {
-                self.approvals.insert(approval_id.clone());
+                // Routing to the primary session is P2b.4; until then every request goes to
+                // the user.
+                let routed_to = Route::User;
                 self.log(EventBody::ApprovalRequested {
-                    approval_id,
+                    approval_id: approval_id.clone(),
                     turn_id,
                     tool_call_id,
                     summary,
-                    routed_to: Route::User,
+                    routed_to,
                     reason: None,
                 })
                 .await;
-                self.set_status(SessionStatus::NeedsYou).await;
+                self.approvals.push((approval_id, routed_to));
+                self.settle().await;
             }
             AdapterEvent::QuestionAsked {
                 question_id,
@@ -509,10 +566,10 @@ impl Actor {
     /// Journals the end of the running turn, then starts the next queued prompt or settles
     /// on `settled`.
     async fn turn_ended(&mut self, body: EventBody, settled: SessionStatus) {
+        self.void_approvals().await;
         self.log(body).await;
         self.record_branches().await;
         self.turn = None;
-        self.approvals.clear();
         self.questions.clear();
         if self.queue.is_empty() {
             self.set_status(settled).await;
@@ -525,7 +582,7 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let open = self.turn.take();
-        self.approvals.clear();
+        self.void_approvals().await;
         self.questions.clear();
         if let Some(turn_id) = &open {
             let error = error.clone().unwrap_or_else(|| TurnError {
@@ -585,19 +642,34 @@ async fn stop(mut adapter: AdapterSession) {
     while adapter.events.recv().await.is_some() {}
 }
 
-/// Closes a turn left open by a daemon that stopped mid-turn, and settles the session's status.
+/// Closes a turn left open by a daemon that stopped mid-turn, denying its open approvals, and
+/// settles the session's status.
+///
+/// An open approval is denied, not left open: the CLI that asked is gone with the old daemon,
+/// so no answer can reach it, and the next turn starts a new CLI that asks afresh if it still
+/// needs to.
 pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -> Result<()> {
     let mut open = None;
+    let mut approvals = Vec::new();
     for event in journal.all(session.session_id.clone()).await? {
         match event.body {
             EventBody::TurnStarted { turn_id } => open = Some(turn_id),
             EventBody::TurnCompleted { .. }
             | EventBody::TurnInterrupted { .. }
             | EventBody::TurnFailed { .. } => open = None,
+            EventBody::ApprovalRequested { approval_id, .. } => approvals.push(approval_id),
+            EventBody::ApprovalResolved { approval_id, .. } => {
+                approvals.retain(|id| *id != approval_id);
+            }
             _ => {}
         }
     }
     let id = &session.session_id;
+    for approval_id in approvals {
+        journal
+            .record(id.clone(), None, voided(approval_id))
+            .await?;
+    }
     let status = match open {
         Some(turn_id) => {
             let error = TurnError {
@@ -618,4 +690,14 @@ pub(super) async fn close_abandoned_turn(journal: &Journal, session: &Session) -
             .await?;
     }
     Ok(())
+}
+
+/// An approval the daemon denied because no answer can reach the agent any more; `by` is
+/// absent, which tells it from a user's answer.
+fn voided(approval_id: ApprovalId) -> EventBody {
+    EventBody::ApprovalResolved {
+        approval_id,
+        decision: ApprovalDecision::Deny,
+        answered_by: Answerer::User,
+    }
 }

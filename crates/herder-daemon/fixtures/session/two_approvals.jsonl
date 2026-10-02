@@ -1,0 +1,12 @@
+# Two tool calls blocked at once: the first is allowed, the second denied.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Build and deploy."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "cargo build"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "approval-1", "turn_id": "turn-1", "tool_call_id": "item-1", "summary": "Run cargo build"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "make deploy"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "approval-2", "turn_id": "turn-1", "tool_call_id": "item-2", "summary": "Run make deploy"}}
+{"expect": {"type": "answer_approval", "approval_id": "approval-1", "decision": "allow"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "turn-1", "body": {"type": "tool_result", "call_id": "item-1", "output": "built", "is_error": false}}}}
+{"expect": {"type": "answer_approval", "approval_id": "approval-2", "decision": "deny"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-4", "turn_id": "turn-1", "body": {"type": "tool_result", "call_id": "item-2", "output": "denied", "is_error": true}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
