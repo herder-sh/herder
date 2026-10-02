@@ -1,0 +1,6 @@
+# The account runs out mid-turn, after some work; the CLI waits to be shut down.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "a-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Splitting the lexer out."}}}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "limit_reached", "message": "5-hour limit reached"}}}
+{"expect": {"type": "shutdown"}}

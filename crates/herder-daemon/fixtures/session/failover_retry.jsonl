@@ -1,0 +1,5 @@
+# The failed turn's prompt, retried on the account failover moved to.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "b-1", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Refactored the parser."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

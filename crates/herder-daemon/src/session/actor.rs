@@ -98,6 +98,14 @@ pub(super) enum PrimaryAct {
     },
 }
 
+/// A prompt waiting for its turn, or the running turn's.
+struct Prompt {
+    by: Option<UserId>,
+    text: String,
+    /// Whether it retries a turn that hit a limit, on the account failover moved to.
+    retry: bool,
+}
+
 /// An open question or approval request: who it waits for.
 struct Open {
     route: Route,
@@ -118,8 +126,10 @@ pub(super) struct Actor {
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
     waiting: Option<oneshot::Receiver<Permit>>,
+    /// The running turn's prompt, for a failover retry.
+    prompt: Option<Prompt>,
     /// Prompts waiting for the running turn to end, oldest first.
-    queue: VecDeque<(Option<UserId>, String)>,
+    queue: VecDeque<Prompt>,
     /// The latest assistant message of the running turn: a child's report when it ends.
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
@@ -149,6 +159,7 @@ impl Actor {
             turn: None,
             permit: None,
             waiting: None,
+            prompt: None,
             queue: VecDeque::new(),
             last_reply: None,
             approvals: Vec::new(),
@@ -243,7 +254,11 @@ impl Actor {
         match request {
             Request::SendPrompt { text, queued } => {
                 let busy = self.turn.is_some() || !self.queue.is_empty();
-                self.queue.push_back((by, text));
+                self.queue.push_back(Prompt {
+                    by,
+                    text,
+                    retry: false,
+                });
                 if let Some(queued) = queued {
                     let _ = queued.send(busy);
                 }
@@ -912,9 +927,10 @@ impl Actor {
                 self.set_status(SessionStatus::WaitingForCapacity).await;
                 return;
             }
-            let Some((by, text)) = self.queue.pop_front() else {
+            let Some(prompt) = self.queue.pop_front() else {
                 return;
             };
+            let Prompt { by, text, retry } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
             if self.adapter.is_none() {
@@ -941,15 +957,16 @@ impl Actor {
                     }
                 }
             }
-            self.user_message(by, &turn_id, text.clone()).await;
+            self.user_message(by.clone(), &turn_id, text.clone()).await;
             if let Some(adapter) = &self.adapter {
                 // A closed channel means the CLI is gone; its `exited` fails this turn.
                 let _ = adapter.commands.send(AdapterCommand::SendPrompt {
                     turn_id: turn_id.clone(),
-                    text,
+                    text: text.clone(),
                 });
             }
             self.turn = Some(turn_id);
+            self.prompt = Some(Prompt { by, text, retry });
             self.last_reply = None;
         }
     }
@@ -1067,6 +1084,9 @@ impl Actor {
                     .await;
             }
             AdapterEvent::TurnFailed { turn_id, error } => {
+                if error.class == ErrorClass::LimitReached {
+                    return self.limit_reached(turn_id, error).await;
+                }
                 let summary = failed(&error);
                 let body = EventBody::TurnFailed {
                     turn_id: turn_id.clone(),
@@ -1192,6 +1212,7 @@ impl Actor {
         self.turn = None;
         // The next turn asks again, behind every turn already waiting.
         self.permit = None;
+        self.prompt = None;
         if self.queue.is_empty() {
             self.set_status(settled).await;
         }
@@ -1199,9 +1220,68 @@ impl Actor {
         self.start_next().await;
     }
 
+    /// The running turn hit the account's limit: fails over to the next eligible account and
+    /// retries the turn's prompt there, unless the session is pinned, the turn was a retry
+    /// already, or no account is eligible; then the session needs the user.
+    async fn limit_reached(&mut self, turn_id: TurnId, error: TurnError) {
+        let failing = self.session.account_id.clone();
+        self.inner.limit_hit(&failing);
+        let prompt = self.prompt.take().filter(|prompt| !prompt.retry);
+        let target = match prompt {
+            Some(_) if !self.inner.pinned() => {
+                self.inner.failover_target(&self.session.provider, &failing)
+            }
+            _ => None,
+        };
+        let (Some(prompt), Some(account_id)) = (prompt, target) else {
+            let summary = failed(&error);
+            let body = EventBody::TurnFailed {
+                turn_id: turn_id.clone(),
+                error,
+            };
+            return self
+                .turn_ended(turn_id, body, SessionStatus::NeedsYou, summary)
+                .await;
+        };
+        self.void_requests().await;
+        self.log(EventBody::TurnFailed {
+            turn_id: turn_id.clone(),
+            error: error.clone(),
+        })
+        .await;
+        self.record_branches().await;
+        self.turn = None;
+        let to = if self.inner.accounts.get(&account_id).map(|a| &a.provider)
+            == Some(&self.session.provider)
+        {
+            Switch::Account
+        } else {
+            Switch::Provider { model: None }
+        };
+        if let Err(err) = self.switch(None, account_id.clone(), to).await {
+            warn!(
+                session_id = %self.session.session_id,
+                "cannot fail over to {account_id}: {}", err.message
+            );
+            self.permit = None;
+            if self.queue.is_empty() {
+                self.set_status(SessionStatus::NeedsYou).await;
+            }
+            self.report(turn_id, failed(&error)).await;
+            return self.start_next().await;
+        }
+        // The retry keeps the failed turn's permit: it is the same work, moved.
+        self.queue.push_front(Prompt {
+            retry: true,
+            ..prompt
+        });
+        self.start_next().await;
+    }
+
     /// The CLI is gone: fails a turn it left open; the next prompt starts it again.
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
+        self.prompt = None;
         let open = self.turn.take();
         self.permit = None;
         self.void_requests().await;

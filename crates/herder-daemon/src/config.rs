@@ -16,6 +16,18 @@
 //! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
 //! ```
 //!
+//! # Failover
+//!
+//! A session whose turn hits its account's usage limit moves to another account that opted in
+//! with `failover = true` and retries the turn there: first an account of its own provider,
+//! then one of each provider the `[failover]` table lists, in order:
+//!
+//! ```toml
+//! [failover]
+//! providers = ["codex", "cursor"] # after the session's own provider; none by default
+//! pin = false                     # true keeps every session on its account
+//! ```
+//!
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
@@ -74,7 +86,7 @@ use serde::Deserialize;
 use crate::accounts;
 use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
-use crate::session::{AccountConfig, Accounts, TaskLimits};
+use crate::session::{AccountConfig, Accounts, FailoverConfig, TaskLimits};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -94,6 +106,8 @@ pub struct Config {
     pub binaries: HashMap<Provider, PathBuf>,
     /// Limits on every task.
     pub tasks: TaskLimits,
+    /// How sessions fail over when their account hits a limit.
+    pub failover: FailoverConfig,
     /// Limits for the systemd scopes sessions run in.
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
@@ -139,6 +153,7 @@ struct ConfigFile {
     accounts: Vec<AccountFile>,
     providers: BTreeMap<String, ProviderFile>,
     tasks: TaskLimits,
+    failover: FailoverConfig,
     resources: ResourcesConfig,
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
@@ -153,6 +168,7 @@ impl Default for ConfigFile {
             accounts: Vec::new(),
             providers: BTreeMap::new(),
             tasks: TaskLimits::default(),
+            failover: FailoverConfig::default(),
             resources: ResourcesConfig::default(),
             projects: ProjectsFile::default(),
             project: Vec::new(),
@@ -224,6 +240,9 @@ impl Config {
             None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
         };
         file.resources.validate()?;
+        for provider in &file.failover.providers {
+            supported(provider.as_str().to_owned()).context("failover.providers")?;
+        }
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
         Ok(Self {
@@ -233,6 +252,7 @@ impl Config {
             accounts,
             binaries: resolve_binaries(file.providers, &env)?,
             tasks: file.tasks,
+            failover: file.failover,
             resources: file.resources,
             projects,
         })
@@ -543,6 +563,9 @@ mod tests {
 
             [tasks]
             max_children = 2
+            [failover]
+            providers = ["codex", "cursor"]
+            pin = true
             [resources]
             memory_max_percent = 25
             memory_high_percent = 90
@@ -568,6 +591,10 @@ mod tests {
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
                 tasks: TaskLimits { max_children: 2 },
+                failover: FailoverConfig {
+                    providers: vec![Provider::Codex, Provider::Cursor],
+                    pin: true,
+                },
                 resources: ResourcesConfig {
                     memory_max_percent: 25,
                     memory_high_percent: 90,
@@ -783,6 +810,10 @@ mod tests {
                 "herder cannot run nope",
             ),
             ("[providers.claude]\n".to_owned(), "missing field `binary`"),
+            (
+                "[failover]\nproviders = [\"nope\"]\n".to_owned(),
+                "herder cannot run nope",
+            ),
         ];
         for (text, expected) in cases {
             let err = load(home.path(), &text).unwrap_err();
