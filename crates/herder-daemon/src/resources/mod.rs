@@ -48,7 +48,7 @@ use tracing::{info, warn};
 
 use crate::hub::Hub;
 
-pub use admission::{Admission, Budget, Permit, ProcHost, ReadHost, Reading, Ticket};
+pub use admission::{Admission, Budget, Parked, Permit, ProcHost, ReadHost, Reading, Ticket};
 pub use cgroup::Sample;
 
 /// How often scopes are read; the contract's limit for `session_resources`.

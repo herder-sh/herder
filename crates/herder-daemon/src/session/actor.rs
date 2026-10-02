@@ -966,7 +966,7 @@ impl Actor {
         let Some(admission) = self.inner.admission.get() else {
             return true;
         };
-        match admission.request() {
+        match admission.request(&self.session.session_id) {
             Ticket::Admitted(permit) => {
                 self.permit = Some(permit);
                 true

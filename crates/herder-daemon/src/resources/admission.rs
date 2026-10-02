@@ -14,20 +14,30 @@
 //! A turn the host cannot admit waits in one FIFO queue across all sessions. Waiting turns
 //! are admitted in order when a running turn ends and every [`RECHECK_INTERVAL`]; a turn
 //! never overtakes an earlier one. A running turn holds a [`Permit`]; dropping it frees the
-//! turn's slot. `spawn` asks [`Admission::constraint`] and is refused as `host_busy` while it
-//! is set.
+//! turn's slot.
+//!
+//! A turn blocked in a tool call that waits for its children ([`Admission::park`]) uses no
+//! CPU, so it gives its slot to them meanwhile: otherwise primaries waiting on their children
+//! could take every slot and no child would ever start. When the call returns, the turn takes
+//! its slot back at once, ahead of every waiting turn, even when that puts the host one over
+//! [`Budget::max_turns`] until a turn ends; waiting for a slot there could deadlock with a
+//! child whose question waits for that primary.
+//!
+//! `spawn` asks [`Admission::host_constraint`] and is refused as `host_busy` while memory,
+//! load or pressure binds; a child spawned while only the turn limit binds waits for a slot
+//! like any other turn.
 //!
 //! [`Admission::run`] publishes
 //! [`ServerMessage::HostResources`](herder_protocol::ServerMessage::HostResources) through the
 //! [`Hub`] each [`RECHECK_INTERVAL`] when it changed.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use herder_protocol::{Constraint, HostResources, Pressure};
+use herder_protocol::{Constraint, HostResources, Pressure, SessionId};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
@@ -158,10 +168,12 @@ struct Shared {
 
 #[derive(Default)]
 struct State {
-    /// Turns holding a permit.
+    /// Turns holding a permit and not parked: the turns counted against the limit.
     running: u32,
+    /// Each session holding a permit, with how many of its tool calls park it now.
+    holders: HashMap<SessionId, u32>,
     /// Turns waiting for a permit, oldest first; a closed one was given up.
-    waiting: VecDeque<oneshot::Sender<Permit>>,
+    waiting: VecDeque<(SessionId, oneshot::Sender<Permit>)>,
     /// What clients were sent last.
     published: Option<HostResources>,
 }
@@ -178,14 +190,38 @@ pub enum Ticket {
 pub struct Permit {
     /// `None` once the slot was never taken or is already freed.
     shared: Option<Arc<Shared>>,
+    session: SessionId,
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
         if let Some(shared) = self.shared.take() {
             let mut state = shared.lock();
-            state.running = state.running.saturating_sub(1);
+            // A parked turn's slot is free already.
+            if state.holders.remove(&self.session) == Some(0) {
+                state.running = state.running.saturating_sub(1);
+            }
             shared.admit(&mut state);
+        }
+    }
+}
+
+/// A turn's slot lent out while one of its tool calls waits for children; dropping it takes the
+/// slot back.
+pub struct Parked {
+    shared: Arc<Shared>,
+    session: SessionId,
+}
+
+impl Drop for Parked {
+    fn drop(&mut self) {
+        let mut state = self.shared.lock();
+        // Nothing to take back once the turn ended meanwhile.
+        if let Some(parked) = state.holders.get_mut(&self.session) {
+            *parked = parked.saturating_sub(1);
+            if *parked == 0 {
+                state.running += 1;
+            }
         }
     }
 }
@@ -208,8 +244,9 @@ impl Admission {
         self.shared.budget
     }
 
-    /// Admits a turn now when the host has room and no turn waits; otherwise puts it in line.
-    pub fn request(&self) -> Ticket {
+    /// Admits `session`'s next turn now when the host has room and no turn waits; otherwise
+    /// puts it in line.
+    pub fn request(&self, session: &SessionId) -> Ticket {
         let shared = &self.shared;
         let mut state = shared.lock();
         // Earlier turns first, should the host have room for them now.
@@ -222,20 +259,40 @@ impl Admission {
                 .is_none()
         {
             state.running += 1;
+            state.holders.insert(session.clone(), 0);
             return Ticket::Admitted(Permit {
                 shared: Some(Arc::clone(shared)),
+                session: session.clone(),
             });
         }
         let (permit, waiting) = oneshot::channel();
-        state.waiting.push_back(permit);
+        state.waiting.push_back((session.clone(), permit));
         Ticket::Waiting(waiting)
     }
 
-    /// What keeps the host from starting another turn now; `None` while it would start one.
-    pub fn constraint(&self) -> Option<Constraint> {
-        let running = self.shared.lock().running;
-        let reading = self.shared.read();
-        self.shared.budget.constraint(running, reading.as_ref())
+    /// Lends `session`'s slot to other turns while its turn waits for its children, until the
+    /// guard drops; `None` when the session holds no slot.
+    pub fn park(&self, session: &SessionId) -> Option<Parked> {
+        let shared = &self.shared;
+        let mut state = shared.lock();
+        let parked = state.holders.get_mut(session)?;
+        *parked += 1;
+        if *parked == 1 {
+            state.running = state.running.saturating_sub(1);
+            shared.admit(&mut state);
+        }
+        Some(Parked {
+            shared: Arc::clone(shared),
+            session: session.clone(),
+        })
+    }
+
+    /// What about the host itself, its memory, load or pressure, keeps it from starting another
+    /// turn now, whatever the turn limit says.
+    pub fn host_constraint(&self) -> Option<Constraint> {
+        self.shared
+            .budget
+            .constraint(0, self.shared.read().as_ref())
     }
 
     /// Why the host starts no more turns for `constraint`, for an agent or a log.
@@ -300,7 +357,7 @@ impl Admission {
 impl Shared {
     /// Hands permits to waiting turns, oldest first, while the host has room.
     fn admit(self: &Arc<Self>, state: &mut State) {
-        while let Some(waiting) = state.waiting.front() {
+        while let Some((_, waiting)) = state.waiting.front() {
             if waiting.is_closed() {
                 state.waiting.pop_front();
                 continue;
@@ -312,24 +369,27 @@ impl Shared {
             {
                 return;
             }
-            let Some(waiting) = state.waiting.pop_front() else {
+            let Some((session, waiting)) = state.waiting.pop_front() else {
                 return;
             };
             state.running += 1;
+            state.holders.insert(session.clone(), 0);
             let permit = Permit {
                 shared: Some(Arc::clone(self)),
+                session: session.clone(),
             };
             if let Err(mut permit) = waiting.send(permit) {
                 // The turn was given up meanwhile; its slot was never used. Freed here rather
                 // than by the drop, which would take the lock this holds.
                 permit.shared = None;
                 state.running -= 1;
+                state.holders.remove(&session);
             }
         }
     }
 
     fn resources(&self, state: &State, reading: Option<&Reading>) -> HostResources {
-        let waiting = state.waiting.iter().filter(|w| !w.is_closed()).count();
+        let waiting = state.waiting.iter().filter(|(_, w)| !w.is_closed()).count();
         HostResources {
             cpu_cores: self.budget.cores,
             cpu_percent: reading.map_or(0.0, |r| r.cpu_percent),

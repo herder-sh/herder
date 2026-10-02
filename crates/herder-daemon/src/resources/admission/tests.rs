@@ -65,6 +65,11 @@ fn admission(max_turns: u32) -> (Admission, Fake) {
     )
 }
 
+/// A session of its own for each turn.
+fn turn() -> SessionId {
+    SessionId::new(ulid::Ulid::new().to_string())
+}
+
 fn admitted(ticket: Ticket) -> Permit {
     match ticket {
         Ticket::Admitted(permit) => permit,
@@ -139,10 +144,10 @@ fn the_first_failing_check_is_the_constraint() {
 #[test]
 fn waiting_turns_are_admitted_in_order_as_running_ones_end() {
     let (admission, _) = admission(1);
-    let first = admitted(admission.request());
-    let mut second = waiting(admission.request());
-    let mut third = waiting(admission.request());
-    assert_eq!(admission.constraint(), Some(Constraint::MaxTurns));
+    let first = admitted(admission.request(&turn()));
+    let mut second = waiting(admission.request(&turn()));
+    let mut third = waiting(admission.request(&turn()));
+    assert_eq!(admission.resources().constraint, Some(Constraint::MaxTurns));
     assert_eq!(admission.resources().waiting_turns, 2);
 
     drop(first);
@@ -155,7 +160,7 @@ fn waiting_turns_are_admitted_in_order_as_running_ones_end() {
     let third = third.try_recv().unwrap();
     drop(third);
     assert_eq!(admission.resources().running_turns, 0);
-    assert_eq!(admission.constraint(), None);
+    assert_eq!(admission.resources().constraint, None);
 }
 
 #[test]
@@ -165,10 +170,10 @@ fn a_turn_never_overtakes_a_waiting_one() {
         memory_available: GIB,
         ..roomy()
     }));
-    let mut first = waiting(admission.request());
+    let mut first = waiting(admission.request(&turn()));
     // The host has room again before a recheck admitted the earlier turn: it still goes first.
     host.set(Some(roomy()));
-    let mut second = waiting(admission.request());
+    let mut second = waiting(admission.request(&turn()));
     let first = first.try_recv().unwrap();
     assert!(second.try_recv().is_err());
     drop(first);
@@ -182,7 +187,7 @@ fn memory_short_turns_wait_until_a_recheck_finds_room() {
         memory_available: GIB,
         ..roomy()
     }));
-    let mut turn = waiting(admission.request());
+    let mut turn = waiting(admission.request(&turn()));
     admission.recheck();
     assert!(turn.try_recv().is_err());
     assert_eq!(admission.resources().constraint, Some(Constraint::Memory));
@@ -194,11 +199,68 @@ fn memory_short_turns_wait_until_a_recheck_finds_room() {
 }
 
 #[test]
+fn a_parked_turn_lends_its_slot_and_takes_it_back_ahead_of_the_line() {
+    let (admission, _) = admission(1);
+    let primary = turn();
+    let permit = admitted(admission.request(&primary));
+    let mut child = waiting(admission.request(&turn()));
+    let parked = admission.park(&primary).unwrap();
+    let child = child
+        .try_recv()
+        .expect("the parked slot goes to the waiting turn");
+    let mut later = waiting(admission.request(&turn()));
+
+    // Back from its tool call, the primary runs at once, one over the limit for now.
+    drop(parked);
+    assert_eq!(admission.resources().running_turns, 2);
+    drop(child);
+    assert!(
+        later.try_recv().is_err(),
+        "the primary still fills the limit"
+    );
+    drop(permit);
+    let _later = later.try_recv().unwrap();
+    assert_eq!(admission.resources().running_turns, 1);
+}
+
+#[test]
+fn a_turn_that_ends_while_parked_takes_nothing_back() {
+    let (admission, _) = admission(1);
+    let primary = turn();
+    let permit = admitted(admission.request(&primary));
+    let first = admission.park(&primary).unwrap();
+    let second = admission.park(&primary).unwrap();
+    drop(first);
+    assert_eq!(
+        admission.resources().running_turns,
+        0,
+        "one call still parks it"
+    );
+    drop(permit);
+    drop(second);
+    assert_eq!(admission.resources().running_turns, 0);
+    assert!(admission.park(&primary).is_none(), "it holds no slot");
+}
+
+#[test]
+fn the_host_constraint_ignores_the_turn_limit() {
+    let (admission, host) = admission(1);
+    let _permit = admitted(admission.request(&turn()));
+    assert_eq!(admission.resources().constraint, Some(Constraint::MaxTurns));
+    assert_eq!(admission.host_constraint(), None);
+    host.set(Some(Reading {
+        memory_available: GIB,
+        ..roomy()
+    }));
+    assert_eq!(admission.host_constraint(), Some(Constraint::Memory));
+}
+
+#[test]
 fn a_turn_given_up_while_waiting_takes_no_slot() {
     let (admission, _) = admission(1);
-    let first = admitted(admission.request());
-    let gone = waiting(admission.request());
-    let mut next = waiting(admission.request());
+    let first = admitted(admission.request(&turn()));
+    let gone = waiting(admission.request(&turn()));
+    let mut next = waiting(admission.request(&turn()));
     drop(gone);
     assert_eq!(admission.resources().waiting_turns, 1);
     drop(first);
@@ -210,8 +272,8 @@ fn a_turn_given_up_while_waiting_takes_no_slot() {
 fn an_unreadable_host_admits_by_the_turn_limit_only() {
     let (admission, host) = admission(1);
     host.set(None);
-    let _permit = admitted(admission.request());
-    assert_eq!(admission.constraint(), Some(Constraint::MaxTurns));
+    let _permit = admitted(admission.request(&turn()));
+    assert_eq!(admission.resources().constraint, Some(Constraint::MaxTurns));
 }
 
 #[test]
@@ -244,12 +306,12 @@ fn host_resources_are_published_when_they_change() {
     admission.publish(&hub);
     assert!(published().is_empty(), "nothing changed");
 
-    let _permit = admitted(admission.request());
+    let _permit = admitted(admission.request(&turn()));
     host.set(Some(Reading {
         memory_available: GIB,
         ..roomy()
     }));
-    let _waiting = waiting(admission.request());
+    let _waiting = waiting(admission.request(&turn()));
     admission.publish(&hub);
     let [ServerMessage::HostResources(busy)] = <[_; 1]>::try_from(published()).unwrap() else {
         panic!("expected host resources");

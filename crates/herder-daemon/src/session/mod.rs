@@ -71,9 +71,10 @@
 //! [`Admission`] before it starts, whichever session it is in. A turn the host has no room for
 //! keeps its prompt queued, journals `waiting_for_capacity`, and starts once its permit
 //! arrives, in the order the turns asked; a session with prompts left after a turn asks
-//! again, behind every turn already waiting. A turn's end frees its permit. `spawn` is
-//! refused as `host_busy` while the host admits no turn. A daemon restart loses waiting
-//! prompts like every queued prompt, so a session left `waiting_for_capacity` settles `idle`.
+//! again, behind every turn already waiting. A turn's end frees its permit, and a turn blocked
+//! in `wait_for` lends it to other turns until the call returns ([`tasks`]). `spawn` is refused
+//! as `host_busy` while memory, load or pressure binds. A daemon restart loses waiting prompts
+//! like every queued prompt, so a session left `waiting_for_capacity` settles `idle`.
 //!
 //! # Questions
 //!

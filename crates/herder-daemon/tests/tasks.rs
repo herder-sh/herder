@@ -667,6 +667,60 @@ async fn spawn_on_a_busy_host_is_refused_with_a_retry_hint() {
 }
 
 #[tokio::test]
+async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let config = ResourcesConfig {
+        max_turns: Some(1),
+        ..ResourcesConfig::default()
+    };
+    let host = FakeHost(Arc::new(Mutex::new(8)));
+    let admission = Arc::new(Admission::new(config.budget(8), Box::new(host)));
+    daemon.manager.admit_turns(admission.clone()).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    // The primary's turn runs on, holding the only slot, while it calls the task tools.
+    let prompt = CommandBody::SendPrompt {
+        session_id: primary.clone(),
+        text: "Hang.".into(),
+    };
+    daemon.manager.handle(alice(), prompt).await.unwrap();
+    daemon
+        .until_n(&primary, 2, |body| {
+            matches!(body, EventBody::TurnStarted { .. })
+        })
+        .await;
+    let mut tools = daemon.connect(&primary);
+    let spawn = json!({ "task": "T", "prompt": "Do it." });
+
+    // Only the turn limit binds, so the spawn succeeds and the child's turn waits.
+    let child = id(&tools.ok("spawn", spawn.clone()).await["child"]);
+    daemon
+        .until(&child, |body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity
+                }
+            )
+        })
+        .await;
+    assert_eq!(admission.resources().waiting_turns, 1);
+
+    // Waiting for the child lends it the primary's slot; the primary takes it back after.
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report", "{report}");
+    assert_eq!(report["summary"], "Done: Do it.");
+    let host = admission.resources();
+    assert_eq!((host.running_turns, host.waiting_turns), (1, 0));
+
+    // The primary goes on with its task the same way.
+    tools.ok("spawn", spawn).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["summary"], "Done: Do it.", "{report}");
+    assert_eq!(admission.resources().running_turns, 1);
+}
+
+#[tokio::test]
 async fn concurrent_spawns_cannot_both_take_the_last_free_slot() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 1 }).await;

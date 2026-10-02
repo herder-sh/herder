@@ -6,9 +6,11 @@
 //! permission mode may never exceed the primary's, and a child cannot spawn (a task is one
 //! level deep). A primary has at most [`TaskLimits::max_children`] live (not archived)
 //! children at once; `spawn` past that is refused as `limit_exceeded`. While the host admits no
-//! more turns ([`crate::resources::admission`]), `spawn` is refused as `host_busy` with a hint
-//! to retry after [`RETRY_AFTER_SECS`]. Every prompt the
-//! primary sends is journaled in the child with no `by`, since the agent sent it.
+//! more turns for want of memory, load or pressure ([`crate::resources::admission`]), `spawn` is
+//! refused as `host_busy` with a hint to retry after [`RETRY_AFTER_SECS`]; while only the turn
+//! limit binds, the child is created and its first turn waits for a slot. While `wait_for`
+//! blocks, the primary's turn lends its slot to other turns, so its children can run. Every
+//! prompt the primary sends is journaled in the child with no `by`, since the agent sent it.
 //!
 //! When a child's turn ends, however it ended, the child journals `child_reported` in the
 //! primary, with its final assistant message of the turn or a short failure status, and the
@@ -266,7 +268,14 @@ impl ToolHandler for TaskTools {
                 ToolCall::Spawn(input) => success(manager.spawn(caller, input, limits).await),
                 ToolCall::Send(input) => success(manager.send_child(caller, input).await),
                 ToolCall::Status(input) => success(manager.child_status(caller, input).await),
-                ToolCall::WaitFor(input) => success(manager.wait_for(caller, input).await),
+                ToolCall::WaitFor(input) => {
+                    // The caller's turn uses no CPU while it waits for its children: its slot
+                    // goes to them meanwhile.
+                    let parked = manager.inner.admission.get().and_then(|a| a.park(&caller));
+                    let output = manager.wait_for(caller, input).await;
+                    drop(parked);
+                    success(output)
+                }
                 ToolCall::Answer(input) => success(manager.answer(caller, input).await),
                 ToolCall::Escalate(input) => success(manager.escalate(caller, input).await),
             };
@@ -366,7 +375,7 @@ impl SessionManager {
             ));
         }
         if let Some(admission) = self.inner.admission.get()
-            && let Some(constraint) = admission.constraint()
+            && let Some(constraint) = admission.host_constraint()
         {
             return Err(ToolError::host_busy(
                 RETRY_AFTER_SECS,
