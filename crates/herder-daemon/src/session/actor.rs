@@ -318,6 +318,15 @@ impl Actor {
             )
             .await
             .map_err(super::worktree_error)?;
+        if let Some(prs) = self.inner.prs.get() {
+            let session = &self.session;
+            prs.uninstall(
+                &session.session_id,
+                Path::new(&session.repo),
+                Path::new(&session.worktree),
+            )
+            .await;
+        }
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
         }

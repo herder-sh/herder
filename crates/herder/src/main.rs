@@ -1,6 +1,7 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
 mod dev;
+mod hook;
 mod pair;
 mod service;
 mod update;
@@ -53,6 +54,12 @@ enum Command {
         #[command(subcommand)]
         command: dev::Command,
     },
+    /// Run by the git hooks herder installs in session worktrees.
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        hook: hook::Hook,
+    },
 }
 
 fn main() -> ExitCode {
@@ -71,6 +78,7 @@ fn main() -> ExitCode {
         })
         .map(|()| ExitCode::SUCCESS),
         Some(Command::Dev { command }) => dev::run(command),
+        Some(Command::Hook { hook }) => hook::run(hook),
         None => {
             println!("{}", herder_tui::run());
             Ok(ExitCode::SUCCESS)

@@ -5,6 +5,7 @@ pub mod config;
 pub mod data_dir;
 pub mod hub;
 pub mod logging;
+pub mod prs;
 pub mod session;
 pub mod worktree;
 pub mod ws;
@@ -83,6 +84,15 @@ pub async fn serve(
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
+    sessions
+        .track_prs(prs::Config {
+            data_dir: data_dir.root().to_owned(),
+            herder: herder_binary()?,
+            github: Arc::new(prs::GhCli),
+            fast: prs::FAST,
+            slow: prs::SLOW,
+        })
+        .await?;
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
@@ -108,6 +118,17 @@ pub async fn serve(
         .await;
     info!("herder daemon stopped");
     Ok(())
+}
+
+/// The running herder binary, for session git hooks to call. After an update replaced it on
+/// disk, Linux reports the old path with ` (deleted)`; the new binary is at that path.
+fn herder_binary() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe().context("locating the herder binary")?;
+    let path = exe.to_string_lossy();
+    Ok(match path.strip_suffix(" (deleted)") {
+        Some(path) => path.into(),
+        None => exe,
+    })
 }
 
 /// This machine's host name, for display.
