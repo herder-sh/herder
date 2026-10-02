@@ -69,8 +69,51 @@
       "description": "Identifies a provider account on a host; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "Answer": {
+      "description": "An answer to a question.",
+      "oneOf": [
+        {
+          "description": "A free-text answer.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Answer text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "One of the question's choices.",
+          "type": "object",
+          "properties": {
+            "index": {
+              "description": "Position of the choice in the question's `choices`, from 0.",
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "choice"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ]
+        }
+      ]
+    },
     "ApprovalDecision": {
-      "description": "A user's answer to an approval request.",
+      "description": "An answer to an approval request.",
       "oneOf": [
         {
           "description": "Run the tool call once.",
@@ -272,7 +315,7 @@
           ]
         },
         {
-          "description": "Answer a pending approval request.",
+          "description": "Answer a pending approval request as the user, whoever it is routed to.",
           "type": "object",
           "properties": {
             "approval_id": {
@@ -297,6 +340,34 @@
             "session_id",
             "approval_id",
             "decision"
+          ]
+        },
+        {
+          "description": "Answer a pending question as the user, whoever it is routed to.",
+          "type": "object",
+          "properties": {
+            "answer": {
+              "description": "The answer.",
+              "$ref": "#/$defs/Answer"
+            },
+            "question_id": {
+              "description": "Question to answer.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "session_id": {
+              "description": "Session that asked.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "answer_question"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "question_id",
+            "answer"
           ]
         },
         {
@@ -579,6 +650,10 @@
           "const": "full_access"
         }
       ]
+    },
+    "QuestionId": {
+      "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",

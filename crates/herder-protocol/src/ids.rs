@@ -41,6 +41,8 @@ id! {
     ItemId,
     /// Identifies an approval request within a session; a ULID string, opaque to receivers.
     ApprovalId,
+    /// Identifies a question within a session; a ULID string, opaque to receivers.
+    QuestionId,
     /// Identifies a host running a daemon; a ULID string, opaque to receivers.
     HostId,
     /// Identifies a provider account on a host; a ULID string, opaque to receivers.

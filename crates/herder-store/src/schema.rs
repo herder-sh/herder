@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -46,6 +46,13 @@ CREATE TABLE session_prs (
     mergeable  TEXT    NOT NULL,
     PRIMARY KEY (session_id, number)
 ) STRICT;
+";
+
+/// Task trees: a child session's primary session and its task label.
+const V2: &str = "
+ALTER TABLE sessions ADD COLUMN parent TEXT;
+ALTER TABLE sessions ADD COLUMN task TEXT;
+CREATE INDEX sessions_parent ON sessions (parent);
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

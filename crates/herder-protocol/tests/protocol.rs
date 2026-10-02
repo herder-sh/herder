@@ -144,6 +144,18 @@ fn client_fixtures() -> Vec<ClientMessage> {
             mode,
         }));
     }
+    for answer in [
+        Answer::Text {
+            text: "Use the staging database".into(),
+        },
+        Answer::Choice { index: 1 },
+    ] {
+        messages.push(command(CommandBody::AnswerQuestion {
+            session_id: session_id(),
+            question_id: QuestionId::new("01J9QUESTION"),
+            answer,
+        }));
+    }
     for decision in [ApprovalDecision::Allow, ApprovalDecision::Deny] {
         messages.push(command(CommandBody::AnswerApproval {
             session_id: session_id(),
@@ -218,6 +230,8 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 account_id: account_id(),
                 model: "opus".into(),
                 permission_mode: PermissionMode::Ask,
+                parent: None,
+                task: None,
             },
         ),
         event(2, owner, EventBody::TurnStarted { turn_id: turn_id() }),
@@ -257,6 +271,8 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 turn_id: turn_id(),
                 tool_call_id: ItemId::new("01J9ITEM"),
                 summary: "Run cargo build".into(),
+                routed_to: Route::User,
+                reason: None,
             },
         ),
         event(
@@ -331,9 +347,11 @@ fn server_fixtures() -> Vec<ServerMessage> {
             EventBody::ApprovalResolved {
                 approval_id: ApprovalId::new("01J9APPROVAL"),
                 decision,
+                answered_by: Answerer::User,
             },
         ));
     }
+    messages.extend(task_fixtures());
     for status in [
         SessionStatus::Idle,
         SessionStatus::Running,
@@ -449,6 +467,149 @@ fn server_fixtures() -> Vec<ServerMessage> {
         device_id: DeviceId::new("01J9DEVICE"),
         role: Role::Member,
     }));
+    messages
+}
+
+/// Events of a task: a child session, its parent's journal, and routed approvals and questions.
+fn task_fixtures() -> Vec<ServerMessage> {
+    let primary = || SessionId::new("01J9PRIMARY");
+    let child = || SessionId::new("01J9SESSION");
+    let turn_id = || TurnId::new("01J9TURN");
+    let approval_id = || ApprovalId::new("01J9APPROVAL");
+    let question_id = || QuestionId::new("01J9QUESTION");
+    let owner = Some("01J9OWNER");
+    let in_primary = |seq, body| {
+        ServerMessage::Event(Event {
+            session_id: primary(),
+            seq,
+            at: at(),
+            by: None,
+            body,
+        })
+    };
+    let mut messages = vec![
+        event(
+            1,
+            owner,
+            EventBody::SessionCreated {
+                repo: "/home/dev/herder".into(),
+                worktree: "/home/dev/herder-p0-6-store".into(),
+                branch: "p0-6-store".into(),
+                provider: Provider::Claude,
+                account_id: AccountId::new("01J9ACCOUNT"),
+                model: "opus".into(),
+                permission_mode: PermissionMode::AutoEdit,
+                parent: Some(primary()),
+                task: Some("Store migration".into()),
+            },
+        ),
+        in_primary(
+            4,
+            EventBody::ChildSpawned {
+                child_session_id: child(),
+                task: "Store migration".into(),
+            },
+        ),
+        in_primary(
+            9,
+            EventBody::ChildReported {
+                child_session_id: child(),
+                turn_id: turn_id(),
+                summary: "Added the parent column.".into(),
+            },
+        ),
+        event(
+            2,
+            None,
+            EventBody::ApprovalRequested {
+                approval_id: approval_id(),
+                turn_id: turn_id(),
+                tool_call_id: ItemId::new("01J9ITEM"),
+                summary: "Run cargo test".into(),
+                routed_to: Route::Primary,
+                reason: None,
+            },
+        ),
+        event(
+            3,
+            None,
+            EventBody::ApprovalResolved {
+                approval_id: approval_id(),
+                decision: ApprovalDecision::Allow,
+                answered_by: Answerer::Primary {
+                    session_id: primary(),
+                },
+            },
+        ),
+        event(
+            4,
+            None,
+            EventBody::QuestionAsked {
+                question_id: question_id(),
+                turn_id: turn_id(),
+                text: "Which database should the migration target?".into(),
+                choices: vec![],
+                routed_to: Route::Primary,
+                reason: None,
+            },
+        ),
+        event(
+            5,
+            None,
+            EventBody::QuestionAnswered {
+                question_id: question_id(),
+                answer: Answer::Text {
+                    text: "SQLite only".into(),
+                },
+                answered_by: Answerer::Primary {
+                    session_id: primary(),
+                },
+            },
+        ),
+        event(
+            6,
+            None,
+            EventBody::QuestionAsked {
+                question_id: question_id(),
+                turn_id: turn_id(),
+                text: "Force-push the branch?".into(),
+                choices: vec!["Yes".into(), "No".into()],
+                routed_to: Route::User,
+                reason: Some(EscalationReason::ExceedsAuthority),
+            },
+        ),
+        event(
+            7,
+            owner,
+            EventBody::QuestionAnswered {
+                question_id: question_id(),
+                answer: Answer::Choice { index: 1 },
+                answered_by: Answerer::User,
+            },
+        ),
+    ];
+    for reason in [
+        EscalationReason::MarkedByPrimary,
+        EscalationReason::ExceedsAuthority,
+        EscalationReason::Timeout,
+    ] {
+        messages.push(event(
+            8,
+            None,
+            EventBody::QuestionEscalated {
+                question_id: question_id(),
+                reason,
+            },
+        ));
+        messages.push(event(
+            8,
+            None,
+            EventBody::ApprovalEscalated {
+                approval_id: approval_id(),
+                reason,
+            },
+        ));
+    }
     messages
 }
 
@@ -633,6 +794,52 @@ fn unknown_tags_decode_to_unknown() {
 
     let status: SessionStatus = serde_json::from_value(json!("paused")).unwrap();
     assert_eq!(status, SessionStatus::Unknown);
+}
+
+#[test]
+fn events_without_task_fields_decode_as_top_level_and_user_routed() {
+    let body: EventBody = serde_json::from_value(json!({
+        "type": "session_created",
+        "repo": "/r",
+        "worktree": "/w",
+        "branch": "b",
+        "provider": "claude",
+        "account_id": "a",
+        "model": "opus",
+        "permission_mode": "ask"
+    }))
+    .unwrap();
+    let EventBody::SessionCreated { parent, task, .. } = body else {
+        panic!("expected session_created");
+    };
+    assert_eq!((parent, task), (None, None));
+
+    let body: EventBody = serde_json::from_value(json!({
+        "type": "approval_requested",
+        "approval_id": "ap",
+        "turn_id": "t",
+        "tool_call_id": "i",
+        "summary": "Run it"
+    }))
+    .unwrap();
+    let EventBody::ApprovalRequested {
+        routed_to, reason, ..
+    } = body
+    else {
+        panic!("expected approval_requested");
+    };
+    assert_eq!((routed_to, reason), (Route::User, None));
+
+    let body: EventBody = serde_json::from_value(json!({
+        "type": "approval_resolved",
+        "approval_id": "ap",
+        "decision": "allow"
+    }))
+    .unwrap();
+    let EventBody::ApprovalResolved { answered_by, .. } = body else {
+        panic!("expected approval_resolved");
+    };
+    assert_eq!(answered_by, Answerer::User);
 }
 
 #[test]
