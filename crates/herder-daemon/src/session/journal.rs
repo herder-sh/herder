@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    CommandId, CommandResult, Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead,
-    SessionId, SessionStatus, Timestamp, UserId,
+    CommandId, CommandResult, Event, EventBody, HostId, JournalRecord, Project, ProjectId,
+    PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UserId,
 };
 use herder_store::{NewEvent, QueuedPrompt, Session, Store};
 
@@ -104,6 +104,51 @@ impl Journal {
     ) -> Result<Vec<Event>> {
         self.with_store(move |store| store.read_since(&session_id, after_seq, limit))
             .await
+    }
+
+    /// Up to `limit` events of a session after `after_seq`, as stored; for replication.
+    pub(crate) async fn records_since(
+        &self,
+        session_id: SessionId,
+        after_seq: Seq,
+        limit: usize,
+    ) -> Result<Vec<JournalRecord>> {
+        self.with_store(move |store| store.read_records_since(&session_id, after_seq, limit))
+            .await
+    }
+
+    /// Every session as the vault's fleet index lists it, ordered by session id; a session
+    /// whose repo discovery has not resolved yet gets the local project id of `host`.
+    pub(crate) async fn summaries(&self, host: &HostId) -> Result<Vec<SessionSummary>> {
+        let sessions = self
+            .with_store(|store| {
+                let sessions = store.sessions()?;
+                sessions
+                    .into_iter()
+                    .map(|session| Ok((store.session_prs(&session.session_id)?, session)))
+                    .collect::<herder_store::Result<Vec<_>>>()
+            })
+            .await?;
+        let projects = self.projects();
+        Ok(sessions
+            .into_iter()
+            .map(|(prs, session)| SessionSummary {
+                project_id: projects
+                    .by_path
+                    .get(&session.repo)
+                    .cloned()
+                    .unwrap_or_else(|| ProjectId::local(host, &session.repo)),
+                session_id: session.session_id,
+                repo: session.repo,
+                branch: session.branch,
+                status: session.status,
+                prs,
+                parent: session.parent,
+                task: session.task,
+                head_seq: session.last_seq,
+                updated_at: session.updated_at,
+            })
+            .collect())
     }
 
     /// Every event of a session, oldest first.

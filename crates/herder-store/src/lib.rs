@@ -23,8 +23,8 @@ mod schema;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, CommandId, CommandResult, Event, EventBody, PermissionMode, Provider, PullRequest,
-    Seq, SessionId, SessionStatus, Timestamp, UserId,
+    AccountId, CommandId, CommandResult, Event, EventBody, JournalRecord, PermissionMode, Provider,
+    PullRequest, RawEventBody, Seq, SessionId, SessionStatus, Timestamp, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -224,6 +224,39 @@ impl Store {
         let rows = stmt.query_map(
             params![session.as_str(), clamp(after_seq), clamp(limit)],
             read_event,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Up to `limit` events of `session` with seq greater than `after_seq`, oldest first, exactly
+    /// as stored: the body is the raw JSON, whether or not this build knows its type. For
+    /// replication, which must pass on event types newer than this build.
+    pub fn read_records_since(
+        &self,
+        session: &SessionId,
+        after_seq: Seq,
+        limit: usize,
+    ) -> Result<Vec<JournalRecord>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT seq, at, by, body FROM events
+             WHERE session_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![session.as_str(), clamp(after_seq), clamp(limit)],
+            |row| {
+                let body: String = row.get(3)?;
+                let body = serde_json::from_str(&body)
+                    .and_then(RawEventBody::from_value)
+                    .map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(3, Type::Text, Box::new(err))
+                    })?;
+                Ok(JournalRecord {
+                    seq: row.get(0)?,
+                    at: row.get(1)?,
+                    by: row.get::<_, Option<String>>(2)?.map(UserId::new),
+                    body,
+                })
+            },
         )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

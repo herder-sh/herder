@@ -31,6 +31,9 @@ enum Command {
         /// Config file [default: $XDG_CONFIG_HOME/herder/daemon.toml].
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
+        /// Run as the vault, keeping the sessions hosts replicate to it, as `mode = "vault"`.
+        #[arg(long)]
+        vault: bool,
     },
     /// Pair a device with the daemon running on this machine, or list and revoke devices.
     Pair(pair::Args),
@@ -96,7 +99,9 @@ fn main() -> ExitCode {
         }
     };
     let result = match cli.command {
-        Some(Command::Daemon { config }) => daemon(config).map(|()| ExitCode::SUCCESS),
+        Some(Command::Daemon { config, vault }) => {
+            daemon(config, vault).map(|()| ExitCode::SUCCESS)
+        }
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
@@ -125,8 +130,15 @@ fn main() -> ExitCode {
     })
 }
 
-fn daemon(config: Option<PathBuf>) -> anyhow::Result<()> {
-    let config = herder_daemon::Config::load(config.as_deref())?;
+fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
+    let mut config = herder_daemon::Config::load(config.as_deref())?;
+    if vault {
+        anyhow::ensure!(
+            config.vault.is_none(),
+            "a vault does not replicate to another vault; remove the [vault] table"
+        );
+        config.mode = herder_daemon::config::Mode::Vault;
+    }
     herder_daemon::logging::init(&config.log)?;
     herder_daemon::run(config)
 }
@@ -151,10 +163,19 @@ mod tests {
     fn parses_config_flag() {
         let cli =
             Cli::try_parse_from(["herder", "daemon", "--config", "/etc/herder.toml"]).unwrap();
-        let Some(Command::Daemon { config }) = cli.command else {
+        let Some(Command::Daemon { config, .. }) = cli.command else {
             panic!("expected daemon");
         };
         assert_eq!(config, Some(PathBuf::from("/etc/herder.toml")));
+    }
+
+    #[test]
+    fn parses_vault_flag() {
+        let cli = Cli::try_parse_from(["herder", "daemon", "--vault"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon { vault: true, .. })
+        ));
     }
 
     #[test]

@@ -1047,6 +1047,7 @@ dependencies = [
  "portable-pty",
  "rcgen",
  "ring",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

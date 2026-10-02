@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     AccountId, CiStatus, CommandId, CommandResult, Event, EventBody, Item, ItemBody, ItemId,
-    Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus, SessionId,
-    SessionStatus, Timestamp, TurnId, UserId,
+    JournalRecord, Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus,
+    SessionId, SessionStatus, Timestamp, TurnId, UserId,
 };
 use herder_store::{COMMAND_RESULTS_KEPT, Error, NewEvent, QueuedPrompt, Session, Store};
 use proptest::prelude::*;
@@ -464,6 +464,43 @@ fn undecodable_bodies_read_as_unknown_keeping_their_seq() {
         events[3].body,
         EventBody::ModelSwitched { model: "m".into() }
     );
+}
+
+#[test]
+fn records_keep_bodies_this_build_cannot_decode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let mut store = Store::open(&path).unwrap();
+    let s = SessionId::new("s1");
+    let first = store.append(new_event(&s, 0, created())).unwrap();
+    let raw = Connection::open(&path).unwrap();
+    raw.execute_batch(
+        "INSERT INTO events (session_id, seq, at, by, event_type, body) VALUES
+           ('s1', 2, '2027-01-15T08:00:00Z', 'u1', 'from_the_future', '{\"type\":\"from_the_future\",\"x\":1}');",
+    )
+    .unwrap();
+    drop(raw);
+    store
+        .append(new_event(
+            &s,
+            5,
+            EventBody::ModelSwitched { model: "m".into() },
+        ))
+        .unwrap();
+
+    let records = store.read_records_since(&s, 0, 10).unwrap();
+    let seqs: Vec<_> = records.iter().map(|r| r.seq).collect();
+    assert_eq!(seqs, [1, 2, 3]);
+    assert_eq!(records[0], JournalRecord::from_event(&first).unwrap());
+    assert_eq!(records[1].body.event_type(), "from_the_future");
+    assert_eq!(records[1].body.as_json()["x"], 1);
+    assert_eq!(records[1].by, Some(UserId::new("u1")));
+    assert_eq!(
+        records[2].body.decode(),
+        EventBody::ModelSwitched { model: "m".into() }
+    );
+    let after = store.read_records_since(&s, 1, 1).unwrap();
+    assert_eq!(after.iter().map(|r| r.seq).collect::<Vec<_>>(), [2]);
 }
 
 #[test]
