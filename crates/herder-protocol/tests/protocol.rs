@@ -1168,3 +1168,285 @@ fn terminal_purpose_is_tagged() {
         json!({"terminal_id": "t", "purpose": {"type": "login", "account_id": "a"}})
     );
 }
+
+fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
+    SessionSummary {
+        session_id: SessionId::new("01J9SESSION"),
+        project_id: ProjectId::new("github.com/herder-sh/herder"),
+        repo: "/home/dev/herder".into(),
+        branch: "herder/1a2b3c4d".into(),
+        status,
+        prs,
+        parent: None,
+        task: None,
+        head_seq: 17,
+        updated_at: at(),
+    }
+}
+
+/// One message per variant of every host-sent replication type, and every value of its enums.
+fn host_fixtures() -> Vec<HostMessage> {
+    let mut messages = vec![
+        HostMessage::Hello(HostHello {
+            replication_version: REPLICATION_VERSION,
+            host_id: HostId::new("01J9HOST"),
+            host_name: "devbox".into(),
+            build: "herder/0.0.0".into(),
+            pairing_code: Some("483-921".into()),
+        }),
+        HostMessage::Hello(HostHello {
+            replication_version: REPLICATION_VERSION,
+            host_id: HostId::new("01J9HOST"),
+            host_name: "devbox".into(),
+            build: "herder/0.0.0".into(),
+            pairing_code: None,
+        }),
+        HostMessage::Session(SessionSummary {
+            parent: Some(SessionId::new("01J9PRIMARY")),
+            task: Some("write the tests".into()),
+            ..summary(SessionStatus::Running, Vec::new())
+        }),
+    ];
+    let statuses = [
+        SessionStatus::Idle,
+        SessionStatus::WaitingForCapacity,
+        SessionStatus::NeedsYou,
+        SessionStatus::Error,
+        SessionStatus::Archived,
+        SessionStatus::Moved,
+    ];
+    messages.extend(
+        statuses
+            .into_iter()
+            .map(|status| HostMessage::Session(summary(status, Vec::new()))),
+    );
+    let prs = vec![
+        pr(
+            PrState::Draft,
+            CiStatus::None,
+            ReviewStatus::None,
+            Mergeable::Unknown,
+        ),
+        pr(
+            PrState::Open,
+            CiStatus::Pending,
+            ReviewStatus::Required,
+            Mergeable::Clean,
+        ),
+        pr(
+            PrState::Merged,
+            CiStatus::Passing,
+            ReviewStatus::Approved,
+            Mergeable::Conflicting,
+        ),
+        pr(
+            PrState::Closed,
+            CiStatus::Failing,
+            ReviewStatus::ChangesRequested,
+            Mergeable::Clean,
+        ),
+    ];
+    messages.push(HostMessage::Session(summary(SessionStatus::Idle, prs)));
+    let record = |seq, by: Option<&str>, body: Value| JournalRecord {
+        seq,
+        at: at(),
+        by: by.map(UserId::new),
+        body: RawEventBody::from_value(body).unwrap(),
+    };
+    messages.push(HostMessage::Batch(Batch {
+        session_id: SessionId::new("01J9SESSION"),
+        events: vec![
+            record(
+                3,
+                Some("01J9OWNER"),
+                json!({ "type": "turn_started", "turn_id": "01J9TURN" }),
+            ),
+            record(
+                4,
+                None,
+                json!({ "type": "event_from_the_future", "detail": { "n": 1 } }),
+            ),
+        ],
+    }));
+    messages
+}
+
+/// One message per variant of every vault-sent replication type, and every value of its enums.
+fn vault_fixtures() -> Vec<VaultMessage> {
+    let cursor = |after_seq| Cursor {
+        session_id: SessionId::new("01J9SESSION"),
+        after_seq,
+    };
+    let mut messages = vec![
+        VaultMessage::Hello(VaultHello {
+            replication_version: REPLICATION_VERSION,
+            build: "herder/0.0.0".into(),
+            acked: vec![cursor(12)],
+        }),
+        VaultMessage::Ack(cursor(17)),
+        VaultMessage::Rejected {
+            cursor: cursor(12),
+            reason: RejectReason::Gap,
+        },
+        VaultMessage::Rejected {
+            cursor: cursor(12),
+            reason: RejectReason::Conflict,
+        },
+    ];
+    let codes = [
+        ReplicationErrorCode::BadRequest,
+        ReplicationErrorCode::Forbidden,
+        ReplicationErrorCode::Internal,
+    ];
+    messages.extend(codes.into_iter().map(|code| VaultMessage::Error {
+        error: ReplicationError {
+            code,
+            message: "detail".into(),
+        },
+    }));
+    messages
+}
+
+#[test]
+fn every_replication_message_round_trips() {
+    host_fixtures().iter().for_each(assert_round_trips);
+    vault_fixtures().iter().for_each(assert_round_trips);
+}
+
+#[test]
+fn every_replication_message_matches_its_schema() {
+    assert_valid(&host_schema(), &host_fixtures());
+    assert_valid(&vault_schema(), &vault_fixtures());
+}
+
+#[test]
+fn replication_fixtures_cover_every_variant_and_enum_value() {
+    assert_covered(&host_schema(), &host_fixtures());
+    assert_covered(&vault_schema(), &vault_fixtures());
+}
+
+#[test]
+fn host_schema_matches_snapshot() {
+    assert_schema_snapshot("host_message.json", &host_schema());
+}
+
+#[test]
+fn vault_schema_matches_snapshot() {
+    assert_schema_snapshot("vault_message.json", &vault_schema());
+}
+
+#[test]
+fn journal_records_carry_bodies_as_stored() {
+    let event = Event {
+        session_id: SessionId::new("01J9SESSION"),
+        seq: 3,
+        at: at(),
+        by: Some(UserId::new("01J9OWNER")),
+        body: EventBody::ItemAdded {
+            item: item(ItemBody::UserMessage { text: "hi".into() }),
+        },
+    };
+    let record = JournalRecord::from_event(&event).unwrap();
+    assert_eq!(
+        serde_json::to_value(&record).unwrap(),
+        json!({
+            "seq": 3,
+            "at": "2026-10-02T12:00:00Z",
+            "by": "01J9OWNER",
+            "body": serde_json::to_value(&event.body).unwrap(),
+        })
+    );
+    assert_eq!(record.body.event_type(), "item_added");
+    assert_eq!(record.to_event(SessionId::new("01J9SESSION")), event);
+    assert!(
+        JournalRecord::from_event(&Event {
+            body: EventBody::Unknown,
+            ..event
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn unknown_event_types_pass_through_verbatim() {
+    let body = json!({ "type": "event_from_the_future", "detail": { "n": 1 } });
+    let raw: RawEventBody = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(raw.event_type(), "event_from_the_future");
+    assert_eq!(raw.decode(), EventBody::Unknown);
+    assert_eq!(serde_json::to_value(&raw).unwrap(), body);
+    // A known type whose shape changed is kept as well, and decodes like the store reads it.
+    let changed = json!({ "type": "turn_started", "turn": 7 });
+    let raw = RawEventBody::from_value(changed.clone()).unwrap();
+    assert_eq!(raw.decode(), EventBody::Unknown);
+    assert_eq!(serde_json::to_value(&raw).unwrap(), changed);
+}
+
+#[test]
+fn event_bodies_without_a_string_type_are_rejected() {
+    for body in [
+        json!({ "kind": "x" }),
+        json!({ "type": 1 }),
+        json!("turn_started"),
+    ] {
+        assert!(serde_json::from_value::<RawEventBody>(body).is_err());
+    }
+}
+
+#[test]
+fn unknown_replication_tags_decode_to_unknown() {
+    let host: HostMessage = serde_json::from_value(json!({ "type": "future", "x": 1 })).unwrap();
+    assert_eq!(host, HostMessage::Unknown);
+    let vault: VaultMessage = serde_json::from_value(json!({ "type": "future", "x": 1 })).unwrap();
+    assert_eq!(vault, VaultMessage::Unknown);
+    assert!(serde_json::to_string(&HostMessage::Unknown).is_err());
+    assert!(serde_json::to_string(&VaultMessage::Unknown).is_err());
+}
+
+#[test]
+fn replication_optional_fields_may_be_absent() {
+    let hello: HostMessage = serde_json::from_value(json!({
+        "type": "hello",
+        "replication_version": REPLICATION_VERSION,
+        "host_id": "01J9HOST",
+        "host_name": "devbox",
+        "build": "herder/0.0.0"
+    }))
+    .unwrap();
+    let HostMessage::Hello(hello) = hello else {
+        panic!("not a hello: {hello:?}")
+    };
+    assert_eq!(hello.pairing_code, None);
+    let session: HostMessage = serde_json::from_value(json!({
+        "type": "session",
+        "session_id": "01J9SESSION",
+        "project_id": "github.com/herder-sh/herder",
+        "repo": "/home/dev/herder",
+        "branch": "herder/1a2b3c4d",
+        "status": "idle",
+        "prs": [],
+        "head_seq": 1,
+        "updated_at": "2026-10-02T12:00:00Z"
+    }))
+    .unwrap();
+    let HostMessage::Session(session) = session else {
+        panic!("not a session: {session:?}")
+    };
+    assert_eq!((session.parent, session.task), (None, None));
+}
+
+/// The vault never writes to a host's sessions: nothing it can send carries an event or a command.
+#[test]
+fn vault_messages_carry_no_events_or_commands() {
+    let schema = vault_schema();
+    let defs = schema.as_value()["$defs"].as_object().unwrap();
+    for absent in [
+        "Event",
+        "EventBody",
+        "RawEventBody",
+        "JournalRecord",
+        "Batch",
+        "Command",
+    ] {
+        assert!(!defs.contains_key(absent), "vault schema has {absent}");
+    }
+}

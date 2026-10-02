@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VaultMessage",
+  "description": "A vault-to-host message.",
+  "oneOf": [
+    {
+      "description": "Answer to the host's hello.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "hello"
+        }
+      },
+      "$ref": "#/$defs/VaultHello",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Every event of the session up to and including `after_seq` is durable on the vault.\nCumulative: a later ack covers every earlier one.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "ack"
+        }
+      },
+      "$ref": "#/$defs/Cursor",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A batch was refused and changed nothing; `cursor` is the last seq the vault holds.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "The session and the last seq the vault holds of it.",
+          "$ref": "#/$defs/Cursor"
+        },
+        "reason": {
+          "description": "Why the batch was refused.",
+          "$ref": "#/$defs/RejectReason"
+        },
+        "type": {
+          "type": "string",
+          "const": "rejected"
+        }
+      },
+      "required": [
+        "type",
+        "cursor",
+        "reason"
+      ]
+    },
+    {
+      "description": "The connection failed, such as a bad hello or a malformed frame; the vault closes it.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "What went wrong.",
+          "$ref": "#/$defs/ReplicationError"
+        },
+        "type": {
+          "type": "string",
+          "const": "error"
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ]
+    }
+  ],
+  "$defs": {
+    "Cursor": {
+      "description": "A position in a session's journal.",
+      "type": "object",
+      "properties": {
+        "after_seq": {
+          "description": "Last event seq the client holds; 0 for none.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "session_id": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "after_seq"
+      ]
+    },
+    "RejectReason": {
+      "description": "Why the vault refused a batch.",
+      "oneOf": [
+        {
+          "description": "The batch starts after the seq following the vault's cursor; re-send from that seq.",
+          "type": "string",
+          "const": "gap"
+        },
+        {
+          "description": "The batch holds an event at a seq the vault already has, and it differs from what the\nvault has. The host's journal diverged from what it replicated earlier; stop\nreplicating the session until someone resolves it.",
+          "type": "string",
+          "const": "conflict"
+        }
+      ]
+    },
+    "ReplicationError": {
+      "description": "A connection-level failure reported to the host.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "What kind of failure.",
+          "$ref": "#/$defs/ReplicationErrorCode"
+        },
+        "message": {
+          "description": "Human-readable detail.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "ReplicationErrorCode": {
+      "description": "Kind of connection-level failure.",
+      "oneOf": [
+        {
+          "description": "The message was malformed or invalid, or came before the hello.",
+          "type": "string",
+          "const": "bad_request"
+        },
+        {
+          "description": "The device is not paired, or the hello names a host it was not paired as.",
+          "type": "string",
+          "const": "forbidden"
+        },
+        {
+          "description": "The vault failed.",
+          "type": "string",
+          "const": "internal"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "Identifies a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "VaultHello": {
+      "description": "The vault's answer to a host's hello.",
+      "type": "object",
+      "properties": {
+        "acked": {
+          "description": "For every session of this host the vault holds, the last seq it holds durably. A session\nnot listed has nothing on the vault yet. The host resumes each session right after its\ncursor here. Empty when the replication versions differ.\n\nA cursor beyond the host's own latest seq means the host lost events the vault holds,\nsuch as after restoring an older backup; its next events at those seqs would conflict,\nso the host does not replicate that session until someone resolves it.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cursor"
+          }
+        },
+        "build": {
+          "description": "Build name and version, for logs, e.g. `herder/0.1.0`.",
+          "type": "string"
+        },
+        "replication_version": {
+          "description": "The vault's [`REPLICATION_VERSION`]; on a mismatch both sides disconnect.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "replication_version",
+        "build",
+        "acked"
+      ]
+    }
+  }
+}

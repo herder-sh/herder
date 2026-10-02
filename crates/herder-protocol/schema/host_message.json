@@ -1,0 +1,426 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HostMessage",
+  "description": "A host-to-vault message.",
+  "oneOf": [
+    {
+      "description": "First message on every connection.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "hello"
+        }
+      },
+      "$ref": "#/$defs/HostHello",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "A session's current state for the fleet index; sent for every session after the vault's\nhello, then whenever any of it changes. Replaces what the vault had for the session.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "session"
+        }
+      },
+      "$ref": "#/$defs/SessionSummary",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "Consecutive journal events of one session.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "batch"
+        }
+      },
+      "$ref": "#/$defs/Batch",
+      "required": [
+        "type"
+      ]
+    }
+  ],
+  "$defs": {
+    "Batch": {
+      "description": "Events of one session with consecutive seqs, oldest first.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "description": "One to [`MAX_BATCH_EVENTS`] events, each seq one more than the one before.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JournalRecord"
+          }
+        },
+        "session_id": {
+          "description": "Session whose journal holds the events.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "events"
+      ]
+    },
+    "CiStatus": {
+      "description": "Combined status of a pull request's checks.",
+      "oneOf": [
+        {
+          "description": "No checks reported.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Checks still running.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Every check passed.",
+          "type": "string",
+          "const": "passing"
+        },
+        {
+          "description": "At least one check failed.",
+          "type": "string",
+          "const": "failing"
+        }
+      ]
+    },
+    "HostHello": {
+      "description": "Opening message of a host connection.",
+      "type": "object",
+      "properties": {
+        "build": {
+          "description": "Build name and version, for logs, e.g. `herder/0.1.0`.",
+          "type": "string"
+        },
+        "host_id": {
+          "description": "The host; must be the host this connection's device was paired as.",
+          "$ref": "#/$defs/HostId"
+        },
+        "host_name": {
+          "description": "Display name of the host.",
+          "type": "string"
+        },
+        "pairing_code": {
+          "description": "One-time code from the vault's pairing, sent by a host that is not paired yet; ignored\nonce it is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replication_version": {
+          "description": "Must equal the vault's [`REPLICATION_VERSION`].",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "replication_version",
+        "host_id",
+        "host_name",
+        "build"
+      ]
+    },
+    "HostId": {
+      "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "JournalRecord": {
+      "description": "One event of a session's journal, exactly as the host stored it.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "When the host recorded the event.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "body": {
+          "description": "What happened, as stored.",
+          "$ref": "#/$defs/RawEventBody"
+        },
+        "by": {
+          "description": "User whose command caused the event; absent when the agent or the daemon caused it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seq": {
+          "description": "Position in the session's journal, gap-free from 1.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "seq",
+        "at",
+        "body"
+      ]
+    },
+    "Mergeable": {
+      "description": "Whether a pull request can merge cleanly.",
+      "oneOf": [
+        {
+          "description": "Merges cleanly.",
+          "type": "string",
+          "const": "clean"
+        },
+        {
+          "description": "Has conflicts with its base.",
+          "type": "string",
+          "const": "conflicting"
+        },
+        {
+          "description": "GitHub has not computed it yet.",
+          "type": "string",
+          "const": "unknown"
+        }
+      ]
+    },
+    "PrState": {
+      "description": "Lifecycle state of a pull request.",
+      "oneOf": [
+        {
+          "description": "Draft, not ready for review.",
+          "type": "string",
+          "const": "draft"
+        },
+        {
+          "description": "Open for review.",
+          "type": "string",
+          "const": "open"
+        },
+        {
+          "description": "Merged.",
+          "type": "string",
+          "const": "merged"
+        },
+        {
+          "description": "Closed without merging.",
+          "type": "string",
+          "const": "closed"
+        }
+      ]
+    },
+    "ProjectId": {
+      "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
+      "type": "string"
+    },
+    "PullRequest": {
+      "description": "A GitHub pull request tracked for a session.",
+      "type": "object",
+      "properties": {
+        "ci": {
+          "description": "Combined status of required checks.",
+          "$ref": "#/$defs/CiStatus"
+        },
+        "mergeable": {
+          "description": "Whether it can merge cleanly.",
+          "$ref": "#/$defs/Mergeable"
+        },
+        "number": {
+          "description": "Number in the session's repository.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "review": {
+          "description": "Review verdict.",
+          "$ref": "#/$defs/ReviewStatus"
+        },
+        "state": {
+          "description": "Lifecycle state.",
+          "$ref": "#/$defs/PrState"
+        },
+        "title": {
+          "description": "Title.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Web URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "title",
+        "state",
+        "ci",
+        "review",
+        "mergeable"
+      ]
+    },
+    "RawEventBody": {
+      "description": "An event body exactly as the host stored it: an `EventBody` of the client protocol (see `server_message.json`), or a type newer than the receiver, kept verbatim.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "ReviewStatus": {
+      "description": "Review verdict on a pull request.",
+      "oneOf": [
+        {
+          "description": "No review required or given.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Waiting for a required review.",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Approved.",
+          "type": "string",
+          "const": "approved"
+        },
+        {
+          "description": "A reviewer requested changes.",
+          "type": "string",
+          "const": "changes_requested"
+        }
+      ]
+    },
+    "SessionId": {
+      "description": "Identifies a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "SessionStatus": {
+      "description": "Where a session stands, as shown in lists.",
+      "oneOf": [
+        {
+          "description": "Waiting for a prompt.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "A prompt waits for the host to have capacity for another turn; the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+          "type": "string",
+          "const": "waiting_for_capacity"
+        },
+        {
+          "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
+          "type": "string",
+          "const": "needs_you"
+        },
+        {
+          "description": "Cannot continue without intervention.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "Put away by a user; read-only.",
+          "type": "string",
+          "const": "archived"
+        },
+        {
+          "description": "Handed off to another host; read-only here.",
+          "type": "string",
+          "const": "moved"
+        }
+      ]
+    },
+    "SessionSummary": {
+      "description": "A session as the fleet index lists it.",
+      "type": "object",
+      "properties": {
+        "branch": {
+          "description": "Branch the session's worktree has checked out, or had when it was removed.",
+          "type": "string"
+        },
+        "head_seq": {
+          "description": "Seq of the session's latest event on the host; the vault is caught up once it holds it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "parent": {
+          "description": "Primary session of the task this session is a child of; absent for a top-level session.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "description": "Project of the session's repository, as resolved under the host's current config.",
+          "$ref": "#/$defs/ProjectId"
+        },
+        "prs": {
+          "description": "Every pull request tracked for the session.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PullRequest"
+          }
+        },
+        "repo": {
+          "description": "Absolute path of the repository on the host.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "status": {
+          "description": "Current status.",
+          "$ref": "#/$defs/SessionStatus"
+        },
+        "task": {
+          "description": "Short label of the session's task.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "`at` of the session's latest event.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "session_id",
+        "project_id",
+        "repo",
+        "branch",
+        "status",
+        "prs",
+        "head_seq",
+        "updated_at"
+      ]
+    },
+    "UserId": {
+      "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
+      "type": "string"
+    }
+  }
+}
