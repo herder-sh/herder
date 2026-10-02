@@ -1,0 +1,16 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 100, 12).backend()"
+---
+"┌ sessions ─────────────────────┐┌ app · herder/api needs you ──────────────────────── claude-opus ┐"
+"│● box (4)                      ││  so load balancers can probe it.                                │"
+"│ needs you app · herder/api    ││  • one route                                                    │"
+"│ running   └ write the tests   ││  • one test                                                     │"
+"│ error     └ document it       ││  ```rust                                                        │"
+"│ idle      app · herder/fix-log││  fn health() {}                                                 │"
+"│                               ││  ```                                                            │"
+"│                               ││                                                                 │"
+"│                               ││assistant …                                                      │"
+"│                               ││  Now the docs: the endpoint is▌                                 │"
+"└───────────────────────────────┘└─────────────────────────────────────────────────────────────────┘"
+" ● box connected                                                                     ? help  q quit "

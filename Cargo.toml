@@ -28,11 +28,13 @@ herder-protocol = { path = "crates/herder-protocol" }
 herder-store = { path = "crates/herder-store" }
 herder-tasktools = { path = "crates/herder-tasktools" }
 herder-tui = { path = "crates/herder-tui" }
+insta = "1"
 jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
 nix = { version = "0.31", features = ["hostname", "net", "signal"] }
 portable-pty = "0.9"
 proptest = "1"
+ratatui = "0.30"
 qrcode = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 regex = "1"
@@ -46,6 +48,7 @@ serde_json = "1"
 sha2 = "0.11"
 tar = "0.4"
 tempfile = "3"
+textwrap = "0.16"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

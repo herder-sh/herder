@@ -1,0 +1,14 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 100, 10).backend()"
+---
+"┌ sessions ─────────────────────┐┌─────────────────────────────────────────────────────────────────┐"
+"│● box (4)                      ││                                                                 │"
+"│ needs you app · herder/api    ││                                                                 │"
+"│ running   └ write the tests   ││                                                                 │"
+"│ error     └ document it       ││                Select a session and press Enter.                │"
+"│ idle      app · herder/fix-log││                                                                 │"
+"│✗ laptop (0)                   ││                                                                 │"
+"│◌ ci (0)                       ││                                                                 │"
+"└───────────────────────────────┘└─────────────────────────────────────────────────────────────────┘"
+" ● box connected  ✗ laptop connection refused  ◌ ci connecting                       ? help  q quit "
