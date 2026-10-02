@@ -201,6 +201,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             sessions: vec![SessionHead {
                 session_id: session_id(),
                 head_seq: 12,
+                project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
             }],
         },
         ServerMessage::Snapshot {
@@ -387,6 +388,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     }
     messages.extend(task_fixtures());
     messages.extend(resource_fixtures());
+    messages.extend(project_fixtures());
     for status in [
         SessionStatus::Idle,
         SessionStatus::Running,
@@ -504,6 +506,33 @@ fn server_fixtures() -> Vec<ServerMessage> {
         role: Role::Member,
     }));
     messages
+}
+
+/// Project lists: one empty, one with a remote project with settings and a local one without.
+fn project_fixtures() -> Vec<ServerMessage> {
+    vec![
+        ServerMessage::Projects {
+            projects: Vec::new(),
+        },
+        ServerMessage::Projects {
+            projects: vec![
+                Project {
+                    project_id: ProjectId::new("github.com/herder-sh/herder"),
+                    name: "herder".into(),
+                    paths: vec!["/home/dev/herder".into(), "/srv/herder".into()],
+                    default_account: Some(AccountId::new("01J9ACCOUNT")),
+                    setup_command: Some("cargo fetch".into()),
+                },
+                Project {
+                    project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
+                    name: "scratch".into(),
+                    paths: vec!["/home/dev/scratch".into()],
+                    default_account: None,
+                    setup_command: None,
+                },
+            ],
+        },
+    ]
 }
 
 /// Host and session resource messages, with every constraint and container state.
@@ -1032,6 +1061,30 @@ fn resource_optional_fields_may_be_absent() {
     }))
     .unwrap();
     assert_eq!(container.compose_project, None);
+}
+
+#[test]
+fn project_optional_fields_may_be_absent() {
+    let message: ServerMessage = serde_json::from_value(json!({
+        "type": "sessions",
+        "sessions": [{ "session_id": "s", "head_seq": 3 }]
+    }))
+    .unwrap();
+    let ServerMessage::Sessions { sessions } = message else {
+        panic!("expected sessions");
+    };
+    assert_eq!(sessions[0].project_id, None);
+
+    let project: Project = serde_json::from_value(json!({
+        "project_id": "github.com/org/repo",
+        "name": "repo",
+        "paths": ["/r"]
+    }))
+    .unwrap();
+    assert_eq!(
+        (project.default_account, project.setup_command),
+        (None, None)
+    );
 }
 
 #[test]

@@ -64,6 +64,7 @@ impl Backend for TestBackend {
             .map(|session| SessionHead {
                 session_id: session.session_id,
                 head_seq: session.last_seq,
+                project_id: None,
             })
             .collect())
     }

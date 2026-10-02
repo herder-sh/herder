@@ -23,6 +23,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
             .map(|id| SessionHead {
                 session_id: SessionId::new(*id),
                 head_seq: 0,
+                project_id: None,
             })
             .collect(),
         accounts: Vec::new(),

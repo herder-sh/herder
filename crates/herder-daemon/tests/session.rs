@@ -432,7 +432,8 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
         heads,
         [SessionHead {
             session_id: session.clone(),
-            head_seq: 7
+            head_seq: 7,
+            project_id: None,
         }]
     );
     // Nothing starts until the next prompt.
