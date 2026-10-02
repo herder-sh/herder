@@ -2,8 +2,9 @@
 
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{
-    AccountId, Event, EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider, Role,
-    SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
+    AccountId, CiStatus, Event, EventBody, HostId, Item, ItemBody, ItemId, Mergeable,
+    PermissionMode, PrState, Provider, PullRequest, ReviewStatus, Role, SessionHead, SessionId,
+    SessionStatus, Timestamp, TurnId,
 };
 
 use crate::app::{App, Msg};
@@ -194,4 +195,42 @@ pub fn type_text(app: &mut App, text: &str) {
         );
         app.update(Msg::Key(key));
     }
+}
+
+/// Pull request `number` of `acme/app`, with no checks, reviews or mergeability yet.
+pub fn pr(number: u64, title: &str, state: PrState) -> PullRequest {
+    PullRequest {
+        number,
+        url: format!("https://github.com/acme/app/pull/{number}"),
+        title: title.to_owned(),
+        state,
+        ci: CiStatus::None,
+        review: ReviewStatus::None,
+        mergeable: Mergeable::Unknown,
+    }
+}
+
+/// [`tree`] with PRs: `s2` has #7 (open, passing, approved, clean) and #9 (a draft, checks
+/// failing, conflicting); its child `s3` has #8 (merged).
+pub fn with_prs() -> App {
+    let mut app = tree();
+    let mut seven = pr(7, "Add a health endpoint", PrState::Open);
+    seven.ci = CiStatus::Passing;
+    seven.review = ReviewStatus::Approved;
+    seven.mergeable = Mergeable::Clean;
+    let mut nine = pr(9, "Document the health endpoint", PrState::Draft);
+    nine.ci = CiStatus::Failing;
+    nine.review = ReviewStatus::Required;
+    nine.mergeable = Mergeable::Conflicting;
+    let mut eight = pr(8, "Test the health endpoint", PrState::Merged);
+    eight.ci = CiStatus::Passing;
+    for (session, pr) in [("s2", seven), ("s2", nine), ("s3", eight)] {
+        feed(
+            &mut app,
+            "h1",
+            session,
+            update(session, 3, vec![EventBody::PrLinked { pr }], Vec::new()),
+        );
+    }
+    app
 }

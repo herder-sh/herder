@@ -8,6 +8,7 @@ mod help;
 mod new_session;
 mod pairing;
 mod palette;
+mod prs;
 mod sessions;
 mod status;
 mod transcript;
@@ -30,10 +31,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let [list, main] =
             Layout::horizontal([Constraint::Length(list_width), Constraint::Fill(1)]).areas(body);
         sessions::draw(frame, list, app);
-        let (main, controls) = composer::split(main, app);
-        transcript::draw(frame, main, app);
-        if let Some(controls) = controls {
-            composer::draw(frame, controls, app);
+        if app.focus == Focus::AllPrs {
+            prs::all(frame, main, app);
+        } else {
+            let (main, controls) = composer::split(main, app);
+            let [strip, main] = Layout::vertical([
+                Constraint::Length(prs::strip_height(app)),
+                Constraint::Fill(1),
+            ])
+            .areas(main);
+            prs::strip(frame, strip, app);
+            transcript::draw(frame, main, app);
+            if let Some(controls) = controls {
+                composer::draw(frame, controls, app);
+            }
         }
     }
     if !palette::draw(frame, status_line, app) {
@@ -43,6 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.help {
         help::draw(frame, area);
     }
+    prs::prompt(frame, area, app);
 }
 
 /// The border style of a pane: highlighted while it has focus.

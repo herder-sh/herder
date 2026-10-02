@@ -10,6 +10,7 @@ use herder_protocol::ApprovalDecision;
 
 use crate::app::{App, Focus};
 use crate::compose::{self, Act};
+use crate::prs::{self, PrAction};
 
 /// Something the user asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,8 @@ pub enum Action {
     Reconnect,
     /// Write to, answer or control a session; see [`crate::compose`].
     Compose(Act),
+    /// Something about pull requests.
+    Pr(PrAction),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -57,6 +60,13 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(action) = compose::for_key(key, app) {
         return action;
+    }
+    if let Some(action) = prs::for_key(key, app) {
+        return Some(Action::Pr(action));
+    }
+    if app.prs.prompt.is_some() {
+        // The link prompt takes every key.
+        return None;
     }
     let in_transcript = app.focus == Focus::Transcript;
     let action = match key.code {
@@ -111,6 +121,11 @@ pub const HELP: &[(&str, &str)] = &[
     ("Ctrl-c", "interrupt the running turn"),
     (":", "commands: model, mode, archive, new"),
     ("n", "new session"),
+    ("p", "focus the session's pull requests"),
+    ("P", "every session's pull requests"),
+    ("Enter, o", "open the selected pull request in the browser"),
+    ("L", "link a pull request by number or URL"),
+    ("x", "unlink the selected pull request"),
     ("r", "reconnect now"),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),

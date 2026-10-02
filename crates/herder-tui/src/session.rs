@@ -4,7 +4,7 @@
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
     AccountId, Answer, ApprovalId, ApprovalOutcome, Event, EventBody, HostId, Item, ItemBody,
-    PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnId,
+    PermissionMode, PullRequest, QuestionId, Route, SessionId, SessionStatus, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -51,6 +51,8 @@ pub struct Session {
     pub questions: Vec<PendingQuestion>,
     /// Prompts this TUI sent while a turn ran, not yet started; the daemon queues them.
     pub queued: Vec<String>,
+    /// Pull requests linked to the session now, in the order they were linked.
+    pub prs: Vec<PullRequest>,
 }
 
 /// An approval request waiting for an answer.
@@ -124,6 +126,7 @@ impl Session {
             approvals: Vec::new(),
             questions: Vec::new(),
             queued: Vec::new(),
+            prs: Vec::new(),
         }
     }
 
@@ -314,11 +317,23 @@ impl Session {
                 self.model = model;
                 Some(notice(text, Tone::Info))
             }
-            EventBody::PrLinked { pr } => Some(notice(
-                format!("pull request #{} linked: {}", pr.number, pr.title),
-                Tone::Info,
-            )),
-            EventBody::PrUpdated { .. } | EventBody::PrUnlinked { .. } | EventBody::Unknown => None,
+            EventBody::PrLinked { pr } => {
+                let text = format!("pull request #{} linked: {}", pr.number, pr.title);
+                self.track(pr);
+                Some(notice(text, Tone::Info))
+            }
+            EventBody::PrUpdated { pr } => {
+                self.track(pr);
+                None
+            }
+            EventBody::PrUnlinked { number } => {
+                self.prs.retain(|pr| pr.number != number);
+                Some(notice(
+                    format!("pull request #{number} unlinked"),
+                    Tone::Info,
+                ))
+            }
+            EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }
@@ -329,6 +344,14 @@ impl Session {
         }
         self.questions
             .retain(|question| question.turn_id != *turn_id);
+    }
+
+    /// Adds `pr`, or replaces the linked pull request with its number.
+    fn track(&mut self, pr: PullRequest) {
+        match self.prs.iter_mut().find(|known| known.number == pr.number) {
+            Some(known) => *known = pr,
+            None => self.prs.push(pr),
+        }
     }
 }
 

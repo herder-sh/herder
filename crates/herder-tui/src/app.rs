@@ -5,14 +5,13 @@
 use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
-use herder_protocol::{HostId, SessionId};
+use herder_protocol::{CommandBody, CommandResult, HostId, SessionId};
 use ratatui::crossterm::event::KeyEvent;
 use ratatui::widgets::ListState;
 
-use herder_protocol::{CommandBody, CommandResult};
-
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
+use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
 
 /// An input to the app.
@@ -40,6 +39,8 @@ pub enum Msg {
         /// The daemon's answer.
         result: Result<CommandResult, String>,
     },
+    /// Something to tell the user on the status line, such as a refused command.
+    Notice(String),
 }
 
 /// Something the event loop does for the app.
@@ -58,6 +59,8 @@ pub enum Effect {
         /// What it is sent for.
         origin: Origin,
     },
+    /// Open a web page in the browser.
+    OpenUrl(String),
 }
 
 /// Which pane keys go to.
@@ -69,6 +72,10 @@ pub enum Focus {
     Transcript,
     /// The open session's composer.
     Composer,
+    /// The open session's pull request strip.
+    Prs,
+    /// Every session's pull requests, in the main pane.
+    AllPrs,
 }
 
 /// A row of the session list.
@@ -153,6 +160,10 @@ pub struct App {
     pub list: ListState,
     /// The composer, palette and new-session dialog.
     pub compose: Compose,
+    /// The pull request strip, view and link prompt.
+    pub prs: Prs,
+    /// A message for the status line, until the next key.
+    pub notice: Option<String>,
 }
 
 impl Default for App {
@@ -167,6 +178,8 @@ impl Default for App {
             scroll: Scroll::default(),
             list: ListState::default(),
             compose: Compose::default(),
+            prs: Prs::default(),
+            notice: None,
         }
     }
 }
@@ -175,10 +188,13 @@ impl App {
     /// Folds in one input; returns what the event loop must do.
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {
-            Msg::Key(key) => match action::for_key(key, self) {
-                Some(action) => self.act(action),
-                None => Vec::new(),
-            },
+            Msg::Key(key) => {
+                self.notice = None;
+                match action::for_key(key, self) {
+                    Some(action) => self.act(action),
+                    None => Vec::new(),
+                }
+            }
             Msg::Resize => Vec::new(),
             Msg::Machines(machines) => {
                 self.machines(machines);
@@ -196,7 +212,17 @@ impl App {
                 Vec::new()
             }
             Msg::Sent { origin, result } => {
+                // A PR command's failure for a session not in view goes to the status line.
+                if let (Origin::Session(key), Err(error)) = (&origin, &result)
+                    && (self.open.as_ref() != Some(key) || self.focus == Focus::AllPrs)
+                {
+                    self.notice = Some(error.clone());
+                }
                 self.sent(origin, result);
+                Vec::new()
+            }
+            Msg::Notice(text) => {
+                self.notice = Some(text);
                 Vec::new()
             }
         }
@@ -213,11 +239,13 @@ impl App {
             Action::Quit => return vec![Effect::Quit],
             Action::Reconnect => return vec![Effect::Wake],
             Action::ToggleHelp => self.help = !self.help,
+            Action::Pr(action) => return self.act_pr(action),
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {
                     if self.open.as_ref() != Some(&key) {
                         self.scroll = Scroll::default();
+                        self.prs.strip = 0;
                     }
                     // Pin the row, so new sessions listed above it do not move the selection.
                     self.chosen = selected;
@@ -249,15 +277,19 @@ impl App {
                         };
                         self.scroll.by(lines);
                     }
+                    // Their keys are taken by `prs::for_key` first.
+                    Focus::Prs | Focus::AllPrs => {}
                 }
             }
             Action::Top => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().into_iter().next(),
                 Focus::Transcript | Focus::Composer => self.scroll.top = Some(0),
+                Focus::Prs | Focus::AllPrs => {}
             },
             Action::Bottom => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().pop(),
                 Focus::Transcript | Focus::Composer => self.scroll.top = None,
+                Focus::Prs | Focus::AllPrs => {}
             },
         }
         Vec::new()
@@ -352,6 +384,11 @@ impl App {
         {
             self.chosen = None;
         }
+    }
+
+    /// Selects `row` of the session list.
+    pub fn choose_row(&mut self, row: Row) {
+        self.chosen = Some(row);
     }
 
     fn select_by(&mut self, step: isize) {
