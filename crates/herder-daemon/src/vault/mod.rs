@@ -110,6 +110,8 @@ impl Server {
     /// Accepts hosts and clients on `listener` until `shutdown`, which also closes every
     /// connection.
     pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
+        // Every host is offline until it connects.
+        self.shared.fleet.refresh_hosts().await;
         let flusher = tokio::spawn({
             let hub = Arc::clone(&self.shared.hub);
             let shutdown = shutdown.clone();

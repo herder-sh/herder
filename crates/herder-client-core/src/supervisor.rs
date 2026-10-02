@@ -100,6 +100,7 @@ struct State {
     connection: Option<ConnectionState>,
     role: Option<Role>,
     sessions: Vec<herder_protocol::SessionHead>,
+    hosts: Vec<herder_protocol::FleetHost>,
     projects: Vec<Project>,
     accounts: Vec<herder_protocol::Account>,
     failover: FailoverSettings,
@@ -204,6 +205,7 @@ impl Supervisor {
                 .unwrap_or(ConnectionState::Connecting),
             role: state.role,
             sessions: state.sessions.clone(),
+            hosts: state.hosts.clone(),
             projects: state.projects.clone(),
             accounts: state.accounts.clone(),
             failover: state.failover.clone(),
@@ -534,6 +536,10 @@ impl Supervisor {
         let log = match message {
             ServerMessage::Sessions { sessions } => {
                 state.sessions = sessions;
+                return self.notify_after(state);
+            }
+            ServerMessage::Hosts { hosts } => {
+                state.hosts = hosts;
                 return self.notify_after(state);
             }
             ServerMessage::Projects { projects } => {

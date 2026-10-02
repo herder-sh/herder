@@ -580,7 +580,7 @@ impl App {
         self.compose.palette = None;
         let selected = self.selected();
         let host_id = match &selected {
-            Some(Row::Machine(host_id)) => Some(host_id.clone()),
+            Some(Row::Machine(host_id) | Row::Host { vault: host_id, .. }) => Some(host_id.clone()),
             Some(Row::Session { key, .. }) => Some(key.host_id.clone()),
             Some(Row::Project(_)) | None => None,
         };

@@ -66,8 +66,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
-    Event, FailoverSettings, HostId, HostResources, Item, PROTOCOL_VERSION, Project, Provider,
-    Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
+    Provider, Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -130,8 +130,12 @@ pub struct Machine {
     pub connection: ConnectionState,
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
-    /// The daemon's sessions, as last listed.
+    /// The daemon's sessions, as last listed. A vault's are every host's, each naming its
+    /// host in `host_id`, and all read-only.
     pub sessions: Vec<SessionHead>,
+    /// The hosts a vault lists sessions of, with their liveness, as last listed; empty for a
+    /// daemon, whose sessions all run on its own host. A machine with hosts is a vault.
+    pub hosts: Vec<FleetHost>,
     /// The projects with a clone on the daemon's host, as last listed; merge them across
     /// machines by `project_id`.
     pub projects: Vec<Project>,

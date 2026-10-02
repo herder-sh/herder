@@ -145,7 +145,7 @@ impl App {
         match self.selected()? {
             Row::Project(project) => project,
             Row::Session { key, .. } => self.project_of(&key),
-            Row::Machine(_) => None,
+            Row::Machine(_) | Row::Host { .. } => None,
         }
     }
 

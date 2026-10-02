@@ -2,7 +2,7 @@
 
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{
-    AccountId, CiStatus, Event, EventBody, HostId, Item, ItemBody, ItemId, Mergeable,
+    AccountId, CiStatus, Event, EventBody, FleetHost, HostId, Item, ItemBody, ItemId, Mergeable,
     PermissionMode, PrState, Provider, PullRequest, ReviewStatus, Role, SessionHead, SessionId,
     SessionStatus, Timestamp, TurnId,
 };
@@ -14,6 +14,7 @@ use crate::session::SessionKey;
 pub fn head(id: &str, project: Option<&str>) -> SessionHead {
     SessionHead {
         session_id: SessionId::new(id),
+        host_id: None,
         head_seq: 0,
         status: SessionStatus::Idle,
         parent: None,
@@ -33,6 +34,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         connection: ConnectionState::Connected,
         role: Some(Role::Owner),
         sessions: sessions.iter().map(|id| head(id, None)).collect(),
+        hosts: Vec::new(),
         projects: Vec::new(),
         accounts: Vec::new(),
         failover: Default::default(),
@@ -166,6 +168,49 @@ pub fn tree() -> App {
             id,
             update(id, 1, vec![created, status(state)], Vec::new()),
         );
+    }
+    app
+}
+
+/// A vault listing two hosts' sessions, every session loaded: `devbox`, online, runs `s1`
+/// and `s3`; `laptop`, offline and last heard from 2h 5m ago, runs `s2`. The list groups by
+/// machine.
+pub fn vault() -> App {
+    let mut app = App {
+        grouping: crate::projects::Grouping::Machines,
+        ..App::default()
+    };
+    let mut vault = machine("v", "vault", &[]);
+    let seen = Timestamp::now() - std::time::Duration::from_secs(2 * 3600 + 5 * 60 + 30);
+    vault.hosts = vec![
+        FleetHost {
+            host_id: HostId::new("devbox"),
+            host_name: "devbox".into(),
+            online: true,
+            last_seen: Timestamp::now(),
+        },
+        FleetHost {
+            host_id: HostId::new("laptop"),
+            host_name: "laptop".into(),
+            online: false,
+            last_seen: seen,
+        },
+    ];
+    vault.sessions = [("s1", "devbox"), ("s2", "laptop"), ("s3", "devbox")]
+        .into_iter()
+        .map(|(id, host)| SessionHead {
+            host_id: Some(HostId::new(host)),
+            ..head(id, Some("github.com/org/app"))
+        })
+        .collect();
+    app.update(Msg::Machines(vec![vault]));
+    for (id, branch) in [
+        ("s1", "herder/login"),
+        ("s2", "herder/docs"),
+        ("s3", "herder/api"),
+    ] {
+        let bodies = vec![created(branch, None, None), status(SessionStatus::Idle)];
+        feed(&mut app, "v", id, update(id, 1, bodies, Vec::new()));
     }
     app
 }

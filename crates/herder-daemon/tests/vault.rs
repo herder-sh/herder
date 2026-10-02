@@ -1,7 +1,7 @@
 //! A host daemon replicating to a vault daemon, both in process over TLS on localhost: sessions
 //! appear in the vault, a vault restarted mid-stream gets the rest, a host that was offline
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
-//! read-only, with the host's liveness.
+//! read-only, and the hosts with their liveness.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -461,8 +461,19 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
     let vault_id = paired.host_id;
     assert_eq!(vault_id.as_str(), "vault");
     let machine = machine_when(&client, |m| m.sessions.len() == 2).await;
+    assert_eq!(machine.hosts.len(), 1);
+    let devbox = &machine.hosts[0];
+    assert_eq!(
+        (
+            devbox.host_id.as_str(),
+            devbox.host_name.as_str(),
+            devbox.online
+        ),
+        ("host-1", "devbox", true)
+    );
     let s1 = &machine.sessions[0];
     assert_eq!(s1.session_id.as_str(), "s1");
+    assert_eq!(s1.host_id, Some(host_id()));
     assert_eq!(s1.head_seq, 4);
     assert_eq!(s1.status, SessionStatus::Idle);
     assert_eq!(s1.account_id.as_str(), "main");
@@ -491,7 +502,7 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
 
     // Mutating commands are refused, naming the owning host.
     let error = refusal(&client, &vault_id, "s1").await;
-    assert_eq!(error.code, ErrorCode::Conflict);
+    assert_eq!(error.code, ErrorCode::ReadOnly);
     assert!(error.message.contains("read-only"), "{}", error.message);
     assert!(
         error.message.contains("devbox (host-1)"),
@@ -509,13 +520,21 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
     };
     assert!(matches!(
         client.send(&vault_id, archive).await,
-        Err(Error::Rejected(error)) if error.code == ErrorCode::Conflict
+        Err(Error::Rejected(error)) if error.code == ErrorCode::ReadOnly
     ));
     let missing = refusal(&client, &vault_id, "nope").await;
     assert_eq!(missing.code, ErrorCode::NotFound);
 
     // The host stops: its sessions stay listed and readable, and are shown offline.
     host.runtime.kill().await;
+    let machine = machine_when(&client, |m| m.hosts.iter().all(|h| !h.online)).await;
+    assert_eq!(machine.hosts.len(), 1);
+    assert!(
+        machine
+            .sessions
+            .iter()
+            .all(|s| s.host_id == Some(host_id()))
+    );
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
         let error = refusal(&client, &vault_id, "s1").await;
@@ -588,7 +607,10 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
             .ends_with("which is online")
     );
 
+    machine_when(&client, |m| m.hosts.iter().any(|h| h.online)).await;
+
     // Silent from now on, without closing: offline once the timeout passes.
+    machine_when(&client, |m| m.hosts.iter().all(|h| !h.online)).await;
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
         let error = refusal(&client, &vault_id, "s1").await;

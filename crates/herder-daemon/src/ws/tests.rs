@@ -67,6 +67,7 @@ impl Backend for TestBackend {
             .into_iter()
             .map(|session| SessionHead {
                 session_id: session.session_id,
+                host_id: None,
                 head_seq: session.last_seq,
                 status: session.status,
                 parent: session.parent,

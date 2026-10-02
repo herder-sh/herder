@@ -223,6 +223,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             sessions: vec![
                 SessionHead {
                     session_id: session_id(),
+                    host_id: None,
                     head_seq: 12,
                     status: SessionStatus::Running,
                     parent: None,
@@ -233,6 +234,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 },
                 SessionHead {
                     session_id: SessionId::new("01J9CHILD"),
+                    host_id: Some(HostId::new("01J9HOST")),
                     head_seq: 4,
                     status: SessionStatus::NeedsYou,
                     parent: Some(session_id()),
@@ -443,6 +445,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     messages.extend(task_fixtures());
     messages.extend(resource_fixtures());
     messages.extend(project_fixtures());
+    messages.extend(fleet_fixtures());
     for status in [
         SessionStatus::Idle,
         SessionStatus::Running,
@@ -544,6 +547,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ErrorCode::NotFound,
         ErrorCode::Conflict,
         ErrorCode::Unsupported,
+        ErrorCode::ReadOnly,
         ErrorCode::Internal,
     ] {
         let error = ErrorInfo {
@@ -565,6 +569,29 @@ fn server_fixtures() -> Vec<ServerMessage> {
         role: Role::Member,
     }));
     messages
+}
+
+/// Host lists of a vault: one empty, one with an online and an offline host.
+fn fleet_fixtures() -> Vec<ServerMessage> {
+    vec![
+        ServerMessage::Hosts { hosts: Vec::new() },
+        ServerMessage::Hosts {
+            hosts: vec![
+                FleetHost {
+                    host_id: HostId::new("01J9HOST"),
+                    host_name: "devbox".into(),
+                    online: true,
+                    last_seen: at(),
+                },
+                FleetHost {
+                    host_id: HostId::new("01J9HOST2"),
+                    host_name: "laptop".into(),
+                    online: false,
+                    last_seen: at(),
+                },
+            ],
+        },
+    ]
 }
 
 /// Project lists: one empty, one with a remote project with settings and a local one without.

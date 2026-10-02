@@ -325,6 +325,7 @@ fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
     sessions
         .into_iter()
         .map(|session| SessionHead {
+            host_id: None,
             project_id: projects.by_path.get(&session.repo).cloned(),
             children_need_you: need_you.get(&session.session_id).copied().unwrap_or(0),
             session_id: session.session_id,

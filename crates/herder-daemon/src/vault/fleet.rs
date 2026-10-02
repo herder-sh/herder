@@ -2,9 +2,9 @@
 //!
 //! Clients pair with the vault and connect to it as to a daemon, on the port hosts replicate
 //! to. They get the session list, and replay and follow each session's journal as its host
-//! replicates it. Every command is refused: a session is driven on its host, and the error
-//! names that host and whether it is online, which the vault tells from its replication
-//! connection ([`Presence`]).
+//! replicates it, and the host list with each host's liveness, which the vault tells from its
+//! replication connection ([`Presence`]). Every command on a session is refused as
+//! `read_only`: a session is driven on its host, which the error names.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use herder_protocol::{
     Account, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event, EventBody,
-    HostId, Seq, SessionHead, SessionId, Timestamp,
+    FleetHost, HostId, Seq, SessionHead, SessionId, Timestamp,
 };
 use tracing::warn;
 
@@ -30,6 +30,8 @@ pub(crate) struct Fleet {
     presence: Arc<Presence>,
     /// The session list clients got last.
     listed: Arc<tokio::sync::Mutex<Vec<SessionHead>>>,
+    /// Held while the host list is read and sent, so an older one never follows a newer one.
+    sending_hosts: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Fleet {
@@ -39,6 +41,7 @@ impl Fleet {
             hub,
             presence: Arc::default(),
             listed: Arc::default(),
+            sending_hosts: Arc::default(),
         }
     }
 
@@ -80,6 +83,28 @@ impl Fleet {
             self.hub.sessions_changed(&heads);
             *listed = heads;
         }
+    }
+
+    /// Sends clients the host list with each host's liveness now.
+    pub(crate) async fn refresh_hosts(&self) {
+        let _sending = self.sending_hosts.lock().await;
+        let hosts = match blocking(&self.store, |store| store.hosts()).await {
+            Ok(hosts) => hosts,
+            Err(err) => return warn!("cannot list the hosts: {err:#}"),
+        };
+        let hosts = hosts
+            .into_iter()
+            .map(|host| FleetHost {
+                online: self.presence.online(&host.host_id),
+                last_seen: self
+                    .presence
+                    .last_heard(&host.host_id)
+                    .unwrap_or(host.seen_at),
+                host_id: host.host_id,
+                host_name: host.host_name,
+            })
+            .collect();
+        self.hub.hosts_changed(hosts);
     }
 
     async fn heads(&self) -> anyhow::Result<Vec<SessionHead>> {
@@ -126,7 +151,7 @@ impl Fleet {
             }
         };
         error(
-            ErrorCode::Conflict,
+            ErrorCode::ReadOnly,
             format!(
                 "session {session_id} is read-only on the vault; drive it on its host \
                  {name} ({host}), which is {liveness}"

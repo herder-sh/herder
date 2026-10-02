@@ -44,14 +44,26 @@ pub(super) fn heading<'a>(
     ListItem::new(Line::from(spans))
 }
 
-/// The machine label of `key`'s session row: its machine's name.
+/// The machine label of `key`'s session row: its machine's name; for a vault's session, the
+/// name of the host it runs on, marked when that host is offline.
 pub(super) fn machine_label(app: &App, key: &SessionKey) -> Span<'static> {
-    let name = app
-        .machines
+    let Some(machine) = app.machines.iter().find(|m| m.host_id == key.host_id) else {
+        return Span::styled(format!(" {}", key.host_id), Style::new().fg(Color::Blue));
+    };
+    let host = machine
+        .sessions
         .iter()
-        .find(|machine| machine.host_id == key.host_id)
-        .map_or_else(|| key.host_id.to_string(), |machine| machine.name.clone());
-    Span::styled(format!(" {name}"), Style::new().fg(Color::Blue))
+        .find(|head| head.session_id == key.session_id)
+        .and_then(|head| head.host_id.as_ref())
+        .and_then(|host| machine.hosts.iter().find(|h| h.host_id == *host));
+    match host {
+        Some(host) if !host.online => Span::styled(
+            format!(" {} offline", host.host_name),
+            Style::new().fg(Color::Red),
+        ),
+        Some(host) => Span::styled(format!(" {}", host.host_name), Style::new().fg(Color::Blue)),
+        None => Span::styled(format!(" {}", machine.name), Style::new().fg(Color::Blue)),
+    }
 }
 
 /// A session's name under its project's heading, which names the repo already: its branch,
