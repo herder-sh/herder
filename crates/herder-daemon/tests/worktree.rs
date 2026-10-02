@@ -1,7 +1,11 @@
-use std::path::Path;
+//! Session worktrees on throwaway repositories. A separate test binary: the git processes
+//! these spawn would otherwise briefly inherit the data-dir lock of `data_dir`'s tests.
+
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::*;
+use herder_daemon::worktree::{Error, Worktrees, branches, slug};
+use herder_protocol::SessionId;
 
 /// Runs git in `dir` with a fixed identity, panicking on failure; returns trimmed stdout.
 fn run(dir: &Path, args: &[&str]) -> String {

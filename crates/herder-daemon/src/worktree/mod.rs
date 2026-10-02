@@ -37,9 +37,6 @@ use std::path::{Path, PathBuf};
 use herder_protocol::SessionId;
 use tokio::process::Command;
 
-#[cfg(test)]
-mod tests;
-
 /// Why a worktree operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
