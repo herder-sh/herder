@@ -11,7 +11,9 @@ use herder_protocol::{
     JournalRecord, Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus,
     SessionId, SessionStatus, Timestamp, TurnId, UserId,
 };
-use herder_store::{COMMAND_RESULTS_KEPT, Error, NewEvent, QueuedPrompt, Session, Store};
+use herder_store::{
+    COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
+};
 use proptest::prelude::*;
 use rusqlite::Connection;
 
@@ -537,11 +539,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 5);
+    assert_eq!(version(&path), 6);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 5);
+    assert_eq!(version(&path), 6);
     store
         .append(new_event(
             &s,
@@ -557,10 +559,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     // migrates it, and a pull request tracked before has no branch until it updates.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("ALTER TABLE session_prs DROP COLUMN head_branch; PRAGMA user_version = 4;")
+        .execute_batch(
+            "ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
+             PRAGMA user_version = 4;",
+        )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 5);
+    assert_eq!(version(&path), 6);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -586,11 +591,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
-             PRAGMA user_version = 2;",
+             DROP TABLE native_sessions; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 5);
+    assert_eq!(version(&path), 6);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -606,6 +611,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              DROP TABLE session_branches;
              DROP TABLE command_results;
              DROP TABLE queued_prompts;
+             DROP TABLE native_sessions;
              DROP INDEX sessions_parent;
              ALTER TABLE sessions DROP COLUMN parent;
              ALTER TABLE sessions DROP COLUMN task;
@@ -613,7 +619,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 5);
+    assert_eq!(version(&path), 6);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -626,13 +632,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 6)
+        .pragma_update(None, "user_version", 7)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 6,
-            supported: 5
+            found: 7,
+            supported: 6
         })
     ));
 }
@@ -883,4 +889,28 @@ fn queued_prompts_survive_a_reopen_in_order() {
     assert_eq!(store.queued_prompts(&s1).unwrap(), queue[1..]);
     store.set_queued_prompts(&s2, &[]).unwrap();
     assert_eq!(store.sessions_with_queued_prompts().unwrap(), [s1]);
+}
+
+#[test]
+fn native_sessions_survive_a_reopen_and_the_latest_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let (s1, s2) = (SessionId::new("s1"), SessionId::new("s2"));
+    let native = |account: &str, id: &str| NativeSession {
+        provider: Provider::Claude,
+        account_id: AccountId::new(account),
+        native_id: id.into(),
+    };
+    {
+        let mut store = Store::open(&path).unwrap();
+        assert_eq!(store.native_session(&s1).unwrap(), None);
+        store.set_native_session(&s1, &native("work", "a")).unwrap();
+        store.set_native_session(&s1, &native("home", "b")).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.native_session(&s1).unwrap(),
+        Some(native("home", "b"))
+    );
+    assert_eq!(store.native_session(&s2).unwrap(), None);
 }

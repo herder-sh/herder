@@ -1,0 +1,6 @@
+# A turn in which the CLI reports its own session id.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "session_identified", "native_id": "cli-session-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "One."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

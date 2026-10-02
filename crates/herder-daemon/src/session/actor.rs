@@ -13,7 +13,7 @@ use herder_protocol::{
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId,
     PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
 };
-use herder_store::{QueuedPrompt, Session};
+use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
@@ -1303,6 +1303,7 @@ impl Actor {
             model: Some(session.model.clone()).filter(|model| !model.is_empty()),
             permission_mode: session.permission_mode,
             seed,
+            resume: None,
             mcp,
             launcher,
         };
@@ -1456,6 +1457,23 @@ impl Actor {
                 if mode != self.session.permission_mode {
                     self.log(EventBody::PermissionModeChanged { mode }).await;
                     self.session.permission_mode = mode;
+                }
+            }
+            AdapterEvent::SessionIdentified { native_id } => {
+                // Kept with the account it ran on, so a later start can find its transcript.
+                let native = NativeSession {
+                    provider: self.session.provider.clone(),
+                    account_id: self.session.account_id.clone(),
+                    native_id,
+                };
+                let session_id = self.session.session_id.clone();
+                if let Err(err) = self
+                    .inner
+                    .journal
+                    .set_native_session(session_id.clone(), native)
+                    .await
+                {
+                    warn!(%session_id, "cannot save the CLI's session id: {err:#}");
                 }
             }
             AdapterEvent::Exited { error } => self.exited(error).await,

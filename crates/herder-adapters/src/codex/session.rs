@@ -62,6 +62,7 @@ pub(super) async fn start(
             native_model_switch: true,
             native_permission_mode_switch: true,
             reports_usage: true,
+            native_resume: true,
         },
         commands,
         events,
@@ -218,22 +219,48 @@ impl Session {
         let (approval_policy, sandbox) = policy(self.mode);
         let cwd = request.cwd.to_string_lossy();
         let model = self.model.clone();
-        let thread = self
-            .call(
-                stdout,
-                exit,
-                "thread/start",
-                wire::ThreadStartParams {
-                    model: model.as_deref(),
-                    cwd: &cwd,
-                    approval_policy,
-                    sandbox,
-                },
-            )
-            .await?
-            .map_err(|err| refused("thread/start", &err))?;
-        let thread: wire::ThreadStartResult = decode("thread/start", thread)?;
+        let thread = match &request.resume {
+            Some(thread_id) => self
+                .call(
+                    stdout,
+                    exit,
+                    "thread/resume",
+                    wire::ThreadResumeParams {
+                        thread_id,
+                        model: model.as_deref(),
+                        cwd: &cwd,
+                        approval_policy,
+                        sandbox,
+                        exclude_turns: true,
+                    },
+                )
+                .await?
+                .map_err(|err| refused("thread/resume", &err))?,
+            None => self
+                .call(
+                    stdout,
+                    exit,
+                    "thread/start",
+                    wire::ThreadStartParams {
+                        model: model.as_deref(),
+                        cwd: &cwd,
+                        approval_policy,
+                        sandbox,
+                    },
+                )
+                .await?
+                .map_err(|err| refused("thread/start", &err))?,
+        };
+        let method = match request.resume {
+            Some(_) => "thread/resume",
+            None => "thread/start",
+        };
+        let thread: wire::ThreadStartResult = decode(method, thread)?;
         self.thread_id = thread.thread.id;
+        self.emit(AdapterEvent::SessionIdentified {
+            native_id: self.thread_id.clone(),
+        })
+        .await;
         self.emit(AdapterEvent::ModelChanged {
             model: thread.model,
         })

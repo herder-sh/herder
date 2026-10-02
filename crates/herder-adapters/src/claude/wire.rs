@@ -46,6 +46,9 @@ pub(super) struct System {
     /// The permission mode, on `init` and on a `status` that changed it.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// The CLI's id for the session.
+    #[serde(default, rename = "session_id")]
+    pub session_id: Option<String>,
 }
 
 /// A finished content block of the main agent or a subagent.

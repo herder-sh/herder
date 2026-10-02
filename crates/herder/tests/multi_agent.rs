@@ -77,6 +77,7 @@ impl Adapter for Scripted {
                     native_model_switch: true,
                     native_permission_mode_switch: true,
                     reports_usage: false,
+                    native_resume: false,
                 },
                 commands,
                 events: rx,

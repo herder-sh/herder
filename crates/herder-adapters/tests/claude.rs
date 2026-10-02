@@ -52,6 +52,7 @@ fn request(seed: Vec<Item>) -> StartRequest {
         model: None,
         permission_mode: PermissionMode::Ask,
         seed,
+        resume: None,
         mcp: None,
         launcher: Vec::new(),
     }
@@ -68,6 +69,7 @@ async fn start_with(fixture: Fixture, request: StartRequest) -> AdapterSession {
             native_model_switch: true,
             native_permission_mode_switch: true,
             reports_usage: true,
+            native_resume: true,
         }
     );
     session
@@ -184,6 +186,12 @@ fn usage(five_hour: f64, seven_day: f64) -> AdapterEvent {
     }
 }
 
+fn identified(native_id: &str) -> AdapterEvent {
+    AdapterEvent::SessionIdentified {
+        native_id: native_id.into(),
+    }
+}
+
 fn started() -> AdapterEvent {
     AdapterEvent::TurnStarted { turn_id: turn() }
 }
@@ -214,7 +222,12 @@ async fn a_turn_streams_its_reply() {
         .unwrap();
     let events = until(&mut session, is_turn_end).await;
     // The thinking block came with no text, so it is not shown.
-    let mut expected = vec![started(), model(HAIKU), usage(47.0, 5.0)];
+    let mut expected = vec![
+        started(),
+        identified("499f57af-e4af-4c6c-b348-d47c9b704e70"),
+        model(HAIKU),
+        usage(47.0, 5.0),
+    ];
     expected.extend(streamed(1, &["ok"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -256,7 +269,12 @@ async fn model_and_permission_mode_switch_natively() {
     let events = until(&mut session, is_turn_end).await;
     // The CLI's own status line repeats the mode, which changes nothing; its init names the
     // model the alias resolved to.
-    let mut expected = vec![started(), model("claude-sonnet-5-5"), usage(47.0, 5.0)];
+    let mut expected = vec![
+        started(),
+        identified("4c3c016d-005d-4d44-bff0-a232db1ca4d9"),
+        model("claude-sonnet-5-5"),
+        usage(47.0, 5.0),
+    ];
     expected.extend(streamed(1, &["ok"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -281,6 +299,7 @@ async fn a_tool_call_waits_for_its_approval() {
         events,
         [
             started(),
+            identified("4add687d-6595-4709-9f3f-07e191fc63b8"),
             model(HAIKU),
             usage(47.0, 5.0),
             AdapterEvent::ItemCompleted {
@@ -369,7 +388,12 @@ async fn a_question_waits_for_its_answer_and_claude_goes_on_with_it() {
         matches!(event, AdapterEvent::QuestionAsked { .. })
     })
     .await;
-    let mut expected = vec![started(), model(HAIKU), usage(62.0, 7.0)];
+    let mut expected = vec![
+        started(),
+        identified("8abc09ed-1328-46b7-980c-fa8e81269db3"),
+        model(HAIKU),
+        usage(62.0, 7.0),
+    ];
     expected.extend(letter_question());
     assert_eq!(events, expected);
     // The replay checks the answer line: the call's input plus `answers`, keyed by question.
@@ -407,7 +431,11 @@ async fn an_interrupt_withdraws_a_pending_question() {
         matches!(event, AdapterEvent::QuestionAsked { .. })
     })
     .await;
-    assert_eq!(events[3..], letter_question());
+    assert_eq!(
+        events[1],
+        identified("59620c3b-5802-4ea2-880d-9a4ffe71a3d7")
+    );
+    assert_eq!(events[4..], letter_question());
     session.commands.send(AdapterCommand::Interrupt).unwrap();
     let events = until(&mut session, is_turn_end).await;
     assert_eq!(
@@ -456,6 +484,7 @@ async fn an_interrupt_ends_the_turn_with_what_streamed() {
         events,
         [
             started(),
+            identified("57d42dcd-0361-4083-9ade-63cc697be95a"),
             model(HAIKU),
             usage(47.0, 5.0),
             AdapterEvent::ItemStarted {
@@ -507,8 +536,13 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
         .send(prompt("What is my favourite colour? Reply with one word."))
         .unwrap();
     let events = until(&mut session, is_turn_end).await;
-    // The model was reported while the seed went in.
-    let mut expected = vec![model(HAIKU), started(), usage(47.0, 5.0)];
+    // The session id and model were reported while the seed went in.
+    let mut expected = vec![
+        identified("0bea1056-4c0a-442f-995b-83d901d2624f"),
+        model(HAIKU),
+        started(),
+        usage(47.0, 5.0),
+    ];
     expected.extend(streamed(1, &["Teal"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -527,6 +561,7 @@ async fn a_spent_limit_fails_the_turn_with_limit_reached() {
         events,
         [
             started(),
+            identified("499f57af-e4af-4c6c-b348-d47c9b704e70"),
             model(HAIKU),
             usage(40.0, 100.0),
             AdapterEvent::TurnFailed {

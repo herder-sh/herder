@@ -149,6 +149,7 @@ mod tests {
             model: None,
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         };

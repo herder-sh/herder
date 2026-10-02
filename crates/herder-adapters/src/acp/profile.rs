@@ -144,6 +144,7 @@ mod tests {
             model: model.map(Into::into),
             permission_mode: PermissionMode::Ask,
             seed: Vec::new(),
+            resume: None,
             mcp: None,
             launcher: Vec::new(),
         }

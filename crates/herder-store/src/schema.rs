@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -94,6 +94,17 @@ CREATE TABLE queued_prompts (
 /// The branch a tracked pull request merges from; unknown for those tracked before.
 const V5: &str = "
 ALTER TABLE session_prs ADD COLUMN head_branch TEXT;
+";
+
+/// Daemon state, not a projection: the vendor CLI's own id for each session's latest CLI
+/// session, with the provider and account it ran on, so a later start can resume it natively.
+const V6: &str = "
+CREATE TABLE native_sessions (
+    session_id TEXT NOT NULL PRIMARY KEY,
+    provider   TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    native_id  TEXT NOT NULL
+) STRICT;
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

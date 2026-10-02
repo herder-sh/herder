@@ -167,6 +167,7 @@ pub(super) async fn start(
         native_model_switch: model_config.is_some(),
         native_permission_mode_switch: true,
         reports_usage: false,
+        native_resume: false,
     };
     let (commands, command_rx) = mpsc::unbounded_channel();
     let (event_tx, events) = mpsc::channel(EVENT_BUFFER);

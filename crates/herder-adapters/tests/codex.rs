@@ -24,7 +24,28 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The worktree the fixtures were recorded in; replay never touches it.
 const CWD: &str = "/tmp/herder-codex-fixture";
 
-const FIXTURES: [&str; 5] = ["turn", "approval", "interrupt", "limit_reached", "seed"];
+const FIXTURES: [&str; 6] = [
+    "turn",
+    "approval",
+    "interrupt",
+    "limit_reached",
+    "seed",
+    "resume",
+];
+
+/// The thread `turn.jsonl` opened, which `resume.jsonl` reopens.
+const TURN_THREAD: &str = "01a0fc7b-3cda-7031-a6b4-7a11c1f09469";
+
+/// The thread each recording opened.
+fn thread(name: &str) -> &'static str {
+    match name {
+        "turn" | "limit_reached" | "resume" => TURN_THREAD,
+        "approval" => "01a0fc7b-51c2-7923-9f3f-644d234f31d0",
+        "interrupt" => "01a0fc7b-74b0-7e30-a500-81aa38638e40",
+        "seed" => "01a0fc7b-85e5-7f82-a515-5e0075532352",
+        _ => unreachable!("no fixture {name}"),
+    }
+}
 
 fn path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -44,6 +65,7 @@ fn request(seed: Vec<Item>) -> StartRequest {
         model: None,
         permission_mode: PermissionMode::Ask,
         seed,
+        resume: None,
         mcp: None,
         launcher: Vec::new(),
     }
@@ -58,7 +80,12 @@ async fn start_with(fixture: Fixture, request: StartRequest) -> AdapterSession {
 
 /// Starts on `name` and checks the startup events every recording shares.
 async fn start(name: &str) -> AdapterSession {
-    let mut session = start_with(fixture(name), request(Vec::new())).await;
+    start_on(name, request(Vec::new())).await
+}
+
+/// Starts on `name` for `request` and checks the startup events every recording shares.
+async fn start_on(name: &str, request: StartRequest) -> AdapterSession {
+    let mut session = start_with(fixture(name), request).await;
     let events = until(&mut session, |event| {
         matches!(event, AdapterEvent::ModelChanged { .. })
     })
@@ -68,6 +95,9 @@ async fn start(name: &str) -> AdapterSession {
         [
             AdapterEvent::UsageReported {
                 windows: vec![weekly(25.0)]
+            },
+            AdapterEvent::SessionIdentified {
+                native_id: thread(name).into()
             },
             AdapterEvent::ModelChanged {
                 model: "gpt-6.1-sol".into()
@@ -208,6 +238,60 @@ async fn turn_streams_the_answer_on_the_switched_model_and_mode() {
         ]
     );
     shutdown(session).await;
+}
+
+#[tokio::test]
+async fn resume_reopens_the_thread_and_goes_on_in_it() {
+    let request = StartRequest {
+        resume: Some(TURN_THREAD.into()),
+        ..request(Vec::new())
+    };
+    // The replay checks that `thread/resume` names the thread, and every later request.
+    let mut session = start_on("resume", request).await;
+    for command in [
+        AdapterCommand::SetModel {
+            model: "gpt-6-luna".into(),
+        },
+        AdapterCommand::SetPermissionMode {
+            mode: PermissionMode::ReadOnly,
+        },
+        prompt("Reply with the word ok."),
+    ] {
+        session.commands.send(command).unwrap();
+    }
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(streamed(&events, "item-1"), "ok");
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn a_thread_codex_cannot_resume_fails_start() {
+    // Line 10 sends thread/resume; the answer is what a CODEX_HOME without the rollout gets.
+    let text = std::fs::read_to_string(path("resume")).unwrap();
+    let head: String = text
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .take(10)
+        .map(|line| line.to_owned() + "\n")
+        .collect();
+    let missing =
+        r#"{"id":3,"error":{"code":-32600,"message":"no rollout found for thread id 01a0fc7b"}}"#;
+    let tail = Record::Out(missing.into()).to_line() + "\n{\"exit\":0}\n";
+    let request = StartRequest {
+        resume: Some(TURN_THREAD.into()),
+        ..request(Vec::new())
+    };
+    let fixture = Fixture::parse("resume-missing", &(head + &tail)).unwrap();
+    let result = timeout(TIMEOUT, codex::start(Transport::replay(fixture), request))
+        .await
+        .unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(error.class, ErrorClass::Fatal);
+    assert!(error.message.contains("thread/resume"), "{}", error.message);
 }
 
 const TOUCH: &str = "/usr/bin/bash -lc 'touch herder-ok.txt'";
@@ -521,6 +605,7 @@ fn response_schema(method: &str) -> &'static str {
         "account/read" => "GetAccountResponse",
         "account/rateLimits/read" => "GetAccountRateLimitsResponse",
         "thread/start" => "ThreadStartResponse",
+        "thread/resume" => "ThreadResumeResponse",
         "thread/inject_items" => "ThreadInjectItemsResponse",
         "turn/start" => "TurnStartResponse",
         "turn/interrupt" => "TurnInterruptResponse",
