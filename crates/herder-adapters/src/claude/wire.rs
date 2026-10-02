@@ -273,8 +273,40 @@ pub(super) enum Response<'a> {
 #[derive(Serialize)]
 #[serde(tag = "behavior", rename_all = "snake_case")]
 pub(super) enum Permission<'a> {
-    Allow,
-    Deny { message: &'a str },
+    Allow {
+        /// The input the tool runs with instead of the one requested.
+        #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+        updated_input: Option<Value>,
+    },
+    Deny {
+        message: &'a str,
+    },
+}
+
+/// The input of `AskUserQuestion`, as far as herder shows it: 1 to 4 questions, each with 2
+/// to 4 options. herder answers with the same input plus `answers`, which maps each
+/// question's text to the chosen option's label or the user's own text; a multi-select
+/// question's labels are joined with `", "`.
+#[derive(Debug, Deserialize)]
+pub(super) struct AskUserQuestion {
+    pub questions: Vec<Question>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct Question {
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default)]
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[cfg(test)]
@@ -318,6 +350,18 @@ mod tests {
                 },
             }),
             r#"{"type":"control_response","response":{"subtype":"success","request_id":"r1","response":{"behavior":"deny","message":"no"}}}"#
+        );
+        assert_eq!(
+            line(&Permission::Allow {
+                updated_input: None
+            }),
+            r#"{"behavior":"allow"}"#
+        );
+        assert_eq!(
+            line(&Permission::Allow {
+                updated_input: Some(serde_json::json!({"questions": [], "answers": {}}))
+            }),
+            r#"{"behavior":"allow","updatedInput":{"answers":{},"questions":[]}}"#
         );
     }
 
