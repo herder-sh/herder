@@ -146,3 +146,52 @@ pub fn tree() -> App {
     }
     app
 }
+
+pub fn started(turn: &str) -> EventBody {
+    EventBody::TurnStarted {
+        turn_id: TurnId::new(turn),
+    }
+}
+
+pub fn approval(id: &str, summary: &str) -> EventBody {
+    EventBody::ApprovalRequested {
+        approval_id: herder_protocol::ApprovalId::new(id),
+        turn_id: TurnId::new("turn-1"),
+        tool_call_id: ItemId::new("call-1"),
+        summary: summary.to_owned(),
+        routed_to: herder_protocol::Route::User,
+        reason: None,
+    }
+}
+
+pub fn question(id: &str, text: &str, choices: &[&str]) -> EventBody {
+    EventBody::QuestionAsked {
+        question_id: herder_protocol::QuestionId::new(id),
+        turn_id: TurnId::new("turn-1"),
+        text: text.to_owned(),
+        choices: choices.iter().map(|c| (*c).to_owned()).collect(),
+        routed_to: herder_protocol::Route::User,
+        reason: None,
+    }
+}
+
+/// An account of `host`'s machine, for the new-session dialog.
+pub fn account(id: &str, label: &str) -> herder_protocol::Account {
+    herder_protocol::Account {
+        account_id: AccountId::new(id),
+        provider: Provider::Claude,
+        label: label.to_owned(),
+        usage: Vec::new(),
+    }
+}
+
+/// Presses each character of `text`.
+pub fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        let key = ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(c),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        );
+        app.update(Msg::Key(key));
+    }
+}

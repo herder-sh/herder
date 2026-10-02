@@ -3,8 +3,11 @@
 //! [`draw`] lays the screen out and hands each area to its module. Views read the app and
 //! write back only what layout decides, such as how many transcript lines fit.
 
+mod composer;
 mod help;
+mod new_session;
 mod pairing;
+mod palette;
 mod sessions;
 mod status;
 mod transcript;
@@ -27,9 +30,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let [list, main] =
             Layout::horizontal([Constraint::Length(list_width), Constraint::Fill(1)]).areas(body);
         sessions::draw(frame, list, app);
+        let (main, controls) = composer::split(main, app);
         transcript::draw(frame, main, app);
+        if let Some(controls) = controls {
+            composer::draw(frame, controls, app);
+        }
     }
-    status::draw(frame, status_line, app);
+    if !palette::draw(frame, status_line, app) {
+        status::draw(frame, status_line, app);
+    }
+    new_session::draw(frame, area, app);
     if app.help {
         help::draw(frame, area);
     }

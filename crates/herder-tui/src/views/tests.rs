@@ -126,5 +126,89 @@ fn the_status_line_shows_each_connection() {
 fn help_lists_the_keys() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));
-    insta::assert_snapshot!(render(&mut app, 80, 20).backend());
+    insta::assert_snapshot!(render(&mut app, 80, 26).backend());
+}
+
+/// `s2` of [`fake::tree`] open, with `bodies` fed to it from seq 3.
+fn open_s2(bodies: Vec<herder_protocol::EventBody>) -> App {
+    let mut app = fake::tree();
+    fake::feed(&mut app, "h1", "s2", update("s2", 3, bodies, Vec::new()));
+    press(&mut app, KeyCode::Enter);
+    app
+}
+
+#[test]
+fn an_approval_is_prompted_and_badged() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Clean the build.".into(),
+            },
+        ),
+        fake::approval("a1", "Bash: rm -rf target"),
+        fake::approval("a2", "Bash: cargo build"),
+    ]);
+    let terminal = render(&mut app, 100, 20);
+    insta::assert_snapshot!(terminal.backend());
+    let screen = terminal.backend().to_string();
+    assert!(screen.contains("approve?"), "{screen}");
+}
+
+#[test]
+fn a_question_lists_its_choices() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        fake::question(
+            "q1",
+            "Which database should the cache use?",
+            &["SQLite", "Postgres"],
+        ),
+    ]);
+    insta::assert_snapshot!(render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn a_prompt_sent_during_a_turn_shows_queued() {
+    let mut app = open_s2(vec![fake::started("turn-1")]);
+    let streaming = vec![item("i6", assistant("Working on it"))];
+    fake::feed(&mut app, "h1", "s2", update("s2", 4, Vec::new(), streaming));
+    press(&mut app, KeyCode::Char('i'));
+    fake::type_text(&mut app, "then add docs");
+    press(&mut app, KeyCode::Enter);
+    fake::type_text(&mut app, "and a changelog entry");
+    insta::assert_snapshot!(render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn the_palette_shows_why_a_command_failed() {
+    let mut app = open_s2(vec![]);
+    press(&mut app, KeyCode::Char(':'));
+    fake::type_text(&mut app, "mode yolo");
+    press(&mut app, KeyCode::Enter);
+    insta::assert_snapshot!(render(&mut app, 100, 12).backend());
+}
+
+#[test]
+fn a_refused_command_shows_in_the_session_view() {
+    let mut app = open_s2(vec![]);
+    app.update(Msg::Sent {
+        origin: crate::compose::Origin::Session(fake::key("h1", "s2")),
+        result: Err("claude cannot switch models mid-session".into()),
+    });
+    insta::assert_snapshot!(render(&mut app, 100, 12).backend());
+}
+
+#[test]
+fn the_new_session_dialog() {
+    let mut app = fake::tree();
+    let mut machines = app.machines.clone();
+    machines[0].accounts = vec![fake::account("claude-main", "Main")];
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Tab);
+    insta::assert_snapshot!(render(&mut app, 100, 20).backend());
 }

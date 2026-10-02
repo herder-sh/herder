@@ -59,7 +59,7 @@ fn item<'a>(app: &App, row: &Row) -> ListItem<'a> {
                 depth => format!("{}└ ", "  ".repeat(depth - 1)),
             };
             let (label, style) = if session.loaded {
-                badge(session.status)
+                super::composer::waiting(session).unwrap_or_else(|| badge(session.status))
             } else {
                 ("…", super::dim())
             };

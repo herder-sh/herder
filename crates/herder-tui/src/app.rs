@@ -9,7 +9,10 @@ use herder_protocol::{HostId, SessionId};
 use ratatui::crossterm::event::KeyEvent;
 use ratatui::widgets::ListState;
 
+use herder_protocol::{CommandBody, CommandResult};
+
 use crate::action::{self, Action};
+use crate::compose::{Compose, Origin};
 use crate::session::{Session, SessionKey};
 
 /// An input to the app.
@@ -28,15 +31,33 @@ pub enum Msg {
         /// The change.
         update: SessionUpdate,
     },
+    /// Text was pasted.
+    Paste(String),
+    /// The daemon answered a command sent for `origin`; `Err` carries why it failed.
+    Sent {
+        /// What the command was sent for.
+        origin: Origin,
+        /// The daemon's answer.
+        result: Result<CommandResult, String>,
+    },
 }
 
 /// Something the event loop does for the app.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
     /// Leave the TUI.
     Quit,
     /// Reconnect every disconnected machine now.
     Wake,
+    /// Send a command to a machine; its answer comes back as [`Msg::Sent`].
+    Send {
+        /// The machine.
+        host_id: HostId,
+        /// The command.
+        command: CommandBody,
+        /// What it is sent for.
+        origin: Origin,
+    },
 }
 
 /// Which pane keys go to.
@@ -46,6 +67,8 @@ pub enum Focus {
     Sessions,
     /// The open session's transcript.
     Transcript,
+    /// The open session's composer.
+    Composer,
 }
 
 /// A row of the session list.
@@ -63,7 +86,7 @@ pub enum Row {
 }
 
 impl Row {
-    fn session(&self) -> Option<&SessionKey> {
+    pub(crate) fn session(&self) -> Option<&SessionKey> {
         match self {
             Row::Machine(_) => None,
             Row::Session { key, .. } => Some(key),
@@ -117,7 +140,7 @@ pub struct App {
     /// Every listed session of every machine.
     pub sessions: HashMap<SessionKey, Session>,
     /// The row the user selected; until they move, [`App::selected`] is the first session.
-    chosen: Option<Row>,
+    pub(crate) chosen: Option<Row>,
     /// The session the main pane shows.
     pub open: Option<SessionKey>,
     /// Which pane keys go to.
@@ -128,6 +151,8 @@ pub struct App {
     pub scroll: Scroll,
     /// The session list's scroll position, kept between draws.
     pub list: ListState,
+    /// The composer, palette and new-session dialog.
+    pub compose: Compose,
 }
 
 impl Default for App {
@@ -141,6 +166,7 @@ impl Default for App {
             help: false,
             scroll: Scroll::default(),
             list: ListState::default(),
+            compose: Compose::default(),
         }
     }
 }
@@ -156,6 +182,7 @@ impl App {
             Msg::Resize => Vec::new(),
             Msg::Machines(machines) => {
                 self.machines(machines);
+                self.open_pending();
                 Vec::new()
             }
             Msg::Session { key, update } => {
@@ -164,12 +191,25 @@ impl App {
                 }
                 Vec::new()
             }
+            Msg::Paste(text) => {
+                self.paste(&text);
+                Vec::new()
+            }
+            Msg::Sent { origin, result } => {
+                self.sent(origin, result);
+                Vec::new()
+            }
         }
     }
 
     /// Carries out one user action.
     pub fn act(&mut self, action: Action) -> Vec<Effect> {
+        if let Action::Compose(act) = action {
+            return self.compose(act);
+        }
+        self.compose.quit_armed = false;
         match action {
+            Action::Compose(_) => {}
             Action::Quit => return vec![Effect::Quit],
             Action::Reconnect => return vec![Effect::Wake],
             Action::ToggleHelp => self.help = !self.help,
@@ -201,7 +241,7 @@ impl App {
                 };
                 match self.focus {
                     Focus::Sessions => self.select_by(if page { step * 10 } else { step }),
-                    Focus::Transcript => {
+                    Focus::Transcript | Focus::Composer => {
                         let lines = if page {
                             step * self.scroll.page()
                         } else {
@@ -213,11 +253,11 @@ impl App {
             }
             Action::Top => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().into_iter().next(),
-                Focus::Transcript => self.scroll.top = Some(0),
+                Focus::Transcript | Focus::Composer => self.scroll.top = Some(0),
             },
             Action::Bottom => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().pop(),
-                Focus::Transcript => self.scroll.top = None,
+                Focus::Transcript | Focus::Composer => self.scroll.top = None,
             },
         }
         Vec::new()
@@ -480,7 +520,9 @@ mod tests {
         assert_eq!(press(&mut app, KeyCode::Char('q')), []);
         assert!(!app.help);
         assert_eq!(press(&mut app, KeyCode::Char('q')), [Effect::Quit]);
+        // With no turn to interrupt, Ctrl-C quits on its second press.
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.update(Msg::Key(ctrl_c)), []);
         assert_eq!(app.update(Msg::Key(ctrl_c)), [Effect::Quit]);
     }
 
