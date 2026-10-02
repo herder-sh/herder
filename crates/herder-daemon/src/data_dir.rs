@@ -60,7 +60,9 @@ fn create_private_dir(dir: &Path) -> Result<()> {
 /// Takes an exclusive lock on `<root>/daemon.lock` and records our PID in it.
 ///
 /// The OS releases the lock when the process exits, however it exits, so a stale file never
-/// blocks a restart.
+/// blocks a restart. std opens the file close-on-exec, so children we spawn never hold it once
+/// they exec; one forked by another thread does share it until its exec, which is why dropping a
+/// `DataDir` may not free the lock the same instant.
 fn lock(root: &Path) -> Result<File> {
     let path = root.join(LOCK_FILE);
     let mut file = OpenOptions::new()
@@ -148,9 +150,32 @@ fn write_synced(path: &Path, contents: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use super::*;
+
+    /// Reopens `root` after an earlier `DataDir` on it was dropped. Other tests in this binary
+    /// spawn processes, and a child sits on a copy of the lock fd between its fork and its exec,
+    /// so the lock can outlive the drop by that long. Waiting for it is the deterministic check;
+    /// only an fd that survives exec holds it past the deadline.
+    fn reopen(root: &Path) -> DataDir {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match DataDir::open(root) {
+                Ok(dir) => return dir,
+                Err(err)
+                    if err.to_string().contains("already using") && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(err) => panic!("reopening {}: {err:#}", root.display()),
+            }
+        }
+    }
 
     #[test]
     fn creates_layout_and_host_id() {
@@ -176,7 +201,7 @@ mod tests {
     fn host_id_is_stable_across_restarts() {
         let tmp = tempfile::tempdir().unwrap();
         let first = DataDir::open(tmp.path()).unwrap().host_id();
-        let second = DataDir::open(tmp.path()).unwrap().host_id();
+        let second = reopen(tmp.path()).host_id();
         assert_eq!(first, second);
     }
 
@@ -199,6 +224,32 @@ mod tests {
             "{err}"
         );
         drop(first);
-        DataDir::open(tmp.path()).unwrap();
+        reopen(tmp.path());
+    }
+
+    #[test]
+    fn lock_fd_is_close_on_exec() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = DataDir::open(tmp.path()).unwrap();
+        let fdinfo =
+            fs::read_to_string(format!("/proc/self/fdinfo/{}", dir._lock.as_raw_fd())).unwrap();
+        let flags = fdinfo
+            .lines()
+            .find_map(|line| line.strip_prefix("flags:"))
+            .unwrap();
+        let flags = i32::from_str_radix(flags.trim(), 8).unwrap();
+        assert_ne!(flags & nix::libc::O_CLOEXEC, 0, "{fdinfo}");
+    }
+
+    #[test]
+    fn spawned_child_does_not_hold_the_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = DataDir::open(tmp.path()).unwrap();
+        // `spawn` returns once the child has exec'd, so it holds the fd only if it leaked.
+        let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+        drop(dir);
+        reopen(tmp.path());
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }
