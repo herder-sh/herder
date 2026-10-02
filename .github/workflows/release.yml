@@ -1,0 +1,114 @@
+name: release
+
+# A `v*` tag builds static musl binaries and publishes them as a GitHub Release.
+# workflow_dispatch, and PRs that change this file, run the same build without publishing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl and the toolchain from rust-toolchain.toml
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q musl-tools
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "$TARGET"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Read the version
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "herder") | .version')
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build
+        # ring compiles C for the target; musl-gcc builds it against musl instead of glibc.
+        env:
+          TARGET_CC: musl-gcc
+        run: cargo build --release --locked --target "$TARGET" -p herder
+      - name: Check the binary is static and runs
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bin="target/$TARGET/release/herder"
+          file "$bin"
+          file "$bin" | grep -Eq 'statically linked|static-pie linked'
+          test "$("$bin" --version)" = "herder $VERSION"
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          name="herder-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/herder" LICENSE README.md "dist/$name/"
+          cd dist
+          tar -czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          rm -r "$name"
+          cat "$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herder-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herder-*
+          path: dist
+          merge-multiple: true
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=
+          case "$GITHUB_REF_NAME" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "herder ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            $prerelease

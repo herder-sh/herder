@@ -1,5 +1,8 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
+mod service;
+mod update;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -24,22 +27,48 @@ enum Command {
         #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
         config: Option<PathBuf>,
     },
+    /// Manage the systemd user service that runs the daemon at boot.
+    Service {
+        #[command(subcommand)]
+        action: service::Action,
+    },
+    /// Replace this binary with a herder release.
+    Update {
+        /// Install this version instead of the latest release.
+        #[arg(long, value_name = "VERSION")]
+        version: Option<String>,
+        /// Restart the running service without asking.
+        #[arg(long, short)]
+        yes: bool,
+        /// Allow installing a version older than this one.
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
 }
 
 fn main() -> ExitCode {
-    match Cli::parse().command {
-        Some(Command::Daemon { config }) => match daemon(config) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!("herder: {err:#}");
-                ExitCode::FAILURE
-            }
-        },
+    let result = match Cli::parse().command {
+        Some(Command::Daemon { config }) => daemon(config).map(|()| ExitCode::SUCCESS),
+        Some(Command::Service { action }) => service::run(action),
+        Some(Command::Update {
+            version,
+            yes,
+            allow_downgrade,
+        }) => update::run(update::Args {
+            version,
+            yes,
+            allow_downgrade,
+        })
+        .map(|()| ExitCode::SUCCESS),
         None => {
             println!("{}", herder_tui::run());
-            ExitCode::SUCCESS
+            Ok(ExitCode::SUCCESS)
         }
-    }
+    };
+    result.unwrap_or_else(|err| {
+        eprintln!("herder: {err:#}");
+        ExitCode::FAILURE
+    })
 }
 
 fn daemon(config: Option<PathBuf>) -> anyhow::Result<()> {
@@ -72,5 +101,39 @@ mod tests {
             panic!("expected daemon");
         };
         assert_eq!(config, Some(PathBuf::from("/etc/herder.toml")));
+    }
+
+    #[test]
+    fn parses_service_actions() {
+        for action in ["install", "uninstall", "status", "restart"] {
+            let cli = Cli::try_parse_from(["herder", "service", action]).unwrap();
+            assert!(
+                matches!(cli.command, Some(Command::Service { .. })),
+                "{action}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_update_flags() {
+        let cli = Cli::try_parse_from([
+            "herder",
+            "update",
+            "--version",
+            "0.2.0",
+            "--yes",
+            "--allow-downgrade",
+        ])
+        .unwrap();
+        let Some(Command::Update {
+            version,
+            yes,
+            allow_downgrade,
+        }) = cli.command
+        else {
+            panic!("expected update");
+        };
+        assert_eq!(version.as_deref(), Some("0.2.0"));
+        assert!(yes && allow_downgrade);
     }
 }

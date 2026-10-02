@@ -19,6 +19,7 @@ all = { level = "warn", priority = -1 }
 anyhow = "1"
 base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
+flate2 = "1"
 herder-adapters = { path = "crates/herder-adapters" }
 herder-client-core = { path = "crates/herder-client-core" }
 herder-daemon = { path = "crates/herder-daemon" }
@@ -31,8 +32,11 @@ nix = { version = "0.31", features = ["signal"] }
 proptest = "1"
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint", "jiff"] }
 schemars = { version = "1.2", features = ["jiff02"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
+tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros"] }
@@ -40,4 +44,5 @@ tokio-util = "0.7"
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+ureq = "3"
 uuid = { version = "1", features = ["v7"] }
