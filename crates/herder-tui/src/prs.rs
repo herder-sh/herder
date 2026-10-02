@@ -216,7 +216,7 @@ impl App {
     /// Every linked PR of every listed session, in session-list order: what the cross-session
     /// view lists.
     pub fn all_prs(&self) -> Vec<(&SessionKey, &PullRequest)> {
-        self.rows()
+        self.all_rows()
             .iter()
             .filter_map(|row| match row {
                 Row::Session { key, .. } => self.sessions.get_key_value(key),

@@ -5,6 +5,7 @@
 
 mod composer;
 mod help;
+mod inbox;
 mod machines;
 mod new_session;
 mod pairing;
@@ -35,6 +36,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         sessions::draw(frame, list, app);
         if app.focus == Focus::AllPrs {
             prs::all(frame, main, app);
+        } else if app.focus == Focus::Inbox {
+            inbox::draw(frame, main, app);
         } else {
             let (main, controls) = composer::split(main, app);
             let [strip, main] = Layout::vertical([

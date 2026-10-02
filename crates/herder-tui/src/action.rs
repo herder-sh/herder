@@ -10,6 +10,7 @@ use herder_protocol::ApprovalDecision;
 
 use crate::app::{App, Focus};
 use crate::compose::{self, Act};
+use crate::inbox::{self, InboxAction};
 use crate::prs::{self, PrAction};
 
 /// Something the user asked for.
@@ -51,6 +52,10 @@ pub enum Action {
     Machines(crate::machines::Input),
     /// Open the selected session's terminal picker, or close it.
     Terminals,
+    /// Something in the inbox.
+    Inbox(InboxAction),
+    /// Fold or unfold the selected task's children.
+    Fold,
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -83,6 +88,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(action) = compose::for_key(key, app) {
         return action;
+    }
+    if let Some(action) = inbox::for_key(key, app) {
+        return Some(Action::Inbox(action));
     }
     if let Some(action) = prs::for_key(key, app) {
         return Some(Action::Pr(action));
@@ -126,6 +134,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('m') => Action::OpenMachines,
         KeyCode::Char('a') => Action::AddMachine,
         KeyCode::Char('t') => Action::Terminals,
+        KeyCode::Char('z') if app.focus == Focus::Sessions => Action::Fold,
         _ => return None,
     };
     Some(action)
@@ -156,6 +165,12 @@ pub const HELP: &[(&str, &str)] = &[
     ("m", "machines: connections and fingerprints"),
     ("a", "add a machine (or paste its link)"),
     ("t", "terminals of the selected session (owners)"),
+    ("z", "fold or unfold the selected task's children"),
+    ("i / I", "inbox, from the sessions / from anywhere"),
+    (
+        "Enter / l",
+        "in the inbox: type an answer / open its session",
+    ),
     ("Ctrl-] d", "detach from an attached terminal"),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),

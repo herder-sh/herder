@@ -11,6 +11,7 @@ use ratatui::widgets::ListState;
 
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
+use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::prs::Prs;
 use crate::session::{Session, SessionKey};
@@ -91,6 +92,8 @@ pub enum Focus {
     Prs,
     /// Every session's pull requests, in the main pane.
     AllPrs,
+    /// Everything waiting on the user, in the main pane.
+    Inbox,
 }
 
 /// A row of the session list.
@@ -183,6 +186,10 @@ pub struct App {
     pub machine_panel: Option<MachinePanel>,
     /// The terminal picker, while it is open.
     pub terminals: Option<Picker>,
+    /// Primary sessions whose children the session list hides.
+    pub folded: HashSet<SessionKey>,
+    /// The inbox's selection and answer editor.
+    pub inbox: Inbox,
 }
 
 impl Default for App {
@@ -201,6 +208,8 @@ impl Default for App {
             notice: None,
             machine_panel: None,
             terminals: None,
+            folded: HashSet::new(),
+            inbox: Inbox::default(),
         }
     }
 }
@@ -233,7 +242,7 @@ impl App {
                 Vec::new()
             }
             Msg::Paste(text) => {
-                if !self.paste_pairing(&text) {
+                if !self.paste_pairing(&text) && !self.paste_inbox(&text) {
                     self.paste(&text);
                 }
                 Vec::new()
@@ -241,7 +250,8 @@ impl App {
             Msg::Sent { origin, result } => {
                 // A PR command's failure for a session not in view goes to the status line.
                 if let (Origin::Session(key), Err(error)) = (&origin, &result)
-                    && (self.open.as_ref() != Some(key) || self.focus == Focus::AllPrs)
+                    && (self.open.as_ref() != Some(key)
+                        || matches!(self.focus, Focus::AllPrs | Focus::Inbox))
                 {
                     self.notice = Some(error.clone());
                 }
@@ -278,6 +288,8 @@ impl App {
             Action::AddMachine => self.open_machines(true),
             Action::ToggleHelp => self.help = !self.help,
             Action::Pr(action) => return self.act_pr(action),
+            Action::Inbox(action) => return self.act_inbox(action),
+            Action::Fold => self.fold(),
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {
@@ -315,19 +327,19 @@ impl App {
                         };
                         self.scroll.by(lines);
                     }
-                    // Their keys are taken by `prs::for_key` first.
-                    Focus::Prs | Focus::AllPrs => {}
+                    // Their keys are taken by `prs::for_key` and `inbox::for_key` first.
+                    Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
                 }
             }
             Action::Top => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().into_iter().next(),
                 Focus::Transcript | Focus::Composer => self.scroll.top = Some(0),
-                Focus::Prs | Focus::AllPrs => {}
+                Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
             },
             Action::Bottom => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().pop(),
                 Focus::Transcript | Focus::Composer => self.scroll.top = None,
-                Focus::Prs | Focus::AllPrs => {}
+                Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
             },
         }
         Vec::new()
@@ -382,8 +394,17 @@ impl App {
     }
 
     /// The session list: each machine, then its sessions, newest first, each followed by its
-    /// children, oldest first.
+    /// children, oldest first, unless it is folded.
     pub fn rows(&self) -> Vec<Row> {
+        self.tree(true)
+    }
+
+    /// [`App::rows`] with every task unfolded.
+    pub fn all_rows(&self) -> Vec<Row> {
+        self.tree(false)
+    }
+
+    fn tree(&self, fold: bool) -> Vec<Row> {
         let mut rows = Vec::new();
         for machine in &self.machines {
             rows.push(Row::Machine(machine.host_id.clone()));
@@ -417,16 +438,71 @@ impl App {
                 if !seen.insert(session_id) {
                     continue;
                 }
+                let session_key = key(session_id);
+                let folded = fold && self.folded.contains(&session_key);
                 rows.push(Row::Session {
-                    key: key(session_id),
+                    key: session_key,
                     depth,
                 });
+                if folded {
+                    continue;
+                }
                 if let Some(kids) = children.get(session_id) {
                     stack.extend(kids.iter().rev().map(|kid| (*kid, depth + 1)));
                 }
             }
         }
         rows
+    }
+
+    /// The listed children of `key`'s session, in no order.
+    pub fn children(&self, key: &SessionKey) -> Vec<&SessionKey> {
+        self.sessions
+            .iter()
+            .filter(|(child, session)| {
+                child.host_id == key.host_id
+                    && *child != key
+                    && session.parent.as_ref() == Some(&key.session_id)
+            })
+            .map(|(child, _)| child)
+            .collect()
+    }
+
+    /// The listed primary session of `key`'s session, for a child.
+    pub fn primary(&self, key: &SessionKey) -> Option<(SessionKey, &Session)> {
+        let parent = self.sessions.get(key)?.parent.clone()?;
+        let primary = SessionKey {
+            host_id: key.host_id.clone(),
+            session_id: parent,
+        };
+        let session = self.sessions.get(&primary)?;
+        (primary != *key).then_some((primary, session))
+    }
+
+    /// Folds the selected task's children away, or unfolds them. On a child, folds its
+    /// primary and selects it.
+    fn fold(&mut self) {
+        let Some(key) = self.selected().as_ref().and_then(Row::session).cloned() else {
+            return;
+        };
+        if !self.children(&key).is_empty() {
+            if !self.folded.remove(&key) {
+                self.folded.insert(key);
+            }
+        } else if let Some((primary, _)) = self.primary(&key) {
+            self.folded.insert(primary.clone());
+            self.chosen = Some(Row::Session {
+                key: primary,
+                depth: 0,
+            });
+        }
+    }
+
+    /// Unfolds the task `key`'s session belongs to, so its row is listed.
+    pub(crate) fn reveal(&mut self, key: &SessionKey) {
+        if let Some((primary, _)) = self.primary(key) {
+            self.folded.remove(&primary);
+        }
     }
 
     /// The open session, if it is still listed.
@@ -445,6 +521,7 @@ impl App {
             })
             .collect();
         self.sessions.retain(|key, _| listed.contains(key));
+        self.folded.retain(|key| listed.contains(key));
         for key in listed {
             let id = key.session_id.clone();
             self.sessions.entry(key).or_insert_with(|| Session::new(id));
@@ -693,5 +770,49 @@ mod tests {
             app.sessions[&key("h1", "s3")].status,
             SessionStatus::Running
         );
+    }
+
+    #[test]
+    fn z_folds_a_tasks_children_and_unfolds_them() {
+        let mut app = fake::tree();
+        assert_eq!(app.selected(), Some(session("h1", "s2", 0)));
+        press(&mut app, KeyCode::Char('z'));
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s2", 0),
+                session("h1", "s1", 0),
+            ]
+        );
+        // Folded children stay subscribed, so the primary's badge stays current.
+        assert_eq!(app.wanted().len(), 4);
+        assert_eq!(app.all_rows().len(), 5);
+        press(&mut app, KeyCode::Char('z'));
+        assert_eq!(app.rows().len(), 5);
+
+        // On a child, z folds its primary and selects it.
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.selected(), Some(session("h1", "s3", 1)));
+        press(&mut app, KeyCode::Char('z'));
+        assert_eq!(app.rows().len(), 3);
+        assert_eq!(app.selected(), Some(session("h1", "s2", 0)));
+
+        // A session with no task does nothing.
+        press(&mut app, KeyCode::Char('G'));
+        press(&mut app, KeyCode::Char('z'));
+        assert_eq!(app.folded, HashSet::from([key("h1", "s2")]));
+    }
+
+    #[test]
+    fn a_child_knows_its_primary_and_a_primary_its_children() {
+        let app = fake::tree();
+        let mut children = app.children(&key("h1", "s2"));
+        children.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        assert_eq!(children, [&key("h1", "s3"), &key("h1", "s4")]);
+        assert!(app.children(&key("h1", "s1")).is_empty());
+        let (primary, _) = app.primary(&key("h1", "s3")).unwrap();
+        assert_eq!(primary, key("h1", "s2"));
+        assert!(app.primary(&key("h1", "s2")).is_none());
     }
 }

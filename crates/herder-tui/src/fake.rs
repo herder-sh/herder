@@ -234,3 +234,75 @@ pub fn with_prs() -> App {
     }
     app
 }
+
+/// `update` with every event recorded `secs` seconds after the epoch.
+pub fn at(mut update: SessionUpdate, secs: i64) -> SessionUpdate {
+    for event in &mut update.events {
+        event.at = Timestamp::from_second(secs).unwrap();
+    }
+    update
+}
+
+/// An approval or question event put to the primary session first, as a child's are.
+pub fn to_primary(mut body: EventBody) -> EventBody {
+    match &mut body {
+        EventBody::ApprovalRequested { routed_to, .. }
+        | EventBody::QuestionAsked { routed_to, .. } => {
+            *routed_to = herder_protocol::Route::Primary
+        }
+        _ => {}
+    }
+    body
+}
+
+/// [`tree`] with a child's question escalated to the user: `s3` asks "Which port?" of its
+/// primary at 100 s, and `s2` escalates it with a note at 200 s. `s1` asks the user to approve
+/// `cargo publish` at 150 s.
+pub fn escalated() -> App {
+    let mut app = tree();
+    let asked = to_primary(question(
+        "q1",
+        "Which port should the server use?",
+        &["8080", "3000"],
+    ));
+    feed(
+        &mut app,
+        "h1",
+        "s3",
+        at(update("s3", 3, vec![started("turn-1"), asked], vec![]), 100),
+    );
+    feed(
+        &mut app,
+        "h1",
+        "s1",
+        at(
+            update(
+                "s1",
+                3,
+                vec![started("turn-1"), approval("a1", "Bash: cargo publish")],
+                vec![],
+            ),
+            150,
+        ),
+    );
+    let escalation = EventBody::QuestionEscalated {
+        question_id: herder_protocol::QuestionId::new("q1"),
+        reason: herder_protocol::EscalationReason::MarkedByPrimary,
+        note: Some("Production uses 8080 behind the proxy; your call.".to_owned()),
+    };
+    feed(
+        &mut app,
+        "h1",
+        "s3",
+        at(
+            update(
+                "s3",
+                5,
+                vec![escalation, status(SessionStatus::NeedsYou)],
+                vec![],
+            ),
+            200,
+        ),
+    );
+    app
+}

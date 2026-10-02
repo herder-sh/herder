@@ -127,7 +127,7 @@ fn the_status_line_shows_each_connection() {
 fn help_lists_the_keys() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));
-    insta::assert_snapshot!(render(&mut app, 80, 32).backend());
+    insta::assert_snapshot!(render(&mut app, 80, 36).backend());
 }
 
 /// `s2` of [`fake::tree`] open, with `bodies` fed to it from seq 3.
@@ -341,4 +341,53 @@ fn the_add_dialog_shows_the_fingerprint_to_check() {
     paired.fingerprint = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into();
     app.update(Msg::Paired(Ok(paired)));
     insta::assert_snapshot!("paired", render(&mut app, 90, 16).backend());
+}
+
+#[test]
+fn a_primary_counts_its_children_and_badges_the_ones_waiting_on_you() {
+    let mut app = fake::escalated();
+    let screen = render(&mut app, 80, 10).backend().to_string();
+    assert!(screen.contains("(2) !1"), "{screen}");
+    // Folded, the badge still tells.
+    press(&mut app, KeyCode::Char('z'));
+    insta::assert_snapshot!(render(&mut app, 80, 10).backend());
+}
+
+#[test]
+fn the_inbox_shows_each_request_with_its_task_reason_and_note() {
+    let mut app = fake::escalated();
+    press(&mut app, KeyCode::Char('i'));
+    insta::assert_snapshot!(render(&mut app, 110, 20).backend());
+    press(&mut app, KeyCode::Enter);
+    fake::type_text(&mut app, "9000");
+    insta::assert_snapshot!("inbox_answer", render(&mut app, 110, 20).backend());
+}
+
+#[test]
+fn an_empty_inbox_says_so() {
+    let mut app = fake::tree();
+    press(&mut app, KeyCode::Char('i'));
+    let screen = render(&mut app, 100, 10).backend().to_string();
+    assert!(screen.contains("Nothing is waiting on you."), "{screen}");
+}
+
+#[test]
+fn a_child_names_its_primary_and_what_the_primary_answered() {
+    let mut app = fake::escalated();
+    let resolved = herder_protocol::EventBody::ApprovalResolved {
+        approval_id: herder_protocol::ApprovalId::new("a7"),
+        decision: herder_protocol::ApprovalOutcome::Allow,
+        answered_by: herder_protocol::Answerer::Primary {
+            session_id: herder_protocol::SessionId::new("s2"),
+        },
+    };
+    fake::feed(
+        &mut app,
+        "h1",
+        "s3",
+        update("s3", 7, vec![resolved], Vec::new()),
+    );
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Enter);
+    insta::assert_snapshot!(render(&mut app, 110, 20).backend());
 }

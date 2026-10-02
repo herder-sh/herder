@@ -4,7 +4,7 @@ expression: "render(&mut app, 90, 20).backend()"
 ---
 "┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
 "│● box (4)                   ││                                                          │"
-"│ needs you app · herder/api ││                                                          │"
+"│ needs you ▾ app · herd… (2)││                                                          │"
 "│ running   └ write the tests││                                                          │"
 "│ ┌ machines ──────────────────────────────────────────────────────────────────────────┐ │"
 "│ │ ● box              4 sessions   connected                                          │ │"
