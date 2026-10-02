@@ -5,6 +5,9 @@
 //! event channel out. Every vendor shape fits behind it: a long-lived stream-json process
 //! (Claude), JSON-RPC over stdio (Codex app-server, ACP agents).
 //!
+//! Vendor adapters drive their CLI through a [`transport::Transport`], which tests swap for a
+//! recorded [`fixture::Fixture`].
+//!
 //! Adapter events are not journal events. The daemon turns them into journal events, which is
 //! why they reuse the [`herder_protocol`] types the journal is made of.
 //!
@@ -36,6 +39,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 pub mod fake;
+pub mod fixture;
+pub mod record;
+pub mod transport;
 
 /// A vendor CLI that herder can run sessions on, one implementation per CLI shape.
 ///

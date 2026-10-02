@@ -1,5 +1,6 @@
 //! The single herder binary: `herder daemon` runs the daemon, bare `herder` opens the TUI.
 
+mod dev;
 mod service;
 mod update;
 
@@ -44,6 +45,11 @@ enum Command {
         #[arg(long)]
         allow_downgrade: bool,
     },
+    /// Tools for developing herder itself.
+    Dev {
+        #[command(subcommand)]
+        command: dev::Command,
+    },
 }
 
 fn main() -> ExitCode {
@@ -60,6 +66,7 @@ fn main() -> ExitCode {
             allow_downgrade,
         })
         .map(|()| ExitCode::SUCCESS),
+        Some(Command::Dev { command }) => dev::run(command),
         None => {
             println!("{}", herder_tui::run());
             Ok(ExitCode::SUCCESS)
@@ -135,5 +142,26 @@ mod tests {
         };
         assert_eq!(version.as_deref(), Some("0.2.0"));
         assert!(yes && allow_downgrade);
+    }
+
+    #[test]
+    fn parses_dev_record() {
+        let cli = Cli::try_parse_from([
+            "herder",
+            "dev",
+            "record",
+            "claude",
+            "hello",
+            "--redact",
+            "acct-[0-9]+",
+            "--",
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+        ])
+        .unwrap();
+        assert!(matches!(cli.command, Some(Command::Dev { .. })));
+        assert!(Cli::try_parse_from(["herder", "dev", "record", "claude", "hello"]).is_err());
     }
 }

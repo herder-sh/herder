@@ -30,6 +30,7 @@ jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
 nix = { version = "0.31", features = ["signal"] }
 proptest = "1"
+regex = "1"
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint", "jiff"] }
 schemars = { version = "1.2", features = ["jiff02"] }
 semver = "1"
