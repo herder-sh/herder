@@ -328,6 +328,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         provider: herder_protocol::Provider::Claude,
         label: "Main".into(),
         usage: Vec::new(),
+        failover: false,
     }];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));
@@ -540,8 +541,9 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
     assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 45, 40));
 }
 
-/// [`fake::tree`] whose machine has three accounts, two with usage, beside a disconnected
-/// machine with none; `s2` and `s3` run on `claude-main`.
+/// [`fake::tree`] whose machine has three accounts, two with usage and `claude-work` opted in
+/// to failover, and pins its sessions and fails over to codex, beside a disconnected machine
+/// with none; `s2` and `s3` run on `claude-main`.
 fn with_accounts() -> App {
     use herder_protocol::{Provider, Timestamp, UsageWindow};
 
@@ -565,7 +567,13 @@ fn with_accounts() -> App {
         window("five_hour", 8.0, 40 * 60),
         window("weekly", 20.0, 86400),
     ];
-    machines[0].accounts = vec![main, fake::account("claude-work", "Work"), codex];
+    let mut work = fake::account("claude-work", "Work");
+    work.failover = true;
+    machines[0].accounts = vec![main, work, codex];
+    machines[0].failover = herder_protocol::FailoverSettings {
+        pin: true,
+        providers: vec![Provider::Codex],
+    };
     let mut laptop = fake::machine("h2", "laptop", &[]);
     laptop.connection = ConnectionState::Disconnected {
         error: "connection refused".into(),

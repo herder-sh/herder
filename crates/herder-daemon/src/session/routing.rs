@@ -17,10 +17,8 @@
 //!
 //! # Ids the primary sees
 //!
-//! Adapters mint question and approval ids unique within a session only, and `answer` and
-//! `escalate` name a request by its id alone. So the primary sees each id prefixed with the
-//! child's session id, `<child>/<id>` ([`primary_id`]), which [`split_id`] takes apart again.
-//! Journals and clients keep the adapter's id.
+//! Adapters mint question and approval ids unique within a session only, so `answer` and
+//! `escalate` name the child along with the adapter's id, as `wait_for` and `status` give it.
 
 mod commands;
 
@@ -55,35 +53,6 @@ pub struct Escalation {
     pub reason: EscalationReason,
     /// What the primary session told the user about it, as Markdown.
     pub note: Option<String>,
-}
-
-/// `request` of `child` as its primary session sees it: ids prefixed with the child's id.
-pub(super) fn primary_id(child: &SessionId, request: &Request) -> Request {
-    let id = |id: &str| format!("{child}/{id}");
-    match request {
-        Request::Question {
-            question_id,
-            text,
-            choices,
-        } => Request::Question {
-            question_id: herder_protocol::QuestionId::new(id(question_id.as_str())),
-            text: text.clone(),
-            choices: choices.clone(),
-        },
-        Request::Approval {
-            approval_id,
-            summary,
-        } => Request::Approval {
-            approval_id: herder_protocol::ApprovalId::new(id(approval_id.as_str())),
-            summary: summary.clone(),
-        },
-    }
-}
-
-/// The child and the adapter's id of an id the primary session was given.
-pub(super) fn split_id(id: &str) -> Option<(SessionId, &str)> {
-    let (child, id) = id.split_once('/')?;
-    (!child.is_empty() && !id.is_empty()).then(|| (SessionId::new(child), id))
 }
 
 /// Whether the primary session may decide an approval of tool call `name` with `input`, made
@@ -309,22 +278,5 @@ mod tests {
         // Edits still go by their own rule.
         let edit = json!({ "file_path": "src/main.rs" });
         assert!(within(Provider::Claude, "Edit", edit).await);
-    }
-
-    #[test]
-    fn the_primary_sees_ids_prefixed_with_the_child() {
-        let child = SessionId::new("01CHILD");
-        let request = Request::Approval {
-            approval_id: herder_protocol::ApprovalId::new("approval-1"),
-            summary: "Edit a file".into(),
-        };
-        let seen = primary_id(&child, &request);
-        let Request::Approval { approval_id, .. } = &seen else {
-            panic!("expected an approval");
-        };
-        assert_eq!(approval_id.as_str(), "01CHILD/approval-1");
-        assert_eq!(split_id(approval_id.as_str()), Some((child, "approval-1")));
-        assert_eq!(split_id("approval-1"), None);
-        assert_eq!(split_id("/approval-1"), None);
     }
 }

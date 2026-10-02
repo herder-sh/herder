@@ -55,6 +55,14 @@ pub enum EventBody {
         /// Short label of the session's task, shown in the task tree.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<String>,
+        /// Most live children this session may have as a task's primary; absent for the
+        /// daemon's limit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_children: Option<u32>,
+        /// Whether the session stays on its account when it hits a limit; absent for the
+        /// daemon's `[failover] pin`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failover_pin: Option<bool>,
     },
     /// The session's worktree had a branch checked out that the session had not had before.
     /// The session owns it from then on, including after its worktree is removed. The branch
@@ -425,6 +433,10 @@ pub struct PullRequest {
     pub url: String,
     /// Title.
     pub title: String,
+    /// Branch the pull request merges from, as a short name; absent from events journaled
+    /// before herder recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_branch: Option<String>,
     /// Lifecycle state.
     pub state: PrState,
     /// Combined status of required checks.

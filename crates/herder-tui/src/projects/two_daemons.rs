@@ -146,11 +146,14 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
         let link = daemon(&tmp.path().join(name), id, name, &shutdown).await;
         client.pair(link).await.unwrap();
         let command = CommandBody::CreateSession {
-            repo: repo.clone(),
+            repo: Some(repo.clone()),
+            project_id: None,
             branch: None,
-            account_id: account(),
+            account_id: Some(account()),
             model: None,
             permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
         };
         client.send(&HostId::new(*id), command).await.unwrap();
     }

@@ -422,11 +422,14 @@ impl World {
             .handle(
                 alice(),
                 CommandBody::CreateSession {
-                    repo: self.repo.to_str().unwrap().to_owned(),
+                    repo: Some(self.repo.to_str().unwrap().to_owned()),
+                    project_id: None,
                     branch: None,
-                    account_id: AccountId::new("account-1"),
+                    account_id: Some(AccountId::new("account-1")),
                     model: None,
                     permission_mode: PermissionMode::Ask,
+                    max_children: None,
+                    failover_pin: None,
                 },
             )
             .await
@@ -510,11 +513,12 @@ async fn commit(worktree: &Path, file: &str, message: &str, hooks: bool) -> Stri
     git(worktree, &["log", "-1", "--format=%B"]).await
 }
 
-fn pr(number: u64, title: &str) -> PullRequest {
+fn pr(number: u64, title: &str, branch: &str) -> PullRequest {
     PullRequest {
         number,
         url: format!("https://github.com/acme/app/pull/{number}"),
         title: title.to_owned(),
+        head_branch: Some(branch.to_owned()),
         state: PrState::Open,
         ci: CiStatus::None,
         review: ReviewStatus::None,
@@ -559,7 +563,7 @@ async fn a_pr_on_a_branch_the_agent_pushed_under_another_name_is_linked() {
         [(
             None,
             EventBody::PrLinked {
-                pr: pr(number, "Add a")
+                pr: pr(number, "Add a", "feature-x")
             }
         )]
     );
@@ -579,7 +583,7 @@ async fn a_pr_opened_elsewhere_on_the_session_branch_is_linked_and_followed() {
     let other = world.session().await;
     let number = world.github.open(&branch, "Add a");
     world.poll().await;
-    let mut expected = pr(number, "Add a");
+    let mut expected = pr(number, "Add a", &branch);
     assert_eq!(
         world.pr_events(&session_id).await,
         [(
@@ -646,7 +650,7 @@ async fn a_pr_on_a_renamed_branch_is_found_by_its_trailer() {
         [(
             None,
             EventBody::PrLinked {
-                pr: pr(number, "Add a")
+                pr: pr(number, "Add a", "renamed-on-github")
             }
         )]
     );
@@ -689,14 +693,14 @@ async fn unlink_keeps_a_pr_unlinked_until_a_user_links_it_again() {
             (
                 None,
                 EventBody::PrLinked {
-                    pr: pr(number, "Add a")
+                    pr: pr(number, "Add a", &branch)
                 }
             ),
             (Some(alice()), EventBody::PrUnlinked { number }),
             (
                 Some(alice()),
                 EventBody::PrLinked {
-                    pr: pr(number, "Add a")
+                    pr: pr(number, "Add a", &branch)
                 }
             ),
         ]
@@ -719,7 +723,7 @@ async fn unlink_keeps_a_pr_unlinked_until_a_user_links_it_again() {
         Some(&(
             Some(alice()),
             EventBody::PrLinked {
-                pr: pr(unrelated, "Unrelated")
+                pr: pr(unrelated, "Unrelated", "unrelated")
             }
         ))
     );

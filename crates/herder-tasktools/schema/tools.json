@@ -480,12 +480,16 @@
     },
     {
       "name": "answer",
-      "description": "Answer a question or approval request that a child put to you, unblocking it. For a question pass `question_id` with `text`, or `choice` when it lists choices; for an approval pass `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
+      "description": "Answer a question or approval request that a child put to you, unblocking it. Pass the `child` that asked; for a question add `question_id` with `text`, or `choice` when it lists choices; for an approval add `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "approval_id": {
             "description": "The approval request to decide. Pass it with `decision`.",
+            "type": "string"
+          },
+          "child": {
+            "description": "The child whose question or approval request this is, as wait_for or status named it.",
             "type": "string"
           },
           "choice": {
@@ -518,7 +522,10 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "child"
+        ]
       },
       "outputSchema": {
         "type": "object"
@@ -526,12 +533,16 @@
     },
     {
       "name": "escalate",
-      "description": "Hand a question or approval request that a child put to you over to the user, when the decision is theirs rather than yours: product or scope choices, credentials, anything destructive or outside the task. The child stays blocked until the user answers. Pass `question_id` or `approval_id`, and a `note` with what the user should know to decide.",
+      "description": "Hand a question or approval request that a child put to you over to the user, when the decision is theirs rather than yours: product or scope choices, credentials, anything destructive or outside the task. The child stays blocked until the user answers. Pass the `child` that asked, `question_id` or `approval_id`, and a `note` with what the user should know to decide.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "approval_id": {
             "description": "The approval request to hand over.",
+            "type": "string"
+          },
+          "child": {
+            "description": "The child whose question or approval request this is, as wait_for or status named it.",
             "type": "string"
           },
           "note": {
@@ -543,7 +554,10 @@
             "type": "string"
           }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "required": [
+          "child"
+        ]
       },
       "outputSchema": {
         "type": "object"

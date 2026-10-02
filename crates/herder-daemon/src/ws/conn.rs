@@ -173,6 +173,7 @@ async fn read<B: Backend>(
             Ok(ClientMessage::Unsubscribe { session_id }) => {
                 shared.hub.unsubscribe(outbox, &session_id);
             }
+            Ok(ClientMessage::Sync { token }) => outbox.push(ServerMessage::Synced { token }),
             Ok(ClientMessage::Command(Command { id, body })) => {
                 if let Err(error) = auth::authorize(&identity, &body) {
                     outbox.push(ServerMessage::CommandRejected {

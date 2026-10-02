@@ -2,7 +2,8 @@
 //! and reducer.
 //!
 //! The panel lists every paired machine with its connection, role, accounts, addresses and
-//! pinned fingerprint. Its add dialog pairs a new one: paste the `herder://pair` link `herder pair`
+//! pinned fingerprint, and renames the selected one on this device or forgets it here. Its add
+//! dialog pairs a new one: paste the `herder://pair` link `herder pair`
 //! printed, or type its address, fingerprint and code; check the fingerprint; pair. Pasting a
 //! link anywhere in the TUI opens the dialog at that check.
 
@@ -31,6 +32,17 @@ pub struct MachinePanel {
     pub add: Option<AddMachine>,
     /// The add-account dialog, over the panel.
     pub account: Option<AddAccount>,
+    /// A rename or forget of the selected machine, in the panel.
+    pub edit: Option<PanelEdit>,
+}
+
+/// What the panel does to the selected machine.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PanelEdit {
+    /// Renaming it: the name typed so far.
+    Rename(String),
+    /// Asking before forgetting it.
+    Forget,
 }
 
 impl MachinePanel {
@@ -185,6 +197,10 @@ pub enum Input {
     Add,
     /// Open the add-account dialog for the selected machine.
     AddAccount,
+    /// Start renaming the selected machine.
+    Rename,
+    /// Ask before forgetting the selected machine.
+    Forget,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -205,6 +221,28 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     if panel.account.is_some() {
         return accounts::input_for_key(key).map(Action::Machines);
     }
+    let input = match &panel.edit {
+        Some(PanelEdit::Rename(_)) => match key.code {
+            KeyCode::Esc => Input::Close,
+            KeyCode::Enter => Input::Submit,
+            KeyCode::Backspace => Input::Backspace,
+            KeyCode::Char('u') if ctrl => Input::Clear,
+            KeyCode::Char(c) if !ctrl => Input::Char(c),
+            _ => return None,
+        },
+        Some(PanelEdit::Forget) => match key.code {
+            KeyCode::Enter | KeyCode::Char('y') => Input::Submit,
+            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('n') => Input::Close,
+            _ => return None,
+        },
+        None => return panel_key(key, panel),
+    };
+    Some(Action::Machines(input))
+}
+
+/// The action a key asks for while the panel is open with no rename or forget going on.
+fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let input = match &panel.add {
         Some(AddMachine {
             step: Step::Edit | Step::Failed(_),
@@ -241,6 +279,8 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Input::Down,
             KeyCode::Char('a') => Input::Add,
             KeyCode::Char('n') => Input::AddAccount,
+            KeyCode::Char('e') => Input::Rename,
+            KeyCode::Char('d') => Input::Forget,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -278,10 +318,49 @@ impl App {
             }
             return Vec::new();
         }
+        let selected = panel
+            .selected(&self.machines)
+            .map(|at| self.machines[at].host_id.clone());
+        if let Some(edit) = &mut panel.edit {
+            match (edit, input) {
+                (_, Input::Close) => panel.edit = None,
+                (PanelEdit::Rename(name), Input::Char(c)) => name.push(c),
+                (PanelEdit::Rename(name), Input::Backspace) => {
+                    name.pop();
+                }
+                (PanelEdit::Rename(name), Input::Clear) => name.clear(),
+                (PanelEdit::Rename(name), Input::Submit) if !name.trim().is_empty() => {
+                    let name = name.trim().to_owned();
+                    panel.edit = None;
+                    return selected
+                        .map(|host_id| Effect::RenameMachine { host_id, name })
+                        .into_iter()
+                        .collect();
+                }
+                (PanelEdit::Forget, Input::Submit) => {
+                    panel.edit = None;
+                    panel.chosen = None;
+                    return selected.map(Effect::ForgetMachine).into_iter().collect();
+                }
+                _ => {}
+            }
+            return Vec::new();
+        }
         let Some(add) = &mut panel.add else {
             match input {
                 Input::Close => self.machine_panel = None,
                 Input::Add => panel.add = Some(AddMachine::default()),
+                Input::Rename => {
+                    if let Some(at) = panel.selected(&self.machines) {
+                        let name = self.machines[at].name.clone();
+                        panel.edit = Some(PanelEdit::Rename(name));
+                    }
+                }
+                Input::Forget => {
+                    if panel.selected(&self.machines).is_some() {
+                        panel.edit = Some(PanelEdit::Forget);
+                    }
+                }
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
                         return Vec::new();
@@ -350,9 +429,8 @@ impl App {
             let mut add = AddMachine::default();
             add.paste(text);
             self.machine_panel = Some(MachinePanel {
-                chosen: None,
                 add: Some(add),
-                account: None,
+                ..MachinePanel::default()
             });
             return true;
         };
@@ -451,6 +529,41 @@ mod tests {
             code: "ABCDE-FGHJK".into(),
         }
         .to_string()
+    }
+
+    #[test]
+    fn the_panel_renames_and_forgets_the_selected_machine() {
+        let mut app = App::default();
+        app.update(Msg::Machines(vec![
+            machine("h1", "box", &[]),
+            machine("h2", "box", &[]),
+        ]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('e'));
+        // The name starts as it is; an empty one is not saved.
+        for _ in 0.."box".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        typed(&mut app, "laptop");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Effect::RenameMachine {
+                host_id: HostId::new("h2"),
+                name: "laptop".into(),
+            }]
+        );
+        // `d` asks first; `n` keeps the machine, `y` forgets it.
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(press(&mut app, KeyCode::Char('n')), []);
+        assert!(app.machine_panel.as_ref().unwrap().edit.is_none());
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(
+            press(&mut app, KeyCode::Char('y')),
+            [Effect::ForgetMachine(HostId::new("h2"))]
+        );
+        assert!(app.machine_panel.is_some());
     }
 
     #[test]

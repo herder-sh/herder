@@ -73,6 +73,15 @@ pub enum Effect {
     OpenUrl(String),
     /// Pair with the daemon of a `herder://pair` link, answering with [`Msg::Paired`].
     Pair(String),
+    /// Show a machine by another name on this device; a failure comes back as a notice.
+    RenameMachine {
+        /// The machine.
+        host_id: HostId,
+        /// Its new name.
+        name: String,
+    },
+    /// Unpair a machine on this device; a failure comes back as a notice.
+    ForgetMachine(HostId),
     /// Clear the screen and draw every cell anew, as after a resize.
     Repaint,
     /// Suspend the TUI and attach the local terminal to a daemon terminal.

@@ -163,6 +163,8 @@ pub enum WaitForOutput {
 pub enum AnswerInput {
     /// Answers a question.
     Question {
+        /// The child that asked.
+        child: SessionId,
         /// The question.
         question_id: QuestionId,
         /// The answer.
@@ -170,6 +172,8 @@ pub enum AnswerInput {
     },
     /// Decides an approval request.
     Approval {
+        /// The child that asked.
+        child: SessionId,
         /// The request.
         approval_id: ApprovalId,
         /// The decision.
@@ -182,6 +186,9 @@ pub enum AnswerInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnswerArgs {
+    /// The child whose question or approval request this is, as wait_for or status named it.
+    #[schemars(with = "SessionId")]
+    pub child: Option<SessionId>,
     /// The question to answer. Pass it with `text` or `choice`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "QuestionId")]
@@ -208,6 +215,9 @@ impl TryFrom<AnswerArgs> for AnswerInput {
     type Error = String;
 
     fn try_from(args: AnswerArgs) -> Result<Self, String> {
+        let Some(child) = args.child.clone() else {
+            return Err("pass `child`, the child that asked".into());
+        };
         match args {
             AnswerArgs {
                 question_id: Some(question_id),
@@ -215,6 +225,7 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                 text,
                 choice,
                 decision: None,
+                ..
             } => {
                 let answer = match (text, choice) {
                     (Some(text), None) => Answer::Text { text },
@@ -222,6 +233,7 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                     _ => return Err("a question takes exactly one of `text` or `choice`".into()),
                 };
                 Ok(AnswerInput::Question {
+                    child,
                     question_id,
                     answer,
                 })
@@ -232,7 +244,9 @@ impl TryFrom<AnswerArgs> for AnswerInput {
                 text: None,
                 choice: None,
                 decision: Some(decision),
+                ..
             } => Ok(AnswerInput::Approval {
+                child,
                 approval_id,
                 decision,
             }),
@@ -255,6 +269,7 @@ impl From<AnswerInput> for AnswerArgs {
     fn from(input: AnswerInput) -> Self {
         match input {
             AnswerInput::Question {
+                child,
                 question_id,
                 answer,
             } => {
@@ -263,6 +278,7 @@ impl From<AnswerInput> for AnswerArgs {
                     Answer::Choice { index } => (None, Some(index)),
                 };
                 AnswerArgs {
+                    child: Some(child),
                     question_id: Some(question_id),
                     text,
                     choice,
@@ -270,9 +286,11 @@ impl From<AnswerInput> for AnswerArgs {
                 }
             }
             AnswerInput::Approval {
+                child,
                 approval_id,
                 decision,
             } => AnswerArgs {
+                child: Some(child),
                 approval_id: Some(approval_id),
                 decision: Some(decision),
                 ..AnswerArgs::default()
@@ -298,6 +316,8 @@ pub enum RequestRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "EscalateArgs", into = "EscalateArgs")]
 pub struct EscalateInput {
+    /// The child that asked.
+    pub child: SessionId,
     /// The request handed to the user.
     pub request: RequestRef,
     /// Context for the user.
@@ -308,6 +328,9 @@ pub struct EscalateInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EscalateArgs {
+    /// The child whose question or approval request this is, as wait_for or status named it.
+    #[schemars(with = "SessionId")]
+    pub child: Option<SessionId>,
     /// The question to hand over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "QuestionId")]
@@ -326,12 +349,16 @@ impl TryFrom<EscalateArgs> for EscalateInput {
     type Error = String;
 
     fn try_from(args: EscalateArgs) -> Result<Self, String> {
+        let Some(child) = args.child else {
+            return Err("pass `child`, the child that asked".into());
+        };
         let request = match (args.question_id, args.approval_id) {
             (Some(id), None) => RequestRef::Question(id),
             (None, Some(id)) => RequestRef::Approval(id),
             _ => return Err("pass exactly one of `question_id` or `approval_id`".into()),
         };
         Ok(EscalateInput {
+            child,
             request,
             note: args.note,
         })
@@ -345,6 +372,7 @@ impl From<EscalateInput> for EscalateArgs {
             RequestRef::Approval(id) => (None, Some(id)),
         };
         EscalateArgs {
+            child: Some(input.child),
             question_id,
             approval_id,
             note: input.note,

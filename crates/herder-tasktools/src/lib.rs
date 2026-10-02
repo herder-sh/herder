@@ -103,8 +103,9 @@ impl Tool {
             }
             Tool::Answer => {
                 "Answer a question or approval request that a child put to you, unblocking it. \
-                 For a question pass `question_id` with `text`, or `choice` when it lists \
-                 choices; for an approval pass `approval_id` with `decision`. Your answer is \
+                 Pass the `child` that asked; for a question add `question_id` with `text`, or \
+                 `choice` when it lists choices; for an approval add `approval_id` with \
+                 `decision`. Your answer is \
                  final and the child acts on it, so escalate instead when the decision belongs \
                  to the user. Fails with `already_resolved` when someone answered first."
             }
@@ -112,7 +113,8 @@ impl Tool {
                 "Hand a question or approval request that a child put to you over to the user, \
                  when the decision is theirs rather than yours: product or scope choices, \
                  credentials, anything destructive or outside the task. The child stays blocked \
-                 until the user answers. Pass `question_id` or `approval_id`, and a `note` with \
+                 until the user answers. Pass the `child` that asked, `question_id` or \
+                 `approval_id`, and a `note` with \
                  what the user should know to decide."
             }
         }

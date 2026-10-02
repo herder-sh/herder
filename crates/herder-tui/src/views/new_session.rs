@@ -14,6 +14,12 @@ use crate::session::mode_name;
 const LABEL: u16 = 9;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
+    let project = app
+        .compose
+        .dialog
+        .as_ref()
+        .and_then(|dialog| dialog.project.as_ref())
+        .map(|project| app.project_name(project));
     let Some(dialog) = &mut app.compose.dialog else {
         return;
     };
@@ -35,8 +41,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         ),
     };
     let block = Block::bordered()
-        .title(match &dialog.project {
-            Some(project) => format!(" new session · {} ", crate::projects::name(project)),
+        .title(match project {
+            Some(project) => format!(" new session · {project} "),
             None => " new session ".to_owned(),
         })
         .title_bottom(footer.centered())

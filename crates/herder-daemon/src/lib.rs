@@ -127,6 +127,7 @@ pub async fn serve(
     sessions.configure_failover(config.failover.clone())?;
     let docker = Arc::new(resources::Docker::new("docker"));
     sessions.track_containers(Arc::clone(&docker))?;
+    hub.set_failover(config.failover.settings());
     tokio::spawn({
         let hub = Arc::clone(&hub);
         let sessions = sessions.clone();

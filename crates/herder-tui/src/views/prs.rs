@@ -2,6 +2,8 @@
 //! session-list row, the cross-session view, and the link prompt. Grouped by project, the
 //! cross-session view lists each project's PRs together, from every session and machine.
 //!
+//! A PR's row ends with its head branch, except on a narrow screen.
+//!
 //! Colours carry the state everywhere: green open, grey draft, magenta merged, red closed; for
 //! checks green passing, red failing, yellow running.
 
@@ -108,10 +110,10 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
             }
             let name = project
                 .as_ref()
-                .map_or("no project yet", crate::projects::name);
+                .map_or_else(|| "no project yet".to_owned(), |p| app.project_name(p));
             items.push(ListItem::new(Line::from(vec![
                 Span::styled("◆ ", Style::new().fg(Color::Cyan)),
-                Span::styled(name.to_owned(), super::bold()),
+                Span::styled(name, super::bold()),
             ])));
             previous = None;
         }
@@ -272,6 +274,12 @@ fn row(pr: &PullRequest, number_width: usize, compact: bool) -> Line<'static> {
         Span::styled(format!("{:<11}", review.0), review.1),
         Span::styled(format!("{:<11}", merge.0), merge.1),
         Span::raw(pr.title.clone()),
+        Span::styled(
+            pr.head_branch
+                .as_ref()
+                .map_or_else(String::new, |branch| format!("  {branch}")),
+            super::dim(),
+        ),
     ])
 }
 

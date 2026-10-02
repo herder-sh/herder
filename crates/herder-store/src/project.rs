@@ -19,6 +19,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             permission_mode,
             parent,
             task,
+            ..
         } => {
             tx.prepare_cached(
                 "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
@@ -74,11 +75,12 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             write_pr(
                 tx,
                 "INSERT INTO session_prs (session_id, number, url, title, state, ci, review,
-                     mergeable)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     mergeable, head_branch)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT (session_id, number) DO UPDATE SET url = excluded.url,
                      title = excluded.title, state = excluded.state, ci = excluded.ci,
-                     review = excluded.review, mergeable = excluded.mergeable",
+                     review = excluded.review, mergeable = excluded.mergeable,
+                     head_branch = excluded.head_branch",
                 id,
                 pr,
             )?;
@@ -89,7 +91,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             write_pr(
                 tx,
                 "UPDATE session_prs SET url = ?3, title = ?4, state = ?5, ci = ?6, review = ?7,
-                     mergeable = ?8
+                     mergeable = ?8, head_branch = ?9
                  WHERE session_id = ?1 AND number = ?2",
                 id,
                 pr,
@@ -139,6 +141,7 @@ fn write_pr(tx: &Transaction<'_>, sql: &str, session_id: &str, pr: &PullRequest)
         tag(&pr.ci)?,
         tag(&pr.review)?,
         tag(&pr.mergeable)?,
+        pr.head_branch,
     ])?;
     Ok(())
 }

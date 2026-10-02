@@ -1,11 +1,10 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 237
 expression: "render(&mut app, 110, 14).backend()"
 ---
 "┌ sessions ────────────────────────┐┌ pull requests (2) ─────────────────────────────────────────────────────┐"
-"│● box (4)                         ││#7 open   ✓ ci  ✓ approved ✓ merge    Add a health endpoint             │"
-"│ needs you ▾ app · h… (2) #7✓ #9✗!││#9 draft  ✗ ci  … review   ✗ conflict Document the health endpoint      │"
+"│● box (4)                         ││#7 open   ✓ ci  ✓ approved ✓ merge    Add a health endpoint  fix-7      │"
+"│ needs you ▾ app · h… (2) #7✓ #9✗!││#9 draft  ✗ ci  … review   ✗ conflict Document the health endpoint  fix-│"
 "│ running   └ write the tests #8   │└───────────────────────────── Enter open · x unlink · L link · Esc back ┘"
 "│ error     └ document it          │┌ app · herder/api needs you ─────────── claude-main · claude-opus · ask ┐"
 "│ idle      app · herder/fix-login ││  · pull request #7 linked: Add a health endpoint                       │"

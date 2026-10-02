@@ -7,7 +7,8 @@
 //! its usage ([`crate::usage`]) is at 100% before it resets, and it has not hit a limit since
 //! its reset time ([`Limits`]). Accounts of the session's provider come first, then those of each
 //! provider in [`FailoverConfig::providers`] in order; within a provider, most quota left first,
-//! then by id. A session pinned to its account ([`FailoverConfig::pin`]) never fails over.
+//! then by id. A session pinned to its account (created with `failover_pin`, else by
+//! [`FailoverConfig::pin`]) never fails over.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -31,6 +32,16 @@ pub struct FailoverConfig {
     pub providers: Vec<Provider>,
     /// Whether sessions stay on their account when it hits a limit.
     pub pin: bool,
+}
+
+impl FailoverConfig {
+    /// The settings as clients see them.
+    pub fn settings(&self) -> herder_protocol::FailoverSettings {
+        herder_protocol::FailoverSettings {
+            pin: self.pin,
+            providers: self.providers.clone(),
+        }
+    }
 }
 
 /// When each account that hit a limit may be chosen again.

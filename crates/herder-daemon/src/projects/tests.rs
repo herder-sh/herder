@@ -347,6 +347,8 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 account_id: AccountId::new("a"),
                 model: "m".into(),
                 permission_mode: herder_protocol::PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
                 parent: None,
                 task: None,
             },

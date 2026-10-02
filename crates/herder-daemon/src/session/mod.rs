@@ -141,8 +141,8 @@
 //! any queued prompt. The failed turn stays journaled and its partial items are replayed with
 //! the transcript. A child does not report the failed turn to its primary, only the retry. The
 //! account that hit its limit is passed over by every session until it resets. With no eligible
-//! account, with the session pinned ([`FailoverConfig::pin`]), or when the retry hits a limit
-//! too, the session is `needs_you` with the limit error.
+//! account, with the session pinned (its `failover_pin`, else [`FailoverConfig::pin`]), or when
+//! the retry hits a limit too, the session is `needs_you` with the limit error.
 //!
 //! # Restart
 //!
@@ -169,8 +169,8 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemId, Project, Provider, SessionHead, SessionId, SessionStatus,
-    Timestamp, TurnId, UsageWindow, UserId,
+    EventBody, HostId, Item, ItemId, Project, ProjectId, Provider, SessionHead, SessionId,
+    SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -200,7 +200,8 @@ pub trait EventSink: Send + Sync + 'static {
     fn snapshot(&self, session_id: &SessionId, item: &Item);
     /// Text appended to a streaming item; ephemeral, never journaled.
     fn delta(&self, session_id: &SessionId, item_id: &ItemId, text: &str);
-    /// The session list changed (a session was created); carries the new list.
+    /// The session list changed: a session was created, or its status, account or project
+    /// changed; carries the new list.
     fn sessions_changed(&self, sessions: &[SessionHead]);
     /// An account's usage changed ([`crate::usage`]); carries every account. Calls arrive in
     /// order.
@@ -429,11 +430,21 @@ impl SessionManager {
         let (session_id, request) = match command {
             CommandBody::CreateSession {
                 repo,
+                project_id,
                 branch,
                 account_id,
                 model,
                 permission_mode,
+                max_children,
+                failover_pin,
             } => {
+                let (repo, default_account) = self.resolve_repo(repo, project_id)?;
+                let account_id = account_id.or(default_account).ok_or_else(|| {
+                    error(
+                        ErrorCode::BadRequest,
+                        format!("pick an account: the project of {repo} has no default_account"),
+                    )
+                })?;
                 let request = CreateRequest {
                     repo,
                     branch,
@@ -442,6 +453,8 @@ impl SessionManager {
                     permission_mode,
                     parent: None,
                     task: None,
+                    max_children,
+                    failover_pin,
                 };
                 let (session_id, _) = self.create_session(Some(by), request).await?;
                 return Ok(CommandResult::SessionCreated { session_id });
@@ -868,6 +881,47 @@ impl SessionManager {
             .await
     }
 
+    /// The repository a `create_session` names, by path or by project, and its project's
+    /// default account.
+    fn resolve_repo(
+        &self,
+        repo: Option<String>,
+        project_id: Option<ProjectId>,
+    ) -> Result<(String, Option<AccountId>), ErrorInfo> {
+        let projects = self.inner.journal.projects();
+        match (repo, project_id) {
+            (Some(repo), None) => {
+                let default_account = projects
+                    .of_repo(&repo)
+                    .and_then(|project| project.default_account.clone());
+                Ok((repo, default_account))
+            }
+            (None, Some(project_id)) => {
+                let project = projects
+                    .list
+                    .iter()
+                    .find(|project| project.project_id == project_id)
+                    .ok_or_else(|| {
+                        error(
+                            ErrorCode::NotFound,
+                            format!("project {project_id} has no clone on this host"),
+                        )
+                    })?;
+                let repo = project.paths.first().cloned().ok_or_else(|| {
+                    error(
+                        ErrorCode::NotFound,
+                        format!("project {project_id} has no clone on this host"),
+                    )
+                })?;
+                Ok((repo, project.default_account.clone()))
+            }
+            _ => Err(error(
+                ErrorCode::BadRequest,
+                "name the repository by exactly one of `repo` and `project_id`",
+            )),
+        }
+    }
+
     /// Creates a session with its worktree; returns its id and branch.
     async fn create_session(
         &self,
@@ -909,6 +963,8 @@ impl SessionManager {
             permission_mode: request.permission_mode,
             parent: request.parent,
             task: request.task,
+            max_children: request.max_children,
+            failover_pin: request.failover_pin,
         };
         inner
             .journal
@@ -917,10 +973,6 @@ impl SessionManager {
             .map_err(internal)?;
         if let Some(prs) = inner.prs.get() {
             prs.install(&session_id, &worktree.path).await;
-        }
-        match inner.journal.heads().await {
-            Ok(heads) => inner.journal.sink().sessions_changed(&heads),
-            Err(err) => warn!("cannot list sessions after creating {session_id}: {err:#}"),
         }
         // Before the reply, so the session's first prompt queues behind the setup.
         if let Some((command, timeout)) = inner.setup_command(&repo).await {
@@ -999,6 +1051,10 @@ struct CreateRequest {
     parent: Option<SessionId>,
     /// The child's task label.
     task: Option<String>,
+    /// The session's own limit on live children.
+    max_children: Option<u32>,
+    /// The session's own failover pin.
+    failover_pin: Option<bool>,
 }
 
 fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {

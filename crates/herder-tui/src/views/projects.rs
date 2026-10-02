@@ -25,7 +25,7 @@ pub(super) fn heading<'a>(
         }
     }
     let (mark, name) = match project {
-        Some(project) => ("◆", crate::projects::name(project).to_owned()),
+        Some(project) => ("◆", app.project_name(project)),
         None => ("◇", "no project yet".to_owned()),
     };
     let mut spans = vec![

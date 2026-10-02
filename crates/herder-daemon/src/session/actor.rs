@@ -553,6 +553,7 @@ impl Actor {
             PrimaryAct::Answer(AnswerInput::Question {
                 question_id,
                 answer,
+                ..
             }) => {
                 let choices = self.questions.get(&question_id).map_or(0, |(n, _)| *n);
                 if let Answer::Choice { index } = answer
@@ -575,6 +576,7 @@ impl Actor {
             PrimaryAct::Answer(AnswerInput::Approval {
                 approval_id,
                 decision,
+                ..
             }) => {
                 let Some(open) = self.approvals.iter().position(|(id, _)| *id == approval_id)
                 else {
@@ -1484,6 +1486,19 @@ impl Actor {
         self.start_next().await;
     }
 
+    /// Whether the session stays on its account when it hits a limit: as it was created, else
+    /// as the daemon's default says.
+    async fn pinned(&self) -> bool {
+        let session_id = self.session.session_id.clone();
+        match self.inner.journal.settings(session_id).await {
+            Ok(settings) => settings.failover_pin.unwrap_or_else(|| self.inner.pinned()),
+            Err(err) => {
+                warn!("cannot read the session's failover pin: {err:#}");
+                self.inner.pinned()
+            }
+        }
+    }
+
     /// The running turn hit the account's limit: fails over to the next eligible account and
     /// retries the turn's prompt there, unless the session is pinned, the turn was a retry
     /// already, or no account is eligible; then the session needs the user.
@@ -1492,7 +1507,7 @@ impl Actor {
         self.inner.limit_hit(&failing);
         let prompt = self.prompt.take().filter(|prompt| !prompt.retry);
         let target = match prompt {
-            Some(_) if !self.inner.pinned() => {
+            Some(_) if !self.pinned().await => {
                 self.inner.failover_target(&self.session.provider, &failing)
             }
             _ => None,

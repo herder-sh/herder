@@ -161,8 +161,9 @@ fn calls_parse_validate_and_round_trip() {
             }),
         ),
         (
-            json!({ "question_id": "01J9Q", "text": "Use Postgres." }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "text": "Use Postgres." }),
             ToolCall::Answer(AnswerInput::Question {
+                child: child(),
                 question_id: QuestionId::new("01J9Q"),
                 answer: Answer::Text {
                     text: "Use Postgres.".into(),
@@ -170,36 +171,41 @@ fn calls_parse_validate_and_round_trip() {
             }),
         ),
         (
-            json!({ "question_id": "01J9Q", "choice": 1 }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "choice": 1 }),
             ToolCall::Answer(AnswerInput::Question {
+                child: child(),
                 question_id: QuestionId::new("01J9Q"),
                 answer: Answer::Choice { index: 1 },
             }),
         ),
         (
-            json!({ "approval_id": "01J9A", "decision": "allow" }),
+            json!({ "child": "01J9CHILD", "approval_id": "01J9A", "decision": "allow" }),
             ToolCall::Answer(AnswerInput::Approval {
+                child: child(),
                 approval_id: ApprovalId::new("01J9A"),
                 decision: ApprovalDecision::Allow,
             }),
         ),
         (
-            json!({ "approval_id": "01J9A", "decision": "deny" }),
+            json!({ "child": "01J9CHILD", "approval_id": "01J9A", "decision": "deny" }),
             ToolCall::Answer(AnswerInput::Approval {
+                child: child(),
                 approval_id: ApprovalId::new("01J9A"),
                 decision: ApprovalDecision::Deny,
             }),
         ),
         (
-            json!({ "question_id": "01J9Q" }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q" }),
             ToolCall::Escalate(EscalateInput {
+                child: child(),
                 request: RequestRef::Question(QuestionId::new("01J9Q")),
                 note: None,
             }),
         ),
         (
-            json!({ "approval_id": "01J9A", "note": "It drops the staging table." }),
+            json!({ "child": "01J9CHILD", "approval_id": "01J9A", "note": "It drops the staging table." }),
             ToolCall::Escalate(EscalateInput {
+                child: child(),
                 request: RequestRef::Approval(ApprovalId::new("01J9A")),
                 note: Some("It drops the staging table.".into()),
             }),
@@ -246,30 +252,44 @@ fn malformed_calls_are_invalid_arguments() {
         (Tool::Send, json!({ "child": "01J9CHILD" })),
         (Tool::WaitFor, json!({ "child": "01J9CHILD" })),
         (Tool::Answer, json!({})),
-        (Tool::Answer, json!({ "text": "yes" })),
-        (Tool::Answer, json!({ "question_id": "01J9Q" })),
+        (Tool::Answer, json!({ "child": "01J9CHILD", "text": "yes" })),
         (
             Tool::Answer,
-            json!({ "question_id": "01J9Q", "text": "yes", "choice": 0 }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q" }),
         ),
         (
             Tool::Answer,
-            json!({ "question_id": "01J9Q", "decision": "allow" }),
-        ),
-        (Tool::Answer, json!({ "approval_id": "01J9A" })),
-        (
-            Tool::Answer,
-            json!({ "approval_id": "01J9A", "decision": "allow", "text": "ok" }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "text": "yes", "choice": 0 }),
         ),
         (
             Tool::Answer,
-            json!({ "question_id": "01J9Q", "approval_id": "01J9A", "text": "yes" }),
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "decision": "allow" }),
         ),
-        (Tool::Escalate, json!({ "note": "yours" })),
+        (
+            Tool::Answer,
+            json!({ "child": "01J9CHILD", "approval_id": "01J9A" }),
+        ),
+        (
+            Tool::Answer,
+            json!({ "child": "01J9CHILD", "approval_id": "01J9A", "decision": "allow", "text": "ok" }),
+        ),
+        (
+            Tool::Answer,
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "approval_id": "01J9A", "text": "yes" }),
+        ),
         (
             Tool::Escalate,
-            json!({ "question_id": "01J9Q", "approval_id": "01J9A" }),
+            json!({ "child": "01J9CHILD", "note": "yours" }),
         ),
+        (
+            Tool::Escalate,
+            json!({ "child": "01J9CHILD", "question_id": "01J9Q", "approval_id": "01J9A" }),
+        ),
+        (
+            Tool::Answer,
+            json!({ "question_id": "01J9Q", "text": "yes" }),
+        ),
+        (Tool::Escalate, json!({ "question_id": "01J9Q" })),
     ];
     for (tool, arguments) in cases {
         let error = call(tool, arguments.clone()).unwrap_err();

@@ -19,8 +19,9 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     CommandBody, CommandId, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead,
-    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UsageWindow, UserId,
+    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Project, ProjectId, Provider,
+    QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UsageWindow,
+    UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -220,11 +221,14 @@ impl Daemon {
             .handle(
                 alice(),
                 CommandBody::CreateSession {
-                    repo: repo.to_str().unwrap().to_owned(),
+                    repo: Some(repo.to_str().unwrap().to_owned()),
+                    project_id: None,
                     branch: None,
-                    account_id: account(),
+                    account_id: Some(account()),
                     model: None,
                     permission_mode: PermissionMode::Ask,
+                    max_children: None,
+                    failover_pin: None,
                 },
             )
             .await
@@ -444,6 +448,15 @@ async fn streaming_items_publish_a_snapshot_then_deltas() {
     };
     assert_eq!(heads.len(), 1);
     assert_eq!(heads[0].session_id, session);
+    // Each status change publishes the list again, right after the event.
+    let Some(Seen::Sessions(heads)) = daemon.seen.recv().await else {
+        panic!("the idle status is not followed by the session list");
+    };
+    let last = daemon.journal(&session).await.last().unwrap().seq;
+    assert_eq!(
+        (heads[0].status, heads[0].head_seq, &heads[0].account_id),
+        (SessionStatus::Idle, last, &account())
+    );
     let streamed: Vec<_> = daemon
         .log
         .iter()
@@ -482,7 +495,12 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
         [SessionHead {
             session_id: session.clone(),
             head_seq: 7,
+            status: SessionStatus::Idle,
+            parent: None,
+            task: None,
             project_id: None,
+            account_id: account(),
+            children_need_you: 0,
         }]
     );
     // Nothing starts until the next prompt.
@@ -960,14 +978,92 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
     assert_eq!(error.code, ErrorCode::NotFound);
 
     let create = CommandBody::CreateSession {
-        repo: dir.path().to_str().unwrap().to_owned(),
+        repo: Some(dir.path().to_str().unwrap().to_owned()),
+        project_id: None,
         branch: None,
-        account_id: AccountId::new("account-9"),
+        account_id: Some(AccountId::new("account-9")),
         model: None,
         permission_mode: PermissionMode::Ask,
+        max_children: None,
+        failover_pin: None,
     };
     let error = daemon.manager.handle(alice(), create).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let repo = daemon.repo.to_str().unwrap().to_owned();
+    let project = |default_account: Option<AccountId>| Project {
+        project_id: ProjectId::new("github.com/org/app"),
+        name: "app".into(),
+        paths: vec![repo.clone()],
+        default_account,
+        setup_command: None,
+    };
+    let create = |repo: Option<String>, project_id: Option<&str>| CommandBody::CreateSession {
+        repo,
+        project_id: project_id.map(ProjectId::new),
+        branch: None,
+        account_id: None,
+        model: None,
+        permission_mode: PermissionMode::Ask,
+        max_children: None,
+        failover_pin: None,
+    };
+    let code = |result: Result<CommandResult, ErrorInfo>| result.unwrap_err().code;
+
+    daemon.manager.set_projects(&[project(None)]).await;
+    let refused = daemon
+        .manager
+        .handle(alice(), create(Some(repo.clone()), None))
+        .await;
+    assert_eq!(code(refused), ErrorCode::BadRequest);
+    let refused = daemon.manager.handle(alice(), create(None, None)).await;
+    assert_eq!(code(refused), ErrorCode::BadRequest);
+    let both = create(Some(repo.clone()), Some("github.com/org/app"));
+    assert_eq!(
+        code(daemon.manager.handle(alice(), both).await),
+        ErrorCode::BadRequest
+    );
+    let unknown = create(None, Some("github.com/org/other"));
+    assert_eq!(
+        code(daemon.manager.handle(alice(), unknown).await),
+        ErrorCode::NotFound
+    );
+
+    daemon
+        .manager
+        .set_projects(&[project(Some(account()))])
+        .await;
+    for create in [
+        create(None, Some("github.com/org/app")),
+        create(Some(repo.clone()), None),
+    ] {
+        let Ok(CommandResult::SessionCreated { session_id }) =
+            daemon.manager.handle(alice(), create).await
+        else {
+            panic!("expected a created session");
+        };
+        let journal = daemon.journal(&session_id).await;
+        let EventBody::SessionCreated {
+            repo: created_in,
+            account_id,
+            ..
+        } = &journal[0].body
+        else {
+            panic!("expected session_created");
+        };
+        assert_eq!((created_in, account_id), (&repo, &account()));
+    }
+    let heads = daemon.manager.sessions().await.unwrap();
+    assert!(
+        heads
+            .iter()
+            .all(|head| head.project_id == Some(ProjectId::new("github.com/org/app")))
+    );
 }
 
 #[tokio::test]
@@ -1014,11 +1110,14 @@ async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     let create = |branch: &str| CommandBody::CreateSession {
-        repo: daemon.repo.to_str().unwrap().to_owned(),
+        repo: Some(daemon.repo.to_str().unwrap().to_owned()),
+        project_id: None,
         branch: Some(branch.to_owned()),
-        account_id: account(),
+        account_id: Some(account()),
         model: None,
         permission_mode: PermissionMode::Ask,
+        max_children: None,
+        failover_pin: None,
     };
     let result = daemon.manager.handle(alice(), create("fix/login")).await;
     let Ok(CommandResult::SessionCreated { session_id }) = result else {
@@ -1209,11 +1308,14 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
 
     for account in ["codex-work", "claude-main"] {
         let create = CommandBody::CreateSession {
-            repo: repo.to_str().unwrap().to_owned(),
+            repo: Some(repo.to_str().unwrap().to_owned()),
+            project_id: None,
             branch: None,
-            account_id: AccountId::new(account),
+            account_id: Some(AccountId::new(account)),
             model: None,
             permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
             manager.handle(alice(), create).await
@@ -1711,12 +1813,20 @@ impl Switching {
     }
 
     async fn create(&self, account: &str) -> SessionId {
+        self.create_pinned(account, None).await
+    }
+
+    /// A session on `account` with its own failover pin.
+    async fn create_pinned(&self, account: &str, failover_pin: Option<bool>) -> SessionId {
         let create = CommandBody::CreateSession {
-            repo: self.repo.to_str().unwrap().to_owned(),
+            repo: Some(self.repo.to_str().unwrap().to_owned()),
+            project_id: None,
             branch: None,
-            account_id: AccountId::new(account),
+            account_id: Some(AccountId::new(account)),
             model: None,
             permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
             self.manager.handle(alice(), create).await
@@ -2065,6 +2175,8 @@ async fn a_child_switches_only_within_its_tasks_failover_chain() {
         permission_mode: PermissionMode::Ask,
         task: parent.as_ref().map(|_| "help".into()),
         parent,
+        max_children: None,
+        failover_pin: None,
     };
     let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
     let daemon = Switching::open(
@@ -2417,11 +2529,14 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
     let turns = Arc::new(AtomicU64::new(0));
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", turns.clone()).await;
     let create = CommandBody::CreateSession {
-        repo: daemon.repo.to_str().unwrap().to_owned(),
+        repo: Some(daemon.repo.to_str().unwrap().to_owned()),
+        project_id: None,
         branch: None,
-        account_id: account(),
+        account_id: Some(account()),
         model: None,
         permission_mode: PermissionMode::Ask,
+        max_children: None,
+        failover_pin: None,
     };
     let (c1, c2) = (CommandId::new("c1"), CommandId::new("c2"));
     let created = daemon
@@ -2584,6 +2699,64 @@ async fn a_pinned_session_does_not_fail_over() {
         ["-: turn_failed turn-1 LimitReached", "-: status NeedsYou"]
     );
     assert_eq!(claude.starts().len(), 1);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_session_pinned_at_creation_does_not_fail_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create_pinned("claude-a", Some(true)).await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["-: turn_failed turn-1 LimitReached", "-: status NeedsYou"]
+    );
+    assert_eq!(claude.starts().len(), 1);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_session_unpinned_at_creation_fails_over_on_a_pinning_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let pin = FailoverConfig {
+        providers: Vec::new(),
+        pin: true,
+    };
+    daemon.manager.configure_failover(pin).unwrap();
+    let session = daemon.create_pinned("claude-a", Some(false)).await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::Idle).await;
+    assert!(
+        from_first_turn(&journal).contains(&"-: account_switched claude-b".to_owned()),
+        "{journal:?}"
+    );
+    assert_eq!(claude.starts().len(), 2);
     daemon.shutdown.cancel();
 }
 

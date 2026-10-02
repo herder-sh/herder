@@ -252,18 +252,26 @@ impl Daemon {
 
     /// A top-level session in `mode` whose CLI has started, so it holds an MCP token.
     async fn primary(&self, mode: PermissionMode) -> SessionId {
-        let session_id = self.create(mode).await;
+        self.primary_with(mode, None).await
+    }
+
+    /// A primary created with its own limit on children, as `primary`.
+    async fn primary_with(&self, mode: PermissionMode, max_children: Option<u32>) -> SessionId {
+        let session_id = self.create_with(mode, max_children).await;
         self.start(&session_id).await;
         session_id
     }
 
-    async fn create(&self, mode: PermissionMode) -> SessionId {
+    async fn create_with(&self, mode: PermissionMode, max_children: Option<u32>) -> SessionId {
         let create = CommandBody::CreateSession {
-            repo: self.repo.to_str().unwrap().to_owned(),
+            repo: Some(self.repo.to_str().unwrap().to_owned()),
+            project_id: None,
             branch: None,
-            account_id: AccountId::new("account-1"),
+            account_id: Some(AccountId::new("account-1")),
             model: Some("echo-1".into()),
             permission_mode: mode,
+            max_children,
+            failover_pin: None,
         };
         let CommandResult::SessionCreated { session_id } =
             self.manager.handle(alice(), create).await.unwrap()
@@ -606,9 +614,17 @@ async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
     let status = tools.ok("status", json!({})).await;
     assert_eq!(status["children"].as_array().unwrap().len(), 2);
 
-    // The limit is per task: another primary spawns freely.
+    // The limit is per task: another primary spawns freely, and one created with its own
+    // limit keeps to that.
     let other = daemon.primary(PermissionMode::Ask).await;
     daemon.connect(&other).ok("spawn", spawn.clone()).await;
+    let own = daemon.primary_with(PermissionMode::Ask, Some(1)).await;
+    let mut own_tools = daemon.connect(&own);
+    own_tools.ok("spawn", spawn.clone()).await;
+    assert_eq!(
+        own_tools.fails("spawn", spawn.clone()).await,
+        "limit_exceeded"
+    );
 
     // An archived child no longer counts.
     let archive = CommandBody::ArchiveSession {
@@ -907,7 +923,7 @@ async fn a_primary_answers_its_childrens_questions_and_approvals() {
         )
         .await["child"]);
 
-    // Both requests reach the primary, ids prefixed with their child.
+    // Both requests reach the primary, with the adapter's ids and the child that asked.
     let mut requests = Vec::new();
     for _ in 0..2 {
         let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
@@ -921,7 +937,7 @@ async fn a_primary_answers_its_childrens_questions_and_approvals() {
         approval["request"],
         json!({
             "kind": "approval",
-            "approval_id": format!("{writes}/approval-1"),
+            "approval_id": "approval-1",
             "summary": "Write src/new.rs.",
         })
     );
@@ -930,7 +946,7 @@ async fn a_primary_answers_its_childrens_questions_and_approvals() {
         question["request"],
         json!({
             "kind": "question",
-            "question_id": format!("{asks}/question-1"),
+            "question_id": "question-1",
             "text": "A or B?",
             "choices": ["A", "B"],
         })
@@ -955,11 +971,12 @@ async fn a_primary_answers_its_childrens_questions_and_approvals() {
     assert_eq!(routed, (Route::Primary, None));
 
     // A wrong choice is the primary's to correct; then each answer unblocks its child.
-    let wrong = json!({ "question_id": format!("{asks}/question-1"), "choice": 2 });
+    let wrong = json!({ "child": asks.as_str(), "question_id": "question-1", "choice": 2 });
     assert_eq!(tools.fails("answer", wrong).await, "invalid_arguments");
-    let choose = json!({ "question_id": format!("{asks}/question-1"), "choice": 1 });
+    let choose = json!({ "child": asks.as_str(), "question_id": "question-1", "choice": 1 });
     assert_eq!(tools.ok("answer", choose.clone()).await, json!({}));
-    let allow = json!({ "approval_id": format!("{writes}/approval-1"), "decision": "allow" });
+    let allow =
+        json!({ "child": writes.as_str(), "approval_id": "approval-1", "decision": "allow" });
     assert_eq!(tools.ok("answer", allow.clone()).await, json!({}));
     let mut reports = BTreeSet::new();
     for _ in 0..2 {
@@ -1013,14 +1030,15 @@ async fn a_primary_answers_its_childrens_questions_and_approvals() {
         tools.fails("answer", allow.clone()).await,
         "already_resolved"
     );
-    let unknown = json!({ "approval_id": format!("{writes}/approval-9"), "decision": "deny" });
+    let unknown =
+        json!({ "child": writes.as_str(), "approval_id": "approval-9", "decision": "deny" });
     assert_eq!(tools.fails("answer", unknown).await, "not_found");
     let bare = json!({ "approval_id": "approval-1", "decision": "deny" });
-    assert_eq!(tools.fails("answer", bare).await, "not_found");
+    assert_eq!(tools.fails("answer", bare).await, "invalid_arguments");
     let other = daemon.primary(PermissionMode::AutoEdit).await;
     let mut other_tools = daemon.connect(&other);
     assert_eq!(other_tools.fails("answer", allow).await, "not_your_child");
-    let escalate = json!({ "question_id": format!("{asks}/question-1") });
+    let escalate = json!({ "child": asks.as_str(), "question_id": "question-1" });
     assert_eq!(
         other_tools.fails("escalate", escalate).await,
         "not_your_child"
@@ -1058,6 +1076,19 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
             "{prompt}"
         );
         assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
+        // Lists show it on the child and rolled up on its primary.
+        let heads = daemon.manager.sessions().await.unwrap();
+        let head = |id: &SessionId| heads.iter().find(|head| head.session_id == *id).unwrap();
+        assert_eq!(head(&primary).children_need_you, 1);
+        let listed = head(&child);
+        assert_eq!(
+            (
+                listed.status,
+                listed.parent.as_ref(),
+                listed.task.as_deref()
+            ),
+            (SessionStatus::NeedsYou, Some(&primary), Some("T"))
+        );
         assert_eq!(
             daemon.notifier.taken(),
             [(child.clone(), EscalationReason::ExceedsAuthority, None)]
@@ -1072,7 +1103,8 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
             tools.ok("status", status).await["children"][0]["open_questions"],
             json!([])
         );
-        let allow = json!({ "approval_id": format!("{child}/approval-1"), "decision": "allow" });
+        let allow =
+            json!({ "child": child.as_str(), "approval_id": "approval-1", "decision": "allow" });
         assert_eq!(tools.fails("answer", allow).await, "not_allowed");
 
         daemon
@@ -1093,7 +1125,11 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
     let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     let question_id = request["request"]["question_id"].clone();
     assert!(!daemon.ever_needed_you(&child).await);
-    let escalate = json!({ "question_id": question_id, "note": "This is a product call." });
+    let escalate = json!({
+        "child": child.as_str(),
+        "question_id": question_id,
+        "note": "This is a product call.",
+    });
     assert_eq!(tools.ok("escalate", escalate.clone()).await, json!({}));
     let journal = daemon.journal(&child).await;
     let escalated = last(&journal, |event| match &event.body {
@@ -1119,7 +1155,7 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
         [(child.clone(), EscalationReason::MarkedByPrimary, note)]
     );
     // It is the user's now.
-    let choose = json!({ "question_id": question_id, "choice": 0 });
+    let choose = json!({ "child": child.as_str(), "question_id": question_id, "choice": 0 });
     assert_eq!(tools.fails("answer", choose).await, "not_allowed");
     assert_eq!(tools.fails("escalate", escalate).await, "not_allowed");
     daemon
@@ -1177,7 +1213,11 @@ async fn a_request_the_primary_leaves_unanswered_goes_to_the_user() {
     );
     let status = tools.ok("status", json!({})).await;
     assert_eq!(status["children"][0]["open_questions"], json!([]));
-    let allow = json!({ "approval_id": request["request"]["approval_id"], "decision": "allow" });
+    let allow = json!({
+        "child": child.as_str(),
+        "approval_id": request["request"]["approval_id"],
+        "decision": "allow",
+    });
     assert_eq!(tools.fails("answer", allow).await, "not_allowed");
 
     daemon
@@ -1223,7 +1263,7 @@ async fn a_user_answers_a_request_routed_to_the_primary_first() {
     // The request left the primary's queue unseen: its next event is the report.
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["kind"], "report", "{report}");
-    let late = json!({ "question_id": format!("{child}/question-1"), "text": "B" });
+    let late = json!({ "child": child.as_str(), "question_id": "question-1", "text": "B" });
     assert_eq!(tools.fails("answer", late).await, "already_resolved");
     assert!(daemon.notifier.taken().is_empty());
 }

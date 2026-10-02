@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, Provider,
-    QuestionId, Seq, SessionId, TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, ProjectId,
+    Provider, QuestionId, Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -23,6 +23,13 @@ pub enum ClientMessage {
     },
     /// Ask the daemon to change something.
     Command(Command),
+    /// A barrier: the daemon answers `synced` with the same token once it handled every
+    /// message sent before this one, so the lists sent after hello and the replay of every
+    /// earlier subscription arrive before the answer.
+    Sync {
+        /// Chosen by the client to match the answer.
+        token: String,
+    },
 }
 
 /// Opening message of a client connection.
@@ -62,20 +69,35 @@ pub struct Command {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandBody {
-    /// Create a session on a new worktree and branch of a repository.
+    /// Create a session on a new worktree and branch of a repository, named by exactly one of
+    /// `repo` and `project_id`.
     CreateSession {
         /// Absolute path of the repository on the host.
-        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo: Option<String>,
+        /// Project to work on, in its first clone on the host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project_id: Option<ProjectId>,
         /// Branch to create; the daemon picks a name when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
-        /// Account to run on.
-        account_id: AccountId,
+        /// Account to run on; the project's `default_account` when absent, which then must be
+        /// set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account_id: Option<AccountId>,
         /// Model to use; the provider's default when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
         /// Starting permission mode.
         permission_mode: PermissionMode,
+        /// Most live children the session may have as a task's primary; the daemon's
+        /// `[tasks] max_children` when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_children: Option<u32>,
+        /// Whether the session stays on its account when it hits a limit instead of failing
+        /// over; the daemon's `[failover] pin` when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failover_pin: Option<bool>,
     },
     /// Archive a session: remove its worktree, keep its branches, and make it read-only.
     ArchiveSession {

@@ -36,6 +36,7 @@ fn pr(state: PrState, ci: CiStatus, review: ReviewStatus, mergeable: Mergeable) 
         number: 42,
         url: "https://github.com/herder-sh/herder/pull/42".into(),
         title: "Add protocol".into(),
+        head_branch: Some("p0-2-protocol".into()),
         state,
         ci,
         review,
@@ -78,19 +79,28 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
         },
         command(CommandBody::CreateSession {
-            repo: "/home/dev/herder".into(),
+            repo: Some("/home/dev/herder".into()),
+            project_id: None,
             branch: Some("p0-2-protocol".into()),
-            account_id: AccountId::new("01J9ACCOUNT"),
+            account_id: Some(AccountId::new("01J9ACCOUNT")),
             model: Some("opus".into()),
             permission_mode: PermissionMode::Ask,
+            max_children: Some(3),
+            failover_pin: Some(true),
         }),
         command(CommandBody::CreateSession {
-            repo: "/home/dev/herder".into(),
+            repo: None,
+            project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
             branch: None,
-            account_id: AccountId::new("01J9ACCOUNT"),
+            account_id: None,
             model: None,
             permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
         }),
+        ClientMessage::Sync {
+            token: "01J9SYNC".into(),
+        },
         command(CommandBody::SendPrompt {
             session_id: session_id(),
             text: "Fix the build".into(),
@@ -210,11 +220,31 @@ fn server_fixtures() -> Vec<ServerMessage> {
             role: Role::Owner,
         }),
         ServerMessage::Sessions {
-            sessions: vec![SessionHead {
-                session_id: session_id(),
-                head_seq: 12,
-                project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
-            }],
+            sessions: vec![
+                SessionHead {
+                    session_id: session_id(),
+                    head_seq: 12,
+                    status: SessionStatus::Running,
+                    parent: None,
+                    task: None,
+                    project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
+                    account_id: account_id(),
+                    children_need_you: 1,
+                },
+                SessionHead {
+                    session_id: SessionId::new("01J9CHILD"),
+                    head_seq: 4,
+                    status: SessionStatus::NeedsYou,
+                    parent: Some(session_id()),
+                    task: Some("Fix the flaky auth tests".into()),
+                    project_id: None,
+                    account_id: account_id(),
+                    children_need_you: 0,
+                },
+            ],
+        },
+        ServerMessage::Synced {
+            token: "01J9SYNC".into(),
         },
         ServerMessage::Snapshot {
             session_id: session_id(),
@@ -268,6 +298,8 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 permission_mode: PermissionMode::Ask,
                 parent: None,
                 task: None,
+                max_children: Some(3),
+                failover_pin: Some(false),
             },
         ),
         event(2, owner, EventBody::TurnStarted { turn_id: turn_id() }),
@@ -498,8 +530,13 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     resets_at: None,
                 },
             ],
+            failover: true,
         })
         .collect(),
+        failover: FailoverSettings {
+            pin: true,
+            providers: vec![Provider::Codex],
+        },
     });
     for code in [
         ErrorCode::BadRequest,
@@ -659,6 +696,8 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 permission_mode: PermissionMode::AutoEdit,
                 parent: Some(primary()),
                 task: Some("Store migration".into()),
+                max_children: None,
+                failover_pin: None,
             },
         ),
         in_primary(
@@ -973,10 +1012,30 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
         "permission_mode": "ask"
     }))
     .unwrap();
-    let EventBody::SessionCreated { parent, task, .. } = body else {
+    let EventBody::SessionCreated {
+        parent,
+        task,
+        max_children,
+        failover_pin,
+        ..
+    } = body
+    else {
         panic!("expected session_created");
     };
     assert_eq!((parent, task), (None, None));
+    assert_eq!((max_children, failover_pin), (None, None));
+
+    let pr: PullRequest = serde_json::from_value(json!({
+        "number": 1,
+        "url": "u",
+        "title": "t",
+        "state": "open",
+        "ci": "none",
+        "review": "none",
+        "mergeable": "unknown"
+    }))
+    .unwrap();
+    assert_eq!(pr.head_branch, None);
 
     let body: EventBody = serde_json::from_value(json!({
         "type": "approval_requested",
@@ -1089,13 +1148,43 @@ fn resource_optional_fields_may_be_absent() {
 fn project_optional_fields_may_be_absent() {
     let message: ServerMessage = serde_json::from_value(json!({
         "type": "sessions",
-        "sessions": [{ "session_id": "s", "head_seq": 3 }]
+        "sessions": [{
+            "session_id": "s",
+            "head_seq": 3,
+            "status": "idle",
+            "account_id": "a",
+            "children_need_you": 0
+        }]
     }))
     .unwrap();
     let ServerMessage::Sessions { sessions } = message else {
         panic!("expected sessions");
     };
-    assert_eq!(sessions[0].project_id, None);
+    let head = &sessions[0];
+    assert_eq!(
+        (&head.project_id, &head.parent, &head.task),
+        (&None, &None, &None)
+    );
+
+    let command: CommandBody = serde_json::from_value(json!({
+        "type": "create_session",
+        "repo": "/r",
+        "permission_mode": "ask"
+    }))
+    .unwrap();
+    assert_eq!(
+        command,
+        CommandBody::CreateSession {
+            repo: Some("/r".into()),
+            project_id: None,
+            branch: None,
+            account_id: None,
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
+        }
+    );
 
     let project: Project = serde_json::from_value(json!({
         "project_id": "github.com/org/repo",

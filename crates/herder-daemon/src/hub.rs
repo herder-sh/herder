@@ -10,7 +10,8 @@
 //!   client and flushed every [`FLUSH_INTERVAL`]; a client that falls behind loses its pending
 //!   deltas and gets a snapshot of the item once it catches up.
 //! - the session list whenever it changes, sent to every client.
-//! - the account list whenever an account's usage changes, sent to every client.
+//! - the account list whenever an account's usage changes, sent to every client, with the
+//!   daemon's failover settings ([`Hub::set_failover`]).
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
 //! - the project list whenever it changes, sent to every client, and after the other lists
 //!   on connect once there is one ([`crate::projects`]).
@@ -27,8 +28,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, Event, EventBody, HostResources, Item, ItemBody, ItemId, Project, Role, Seq,
-    ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    Account, Event, EventBody, FailoverSettings, HostResources, Item, ItemBody, ItemId, Project,
+    Role, Seq, ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -68,6 +69,8 @@ struct State {
     host: Option<HostResources>,
     /// The latest project list; `None` until discovery publishes its first.
     projects: Option<Vec<Project>>,
+    /// How sessions fail over, sent with every account list.
+    failover: FailoverSettings,
     outboxes: Vec<Arc<Outbox>>,
 }
 
@@ -99,10 +102,11 @@ impl EventSink for Hub {
     }
 
     fn accounts_changed(&self, accounts: &[Account]) {
+        let state = self.lock();
         let message = ServerMessage::Accounts {
             accounts: accounts.to_vec(),
+            failover: state.failover.clone(),
         };
-        let state = self.lock();
         for outbox in &state.outboxes {
             let mut inner = outbox.lock();
             inner.push(message.clone());
@@ -333,13 +337,20 @@ impl Hub {
         outbox.wake();
     }
 
+    /// Sends `failover` with every account list from now on; set once at startup, as the
+    /// daemon's failover settings do not change while it runs.
+    pub fn set_failover(&self, failover: FailoverSettings) {
+        self.lock().failover = failover;
+    }
+
     /// Queues the account list read after [`Hub::connect`], unless a change already reached
     /// the client, as [`Hub::initial_sessions`] does for sessions.
     pub(crate) fn initial_accounts(&self, outbox: &Outbox, accounts: Vec<Account>) {
-        let _state = self.lock();
+        let state = self.lock();
         let mut inner = outbox.lock();
         if !inner.accounts_sent {
-            inner.push(ServerMessage::Accounts { accounts });
+            let failover = state.failover.clone();
+            inner.push(ServerMessage::Accounts { accounts, failover });
         }
         drop(inner);
         outbox.wake();
@@ -889,7 +900,12 @@ mod tests {
             vec![SessionHead {
                 session_id: session(),
                 head_seq: seq,
+                status: herder_protocol::SessionStatus::Idle,
+                parent: None,
+                task: None,
                 project_id: None,
+                account_id: herder_protocol::AccountId::new("claude"),
+                children_need_you: 0,
             }]
         };
         let first = Arc::new(Outbox::default());
@@ -948,8 +964,14 @@ mod tests {
                     used_percent,
                     resets_at: None,
                 }],
+                failover: true,
             }]
         };
+        let failover = FailoverSettings {
+            pin: true,
+            providers: vec![herder_protocol::Provider::Codex],
+        };
+        hub.set_failover(failover.clone());
         let owner = Arc::new(Outbox::default());
         let member = Arc::new(Outbox::default());
         hub.connect(&owner, Role::Owner);
@@ -960,13 +982,15 @@ mod tests {
         hub.initial_accounts(&member, accounts(1.0));
         let changed = ServerMessage::Accounts {
             accounts: accounts(2.0),
+            failover: failover.clone(),
         };
         assert_eq!(drain(&member), std::slice::from_ref(&changed));
         assert_eq!(
             drain(&owner),
             [
                 ServerMessage::Accounts {
-                    accounts: accounts(1.0)
+                    accounts: accounts(1.0),
+                    failover,
                 },
                 changed
             ]
