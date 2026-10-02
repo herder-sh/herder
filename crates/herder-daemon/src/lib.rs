@@ -43,12 +43,26 @@ pub fn run(config: Config) -> Result<()> {
                 }
                 token.cancel();
             });
-            serve(&config, shutdown).await
+            // Adapters and accounts register here with the accounts component (P4.1); until
+            // then sessions run only where a caller of `serve` supplies them, as tests do.
+            serve(
+                &config,
+                session::Adapters::new(),
+                session::Accounts::new(),
+                shutdown,
+            )
+            .await
         })
 }
 
-/// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`.
-pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
+/// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`,
+/// running sessions on `accounts` through `adapters`.
+pub async fn serve(
+    config: &Config,
+    adapters: session::Adapters,
+    accounts: session::Accounts,
+    shutdown: CancellationToken,
+) -> Result<()> {
     let data_dir = DataDir::open(&config.data_dir)?;
     let host = ws::Host {
         id: HostId::new(data_dir.host_id().to_string()),
@@ -60,12 +74,10 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         .with_context(|| format!("opening the journal {}", store_path.display()))?;
     let auth = Arc::new(auth::Auth::open(data_dir.root())?);
     let hub = Arc::new(Hub::default());
-    // Adapters register here as they land (Claude: P1.6), accounts with the accounts
-    // component.
     let setup = session::Setup {
         store,
-        adapters: session::Adapters::new(),
-        accounts: session::Accounts::new(),
+        adapters,
+        accounts,
         sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
@@ -121,7 +133,15 @@ mod tests {
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({
             let shutdown = shutdown.clone();
-            async move { serve(&config, shutdown).await }
+            async move {
+                serve(
+                    &config,
+                    session::Adapters::new(),
+                    session::Accounts::new(),
+                    shutdown,
+                )
+                .await
+            }
         });
         shutdown.cancel();
         task.await.unwrap().unwrap();
