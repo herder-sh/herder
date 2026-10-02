@@ -1,0 +1,18 @@
+---
+source: crates/herder-tui/src/views/terminals.rs
+expression: "render(&mut app, 80, 14).backend()"
+---
+"┌ sessions ──────────────────┐┌────────────────────────────────────────────────┐"
+"│● box (4)                   ││                                                │"
+"│ needs you app · herder/api ││                                                │"
+"│ running   └ ┌ terminals · app · herder/api ────────────────────┐             │"
+"│ error     └ │                                                  │             │"
+"│ idle      ap│ + new terminal                                   │             │"
+"│             │   terminal t1                                    │nter.        │"
+"│             │   terminal t3                                    │             │"
+"│             │                                                  │             │"
+"│             └──────────── Enter attach  Esc close ─────────────┘             │"
+"│                            ││                                                │"
+"│                            ││                                                │"
+"└────────────────────────────┘└────────────────────────────────────────────────┘"
+" ● box connected                                                 ? help  q quit "

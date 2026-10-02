@@ -19,6 +19,7 @@ mod fake;
 mod machines;
 mod prs;
 mod session;
+mod terminal;
 mod views;
 
 use std::collections::HashMap;
@@ -48,10 +49,11 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     )?;
     let (tx, mut rx) = mpsc::unbounded_channel();
     forward_machines(&client, tx.clone());
+    let raw = terminal::RawInput::default();
 
     let mut terminal = ratatui::init();
-    let enhanced = enable_input_modes();
-    if let Err(err) = forward_input(tx.clone()) {
+    let mut enhanced = enable_input_modes();
+    if let Err(err) = forward_input(tx.clone(), raw.clone()) {
         restore(enhanced);
         return Err(err);
     }
@@ -66,6 +68,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         };
         // Fold in everything that queued up while drawing, then draw once.
         let mut quit = false;
+        let mut attach = None;
         let mut next = Some(msg);
         while let Some(msg) = next {
             for effect in app.update(msg) {
@@ -79,9 +82,17 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                     } => send(&client, host_id, command, origin, tx.clone()),
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
                     Effect::Pair(link) => pair(&client, link, tx.clone()),
+                    Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
                 }
             }
             next = rx.try_recv().ok();
+        }
+        if let Some((host_id, target)) = attach.filter(|_| !quit) {
+            // The attached program gets plain keys and sets its own modes.
+            disable_input_modes(enhanced);
+            let ended = terminal::attach(&client, &host_id, target, &raw, &mut terminal).await;
+            enhanced = enable_input_modes();
+            app.update(Msg::TerminalEnded(ended));
         }
         if quit {
             break Ok(());
@@ -113,6 +124,12 @@ fn enable_input_modes() -> bool {
 
 /// Undoes [`enable_input_modes`] and restores the terminal.
 fn restore(enhanced: bool) {
+    disable_input_modes(enhanced);
+    ratatui::restore();
+}
+
+/// Undoes [`enable_input_modes`].
+fn disable_input_modes(enhanced: bool) {
     use ratatui::crossterm::event::{DisableBracketedPaste, PopKeyboardEnhancementFlags};
     use ratatui::crossterm::execute;
     let mut out = std::io::stdout();
@@ -120,7 +137,6 @@ fn restore(enhanced: bool) {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
     let _ = execute!(out, DisableBracketedPaste);
-    ratatui::restore();
 }
 
 /// Sends a command on its own task and feeds the daemon's answer back to the loop.
@@ -206,12 +222,22 @@ fn forward_machines(client: &Client, tx: mpsc::UnboundedSender<Msg>) {
     });
 }
 
-/// Reads terminal input on its own thread, as crossterm's read blocks.
-fn forward_input(tx: mpsc::UnboundedSender<Msg>) -> Result<()> {
+/// Reads terminal input on its own thread, as crossterm's read blocks: key events, or raw
+/// bytes while a terminal is attached.
+fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Result<()> {
+    let wait = std::time::Duration::from_millis(50);
     std::thread::Builder::new()
         .name("herder-tui-input".to_owned())
         .spawn(move || {
             loop {
+                if raw.forward(wait) {
+                    continue;
+                }
+                match event::poll(wait) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(_) => return,
+                }
                 let msg = match event::read() {
                     Ok(Event::Key(key)) => Msg::Key(key),
                     Ok(Event::Resize(..)) => Msg::Resize,

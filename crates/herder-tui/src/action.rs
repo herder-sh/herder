@@ -49,6 +49,8 @@ pub enum Action {
     AddMachine,
     /// Input to the machines panel or its add dialog.
     Machines(crate::machines::Input),
+    /// Open the selected session's terminal picker, or close it.
+    Terminals,
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -66,6 +68,18 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(panel) = &app.machine_panel {
         return crate::machines::for_key(key, panel);
+    }
+    if app.terminals.is_some() {
+        let action = match key.code {
+            KeyCode::Char('k') | KeyCode::Up => Action::Up,
+            KeyCode::Char('j') | KeyCode::Down => Action::Down,
+            KeyCode::Char('g') | KeyCode::Home => Action::Top,
+            KeyCode::Char('G') | KeyCode::End => Action::Bottom,
+            KeyCode::Enter => Action::Open,
+            KeyCode::Esc | KeyCode::Char('q' | 't') => Action::Back,
+            _ => return None,
+        };
+        return Some(action);
     }
     if let Some(action) = compose::for_key(key, app) {
         return action;
@@ -111,6 +125,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('r') => Action::Reconnect,
         KeyCode::Char('m') => Action::OpenMachines,
         KeyCode::Char('a') => Action::AddMachine,
+        KeyCode::Char('t') => Action::Terminals,
         _ => return None,
     };
     Some(action)
@@ -140,6 +155,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("r", "reconnect now"),
     ("m", "machines: connections and fingerprints"),
     ("a", "add a machine (or paste its link)"),
+    ("t", "terminals of the selected session (owners)"),
+    ("Ctrl-] d", "detach from an attached terminal"),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),
 ];
