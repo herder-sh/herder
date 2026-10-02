@@ -13,8 +13,8 @@ use herder_daemon::prs::{self, Fetched, GetFuture, GitHub, PrTracker};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, CiStatus, CommandBody, CommandResult, ErrorCode, Event, EventBody, Item, ItemId,
-    Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus, SessionHead,
+    Account, AccountId, CiStatus, CommandBody, CommandResult, ErrorCode, Event, EventBody, Item,
+    ItemId, Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus, SessionHead,
     SessionId, Timestamp, UserId,
 };
 use herder_store::Store;
@@ -80,6 +80,7 @@ impl EventSink for Silent {
     fn snapshot(&self, _: &SessionId, _: &Item) {}
     fn delta(&self, _: &SessionId, _: &ItemId, _: &str) {}
     fn sessions_changed(&self, _: &[SessionHead]) {}
+    fn accounts_changed(&self, _: &[Account]) {}
 }
 
 /// A pull request on the fake GitHub.

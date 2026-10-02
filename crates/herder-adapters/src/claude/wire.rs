@@ -3,6 +3,8 @@
 //! Taken from Claude Code 2.1.286 and the Agent SDK's `sdk.d.ts`. Fields herder does not read
 //! are not modelled, and unknown line, block and request types parse as `Other`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -169,6 +171,20 @@ pub(super) struct ResultMessage {
 pub(super) struct RateLimitInfo {
     /// `allowed`, `allowed_warning` or `rejected`.
     pub status: String,
+    /// Every limit window by name, such as `five_hour` and `seven_day`.
+    #[serde(default, rename = "unifiedWindows")]
+    pub unified_windows: BTreeMap<String, EventWindow>,
+}
+
+/// One of a `rate_limit_event`'s `unifiedWindows`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EventWindow {
+    /// Share used, 0 to 1.
+    pub utilization: f64,
+    /// Unix seconds.
+    #[serde(default)]
+    pub resets_at: Option<i64>,
 }
 
 /// A request from the CLI to herder.
@@ -200,6 +216,9 @@ pub(super) struct ControlResponse {
     pub request_id: String,
     #[serde(default)]
     pub error: Option<String>,
+    /// The answer, on `success`.
+    #[serde(default)]
+    pub response: Option<Value>,
 }
 
 // ---- Into the CLI ----
@@ -244,8 +263,16 @@ pub(super) struct ControlRequestLine<'a> {
 pub(super) enum Request<'a> {
     Initialize,
     Interrupt,
-    SetModel { model: &'a str },
-    SetPermissionMode { mode: &'a str },
+    SetModel {
+        model: &'a str,
+    },
+    SetPermissionMode {
+        mode: &'a str,
+    },
+    /// The structured `/usage` data; `skip_behaviors` leaves out its scan of local transcripts.
+    GetUsage {
+        skip_behaviors: bool,
+    },
 }
 
 /// herder's answer to a request from the CLI.

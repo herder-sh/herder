@@ -19,7 +19,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
@@ -1095,8 +1095,8 @@ impl Actor {
                 self.settle().await;
             }
             AdapterEvent::UsageReported { windows } => {
-                // Account usage is published by the accounts component, not journaled.
-                debug!(session_id = %self.session.session_id, ?windows, "usage reported");
+                // Account usage is published to clients, not journaled.
+                self.inner.report_usage(&self.session.account_id, windows);
             }
             AdapterEvent::ModelChanged { model } => {
                 if model != self.session.model {

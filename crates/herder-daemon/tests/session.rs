@@ -12,11 +12,13 @@ use herder_daemon::resources::{self, Host, ResourcesConfig, Scopes};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
 };
+use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandBody,
-    CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody, ItemId,
-    PermissionMode, Provider, QuestionId, SessionHead, SessionId, SessionStatus, TurnId, UserId,
+    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
+    CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemBody,
+    ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
+    TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -29,6 +31,7 @@ enum Seen {
     Snapshot(Item),
     Delta(ItemId, String),
     Sessions(Vec<SessionHead>),
+    Accounts(Vec<Account>),
 }
 
 struct Recorder(mpsc::UnboundedSender<Seen>);
@@ -45,6 +48,9 @@ impl EventSink for Recorder {
     }
     fn sessions_changed(&self, sessions: &[SessionHead]) {
         let _ = self.0.send(Seen::Sessions(sessions.to_vec()));
+    }
+    fn accounts_changed(&self, accounts: &[Account]) {
+        let _ = self.0.send(Seen::Accounts(accounts.to_vec()));
     }
 }
 
@@ -275,6 +281,20 @@ impl Daemon {
 
     async fn journal(&self, session_id: &SessionId) -> Vec<Event> {
         self.manager.read_since(session_id, 0, 1000).await.unwrap()
+    }
+
+    /// The next account list published, skipping everything else.
+    async fn next_accounts(&mut self) -> Vec<Account> {
+        loop {
+            let seen = tokio::time::timeout(Duration::from_secs(5), self.seen.recv())
+                .await
+                .expect("timed out waiting for an account list")
+                .unwrap();
+            if let Seen::Accounts(accounts) = seen {
+                return accounts;
+            }
+            self.log.push(seen);
+        }
     }
 
     /// Stops the manager's sessions and gives their tasks a moment to exit.
@@ -1892,4 +1912,85 @@ async fn a_child_switches_only_within_its_tasks_failover_chain() {
         applied
     );
     daemon.shutdown.cancel();
+}
+
+fn window(name: &str, used_percent: f64, resets_at: &str) -> UsageWindow {
+    UsageWindow {
+        window: name.into(),
+        used_percent,
+        resets_at: Some(resets_at.parse::<Timestamp>().unwrap()),
+    }
+}
+
+#[tokio::test]
+async fn usage_a_session_reports_reaches_clients_with_its_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "usage.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Refactor the parser.")
+        .await;
+
+    let five_hour = |used| window("five_hour", used, "2026-10-02T15:00:00Z");
+    let seven_day = window("seven_day", 7.0, "2026-10-09T07:00:00Z");
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].account_id, account());
+    assert_eq!(accounts[0].usage, [five_hour(40.0), seven_day.clone()]);
+    // The second report names only the five-hour window; the seven-day one stays.
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts[0].usage, [five_hour(41.5), seven_day.clone()]);
+    assert_eq!(daemon.manager.accounts(), accounts);
+    daemon.until_status(SessionStatus::Idle).await;
+    daemon.stop().await;
+}
+
+/// A probe answering with how many times it ran, as the five-hour window's percentage.
+struct Counting {
+    requests: Arc<Mutex<Vec<StartRequest>>>,
+}
+
+impl Probe for Counting {
+    fn read(&self, request: StartRequest) -> ProbeFuture {
+        let mut requests = self.requests.lock().unwrap();
+        requests.push(request);
+        let used = requests.len() as f64;
+        Box::pin(async move { Ok(vec![window("five_hour", used, "2026-10-02T15:00:00Z")]) })
+    }
+}
+
+#[tokio::test]
+async fn idle_accounts_are_probed_at_once_and_again_on_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let probe: Arc<dyn Probe> = Arc::new(Counting {
+        requests: requests.clone(),
+    });
+    daemon
+        .manager
+        .track_usage(usage::Config {
+            probes: Probes::from([(fake(), probe)]),
+            dir: dir.path().join("usage"),
+            interval: Duration::from_secs(3600),
+            fresh: Duration::ZERO,
+        })
+        .unwrap();
+
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts[0].usage[0].used_percent, 1.0);
+    // A client opening asks again; the interval alone would not for an hour.
+    daemon.manager.refresh_usage();
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts[0].usage[0].used_percent, 2.0);
+
+    // The probe runs under the account's own config dir, in the usage dir, which exists.
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].config_dir, Some(dir.path().join("account")));
+    assert_eq!(requests[0].cwd, dir.path().join("usage"));
+    assert_eq!(requests[0].permission_mode, PermissionMode::ReadOnly);
+    assert!(requests[0].mcp.is_none() && requests[0].seed.is_empty());
+    assert!(dir.path().join("usage").is_dir());
+    daemon.stop().await;
 }

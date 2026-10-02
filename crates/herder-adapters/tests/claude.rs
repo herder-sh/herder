@@ -16,7 +16,7 @@ use herder_adapters::transport::Transport;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
-    QuestionId, TurnError, TurnId,
+    QuestionId, Timestamp, TurnError, TurnId, UsageWindow,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -67,7 +67,7 @@ async fn start_with(fixture: Fixture, request: StartRequest) -> AdapterSession {
         Capabilities {
             native_model_switch: true,
             native_permission_mode_switch: true,
-            reports_usage: false,
+            reports_usage: true,
         }
     );
     session
@@ -169,6 +169,21 @@ fn model(model: &str) -> AdapterEvent {
     }
 }
 
+/// The `rate_limit_event` of a recorded turn: its five-hour and seven-day use, in percent.
+fn usage(five_hour: f64, seven_day: f64) -> AdapterEvent {
+    let window = |name: &str, used_percent, resets_at| UsageWindow {
+        window: name.into(),
+        used_percent,
+        resets_at: Some(Timestamp::from_second(resets_at).unwrap()),
+    };
+    AdapterEvent::UsageReported {
+        windows: vec![
+            window("five_hour", five_hour, 1790953200),
+            window("seven_day", seven_day, 1791529200),
+        ],
+    }
+}
+
 fn started() -> AdapterEvent {
     AdapterEvent::TurnStarted { turn_id: turn() }
 }
@@ -199,7 +214,7 @@ async fn a_turn_streams_its_reply() {
         .unwrap();
     let events = until(&mut session, is_turn_end).await;
     // The thinking block came with no text, so it is not shown.
-    let mut expected = vec![started(), model(HAIKU)];
+    let mut expected = vec![started(), model(HAIKU), usage(47.0, 5.0)];
     expected.extend(streamed(1, &["ok"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -241,7 +256,7 @@ async fn model_and_permission_mode_switch_natively() {
     let events = until(&mut session, is_turn_end).await;
     // The CLI's own status line repeats the mode, which changes nothing; its init names the
     // model the alias resolved to.
-    let mut expected = vec![started(), model("claude-sonnet-5-5")];
+    let mut expected = vec![started(), model("claude-sonnet-5-5"), usage(47.0, 5.0)];
     expected.extend(streamed(1, &["ok"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -267,6 +282,7 @@ async fn a_tool_call_waits_for_its_approval() {
         [
             started(),
             model(HAIKU),
+            usage(47.0, 5.0),
             AdapterEvent::ItemCompleted {
                 item: item(
                     1,
@@ -353,7 +369,7 @@ async fn a_question_waits_for_its_answer_and_claude_goes_on_with_it() {
         matches!(event, AdapterEvent::QuestionAsked { .. })
     })
     .await;
-    let mut expected = vec![started(), model(HAIKU)];
+    let mut expected = vec![started(), model(HAIKU), usage(62.0, 7.0)];
     expected.extend(letter_question());
     assert_eq!(events, expected);
     // The replay checks the answer line: the call's input plus `answers`, keyed by question.
@@ -391,7 +407,7 @@ async fn an_interrupt_withdraws_a_pending_question() {
         matches!(event, AdapterEvent::QuestionAsked { .. })
     })
     .await;
-    assert_eq!(events[2..], letter_question());
+    assert_eq!(events[3..], letter_question());
     session.commands.send(AdapterCommand::Interrupt).unwrap();
     let events = until(&mut session, is_turn_end).await;
     assert_eq!(
@@ -441,6 +457,7 @@ async fn an_interrupt_ends_the_turn_with_what_streamed() {
         [
             started(),
             model(HAIKU),
+            usage(47.0, 5.0),
             AdapterEvent::ItemStarted {
                 item: item(1, message(""))
             },
@@ -491,7 +508,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
         .unwrap();
     let events = until(&mut session, is_turn_end).await;
     // The model was reported while the seed went in.
-    let mut expected = vec![model(HAIKU), started()];
+    let mut expected = vec![model(HAIKU), started(), usage(47.0, 5.0)];
     expected.extend(streamed(1, &["Teal"]));
     expected.push(completed());
     assert_eq!(events, expected);
@@ -511,6 +528,7 @@ async fn a_spent_limit_fails_the_turn_with_limit_reached() {
         [
             started(),
             model(HAIKU),
+            usage(40.0, 100.0),
             AdapterEvent::TurnFailed {
                 turn_id: turn(),
                 error: TurnError {
@@ -741,4 +759,58 @@ async fn a_cli_that_dies_before_initialize_answers_fails_start() {
             message: "claude stopped while starting: claude exited with code 1".into(),
         }
     );
+}
+
+#[tokio::test]
+async fn read_usage_answers_with_the_plan_windows_and_runs_no_turn() {
+    // The answer is trimmed from Claude Code 2.1.286's own; nothing but the two requests is
+    // sent, then stdin is closed.
+    let fixture = Fixture::parse(
+        "inline",
+        r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-2\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-2\",\"response\":{\"session\":{\"total_cost_usd\":0},\"rate_limits_available\":true,\"rate_limits\":{\"five_hour\":{\"utilization\":9,\"resets_at\":\"2026-10-02T20:19:59.921522+00:00\"},\"seven_day\":{\"utilization\":2,\"resets_at\":\"2026-10-08T15:59:59.921548+00:00\"},\"seven_day_opus\":null,\"extra_usage\":{\"is_enabled\":true,\"utilization\":null},\"model_scoped\":[{\"display_name\":\"Fable\",\"utilization\":0,\"resets_at\":\"2026-10-08T16:00:00+00:00\"}]},\"behaviors\":null}}}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    )
+    .unwrap();
+    let windows = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
+        .await
+        .unwrap()
+        .unwrap();
+    let window = |name: &str, used_percent, resets_at: &str| UsageWindow {
+        window: name.into(),
+        used_percent,
+        resets_at: Some(resets_at.parse().unwrap()),
+    };
+    assert_eq!(
+        windows,
+        [
+            window("five_hour", 9.0, "2026-10-02T20:19:59.921522Z"),
+            window("seven_day", 2.0, "2026-10-08T15:59:59.921548Z"),
+            window("seven_day_fable", 0.0, "2026-10-08T16:00:00Z"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn read_usage_of_an_account_without_plan_limits_is_empty() {
+    let fixture = Fixture::parse(
+        "inline",
+        r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-2\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-2\",\"response\":{\"rate_limits_available\":false,\"rate_limits\":null}}}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    )
+    .unwrap();
+    let windows = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(windows, []);
 }

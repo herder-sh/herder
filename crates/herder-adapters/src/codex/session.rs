@@ -45,20 +45,7 @@ pub(super) async fn start(
         mut exit,
     } = transport;
     let (event_tx, events) = mpsc::channel(EVENT_BUFFER);
-    let mut session = Session {
-        stdin: Some(stdin),
-        events: event_tx,
-        thread_id: String::new(),
-        model: request.model.clone(),
-        mode: request.permission_mode,
-        next_request: 0,
-        pending: HashMap::new(),
-        turn: None,
-        items: HashMap::new(),
-        approvals: HashMap::new(),
-        next_item: 0,
-        next_approval: 0,
-    };
+    let mut session = Session::new(stdin, event_tx, &request);
     session
         .handshake(&request, &mut stdout, &mut exit)
         .await
@@ -79,6 +66,40 @@ pub(super) async fn start(
         commands,
         events,
     })
+}
+
+/// The account's limit windows: `initialize`, `initialized` and `account/rateLimits/read`,
+/// then stdin is closed. No thread is opened.
+pub(super) async fn read_usage(
+    transport: Transport,
+    request: &StartRequest,
+) -> Result<Vec<UsageWindow>, TurnError> {
+    let Transport {
+        stdin,
+        mut stdout,
+        mut exit,
+    } = transport;
+    // Nobody reads the events: sending to the closed channel drops them.
+    let (event_tx, _) = mpsc::channel(1);
+    let mut session = Session::new(stdin, event_tx, request);
+    let windows = match session.initialize(&mut stdout, &mut exit).await {
+        Ok(()) => session.rate_limits(&mut stdout, &mut exit).await,
+        Err(err) => Err(err),
+    }
+    .map_err(|err| match err {
+        StartError::Turn(error) => error,
+        StartError::Gone(reason) => fatal(format!(
+            "codex app-server stopped while reading usage: {reason}"
+        )),
+    })?;
+    // Closing stdin is how an app-server is asked to exit; it is killed if it does not.
+    session.stdin = None;
+    let _ = tokio::time::timeout(STOP_TIMEOUT, async {
+        while stdout.recv().await.is_some() {}
+    })
+    .await;
+    let _ = gone(&mut exit).await;
+    Ok(windows)
 }
 
 /// Why starting failed.
@@ -141,6 +162,27 @@ struct Session {
 }
 
 impl Session {
+    fn new(
+        stdin: mpsc::Sender<String>,
+        events: mpsc::Sender<AdapterEvent>,
+        request: &StartRequest,
+    ) -> Self {
+        Self {
+            stdin: Some(stdin),
+            events,
+            thread_id: String::new(),
+            model: request.model.clone(),
+            mode: request.permission_mode,
+            next_request: 0,
+            pending: HashMap::new(),
+            turn: None,
+            items: HashMap::new(),
+            approvals: HashMap::new(),
+            next_item: 0,
+            next_approval: 0,
+        }
+    }
+
     // ---- Startup ----
 
     async fn handshake(
@@ -149,21 +191,7 @@ impl Session {
         stdout: &mut mpsc::Receiver<String>,
         exit: &mut oneshot::Receiver<Exit>,
     ) -> Result<(), StartError> {
-        let initialize = wire::InitializeParams {
-            client_info: wire::ClientInfo {
-                name: CLIENT_NAME,
-                title: None,
-                version: env!("CARGO_PKG_VERSION"),
-            },
-            capabilities: None,
-        };
-        self.call(stdout, exit, "initialize", initialize)
-            .await?
-            .map_err(|err| refused("initialize", &err))?;
-        self.send(&wire::Notification {
-            method: "initialized",
-        })
-        .await;
+        self.initialize(stdout, exit).await?;
 
         let account = self
             .call(
@@ -184,18 +212,8 @@ impl Session {
             }));
         }
 
-        // Accounts without ChatGPT plan limits, such as API keys, refuse this; that is fine.
-        if let Ok(limits) = self
-            .call(stdout, exit, "account/rateLimits/read", ())
-            .await?
-        {
-            let limits: wire::RateLimitsReadResult = decode("account/rateLimits/read", limits)?;
-            let windows = match limits.rate_limits_by_limit_id {
-                Some(by_id) if !by_id.is_empty() => by_id.values().flat_map(windows).collect(),
-                _ => windows(&limits.rate_limits),
-            };
-            self.usage(windows).await;
-        }
+        let windows = self.rate_limits(stdout, exit).await?;
+        self.usage(windows).await;
 
         let (approval_policy, sandbox) = policy(self.mode);
         let cwd = request.cwd.to_string_lossy();
@@ -233,6 +251,50 @@ impl Session {
                 .map_err(|err| refused("thread/inject_items", &err))?;
         }
         Ok(())
+    }
+
+    /// `initialize`, then `initialized`.
+    async fn initialize(
+        &mut self,
+        stdout: &mut mpsc::Receiver<String>,
+        exit: &mut oneshot::Receiver<Exit>,
+    ) -> Result<(), StartError> {
+        let initialize = wire::InitializeParams {
+            client_info: wire::ClientInfo {
+                name: CLIENT_NAME,
+                title: None,
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            capabilities: None,
+        };
+        self.call(stdout, exit, "initialize", initialize)
+            .await?
+            .map_err(|err| refused("initialize", &err))?;
+        self.send(&wire::Notification {
+            method: "initialized",
+        })
+        .await;
+        Ok(())
+    }
+
+    /// The windows `account/rateLimits/read` answers with. Accounts without ChatGPT plan
+    /// limits, such as API keys, refuse it; they have none.
+    async fn rate_limits(
+        &mut self,
+        stdout: &mut mpsc::Receiver<String>,
+        exit: &mut oneshot::Receiver<Exit>,
+    ) -> Result<Vec<UsageWindow>, StartError> {
+        let Ok(limits) = self
+            .call(stdout, exit, "account/rateLimits/read", ())
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let limits: wire::RateLimitsReadResult = decode("account/rateLimits/read", limits)?;
+        Ok(match limits.rate_limits_by_limit_id {
+            Some(by_id) if !by_id.is_empty() => by_id.values().flat_map(windows).collect(),
+            _ => windows(&limits.rate_limits),
+        })
     }
 
     /// Sends a request and handles everything else the app-server says until it answers.

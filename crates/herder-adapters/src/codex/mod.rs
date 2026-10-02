@@ -7,6 +7,9 @@
 //! `turn/start`, which also carries the current model and permission mode, so both switch
 //! natively from the next turn on.
 //!
+//! [`CodexAdapter::read_usage`] runs only the handshake and `account/rateLimits/read`, then
+//! asks the app-server to exit: the limit windows of an account no session runs on.
+//!
 //! The process runs with exactly [`StartRequest::env`] plus `CODEX_HOME` set to the account's
 //! config dir, when it has one. The adapter never looks inside that dir.
 //!
@@ -48,7 +51,7 @@ mod wire;
 
 use std::path::PathBuf;
 
-use herder_protocol::{ErrorClass, PermissionMode, TurnError};
+use herder_protocol::{ErrorClass, PermissionMode, TurnError, UsageWindow};
 use tokio::process::Command;
 
 use crate::transport::Transport;
@@ -85,6 +88,34 @@ impl Adapter for CodexAdapter {
             start(transport, request).await
         })
     }
+}
+
+impl CodexAdapter {
+    /// The account's limit windows, read by a `codex app-server` run for `request` that is
+    /// asked to exit once it answered; no thread is opened. Empty for an account without plan
+    /// limits.
+    pub fn read_usage(
+        &self,
+        request: StartRequest,
+    ) -> impl Future<Output = Result<Vec<UsageWindow>, TurnError>> + Send + 'static {
+        let command = command(&self.program, &request);
+        async move {
+            let transport = Transport::spawn(command).map_err(|err| TurnError {
+                class: ErrorClass::Fatal,
+                message: format!("starting codex app-server: {err}"),
+            })?;
+            read_usage(transport, &request).await
+        }
+    }
+}
+
+/// Reads the account's limit windows over `transport`, which must carry a `codex app-server`
+/// from [`command`], or a recording of one.
+pub async fn read_usage(
+    transport: Transport,
+    request: &StartRequest,
+) -> Result<Vec<UsageWindow>, TurnError> {
+    session::read_usage(transport, request).await
 }
 
 /// Runs a session over `transport`, which must carry a `codex app-server`: a real one from

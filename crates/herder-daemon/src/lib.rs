@@ -12,6 +12,7 @@ pub mod prs;
 pub mod resources;
 pub mod session;
 pub mod terminal;
+pub mod usage;
 pub mod worktree;
 pub mod ws;
 
@@ -50,15 +51,17 @@ pub fn run(config: Config) -> Result<()> {
                 token.cancel();
             });
             let adapters = accounts::adapters(&config.accounts, &config.binaries);
-            serve(&config, adapters, config.accounts.clone(), shutdown).await
+            let probes = accounts::probes(&config.accounts, &config.binaries);
+            serve(&config, adapters, probes, config.accounts.clone(), shutdown).await
         })
 }
 
 /// Opens the data dir, the journal and the TLS identity, then serves clients until `shutdown`,
-/// running sessions on `accounts` through `adapters`.
+/// running sessions on `accounts` through `adapters` and reading their usage with `probes`.
 pub async fn serve(
     config: &Config,
     adapters: session::Adapters,
+    probes: usage::Probes,
     accounts: session::Accounts,
     shutdown: CancellationToken,
 ) -> Result<()> {
@@ -121,6 +124,12 @@ pub async fn serve(
             slow: prs::SLOW,
         })
         .await?;
+    sessions.track_usage(usage::Config {
+        probes,
+        dir: data_dir.root().join("usage"),
+        interval: usage::INTERVAL,
+        fresh: usage::FRESH,
+    })?;
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
@@ -191,6 +200,7 @@ mod tests {
                 serve(
                     &config,
                     session::Adapters::new(),
+                    usage::Probes::new(),
                     session::Accounts::new(),
                     shutdown,
                 )

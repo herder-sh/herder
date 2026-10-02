@@ -601,3 +601,25 @@ fn fixtures_match_the_codex_schema() {
         }
     }
 }
+
+#[tokio::test]
+async fn read_usage_reads_the_limits_without_opening_a_thread() {
+    // The recorded handshake, then the rate limits as the second request; stdin is closed
+    // right after, with no thread/start.
+    let fixture = turn_prefix(
+        5,
+        r#"{"dir":"in","line":"{\"id\":1,\"method\":\"account/rateLimits/read\",\"params\":null}"}
+{"dir":"out","line":"{\"id\":1,\"result\":{\"rateLimits\":{\"limitId\":\"codex\",\"primary\":{\"usedPercent\":25,\"windowDurationMins\":10080,\"resetsAt\":1791052121},\"secondary\":null},\"rateLimitsByLimitId\":null}}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    );
+    let windows = timeout(
+        TIMEOUT,
+        codex::read_usage(Transport::replay(fixture), &request(Vec::new())),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(windows, [weekly(25.0)]);
+}
