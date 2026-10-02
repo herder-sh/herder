@@ -1,0 +1,9 @@
+{"header":{"provider":"echo","recorded_at":"2026-10-02T11:33:37.599333908Z","ignore_keys":["id"]}}
+{"dir":"out","line":"{\"type\":\"ready\"}"}
+{"dir":"in","line":"{\"id\":\"a1\",\"text\":\"hello\"}"}
+{"dir":"out","line":"{\"type\":\"echo\",\"got\":{\"id\":\"a1\",\"text\":\"hello\"}}"}
+{"dir":"in","line":"{\"id\":\"a2\",\"text\":\"world\"}"}
+{"dir":"out","line":"{\"type\":\"echo\",\"got\":{\"id\":\"a2\",\"text\":\"world\"}}"}
+{"dir":"in","eof":true}
+{"dir":"out","line":"bye"}
+{"exit":3}

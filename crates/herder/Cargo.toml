@@ -14,12 +14,15 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 flate2.workspace = true
+herder-adapters.workspace = true
 herder-daemon.workspace = true
+herder-protocol.workspace = true
 herder-tui.workspace = true
 semver.workspace = true
 sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "process"] }
 ureq.workspace = true
 
 [dev-dependencies]
