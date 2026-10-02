@@ -106,13 +106,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId,
-    Provider, SessionHead, SessionId, SessionStatus, TurnId, UserId,
+    Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, Item,
+    ItemId, Provider, SessionHead, SessionId, SessionStatus, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -124,6 +125,7 @@ use tasks::{TaskTools, Tasks};
 use crate::mcp::{self, Mcp};
 use crate::prs::{self, PrTracker};
 use crate::resources::Scopes;
+use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees};
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
@@ -137,6 +139,9 @@ pub trait EventSink: Send + Sync + 'static {
     fn delta(&self, session_id: &SessionId, item_id: &ItemId, text: &str);
     /// The session list changed (a session was created); carries the new list.
     fn sessions_changed(&self, sessions: &[SessionHead]);
+    /// An account's usage changed ([`crate::usage`]); carries every account. Calls arrive in
+    /// order.
+    fn accounts_changed(&self, accounts: &[Account]);
 }
 
 /// A provider account on this host: a login the provider's CLI keeps in a config dir.
@@ -222,7 +227,22 @@ struct Inner {
     notifier: OnceLock<Arc<dyn Notifier>>,
     /// The scopes sessions' CLIs run in, once set.
     scopes: OnceLock<Arc<Scopes>>,
+    /// Every account's limit windows.
+    usage: Usage,
+    /// Asks the usage poller, once started, to refresh accounts not read lately.
+    refresh_usage: Arc<Notify>,
     shutdown: CancellationToken,
+}
+
+impl Inner {
+    /// Merges `windows` into the account's usage and, when that changed it, publishes every
+    /// account.
+    pub(super) fn report_usage(&self, account_id: &AccountId, windows: Vec<UsageWindow>) {
+        if let Some(usage) = self.usage.report(account_id, windows) {
+            let accounts = crate::accounts::list(&self.accounts, &usage);
+            self.journal.sink().accounts_changed(&accounts);
+        }
+    }
 }
 
 impl SessionManager {
@@ -252,6 +272,8 @@ impl SessionManager {
                 tasks,
                 notifier: OnceLock::new(),
                 scopes: OnceLock::new(),
+                usage: Usage::default(),
+                refresh_usage: Arc::new(Notify::new()),
                 shutdown,
             }),
         })
@@ -479,8 +501,35 @@ impl SessionManager {
     }
 
     /// Every account sessions may run on, as clients see them.
-    pub fn accounts(&self) -> Vec<herder_protocol::Account> {
-        crate::accounts::list(&self.inner.accounts)
+    pub fn accounts(&self) -> Vec<Account> {
+        crate::accounts::list(&self.inner.accounts, &self.inner.usage.all())
+    }
+
+    /// Starts probing every account's usage ([`crate::usage`]) until the manager's shutdown.
+    /// Call it once per manager.
+    pub fn track_usage(&self, config: usage::Config) -> anyhow::Result<()> {
+        let inner = &self.inner;
+        std::fs::create_dir_all(&config.dir)
+            .with_context(|| format!("creating {}", config.dir.display()))?;
+        let weak = Arc::downgrade(inner);
+        tokio::spawn(usage::poll(
+            config,
+            inner.accounts.clone(),
+            Arc::clone(&inner.refresh_usage),
+            move |account_id, windows| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.report_usage(account_id, windows);
+                }
+            },
+            inner.shutdown.clone(),
+        ));
+        Ok(())
+    }
+
+    /// Asks for fresh usage of every account not read lately ([`usage::Config::fresh`]), as
+    /// when a client opens; it arrives as an account list change.
+    pub fn refresh_usage(&self) {
+        self.inner.refresh_usage.notify_one();
     }
 
     /// Every session with its latest seq, ordered by session id.

@@ -10,6 +10,7 @@
 //!   client and flushed every [`FLUSH_INTERVAL`]; a client that falls behind loses its pending
 //!   deltas and gets a snapshot of the item once it catches up.
 //! - the session list whenever it changes, sent to every client.
+//! - the account list whenever an account's usage changes, sent to every client.
 //! - the terminal list whenever it changes, sent to owners only ([`crate::terminal`]).
 //! - each session's resource usage whenever it changes, sent to every client, and on connect
 //!   for every session with something running ([`crate::resources`]).
@@ -22,8 +23,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead, SessionId,
-    SessionUsage, Terminal, TerminalId,
+    Account, Event, EventBody, Item, ItemBody, ItemId, Role, Seq, ServerMessage, SessionHead,
+    SessionId, SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -84,6 +85,20 @@ impl EventSink for Hub {
             let mut inner = outbox.lock();
             inner.push(message.clone());
             inner.sessions_sent = true;
+            drop(inner);
+            outbox.wake();
+        }
+    }
+
+    fn accounts_changed(&self, accounts: &[Account]) {
+        let message = ServerMessage::Accounts {
+            accounts: accounts.to_vec(),
+        };
+        let state = self.lock();
+        for outbox in &state.outboxes {
+            let mut inner = outbox.lock();
+            inner.push(message.clone());
+            inner.accounts_sent = true;
             drop(inner);
             outbox.wake();
         }
@@ -264,6 +279,18 @@ impl Hub {
         outbox.wake();
     }
 
+    /// Queues the account list read after [`Hub::connect`], unless a change already reached
+    /// the client, as [`Hub::initial_sessions`] does for sessions.
+    pub(crate) fn initial_accounts(&self, outbox: &Outbox, accounts: Vec<Account>) {
+        let _state = self.lock();
+        let mut inner = outbox.lock();
+        if !inner.accounts_sent {
+            inner.push(ServerMessage::Accounts { accounts });
+        }
+        drop(inner);
+        outbox.wake();
+    }
+
     pub(crate) fn disconnect(&self, outbox: &Arc<Outbox>) {
         self.lock()
             .outboxes
@@ -364,6 +391,8 @@ struct Inner {
     stale: Vec<(SessionId, ItemId)>,
     /// Whether a session list change has been queued since the client connected.
     sessions_sent: bool,
+    /// Whether an account list change has been queued since the client connected.
+    accounts_sent: bool,
     /// Whether the client's user is an owner, and so sees terminals.
     owner: bool,
     /// Whether a terminal list change has been queued since the client connected.
@@ -848,6 +877,44 @@ mod tests {
         let last = Arc::new(Outbox::default());
         hub.connect(&last, Role::Member);
         assert!(drain(&last).is_empty());
+    }
+
+    #[test]
+    fn account_usage_reaches_every_client_and_never_goes_back() {
+        let hub = Hub::default();
+        let accounts = |used_percent| {
+            vec![Account {
+                account_id: herder_protocol::AccountId::new("claude"),
+                provider: herder_protocol::Provider::Claude,
+                label: "Main".into(),
+                usage: vec![herder_protocol::UsageWindow {
+                    window: "five_hour".into(),
+                    used_percent,
+                    resets_at: None,
+                }],
+            }]
+        };
+        let owner = Arc::new(Outbox::default());
+        let member = Arc::new(Outbox::default());
+        hub.connect(&owner, Role::Owner);
+        hub.connect(&member, Role::Member);
+        hub.initial_accounts(&owner, accounts(1.0));
+        hub.accounts_changed(&accounts(2.0));
+        // Read before the change landed, queued after it.
+        hub.initial_accounts(&member, accounts(1.0));
+        let changed = ServerMessage::Accounts {
+            accounts: accounts(2.0),
+        };
+        assert_eq!(drain(&member), std::slice::from_ref(&changed));
+        assert_eq!(
+            drain(&owner),
+            [
+                ServerMessage::Accounts {
+                    accounts: accounts(1.0)
+                },
+                changed
+            ]
+        );
     }
 
     #[test]

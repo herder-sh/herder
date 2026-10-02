@@ -1,0 +1,7 @@
+# A turn whose provider reports the account's limit windows twice: the second report names
+# only one of them.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 40.0, "resets_at": "2026-10-02T15:00:00Z"}, {"window": "seven_day", "used_percent": 7.0, "resets_at": "2026-10-09T07:00:00Z"}]}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 41.5, "resets_at": "2026-10-02T15:00:00Z"}]}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

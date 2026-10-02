@@ -51,6 +51,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Every account sessions may run on, sent after the sessions.
     fn accounts(&self) -> Vec<Account>;
 
+    /// Asks for fresh account usage, as a client opened; changes go out through the hub.
+    fn refresh_usage(&self);
+
     /// Up to `limit` events of a session after `after_seq`, oldest first; for replay.
     fn read_since(
         &self,
@@ -81,6 +84,10 @@ impl Backend for SessionManager {
 
     fn accounts(&self) -> Vec<Account> {
         SessionManager::accounts(self)
+    }
+
+    fn refresh_usage(&self) {
+        SessionManager::refresh_usage(self);
     }
 
     async fn read_since(

@@ -16,7 +16,7 @@ use super::wire::{
     self, ApiEvent, AskUserQuestion, Block, BlockStart, CanUseTool, ControlRequest, Delta,
     Incoming, Permission, Question, Request, Response,
 };
-use super::{Failure, classify, mode_flag, mode_from_flag};
+use super::{Failure, classify, mode_flag, mode_from_flag, usage};
 use crate::transport::{Exit, Transport};
 use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 
@@ -24,7 +24,7 @@ use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartReq
 const EVENT_BUFFER: usize = 64;
 
 /// How long a stopping `claude` gets to exit on its own before it is killed.
-const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Longest approval summary, in characters.
 const SUMMARY_MAX: usize = 200;
@@ -40,7 +40,7 @@ const UNREADABLE_QUESTIONS: &str = "herder could not read these questions. Ask t
 const SEED_PREAMBLE: &str = "This session continues an earlier conversation, replayed below \
                              from herder's log. It is context only and needs no reply.";
 
-fn fatal(message: impl Into<String>) -> TurnError {
+pub(super) fn fatal(message: impl Into<String>) -> TurnError {
     TurnError {
         class: ErrorClass::Fatal,
         message: message.into(),
@@ -135,7 +135,7 @@ pub(super) async fn start(
         capabilities: Capabilities {
             native_model_switch: true,
             native_permission_mode_switch: true,
-            reports_usage: false,
+            reports_usage: true,
         },
         commands,
         events,
@@ -349,6 +349,10 @@ impl Session {
                     && rate_limit_info.status == "rejected"
                 {
                     turn.failure.limit_rejected = true;
+                }
+                let windows = usage::event_windows(&rate_limit_info.unified_windows);
+                if !windows.is_empty() {
+                    self.emit(AdapterEvent::UsageReported { windows }).await;
                 }
             }
             Incoming::ControlRequest {
@@ -795,7 +799,7 @@ enum TurnEnd {
 }
 
 /// Why `claude` is gone, as a message.
-async fn gone(exit: &mut oneshot::Receiver<Exit>) -> String {
+pub(super) async fn gone(exit: &mut oneshot::Receiver<Exit>) -> String {
     match tokio::time::timeout(STOP_TIMEOUT, exit).await {
         Ok(Ok(Exit::Code(Some(code)))) => format!("claude exited with code {code}"),
         Ok(Ok(Exit::Code(None))) => "claude was killed by a signal".into(),

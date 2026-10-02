@@ -16,9 +16,10 @@ use herder_daemon::session::{
 };
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandBody,
-    CommandResult, EscalationReason, Event, EventBody, Item, ItemBody, ItemId, PermissionMode,
-    Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus, TurnId, UserId,
+    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
+    CommandBody, CommandResult, EscalationReason, Event, EventBody, Item, ItemBody, ItemId,
+    PermissionMode, Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus, TurnId,
+    UserId,
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
@@ -165,6 +166,7 @@ impl EventSink for Quiet {
     fn snapshot(&self, _: &SessionId, _: &Item) {}
     fn delta(&self, _: &SessionId, _: &ItemId, _: &str) {}
     fn sessions_changed(&self, _: &[SessionHead]) {}
+    fn accounts_changed(&self, _: &[Account]) {}
 }
 
 fn git(dir: &Path, args: &[&str]) {

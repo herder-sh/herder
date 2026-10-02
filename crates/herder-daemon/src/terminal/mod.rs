@@ -24,8 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use herder_protocol::{
-    Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, ServerMessage, SessionHead,
-    SessionId, SessionStatus, Terminal, TerminalId,
+    Account, Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, ServerMessage,
+    SessionHead, SessionId, SessionStatus, Terminal, TerminalId,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tracing::{debug, info, warn};
@@ -404,6 +404,10 @@ impl EventSink for KillOnArchive {
 
     fn sessions_changed(&self, sessions: &[SessionHead]) {
         self.next.sessions_changed(sessions);
+    }
+
+    fn accounts_changed(&self, accounts: &[Account]) {
+        self.next.accounts_changed(accounts);
     }
 }
 

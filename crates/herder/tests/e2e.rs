@@ -329,7 +329,9 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     let shutdown = CancellationToken::new();
     let daemon = tokio::spawn({
         let shutdown = shutdown.clone();
-        async move { herder_daemon::serve(&config, adapters, accounts, shutdown).await }
+        async move {
+            herder_daemon::serve(&config, adapters, Default::default(), accounts, shutdown).await
+        }
     });
     wait_for(&data_dir.join("control.sock")).await;
 

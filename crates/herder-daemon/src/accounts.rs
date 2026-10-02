@@ -17,6 +17,7 @@ use herder_adapters::codex::CodexAdapter;
 use herder_protocol::{Account, Provider};
 
 use crate::session::{Accounts, Adapters};
+use crate::usage::{Probe, Probes, Windows};
 
 /// Every provider herder can run sessions on.
 pub const PROVIDERS: [Provider; 5] = [
@@ -69,15 +70,39 @@ fn adapter(provider: &Provider, binary: Option<PathBuf>) -> Option<Arc<dyn Adapt
     })
 }
 
-/// `accounts` as clients see them, ordered by id. Usage is empty until the provider reports it.
-pub fn list(accounts: &Accounts) -> Vec<Account> {
+/// The usage probe ([`crate::usage`]) for every provider that has one and at least one account,
+/// running the same binary as its adapter.
+pub fn probes(accounts: &Accounts, binaries: &HashMap<Provider, PathBuf>) -> Probes {
+    let mut probes = Probes::new();
+    for account in accounts.values() {
+        let provider = &account.provider;
+        let binary = binaries.get(provider).cloned();
+        let probe: Arc<dyn Probe> = match provider {
+            Provider::Claude => Arc::new(match binary {
+                Some(program) => ClaudeAdapter { program },
+                None => ClaudeAdapter::default(),
+            }),
+            Provider::Codex => Arc::new(match binary {
+                Some(program) => CodexAdapter { program },
+                None => CodexAdapter::default(),
+            }),
+            _ => continue,
+        };
+        probes.insert(provider.clone(), probe);
+    }
+    probes
+}
+
+/// `accounts` as clients see them, ordered by id, each with the windows `usage` holds for it;
+/// none until its provider reports one.
+pub(crate) fn list(accounts: &Accounts, usage: &Windows) -> Vec<Account> {
     accounts
         .iter()
         .map(|(id, account)| Account {
             account_id: id.clone(),
             provider: account.provider.clone(),
             label: account.label.clone(),
-            usage: Vec::new(),
+            usage: usage.get(id).cloned().unwrap_or_default(),
         })
         .collect()
 }
@@ -89,7 +114,7 @@ mod tests {
     use std::path::Path;
 
     use herder_adapters::StartRequest;
-    use herder_protocol::{AccountId, PermissionMode};
+    use herder_protocol::{AccountId, PermissionMode, UsageWindow};
 
     use super::*;
     use crate::session::AccountConfig;
@@ -193,19 +218,47 @@ mod tests {
     }
 
     #[test]
-    fn list_shows_each_account_with_empty_usage() {
-        let accounts = Accounts::from([(
-            AccountId::new("claude-main"),
-            account(Provider::Claude, Some(Path::new("/secret/dir"))),
-        )]);
+    fn list_shows_each_account_with_its_usage() {
+        let accounts = Accounts::from([
+            (
+                AccountId::new("claude-main"),
+                account(Provider::Claude, Some(Path::new("/secret/dir"))),
+            ),
+            (AccountId::new("codex"), account(Provider::Codex, None)),
+        ]);
+        let window = UsageWindow {
+            window: "five_hour".into(),
+            used_percent: 9.0,
+            resets_at: None,
+        };
+        let usage = Windows::from([(AccountId::new("claude-main"), vec![window.clone()])]);
         assert_eq!(
-            list(&accounts),
-            [Account {
-                account_id: AccountId::new("claude-main"),
-                provider: Provider::Claude,
-                label: "Label".into(),
-                usage: Vec::new(),
-            }]
+            list(&accounts, &usage),
+            [
+                Account {
+                    account_id: AccountId::new("claude-main"),
+                    provider: Provider::Claude,
+                    label: "Label".into(),
+                    usage: vec![window],
+                },
+                Account {
+                    account_id: AccountId::new("codex"),
+                    provider: Provider::Codex,
+                    label: "Label".into(),
+                    usage: Vec::new(),
+                }
+            ]
         );
+    }
+
+    #[test]
+    fn probes_cover_claude_and_codex_accounts_only() {
+        let accounts = Accounts::from(
+            PROVIDERS.map(|provider| (AccountId::new(provider.as_str()), account(provider, None))),
+        );
+        let probes = probes(&accounts, &HashMap::new());
+        let mut providers: Vec<_> = probes.keys().map(Provider::as_str).collect();
+        providers.sort_unstable();
+        assert_eq!(providers, ["claude", "codex"]);
     }
 }

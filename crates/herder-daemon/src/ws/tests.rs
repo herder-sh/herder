@@ -57,6 +57,8 @@ impl Backend for TestBackend {
         }]
     }
 
+    fn refresh_usage(&self) {}
+
     async fn sessions(&self) -> anyhow::Result<Vec<SessionHead>> {
         let sessions = self.store.lock().unwrap().sessions()?;
         Ok(sessions

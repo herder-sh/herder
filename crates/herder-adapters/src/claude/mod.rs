@@ -90,14 +90,25 @@
 //! The CLI sends a `rate_limit_event` with every API response: `rate_limit_info` holds a
 //! `status` (`allowed`, `allowed_warning`, `rejected`), `rateLimitType`, `resetsAt` (Unix
 //! seconds), overage fields, and `unifiedWindows` with each window's `utilization` (0 to 1)
-//! and `resetsAt`. The adapter does not report usage yet; it only uses `status`.
+//! and `resetsAt`. Each event is reported as usage, its windows named as the CLI names them
+//! (`five_hour`, `seven_day`).
+//!
+//! Those carry no per-model weekly windows, and an idle account sends none at all.
+//! [`ClaudeAdapter::read_usage`] covers both: a short-lived `claude` that answers the
+//! `get_usage` control request (the structured data behind `/usage`, from claude.ai's usage
+//! endpoint) and exits, without a prompt or a turn. It runs with `--safe-mode`, so none of the
+//! user's plugins, hooks or MCP servers start for it. Its `rate_limits` give `five_hour`,
+//! `seven_day` and `seven_day_<model>` windows (utilization 0 to 100, ISO 8601 `resets_at`);
+//! the per-model ones in `model_scoped` are named the same way, `seven_day_fable` for Fable.
+//! The CLI reads its own login to answer; herder sees only the numbers.
 
 mod session;
+mod usage;
 mod wire;
 
 use std::path::{Path, PathBuf};
 
-use herder_protocol::{ErrorClass, PermissionMode, TurnError};
+use herder_protocol::{ErrorClass, PermissionMode, TurnError, UsageWindow};
 use tokio::process::Command;
 
 use crate::transport::Transport;
@@ -132,6 +143,32 @@ impl Adapter for ClaudeAdapter {
             start(transport, request).await
         })
     }
+}
+
+impl ClaudeAdapter {
+    /// The account's limit windows, read by a `claude` run for `request` that exits once it
+    /// answered; see the module docs. Empty for an account without plan limits.
+    pub fn read_usage(
+        &self,
+        request: StartRequest,
+    ) -> impl Future<Output = Result<Vec<UsageWindow>, TurnError>> + Send + 'static {
+        let mut command = command(&self.program, &request);
+        // Nothing the user customized is needed to answer, and their hooks must not run.
+        command.arg("--safe-mode");
+        async move {
+            let transport = Transport::spawn(command).map_err(|err| TurnError {
+                class: ErrorClass::Fatal,
+                message: format!("starting claude: {err}"),
+            })?;
+            read_usage(transport).await
+        }
+    }
+}
+
+/// Reads the account's limit windows over `transport`, which must carry a `claude` started by
+/// [`command`], or a recording of one.
+pub async fn read_usage(transport: Transport) -> Result<Vec<UsageWindow>, TurnError> {
+    usage::read(transport).await
 }
 
 /// Runs a session over `transport`, which must carry a `claude` started by [`command`], or a
