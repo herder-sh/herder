@@ -1,0 +1,16 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 90, 12).backend()"
+---
+"┌ sessions ──────────────────┐┌──────────────────────────────────────────────────────────┐"
+"│● box (4)                   ││                                                          │"
+"│ needs you app · h… #7✓ #9✗!││                                                          │"
+"│ running   └ write the t… #8││                                                          │"
+"│ error     └ document it    ││                                                          │"
+"│ idle      a┌ link a pull request to app · herder/api ─────────────────────┐            │"
+"│            │number or URL: https://github.com/acme/app/pull/31▌           │            │"
+"│            └───────────────────────────────────── Enter link · Esc cancel ┘            │"
+"│                            ││                                                          │"
+"│                            ││                                                          │"
+"└────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" ● box connected                                                           ? help  q quit "

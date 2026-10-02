@@ -15,7 +15,9 @@ const BADGE: usize = 9;
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     let rows = app.rows();
-    let items: Vec<ListItem> = rows.iter().map(|row| item(app, row)).collect();
+    // Inside the borders.
+    let width = usize::from(area.width.saturating_sub(2));
+    let items: Vec<ListItem> = rows.iter().map(|row| item(app, row, width)).collect();
     let highlight = if app.focus == Focus::Sessions {
         Style::new().add_modifier(Modifier::REVERSED)
     } else {
@@ -33,7 +35,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.list);
 }
 
-fn item<'a>(app: &App, row: &Row) -> ListItem<'a> {
+fn item<'a>(app: &App, row: &Row, width: usize) -> ListItem<'a> {
     match row {
         Row::Machine(host_id) => {
             let Some(machine) = app.machines.iter().find(|m| m.host_id == *host_id) else {
@@ -67,13 +69,29 @@ fn item<'a>(app: &App, row: &Row) -> ListItem<'a> {
             if app.open.as_ref() == Some(key) {
                 title = title.add_modifier(Modifier::UNDERLINED);
             }
-            ListItem::new(Line::from(vec![
+            // The PR badge stays in view: the title gives way to it.
+            let prs = super::prs::badge(session);
+            let prs_width: usize = prs.iter().map(Span::width).sum();
+            let room = width.saturating_sub(BADGE + 2 + indent.chars().count() + prs_width);
+            let mut spans = vec![
                 Span::styled(format!(" {label:<BADGE$} "), style),
                 Span::styled(indent, super::dim()),
-                Span::styled(session.title(), title),
-            ]))
+                Span::styled(clip(&session.title(), room), title),
+            ];
+            spans.extend(prs);
+            ListItem::new(Line::from(spans))
         }
     }
+}
+
+/// `text` cut to `width` characters, with an ellipsis when cut.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    let mut clipped: String = text.chars().take(width.saturating_sub(1)).collect();
+    clipped.push('…');
+    clipped
 }
 
 /// A status's label and colour.

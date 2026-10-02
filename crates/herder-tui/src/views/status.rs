@@ -13,7 +13,13 @@ const KEYS: &str = " ? help  q quit ";
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App) {
     let mut spans = Vec::new();
-    for machine in &app.machines {
+    if let Some(notice) = &app.notice {
+        spans.push(Span::styled(
+            format!(" {notice} "),
+            Style::new().fg(Color::Yellow),
+        ));
+    }
+    for machine in app.machines.iter().filter(|_| app.notice.is_none()) {
         let (mark, color, text) = match &machine.connection {
             ConnectionState::Connected => ("●", Color::Green, "connected".to_owned()),
             ConnectionState::Connecting => ("◌", Color::Yellow, "connecting".to_owned()),

@@ -7,7 +7,7 @@ expression: terminal.backend()
 "│ approve?  app · herder/api    ││  Clean the build.                                               │"
 "│ running   └ write the tests   ││  · approval needed: Bash: rm -rf target                         │"
 "│ error     └ document it       ││  · approval needed: Bash: cargo build                           │"
-"│ idle      app · herder/fix-log││                                                                 │"
+"│ idle      app · herder/fix-lo…││                                                                 │"
 "│                               ││                                                                 │"
 "│                               ││                                                                 │"
 "│                               ││                                                                 │"

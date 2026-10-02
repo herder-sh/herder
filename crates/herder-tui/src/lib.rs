@@ -16,6 +16,7 @@ mod app;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod prs;
 mod session;
 mod views;
 
@@ -75,6 +76,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         command,
                         origin,
                     } => send(&client, host_id, command, origin, tx.clone()),
+                    Effect::OpenUrl(url) => open_url(url, tx.clone()),
                 }
             }
             next = rx.try_recv().ok();
@@ -135,6 +137,46 @@ fn send(
             .map_err(|err| err.to_string());
         let _ = tx.send(Msg::Sent { origin, result });
     });
+}
+
+/// Opens `url` with the desktop's opener; where there is none, as over SSH, the notice shows
+/// the URL to copy instead.
+fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let desktop = cfg!(target_os = "macos")
+        || ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()));
+    if !desktop {
+        let _ = tx.send(Msg::Notice(url));
+        return;
+    }
+    let failed = tx.clone();
+    let spawned = std::thread::Builder::new()
+        .name("herder-tui-open".to_owned())
+        .spawn(move || {
+            let status = std::process::Command::new(opener)
+                .arg(&url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            match status {
+                Ok(status) if status.success() => {
+                    let _ = tx.send(Msg::Notice(format!("opened {url}")));
+                }
+                _ => {
+                    let _ = tx.send(Msg::Notice(format!("{opener} failed; open {url}")));
+                }
+            }
+        });
+    if let Err(err) = spawned {
+        let _ = failed.send(Msg::Notice(format!("cannot run {opener}: {err}")));
+    }
 }
 
 /// Sends the machines now and after every change.

@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Color;
 use serde_json::json;
 
+use crate::app::Focus;
 use crate::app::{App, Msg};
 use crate::fake::{self, added, assistant, item, update};
 
@@ -126,7 +127,7 @@ fn the_status_line_shows_each_connection() {
 fn help_lists_the_keys() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));
-    insta::assert_snapshot!(render(&mut app, 80, 26).backend());
+    insta::assert_snapshot!(render(&mut app, 80, 32).backend());
 }
 
 /// `s2` of [`fake::tree`] open, with `bodies` fed to it from seq 3.
@@ -211,4 +212,83 @@ fn the_new_session_dialog() {
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Tab);
     insta::assert_snapshot!(render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn the_session_list_badges_each_sessions_prs() {
+    let mut app = fake::with_prs();
+    let terminal = render(&mut app, 80, 10);
+    insta::assert_snapshot!(terminal.backend());
+    // The badge's number takes its PR state's colour, its marks the checks'.
+    let buffer = terminal.backend().buffer();
+    let row = |y: u16| (0..40).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    let s2 = (0..12).find(|&y| row(y).contains("#7")).unwrap();
+    let at = row(s2).find("#7").unwrap();
+    let x = u16::try_from(row(s2)[..at].chars().count()).unwrap();
+    assert_eq!(buffer[(x, s2)].fg, Color::Green);
+    assert_eq!(buffer[(x + 2, s2)].symbol(), "✓");
+}
+
+#[test]
+fn the_open_session_shows_its_prs_over_the_transcript() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('p'));
+    press(&mut app, KeyCode::Char('j'));
+    insta::assert_snapshot!(render(&mut app, 110, 14).backend());
+    // Out of the strip, the strip stays and only hints at its key.
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.focus, Focus::Transcript);
+    let terminal = render(&mut app, 110, 14);
+    let screen = terminal.backend().to_string();
+    assert!(screen.contains("pull requests (2)"), "{screen}");
+    assert!(!screen.contains("x unlink"), "{screen}");
+}
+
+#[test]
+fn a_session_without_prs_has_no_strip() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    let screen = render(&mut app, 110, 14).backend().to_string();
+    assert!(!screen.contains("pull requests"), "{screen}");
+}
+
+#[test]
+fn every_sessions_prs_are_listed_under_their_session() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('P'));
+    press(&mut app, KeyCode::Char('G'));
+    insta::assert_snapshot!(render(&mut app, 110, 14).backend());
+}
+
+#[test]
+fn no_prs_anywhere_says_so() {
+    let mut app = fake::tree();
+    press(&mut app, KeyCode::Char('P'));
+    let screen = render(&mut app, 110, 10).backend().to_string();
+    assert!(screen.contains("No pull requests are linked"), "{screen}");
+}
+
+#[test]
+fn the_link_prompt_names_its_session() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('L'));
+    for c in "https://github.com/acme/app/pull/31".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    insta::assert_snapshot!(render(&mut app, 90, 12).backend());
+}
+
+#[test]
+fn a_notice_replaces_the_connections_until_the_next_key() {
+    let mut app = fake::tree();
+    app.update(Msg::Notice(
+        "pull request #4 does not exist in acme/app".into(),
+    ));
+    let screen = render(&mut app, 90, 8).backend().to_string();
+    assert!(screen.contains("#4 does not exist"), "{screen}");
+    assert!(!screen.contains("connected"), "{screen}");
+    press(&mut app, KeyCode::Char('j'));
+    let screen = render(&mut app, 90, 8).backend().to_string();
+    assert!(screen.contains("connected"), "{screen}");
 }
