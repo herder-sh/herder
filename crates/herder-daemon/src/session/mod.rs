@@ -585,6 +585,18 @@ impl SessionManager {
         Ok(PathBuf::from(session.worktree))
     }
 
+    /// Every session's worktree, archived ones included: what they started there outlives them.
+    pub async fn worktrees(&self) -> anyhow::Result<Vec<(SessionId, PathBuf)>> {
+        Ok(self
+            .inner
+            .journal
+            .sessions()
+            .await?
+            .into_iter()
+            .map(|session| (session.session_id, PathBuf::from(session.worktree)))
+            .collect())
+    }
+
     /// Every account sessions may run on, as clients see them.
     pub fn accounts(&self) -> Vec<Account> {
         crate::accounts::list(&self.inner.accounts, &self.inner.usage.all())

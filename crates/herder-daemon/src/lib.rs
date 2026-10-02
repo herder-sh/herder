@@ -121,8 +121,13 @@ pub async fn serve(
     sessions.configure_failover(config.failover.clone())?;
     tokio::spawn({
         let hub = Arc::clone(&hub);
+        let sessions = sessions.clone();
         let shutdown = shutdown.clone();
-        async move { scopes.run_sampler(&hub, shutdown).await }
+        let docker = resources::Docker::new("docker");
+        async move {
+            let worktrees = || sessions.worktrees();
+            resources::run_sampler(&scopes, &docker, worktrees, &hub, shutdown).await;
+        }
     });
     let admission = Arc::new(resources::Admission::new(
         config.resources.budget(resources::cores()),
