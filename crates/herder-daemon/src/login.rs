@@ -11,19 +11,26 @@
 //! - Codex: `codex login --device-auth`.
 //! - Cursor: `agent login`.
 //!
-//! A login that exits with 0 adds the account: it is appended to the daemon's config file
-//! ([`crate::config::append_account`]), which stays the one list of accounts, then offered to
-//! sessions and announced to clients. A login that fails adds nothing, and removes the config
-//! dir if herder created it. Either way the outcome is the terminal's last line.
+//! A login that exits with 0 is not taken at its word: quitting `claude` before logging in exits
+//! with 0 too. herder then asks the provider's own CLI whether the config dir is logged in,
+//! with a check that changes nothing ([`LoginStatus`]): `claude auth status --json`, `codex
+//! login status`, `agent status --format json`. Only when it says so is the account added: it
+//! is appended to the daemon's config file ([`crate::config::append_account`]), which stays
+//! the one list of accounts, then offered to sessions and announced to clients. A login that
+//! fails, or that the check finds logged out, adds nothing, and removes the config dir if
+//! herder created it. Either way the outcome is the terminal's last line.
 //!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
 
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::ErrorKind;
+use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use herder_adapters::acp::AgentProfile;
 use herder_protocol::{Account, AccountId, ErrorCode, ErrorInfo, Provider};
@@ -32,6 +39,9 @@ use tracing::{info, warn};
 
 use crate::config::{self, ID_RULE, resolve_path, valid_id};
 use crate::session::{AccountConfig, SessionManager};
+
+/// How long the login status check may take.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How to log in to one provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,12 +52,29 @@ pub struct LoginProgram {
     pub args: Vec<String>,
     /// The variables that point the CLI at the account's config dir.
     pub config_env: Vec<String>,
+    /// How the same CLI tells whether the login succeeded.
+    pub status: LoginStatus,
+}
+
+/// A check, by the provider's own CLI, of whether a config dir is logged in; it changes no
+/// login and herder reads only its answer, never the credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginStatus {
+    /// The arguments to the login's program.
+    pub args: Vec<String>,
+    /// The boolean field of the JSON object the check prints that is `true` when logged in;
+    /// without one, exit status 0 means logged in.
+    pub logged_in_field: Option<String>,
 }
 
 /// The login of each provider herder can add accounts of, running the binary `binaries` names
 /// for it, else the provider's own CLI on `PATH`.
 pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, LoginProgram> {
-    let login = |provider: Provider, default: &str, args: &[&str], config_env: &[&str]| {
+    let login = |provider: Provider,
+                 default: &str,
+                 args: &[&str],
+                 config_env: &[&str],
+                 (status, field): (&[&str], Option<&str>)| {
         let program = binaries
             .get(&provider)
             .cloned()
@@ -57,22 +84,35 @@ pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, Logi
             program,
             args: strings(args),
             config_env: strings(config_env),
+            status: LoginStatus {
+                args: strings(status),
+                logged_in_field: field.map(str::to_owned),
+            },
         };
         (provider, program)
     };
     HashMap::from([
-        login(Provider::Claude, "claude", &[], &["CLAUDE_CONFIG_DIR"]),
+        login(
+            Provider::Claude,
+            "claude",
+            &[],
+            &["CLAUDE_CONFIG_DIR"],
+            (&["auth", "status", "--json"], Some("loggedIn")),
+        ),
         login(
             Provider::Codex,
             "codex",
             &["login", "--device-auth"],
             &["CODEX_HOME"],
+            (&["login", "status"], None),
         ),
+        // `agent status` exits with 0 logged out too.
         login(
             Provider::Cursor,
             &AgentProfile::cursor().program,
             &["login"],
             &["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"],
+            (&["status", "--format", "json"], Some("isAuthenticated")),
         ),
     ])
 }
@@ -113,6 +153,8 @@ pub(crate) struct Pending {
     inner: Arc<Inner>,
     account_id: AccountId,
     account: AccountConfig,
+    /// The login, whose status check tells whether it succeeded.
+    program: LoginProgram,
     /// Whether herder created the config dir, and so may remove it.
     created: bool,
 }
@@ -205,6 +247,7 @@ impl Logins {
                 inner: Arc::clone(inner),
                 account_id: (*account_id).clone(),
                 account,
+                program: program.clone(),
                 created,
             },
         })
@@ -212,26 +255,36 @@ impl Logins {
 }
 
 impl Pending {
-    /// Adds the account if its login exited with 0; returns the outcome, as a line for the
-    /// login terminal.
+    /// Adds the account if its login exited with 0 and the provider reports the config dir
+    /// logged in; returns the outcome, as a line for the login terminal. Runs the status check,
+    /// so it blocks.
     pub(crate) fn finish(self, exit_code: Option<i32>) -> String {
         let Pending {
             inner,
             account_id,
             account,
+            program,
             created,
         } = self;
-        if exit_code != Some(0) {
-            if created
-                && let Some(dir) = &account.config_dir
-                && let Err(err) = std::fs::remove_dir_all(dir)
-            {
+        let dir = account.config_dir.clone().unwrap_or_default();
+        let failure = match exit_code {
+            Some(0) => match logged_in(&program, &dir) {
+                Ok(true) => None,
+                Ok(false) => Some(format!(
+                    "the login exited, but {} reports no login in {}",
+                    account.provider.as_str(),
+                    dir.display()
+                )),
+                Err(err) => Some(format!("the login exited, but {err}")),
+            },
+            Some(code) => Some(format!("the login exited with {code}")),
+            None => Some("the login exited with a signal".to_owned()),
+        };
+        if let Some(failure) = failure {
+            if created && let Err(err) = std::fs::remove_dir_all(&dir) {
                 warn!(%account_id, "cannot remove {}: {err}", dir.display());
             }
-            let code = exit_code.map_or_else(|| "a signal".to_owned(), |code| code.to_string());
-            return line(&format!(
-                "the login exited with {code}; account {account_id} was not added"
-            ));
+            return line(&format!("{failure}; account {account_id} was not added"));
         }
         let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(err) = config::append_account(&inner.config_file, &account_id, &account) {
@@ -248,6 +301,51 @@ impl Pending {
         info!(%account_id, config_file = %inner.config_file.display(), "account added");
         line(&format!("added account {account_id}"))
     }
+}
+
+/// Whether `program`'s status check finds `dir` logged in; an error says why it could not tell.
+fn logged_in(program: &LoginProgram, dir: &Path) -> Result<bool, String> {
+    let name = program.program.display();
+    let mut command = Command::new(&program.program);
+    command
+        .args(&program.status.args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for var in &program.config_env {
+        command.env(var, dir);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("cannot check its status with {name}: {err}"))?;
+    let deadline = Instant::now() + STATUS_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "its status check did not answer within {} s",
+                    STATUS_TIMEOUT.as_secs()
+                ));
+            }
+            Err(err) => return Err(format!("cannot wait for its status check: {err}")),
+        }
+    };
+    let Some(field) = &program.status.logged_in_field else {
+        return Ok(status.success());
+    };
+    let mut stdout = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        out.read_to_string(&mut stdout)
+            .map_err(|err| format!("cannot read its status check: {err}"))?;
+    }
+    let answer: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|_| format!("its status check printed no JSON: {}", stdout.trim()))?;
+    Ok(answer.get(field).and_then(serde_json::Value::as_bool) == Some(true))
 }
 
 /// `text` as a line of herder's own in a terminal.
@@ -312,6 +410,26 @@ mod tests {
         sessions: SessionManager,
     }
 
+    /// Status checks standing in for the providers' own: codex's answers with its exit status,
+    /// claude's with JSON, both from whether the login left `logged-in` in the config dir.
+    fn fake_programs() -> HashMap<Provider, LoginProgram> {
+        let mut programs = programs(&HashMap::new());
+        let fake = |program: &mut LoginProgram, script: &str| {
+            program.program = PathBuf::from("/bin/sh");
+            program.status.args = vec!["-c".into(), script.into()];
+        };
+        fake(
+            programs.get_mut(&Provider::Codex).unwrap(),
+            r#"[ -e "$CODEX_HOME/logged-in" ]"#,
+        );
+        fake(
+            programs.get_mut(&Provider::Claude).unwrap(),
+            r#"if [ -e "$CLAUDE_CONFIG_DIR/logged-in" ]; then v=true; else v=false; fi
+               echo "{\"loggedIn\": $v, \"authMethod\": \"none\"}""#,
+        );
+        programs
+    }
+
     /// Logins on a daemon with one codex account, `codex`, in the default location.
     async fn fixture() -> Fixture {
         let home = tempfile::tempdir().unwrap();
@@ -337,7 +455,7 @@ mod tests {
             .await
             .unwrap();
         let logins = Logins::new(
-            programs(&HashMap::new()),
+            fake_programs(),
             home.path().join("daemon.toml"),
             sessions.clone(),
         );
@@ -400,6 +518,19 @@ mod tests {
             )
         );
         assert_eq!(programs.len(), 3);
+        let status = |provider: &Provider| {
+            let status = &programs[provider].status;
+            (status.args.join(" "), status.logged_in_field.as_deref())
+        };
+        assert_eq!(
+            status(&Provider::Claude),
+            ("auth status --json".into(), Some("loggedIn"))
+        );
+        assert_eq!(status(&Provider::Codex), ("login status".into(), None));
+        assert_eq!(
+            status(&Provider::Cursor),
+            ("status --format json".into(), Some("isAuthenticated"))
+        );
     }
 
     #[tokio::test]
@@ -460,6 +591,7 @@ mod tests {
     async fn a_successful_login_saves_and_adds_the_account() {
         let f = fixture().await;
         let login = f.start("codex-2", Provider::Codex, None).unwrap();
+        std::fs::write(f.home.path().join(".codex-codex-2/logged-in"), "").unwrap();
         let line = login.pending.finish(Some(0));
         assert_eq!(line, "\r\nherder: added account codex-2\r\n");
         let ids: Vec<_> = f
@@ -506,5 +638,51 @@ mod tests {
         let login = f.start("codex-3", Provider::Codex, Some("~/own")).unwrap();
         login.pending.finish(None);
         assert!(own.is_dir());
+    }
+
+    #[tokio::test]
+    async fn a_login_that_exits_0_without_logging_in_adds_nothing() {
+        let f = fixture().await;
+        // Codex says so with its exit status.
+        let login = f.start("codex-2", Provider::Codex, None).unwrap();
+        let line = login.pending.finish(Some(0));
+        let dir = f.home.path().join(".codex-codex-2");
+        assert_eq!(
+            line,
+            format!(
+                "\r\nherder: the login exited, but codex reports no login in {}; account \
+                 codex-2 was not added\r\n",
+                dir.display()
+            )
+        );
+        assert!(!dir.exists());
+
+        // Claude says so in JSON, as `claude` quit before `/login` does.
+        let login = f.start("claude-2", Provider::Claude, None).unwrap();
+        let line = login.pending.finish(Some(0));
+        assert!(line.contains("claude reports no login"), "{line}");
+        assert!(!f.home.path().join(".claude-claude-2").exists());
+        assert_eq!(f.sessions.accounts().len(), 1);
+        assert!(!f.home.path().join("daemon.toml").exists());
+
+        // Logged in, Claude's JSON adds it.
+        let login = f.start("claude-3", Provider::Claude, None).unwrap();
+        std::fs::write(f.home.path().join(".claude-claude-3/logged-in"), "").unwrap();
+        let line = login.pending.finish(Some(0));
+        assert_eq!(line, "\r\nherder: added account claude-3\r\n");
+    }
+
+    #[tokio::test]
+    async fn a_status_check_that_cannot_run_adds_nothing() {
+        let f = fixture().await;
+        let mut login = f.start("codex-2", Provider::Codex, None).unwrap();
+        login.pending.program.program = PathBuf::from("/nonexistent/codex");
+        let line = login.pending.finish(Some(0));
+        assert!(
+            line.contains("cannot check its status with /nonexistent/codex"),
+            "{line}"
+        );
+        assert!(line.contains("account codex-2 was not added"), "{line}");
+        assert_eq!(f.sessions.accounts().len(), 1);
     }
 }

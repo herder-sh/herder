@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead, SessionId, Timestamp,
-    UserId,
+    CommandId, CommandResult, Event, EventBody, Project, ProjectId, PullRequest, Seq, SessionHead,
+    SessionId, Timestamp, UserId,
 };
-use herder_store::{NewEvent, Session, Store};
+use herder_store::{NewEvent, QueuedPrompt, Session, Store};
 
 use super::EventSink;
 
@@ -98,6 +98,49 @@ impl Journal {
 
     pub(crate) async fn sessions(&self) -> Result<Vec<Session>> {
         self.with_store(|store| store.sessions()).await
+    }
+
+    /// The result `user`'s command `command_id` was accepted with, if it is remembered.
+    pub(super) async fn command_result(
+        &self,
+        user: UserId,
+        command_id: CommandId,
+    ) -> Result<Option<CommandResult>> {
+        self.with_store(move |store| store.command_result(&user, &command_id))
+            .await
+    }
+
+    /// Remembers that `user`'s command `command_id` was accepted with `result`.
+    pub(super) async fn record_command_result(
+        &self,
+        user: UserId,
+        command_id: CommandId,
+        result: CommandResult,
+    ) -> Result<()> {
+        self.with_store(move |store| store.record_command_result(&user, &command_id, &result))
+            .await
+    }
+
+    /// The prompts queued in a session, oldest first.
+    pub(super) async fn queued_prompts(&self, session_id: SessionId) -> Result<Vec<QueuedPrompt>> {
+        self.with_store(move |store| store.queued_prompts(&session_id))
+            .await
+    }
+
+    /// Replaces the prompts queued in a session.
+    pub(super) async fn set_queued_prompts(
+        &self,
+        session_id: SessionId,
+        prompts: Vec<QueuedPrompt>,
+    ) -> Result<()> {
+        self.with_store(move |store| store.set_queued_prompts(&session_id, &prompts))
+            .await
+    }
+
+    /// Every session with a prompt queued.
+    pub(super) async fn sessions_with_queued_prompts(&self) -> Result<Vec<SessionId>> {
+        self.with_store(|store| store.sessions_with_queued_prompts())
+            .await
     }
 
     pub(super) async fn heads(&self) -> Result<Vec<SessionHead>> {

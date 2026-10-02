@@ -83,13 +83,47 @@ fn serve(root: PathBuf, latest: &'static str) -> String {
     base
 }
 
+/// Copies `from` to the executable `to` in a `cp` process, never through a file this process
+/// opens for writing.
+///
+/// Tests run on many threads. A file written here stays open for writing in every child that
+/// another thread forks until that child execs, and running the file meanwhile fails with
+/// `ETXTBSY` ("Text file busy"). `cp` holds the only writable descriptor and has exited by the
+/// time the copy is run.
+fn install(from: &Path, to: &Path) {
+    run(Command::new("cp").arg(from).arg(to));
+}
+
 /// A copy of the built herder binary, so `herder update` can replace it.
 fn installed_herder(dir: &Path) -> PathBuf {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let exe = bin.join("herder");
-    std::fs::copy(env!("CARGO_BIN_EXE_herder"), &exe).unwrap();
+    install(Path::new(env!("CARGO_BIN_EXE_herder")), &exe);
     exe
+}
+
+/// Installs and runs a small executable on many threads at once, as the tests here do; with
+/// the copy written in-process, some runs fail with "Text file busy".
+#[test]
+fn executables_installed_while_other_threads_spawn_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = tmp.path().join("source");
+    std::fs::write(&source, FAKE_RELEASE).unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::thread::scope(|scope| {
+        for thread in 0..8 {
+            let (tmp, source) = (tmp.path(), &source);
+            scope.spawn(move || {
+                for n in 0..25 {
+                    let exe = tmp.join(format!("herder-{thread}-{n}"));
+                    install(source, &exe);
+                    let output = run(&mut Command::new(&exe));
+                    assert_eq!(output.stdout, b"herder 9.9.9\n");
+                }
+            });
+        }
+    });
 }
 
 const FAKE_RELEASE: &[u8] = b"#!/bin/sh\necho 'herder 9.9.9'\n";

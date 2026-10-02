@@ -12,8 +12,13 @@
 //! The daemon mints turn ids. A prompt sent while a turn runs is accepted and queued: queued
 //! prompts start in arrival order, each as soon as the previous turn ends, however it ended.
 //! A prompt is journaled (as a `user_message` item) when its turn starts, not when it is
-//! queued, so every turn's items stay together in the journal. Queued prompts live in memory
-//! only and are lost when the daemon stops.
+//! queued, so every turn's items stay together in the journal. Queued prompts are saved in the
+//! store, apart from the journal, before the prompt is answered and again as each one starts,
+//! so a restart neither loses nor repeats one ([`SessionManager::resume`]).
+//!
+//! [`SessionManager::handle_once`] remembers each accepted command's result in the store, so
+//! a client resending a command after a daemon restart gets its first answer instead of
+//! applying it twice.
 //!
 //! # Status
 //!
@@ -54,9 +59,10 @@
 //! Prompts sent meanwhile queue and start once it succeeded. A non-zero exit, a timeout
 //! ([`ProjectsConfig::setup_timeout`]) or an `interrupt` kills the command's process group,
 //! fails the turn as `fatal` with the output's last lines and leaves the session `error`; the
-//! prompts queued behind it are dropped, and a later prompt starts the agent in the worktree as
-//! it is. `archive_session` is refused while it runs. A daemon restart closes a setup it left
-//! running like any open turn, without running it again.
+//! prompts queued behind it are dropped. A later prompt runs it again, as a turn of its own,
+//! before it starts the agent, until it succeeds. `archive_session` is refused while it runs.
+//! A daemon restart closes a setup it left running like any open turn; the next prompt runs it
+//! again the same way.
 //!
 //! # Pull requests
 //!
@@ -87,8 +93,14 @@
 //! arrives, in the order the turns asked; a session with prompts left after a turn asks
 //! again, behind every turn already waiting. A turn's end frees its permit, and a turn blocked
 //! in `wait_for` lends it to other turns until the call returns ([`tasks`]). `spawn` is refused
-//! as `host_busy` while memory, load or pressure binds. A daemon restart loses waiting prompts
-//! like every queued prompt, so a session left `waiting_for_capacity` settles `idle`.
+//! as `host_busy` while memory, load or pressure binds. Waiting prompts are kept across a
+//! restart like every queued prompt: the session stays `waiting_for_capacity` and asks again
+//! once the manager resumes.
+//!
+//! When the agent's CLI fails after the kernel's OOM killer killed a process in its scope
+//! ([`Scopes::oom_killed`]), the turn fails with an error that says so and the session is
+//! `error`; the CLI is stopped, and the next prompt starts a new one seeded with the transcript,
+//! as after a restart.
 //!
 //! Once [`SessionManager::track_containers`] runs, owners can bring down a Compose project
 //! that one of a session's tracked containers belongs to.
@@ -128,7 +140,7 @@
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
-//! a `transient` `turn_failed` when the manager opens, after expiring its open approvals the
+//! a `transient` `turn_failed` when the manager opens, before any prompt it left queued starts, after expiring its open approvals the
 //! same way as at a turn's end: the CLI that asked is gone. A session's adapter starts lazily on its
 //! next prompt, seeded with the journal's items, condensed to fit the model
 //! ([`crate::handoff`]).
@@ -149,9 +161,9 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, HostId,
-    Item, ItemId, Project, Provider, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
-    UsageWindow, UserId,
+    Account, AccountId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event,
+    EventBody, HostId, Item, ItemId, Project, Provider, SessionHead, SessionId, SessionStatus,
+    Timestamp, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -337,6 +349,18 @@ impl Inner {
         failover::next(&choice, provider, failing)
     }
 
+    /// The setup command of `repo`'s project and how long it may run, if it has one.
+    pub(super) async fn setup_command(&self, repo: &Path) -> Option<(String, std::time::Duration)> {
+        let (host, config) = self.projects.get()?.clone();
+        let timeout = config.setup_timeout;
+        let repo = repo.to_owned();
+        let project =
+            tokio::task::spawn_blocking(move || projects::of_repo(&host, &repo, &config.entries))
+                .await
+                .ok()??;
+        Some((project.setup_command?, timeout))
+    }
+
     /// Whether sessions stay on their account when it hits a limit.
     pub(super) fn pinned(&self) -> bool {
         self.failover.get().is_some_and(|config| config.pin)
@@ -386,7 +410,7 @@ impl SessionManager {
 
     /// Applies a command from `by`, from whichever client sent it. Effects arrive at the sink.
     ///
-    /// Command-id idempotency is the caller's: this applies every call.
+    /// Command-id idempotency is the caller's ([`Self::handle_once`]): this applies every call.
     pub async fn handle(
         &self,
         by: UserId,
@@ -493,6 +517,48 @@ impl SessionManager {
         self.send(session_id, Some(by), request).await
     }
 
+    /// Applies `by`'s command `command_id` once, across daemon restarts too: a resend of a
+    /// command accepted before is answered with its first result and not applied again. A
+    /// rejected command changed nothing, so it is not remembered and a resend is tried afresh.
+    ///
+    /// The result is remembered after the command applied and before it is answered, so a
+    /// daemon that stops in between can still apply a resend twice.
+    pub async fn handle_once(
+        &self,
+        by: UserId,
+        command_id: CommandId,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let journal = &self.inner.journal;
+        let remembered = journal
+            .command_result(by.clone(), command_id.clone())
+            .await
+            .map_err(internal)?;
+        if let Some(result) = remembered {
+            return Ok(result);
+        }
+        let result = self.handle(by.clone(), command).await?;
+        if let Err(err) = journal
+            .record_command_result(by, command_id.clone(), result.clone())
+            .await
+        {
+            warn!(%command_id, "cannot remember an accepted command: {err:#}");
+        }
+        Ok(result)
+    }
+
+    /// Starts every session a previous daemon left prompts queued in, so they run without
+    /// waiting for a command: call it once everything sessions run on is set up. The prompts
+    /// start in order as the host admits them.
+    pub async fn resume(&self) -> anyhow::Result<()> {
+        for session_id in self.inner.journal.sessions_with_queued_prompts().await? {
+            if let Err(err) = self.actor(&session_id).await {
+                warn!(%session_id, "cannot resume the queued prompts: {}", err.message);
+            }
+        }
+        Ok(())
+    }
+
     /// Starts pull request tracking ([`crate::prs`]) for every session, until the manager's
     /// shutdown; once per manager.
     pub async fn track_prs(&self, config: prs::Config) -> anyhow::Result<Arc<PrTracker>> {
@@ -567,18 +633,6 @@ impl SessionManager {
             .projects
             .set((host, projects))
             .map_err(|_| anyhow::anyhow!("worktree setup is configured already"))
-    }
-
-    /// The setup command of `repo`'s project and how long it may run, if it has one.
-    async fn setup_command(&self, repo: &Path) -> Option<(String, std::time::Duration)> {
-        let (host, config) = self.inner.projects.get()?.clone();
-        let timeout = config.setup_timeout;
-        let repo = repo.to_owned();
-        let project =
-            tokio::task::spawn_blocking(move || projects::of_repo(&host, &repo, &config.entries))
-                .await
-                .ok()??;
-        Some((project.setup_command?, timeout))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to
@@ -850,7 +904,7 @@ impl SessionManager {
             Err(err) => warn!("cannot list sessions after creating {session_id}: {err:#}"),
         }
         // Before the reply, so the session's first prompt queues behind the setup.
-        if let Some((command, timeout)) = self.setup_command(&repo).await {
+        if let Some((command, timeout)) = inner.setup_command(&repo).await {
             self.send(
                 session_id.clone(),
                 None,

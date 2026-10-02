@@ -272,6 +272,50 @@ async fn a_runaway_child_is_killed_in_its_scope_and_everything_else_keeps_runnin
     assert_eq!(String::from_utf8_lossy(&other.stdout), "other alive\n");
 }
 
+#[test]
+fn oom_kills_are_read_from_memory_events() {
+    let events = "low 0\nhigh 12\nmax 40\noom 2\noom_kill 1\noom_group_kill 0\n";
+    assert_eq!(oom_kills(events), 1);
+    assert_eq!(oom_kills("low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n"), 0);
+    assert_eq!(oom_kills(""), 0);
+}
+
+/// A CLI the kernel OOM-kills as its scope's last process takes the scope with it; the kill
+/// is still told from systemd's journal. A CLI that exits on its own is not taken for one.
+///
+/// Needs a systemd user session with a journal: `cargo test -p herder-daemon -- --ignored
+/// oom_kill`. It uses at most 64 MiB.
+#[tokio::test]
+#[ignore = "needs a systemd user session"]
+async fn an_oom_kill_is_told_after_its_scope_is_gone() {
+    let pid = std::process::id();
+    let tight = Limits {
+        cpu_weight: 50,
+        memory_high: 64 * 1024 * 1024,
+        memory_max: 64 * 1024 * 1024,
+        nice: Host::read().unwrap().nice.max(10),
+    };
+    let (hog, calm) = (
+        format!("herder-test-oom-{pid}.scope"),
+        format!("herder-test-calm-{pid}.scope"),
+    );
+    // `exec` makes the hog the scope's only process, as an agent CLI is.
+    let output = run_in_scope(&hog, &tight, "exec tail /dev/zero").await;
+    assert_eq!(
+        output.status.signal(),
+        Some(nix::sys::signal::Signal::SIGKILL as i32)
+    );
+    assert!(
+        cgroup_of(&hog).await.is_none(),
+        "the scope outlived its process"
+    );
+    assert!(systemd_oom_killed(hog).await);
+
+    let output = run_in_scope(&calm, &tight, "exit 3").await;
+    assert_eq!(output.status.code(), Some(3));
+    assert!(!systemd_oom_killed(calm).await);
+}
+
 /// `sleep` started the way a session's CLI starts everything: with the session's id in its
 /// environment. `ignore_term` makes it survive `SIGTERM`.
 fn leftover(session: &SessionId, ignore_term: bool) -> Child {

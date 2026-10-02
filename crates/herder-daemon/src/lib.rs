@@ -173,6 +173,7 @@ pub async fn serve(
         interval: usage::INTERVAL,
         fresh: usage::FRESH,
     })?;
+    sessions.resume().await?;
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;

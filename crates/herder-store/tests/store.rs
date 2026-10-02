@@ -7,11 +7,11 @@ use std::thread;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, CiStatus, Event, EventBody, Item, ItemBody, ItemId, Mergeable, PermissionMode,
-    PrState, Provider, PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TurnId,
-    UserId,
+    AccountId, CiStatus, CommandId, CommandResult, Event, EventBody, Item, ItemBody, ItemId,
+    Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus, SessionId,
+    SessionStatus, Timestamp, TurnId, UserId,
 };
-use herder_store::{Error, NewEvent, Session, Store};
+use herder_store::{COMMAND_RESULTS_KEPT, Error, NewEvent, QueuedPrompt, Session, Store};
 use proptest::prelude::*;
 use rusqlite::Connection;
 
@@ -494,21 +494,24 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
     drop(store);
 
     // Back to the v2 schema, as a build before session branches left it; reopening migrates
     // it and backfills each session's created branch.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE session_branches; PRAGMA user_version = 2;")
+        .execute_batch(
+            "DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
+             PRAGMA user_version = 2;",
+        )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -521,6 +524,8 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "DROP TABLE session_branches;
+             DROP TABLE command_results;
+             DROP TABLE queued_prompts;
              DROP INDEX sessions_parent;
              ALTER TABLE sessions DROP COLUMN parent;
              ALTER TABLE sessions DROP COLUMN task;
@@ -528,7 +533,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 3);
+    assert_eq!(version(&path), 4);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -541,13 +546,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 4)
+        .pragma_update(None, "user_version", 5)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 4,
-            supported: 3
+            found: 5,
+            supported: 4
         })
     ));
 }
@@ -724,4 +729,78 @@ fn crash_mid_write_never_leaves_a_projection_ahead_of_the_journal() {
             );
         }
     }
+}
+
+#[test]
+fn command_results_survive_a_reopen_and_the_oldest_are_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let alice = UserId::new("alice");
+    let created = CommandResult::SessionCreated {
+        session_id: SessionId::new("s1"),
+    };
+    {
+        let mut store = Store::open(&path).unwrap();
+        store
+            .record_command_result(&alice, &CommandId::new("c1"), &created)
+            .unwrap();
+    }
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.command_result(&alice, &CommandId::new("c1")).unwrap(),
+        Some(created)
+    );
+    // Ids are per user.
+    let bob = UserId::new("bob");
+    assert_eq!(
+        store.command_result(&bob, &CommandId::new("c1")).unwrap(),
+        None
+    );
+
+    for n in 0..COMMAND_RESULTS_KEPT {
+        let id = CommandId::new(format!("n{n}"));
+        store
+            .record_command_result(&bob, &id, &CommandResult::Applied)
+            .unwrap();
+    }
+    assert_eq!(
+        store.command_result(&alice, &CommandId::new("c1")).unwrap(),
+        None
+    );
+    assert_eq!(
+        store.command_result(&bob, &CommandId::new("n0")).unwrap(),
+        Some(CommandResult::Applied)
+    );
+}
+
+#[test]
+fn queued_prompts_survive_a_reopen_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let (s1, s2) = (SessionId::new("s1"), SessionId::new("s2"));
+    let prompt = |by: Option<&str>, text: &str, retry| QueuedPrompt {
+        by: by.map(UserId::new),
+        text: text.into(),
+        retry,
+    };
+    let queue = vec![
+        prompt(Some("alice"), "First.", true),
+        prompt(None, "From the primary.", false),
+    ];
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.set_queued_prompts(&s1, &queue).unwrap();
+        store.set_queued_prompts(&s2, &queue[..1]).unwrap();
+    }
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.queued_prompts(&s1).unwrap(), queue);
+    assert_eq!(
+        store.sessions_with_queued_prompts().unwrap(),
+        [s1.clone(), s2.clone()]
+    );
+
+    store.set_queued_prompts(&s1, &queue[1..]).unwrap();
+    assert_eq!(store.queued_prompts(&s1).unwrap(), queue[1..]);
+    store.set_queued_prompts(&s2, &[]).unwrap();
+    assert_eq!(store.sessions_with_queued_prompts().unwrap(), [s1]);
 }

@@ -17,9 +17,9 @@ use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    CommandBody, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event, EventBody,
-    HostId, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead, SessionId,
-    SessionStatus, Timestamp, TurnError, TurnId, UsageWindow, UserId,
+    CommandBody, CommandId, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event,
+    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider, QuestionId, SessionHead,
+    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::mpsc;
@@ -2262,7 +2262,7 @@ async fn a_turn_waits_while_memory_is_short_and_starts_once_there_is_room() {
 }
 
 #[tokio::test]
-async fn restart_settles_a_session_left_waiting_for_capacity_idle() {
+async fn restart_keeps_a_prompt_waiting_for_capacity_and_runs_it_once_there_is_room() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     admit(&daemon, 4, &FakeHost::new(GIB));
@@ -2271,9 +2271,147 @@ async fn restart_settles_a_session_left_waiting_for_capacity_idle() {
     daemon.until_status(SessionStatus::WaitingForCapacity).await;
     daemon.stop().await;
 
-    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     let journal = describe(&daemon.journal(&session).await);
-    assert_eq!(journal.last().unwrap(), "-: status Idle", "{journal:#?}");
+    assert_eq!(
+        journal,
+        ["alice: session_created", "-: status WaitingForCapacity"]
+    );
+    let host = FakeHost::new(GIB);
+    let admission = admit(&daemon, 4, &host);
+    daemon.manager.resume().await.unwrap();
+    // Back in the host's line, without a command.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(admission.resources().waiting_turns, 1);
+    host.set_memory_available(4 * GIB);
+    admission.recheck();
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status WaitingForCapacity",
+            "-: status Running",
+            "alice: user turn-1 First.",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 One.",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+        ]
+    );
+    daemon.stop().await;
+
+    // Nothing is left queued to run again.
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    daemon.manager.resume().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    assert_eq!(daemon.journal(&session).await.len(), 8);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn restart_mid_queue_fails_the_open_turn_then_runs_the_queued_prompt_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "hold.jsonl", turns.clone()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Hold the machine.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    daemon.prompt(bob(), &session, "Second.").await;
+    daemon.stop().await;
+
+    let mut daemon = Daemon::open(dir.path(), "second.jsonl", turns).await;
+    daemon.manager.resume().await.unwrap();
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "alice: user turn-1 Hold the machine.",
+            "-: turn_started turn-1",
+            "-: turn_failed turn-1 Transient",
+            "-: status NeedsYou",
+            "-: status Running",
+            "bob: user turn-2 Second.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Two.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = daemon.starts.lock().unwrap().clone();
+    let [start] = starts.as_slice() else {
+        panic!("expected one start, got {starts:?}");
+    };
+    assert_eq!(seed_texts(start), ["user: Hold the machine."]);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_command_resent_after_a_restart_is_not_applied_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", turns.clone()).await;
+    let create = CommandBody::CreateSession {
+        repo: daemon.repo.to_str().unwrap().to_owned(),
+        branch: None,
+        account_id: account(),
+        model: None,
+        permission_mode: PermissionMode::Ask,
+    };
+    let (c1, c2) = (CommandId::new("c1"), CommandId::new("c2"));
+    let created = daemon
+        .manager
+        .handle_once(alice(), c1.clone(), create.clone())
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated {
+        session_id: session,
+    } = created.clone()
+    else {
+        panic!("expected a created session, got {created:?}");
+    };
+    let prompt = |text: &str| CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: text.into(),
+    };
+    let sent = daemon
+        .manager
+        .handle_once(alice(), c2.clone(), prompt("First."));
+    assert_eq!(sent.await, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+    daemon.stop().await;
+
+    // The client never saw the answers, so it resends both on its next connection.
+    let mut daemon = Daemon::open(dir.path(), "second.jsonl", turns).await;
+    let resent = daemon.manager.handle_once(alice(), c1, create).await;
+    assert_eq!(resent, Ok(created));
+    let resent = daemon
+        .manager
+        .handle_once(alice(), c2.clone(), prompt("First."));
+    assert_eq!(resent.await, Ok(CommandResult::Applied));
+    assert_eq!(daemon.manager.sessions().await.unwrap().len(), 1);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    assert_eq!(daemon.journal(&session).await.len(), 7);
+
+    // Command ids are per user: bob's `c2` is a command of its own.
+    let sent = daemon.manager.handle_once(bob(), c2, prompt("Second."));
+    assert_eq!(sent.await, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+    let journal = describe(&daemon.journal(&session).await);
+    let prompts: Vec<_> = journal
+        .iter()
+        .filter(|line| line.contains(": user "))
+        .collect();
+    assert_eq!(
+        prompts,
+        ["alice: user turn-1 First.", "bob: user turn-2 Second."]
+    );
     daemon.stop().await;
 }
 
@@ -2643,6 +2781,176 @@ async fn a_failing_setup_command_marks_the_session_error_and_blocks_the_first_tu
             .any(|line| line.contains("First.")),
         "{:#?}",
         describe(&journal)
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_failed_setup_runs_again_before_the_next_prompt_starts_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon =
+        Daemon::open(dir.path(), "after_retried_setup.jsonl", Default::default()).await;
+    // Fails the first time only, as a missing `.env` the user then adds would.
+    set_up_with(
+        &daemon,
+        "if [ -e .tried ]; then echo ready; else touch .tried; echo missing .env; exit 2; fi",
+        Duration::from_secs(60),
+    );
+    let session = daemon.create().await;
+    daemon.until_status(SessionStatus::Error).await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "-: turn_started turn-1",
+            "-: tool_call herder_setup",
+            "-: tool_result missing .env\n",
+            "-: turn_failed turn-1 Fatal",
+            "-: status Error",
+            "-: status Running",
+            "-: turn_started turn-2",
+            "-: tool_call herder_setup",
+            "-: tool_result ready\n",
+            "-: turn_completed turn-2",
+            "alice: user turn-3 First.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 One.",
+            "-: turn_completed turn-3",
+            "-: status Idle",
+        ]
+    );
+    assert_eq!(daemon.starts.lock().unwrap().len(), 1);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_setup_cut_short_by_a_restart_runs_again_before_the_next_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "after_retried_setup.jsonl", turns.clone()).await;
+    set_up_with(&daemon, "sleep 30", Duration::from_secs(60));
+    let session = daemon.create().await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::ItemAdded { .. }))
+        .await;
+    daemon.stop().await;
+
+    let mut daemon = Daemon::open(dir.path(), "after_retried_setup.jsonl", turns).await;
+    set_up_with(&daemon, "echo ready", Duration::from_secs(60));
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&session).await)[4..],
+        [
+            "-: turn_failed turn-1 Transient",
+            "-: status NeedsYou",
+            "-: status Running",
+            "-: turn_started turn-2",
+            "-: tool_call herder_setup",
+            "-: tool_result ready\n",
+            "-: turn_completed turn-2",
+            "alice: user turn-3 First.",
+            "-: turn_started turn-3",
+            "-: assistant turn-3 One.",
+            "-: turn_completed turn-3",
+            "-: status Idle",
+        ]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn an_agent_oom_killed_in_its_scope_fails_clearly_and_restarts_seeded() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = ["oom_killed.jsonl", "second.jsonl"];
+    let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
+    let scopes = Scopes::new(
+        ResourcesConfig::default(),
+        Host {
+            memory_total: 10 * 1024 * 1024 * 1024,
+            cores: 2,
+            nice: 0,
+        },
+        true,
+    )
+    .with_oom_check(Box::new(|_| Box::pin(async { true })));
+    let limit = scopes.limits(false).memory_max / (1024 * 1024);
+    daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    // Queued behind the turn the kill ends: it must not go to the dying CLI.
+    daemon.prompt(alice(), &session, "Second.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        turn_error(&journal),
+        TurnError {
+            class: ErrorClass::Fatal,
+            message: format!(
+                "the agent ran out of memory: the kernel killed it, or a process it ran, at its \
+                 session's {limit} MiB limit (claude was killed by a signal). The next prompt \
+                 restarts the agent from the session's transcript"
+            ),
+        }
+    );
+    assert_eq!(
+        describe(&journal)[1..],
+        [
+            "-: status Running",
+            "alice: user turn-1 First.",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 Building.",
+            "-: turn_failed turn-1 Fatal",
+            "alice: user turn-2 Second.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Two.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    let starts = daemon.starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(
+        seed_texts(&starts[1]),
+        ["user: First.", "assistant: Building."]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn an_agent_oom_killed_mid_turn_leaves_the_session_error_until_the_next_prompt() {
+    let dir = tempfile::tempdir().unwrap();
+    let scripts = ["oom_killed.jsonl", "second.jsonl"];
+    let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
+    let scopes = Scopes::new(
+        ResourcesConfig::default(),
+        Host {
+            memory_total: 10 * 1024 * 1024 * 1024,
+            cores: 2,
+            nice: 0,
+        },
+        true,
+    )
+    .with_oom_check(Box::new(|_| Box::pin(async { true })));
+    daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Error).await;
+    daemon.prompt(alice(), &session, "Second.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let starts = daemon.starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(
+        seed_texts(&starts[1]),
+        ["user: First.", "assistant: Building."]
     );
     daemon.stop().await;
 }

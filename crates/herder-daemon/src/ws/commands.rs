@@ -1,4 +1,7 @@
 //! Command idempotency: a resend with the same id is answered without being applied again.
+//!
+//! This in-memory log covers a connection that drops while its command runs; the backend
+//! remembers accepted session commands across restarts too ([`super::Backend::command`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;

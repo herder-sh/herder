@@ -88,6 +88,7 @@ impl Backend for TestBackend {
     async fn command(
         &self,
         _: &Identity,
+        _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
         self.commands.fetch_add(1, Ordering::SeqCst);
