@@ -14,6 +14,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AccountId, HostId, PermissionMode};
 
+/// Media types a project icon may have.
+pub const PROJECT_ICON_MEDIA_TYPES: [&str; 4] =
+    ["image/png", "image/svg+xml", "image/x-icon", "image/jpeg"];
+
+/// Most bytes a project icon may have; larger files are not taken as icons.
+pub const MAX_PROJECT_ICON_BYTES: usize = 512 * 1024;
+
 /// Identifies a project across hosts.
 ///
 /// From a remote, it is the host and repository path, as in `github.com/org/repo`. For a
@@ -105,4 +112,9 @@ pub struct Project {
     /// absent when none is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_command: Option<String>,
+    /// The project's icon, an image file found in its clone on this host, named by the
+    /// SHA-256 of its bytes as lowercase hex; absent when it has none. It changes whenever the
+    /// file does, so clients cache the icon by it and fetch it with `get_project_icon`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }

@@ -234,6 +234,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::AddProject { .. }
         | CommandBody::SetProjectSettings { .. }
         | CommandBody::RemoveProject { .. }
+        | CommandBody::GetProjectIcon { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

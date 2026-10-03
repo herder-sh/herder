@@ -837,6 +837,24 @@
           ]
         },
         {
+          "description": "Fetch a project's icon, the file its `icon` names; owners and members alike. Answered\nwith `project_icon`, or refused with `not_found` when the project has none. It changes\nnothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "description": "The project, one of this daemon's.",
+              "$ref": "#/$defs/ProjectId"
+            },
+            "type": {
+              "type": "string",
+              "const": "get_project_icon"
+            }
+          },
+          "required": [
+            "type",
+            "project_id"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {

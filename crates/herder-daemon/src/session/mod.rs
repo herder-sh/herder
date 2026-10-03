@@ -200,10 +200,10 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, AttachmentId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemId, JournalRecord, PermissionMode, Project, ProjectId,
-    Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
-    UsageWindow, UserId,
+    Account, AccountId, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, ErrorCode,
+    ErrorInfo, Event, EventBody, HostId, Item, ItemId, JournalRecord, PermissionMode, Project,
+    ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
+    TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -534,6 +534,9 @@ impl SessionManager {
             CommandBody::RemoveProject { project_id } => {
                 return self.remove_project(&project_id).await;
             }
+            CommandBody::GetProjectIcon { project_id } => {
+                return self.project_icon(&project_id).await;
+            }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
             CommandBody::SetModel { session_id, model } => {
                 (session_id, Request::SetModel { model })
@@ -826,6 +829,31 @@ impl SessionManager {
             .await
             .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
         Ok(CommandResult::Applied)
+    }
+
+    /// The icon of `project_id`, one of the listed projects, read afresh ([`projects::icon`]).
+    async fn project_icon(&self, project_id: &ProjectId) -> Result<CommandResult, ErrorInfo> {
+        let project = self.listed_project(project_id)?;
+        let entries = self
+            .inner
+            .projects
+            .get()
+            .map(|(_, overrides)| overrides.config().entries)
+            .unwrap_or_default();
+        let icon = tokio::task::spawn_blocking(move || projects::icon(&project, &entries))
+            .await
+            .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::NotFound,
+                    format!("project {project_id} has no icon"),
+                )
+            })?;
+        Ok(CommandResult::ProjectIcon {
+            icon: icon.hash,
+            media_type: icon.media_type.to_owned(),
+            data: Bytes(icon.data),
+        })
     }
 
     /// `project_id` as discovery last listed it.
@@ -1343,7 +1371,9 @@ struct CreateRequest {
 pub fn changes_nothing(command: &CommandBody) -> bool {
     matches!(
         command,
-        CommandBody::GetAttachment { .. } | CommandBody::ListDirectory { .. }
+        CommandBody::GetAttachment { .. }
+            | CommandBody::ListDirectory { .. }
+            | CommandBody::GetProjectIcon { .. }
     )
 }
 

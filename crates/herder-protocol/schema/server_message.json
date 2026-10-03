@@ -681,6 +681,34 @@
             "type",
             "project_id"
           ]
+        },
+        {
+          "description": "A project's icon, answering `get_project_icon`.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "description": "The image file's bytes, at most [`crate::MAX_PROJECT_ICON_BYTES`].",
+              "$ref": "#/$defs/Bytes"
+            },
+            "icon": {
+              "description": "The SHA-256 of `data` as lowercase hex, as a project's `icon` names it.",
+              "type": "string"
+            },
+            "media_type": {
+              "description": "One of [`crate::PROJECT_ICON_MEDIA_TYPES`].",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "project_icon"
+            }
+          },
+          "required": [
+            "type",
+            "icon",
+            "media_type",
+            "data"
+          ]
         }
       ]
     },
@@ -1981,6 +2009,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "icon": {
+          "description": "The project's icon, an image file found in its clone on this host, named by the\nSHA-256 of its bytes as lowercase hex; absent when it has none. It changes whenever the\nfile does, so clients cache the icon by it and fetch it with `get_project_icon`.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "name": {

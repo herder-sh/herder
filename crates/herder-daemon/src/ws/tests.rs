@@ -104,6 +104,11 @@ impl Backend for TestBackend {
                 path,
                 entries: Vec::new(),
             }),
+            CommandBody::GetProjectIcon { .. } => Ok(CommandResult::ProjectIcon {
+                icon: "ab".into(),
+                media_type: "image/png".into(),
+                data: herder_protocol::Bytes(b"png".to_vec()),
+            }),
             _ => Err(ErrorInfo {
                 code: ErrorCode::Unsupported,
                 message: "test backend".into(),
@@ -968,6 +973,25 @@ async fn browsing_folders_is_for_owners_only_and_never_remembered() {
             panic!("expected a listing");
         };
         assert!(matches!(result, CommandResult::Directory { .. }));
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn members_fetch_project_icons_afresh_on_every_resend() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    for _ in 0..2 {
+        let body = CommandBody::GetProjectIcon {
+            project_id: herder_protocol::ProjectId::new("github.com/org/app"),
+        };
+        let ServerMessage::CommandAccepted { result, .. } = member.command("c1", body).await else {
+            panic!("expected the icon");
+        };
+        assert!(matches!(result, CommandResult::ProjectIcon { .. }));
     }
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
 }

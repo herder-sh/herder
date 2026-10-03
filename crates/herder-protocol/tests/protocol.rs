@@ -144,6 +144,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::RemoveProject {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
+        command(CommandBody::GetProjectIcon {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+        }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
             force: false,
@@ -331,6 +334,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::Attachment {
                 media_type: "image/png".into(),
                 data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::ProjectIcon {
+                icon: "5f1d5c3b2a7e9e0c4b1f8a6d3e2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a0".into(),
+                media_type: "image/svg+xml".into(),
+                data: Bytes(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec()),
             },
         },
         ServerMessage::CommandAccepted {
@@ -680,6 +691,9 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     default_permission_mode: Some(PermissionMode::AutoEdit),
                     default_account: Some(AccountId::new("01J9ACCOUNT")),
                     setup_command: Some("cargo fetch".into()),
+                    icon: Some(
+                        "5f1d5c3b2a7e9e0c4b1f8a6d3e2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a0".into(),
+                    ),
                 },
                 Project {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
@@ -688,6 +702,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     default_permission_mode: None,
                     default_account: None,
                     setup_command: None,
+                    icon: None,
                 },
             ],
         },
@@ -1299,9 +1314,10 @@ fn project_optional_fields_may_be_absent() {
         (
             project.default_permission_mode,
             project.default_account,
-            project.setup_command
+            project.setup_command,
+            project.icon
         ),
-        (None, None, None)
+        (None, None, None, None)
     );
 
     let command: CommandBody = serde_json::from_value(json!({
@@ -1325,6 +1341,23 @@ fn project_optional_fields_may_be_absent() {
     assert_eq!(
         serde_json::to_value(&remove).unwrap(),
         json!({ "type": "remove_project", "project_id": "github.com/org/repo" })
+    );
+
+    let icon = CommandBody::GetProjectIcon {
+        project_id: ProjectId::new("github.com/org/repo"),
+    };
+    assert_eq!(
+        serde_json::to_value(&icon).unwrap(),
+        json!({ "type": "get_project_icon", "project_id": "github.com/org/repo" })
+    );
+    let icon = CommandResult::ProjectIcon {
+        icon: "ab12".into(),
+        media_type: "image/png".into(),
+        data: Bytes(b"png".to_vec()),
+    };
+    assert_eq!(
+        serde_json::to_value(&icon).unwrap(),
+        json!({ "type": "project_icon", "icon": "ab12", "media_type": "image/png", "data": "cG5n" })
     );
 }
 

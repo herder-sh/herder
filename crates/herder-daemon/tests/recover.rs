@@ -228,6 +228,7 @@ impl HostDaemon {
                         default_permission_mode: None,
                         default_account: None,
                         setup_command: None,
+                        icon: None,
                     }])
                     .await;
                 let me = herder_daemon::ws::Host {

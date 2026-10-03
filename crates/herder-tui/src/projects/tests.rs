@@ -227,6 +227,7 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
         default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
         default_account: Some(AccountId::new("claude-work")),
         setup_command: None,
+        icon: None,
     }];
     app.update(Msg::Machines(machines));
     assert_eq!(app.project_name(&app_id), "Acme app");
