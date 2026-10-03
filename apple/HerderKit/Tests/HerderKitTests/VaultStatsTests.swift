@@ -45,7 +45,7 @@ struct VaultStatsTests {
         let sessions = [
             // Its events say running, and outrank the listing's idle.
             running.key: running.model([
-                created(), .sessionStatusChanged(status: .running),
+                created(), .sessionStatusChanged(status: .running, retryAt: nil),
                 .prLinked(pr: pr(1, .open)), .prLinked(pr: pr(2, .merged)), .prLinked(pr: pr(3, .draft)),
             ]),
             asking.key: asking.model([
