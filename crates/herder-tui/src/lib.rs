@@ -18,6 +18,7 @@ mod action;
 mod app;
 mod attach;
 mod backend;
+mod backup;
 mod bar;
 mod chat;
 mod compose;

@@ -896,6 +896,99 @@
           ]
         },
         {
+          "description": "Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.\nIt changes nothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "get_vault_link"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Back this host's sessions up to a vault from now on, without a restart; owners only.\nThe daemon connects to the vault at the first of `addresses` that answers, pairs with\n`pairing_code` and replicates every session there; only once the vault accepted it\ndoes it keep the vault as the `[vault]` table of its config. Refused with `conflict`\nwhile it backs up to a vault already, and with `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "addresses": {
+              "description": "The vault's addresses as `host:port`, tried in order.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fingerprint": {
+              "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
+              "type": "string"
+            },
+            "pairing_code": {
+              "description": "A host-only code from the vault's `pair_vault_host`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "link_vault"
+            }
+          },
+          "required": [
+            "type",
+            "addresses",
+            "fingerprint",
+            "pairing_code"
+          ]
+        },
+        {
+          "description": "Stop backing this host's sessions up: stop replicating and remove the `[vault]` table\nof its config; owners only. What the vault holds stays there. Refused with `not_found`\nwhen it backs up nowhere.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "unlink_vault"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "On a vault, mint a one-time code that pairs a host to replicate here and only that,\nas `herder pair --host` does; owners only. Answered with `host_pairing`.",
+          "type": "object",
+          "properties": {
+            "host_name": {
+              "description": "The host's name; the user its device acts as on the vault.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "pair_vault_host"
+            }
+          },
+          "required": [
+            "type",
+            "host_name"
+          ]
+        },
+        {
+          "description": "On a vault, unpair every device that replicates as `host_id`, closing its connections;\nowners only. The host's sessions stay on the vault. Refused with `not_found` when no\npaired device replicates as it.",
+          "type": "object",
+          "properties": {
+            "host_id": {
+              "description": "The host.",
+              "$ref": "#/$defs/HostId"
+            },
+            "type": {
+              "type": "string",
+              "const": "revoke_vault_host"
+            }
+          },
+          "required": [
+            "type",
+            "host_id"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
@@ -1013,6 +1106,10 @@
         "session_id",
         "after_seq"
       ]
+    },
+    "HostId": {
+      "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
+      "type": "string"
     },
     "Image": {
       "description": "An image sent with a prompt.",

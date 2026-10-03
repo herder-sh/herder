@@ -238,6 +238,10 @@ private struct Composer: View {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
                     .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
             }
+            let queued = Transcript.queued(model)
+            if !queued.isEmpty {
+                QueueTray(queued: queued) { Task { await fleet.sendNow(key) } }
+            }
             ComposerBox(
                 text: $text,
                 images: $images,

@@ -303,6 +303,32 @@ pub enum CommandResult {
         /// The image file's bytes, at most [`crate::MAX_PROJECT_ICON_BYTES`].
         data: Bytes,
     },
+    /// Where the daemon backs its sessions up, answering `get_vault_link`.
+    VaultLink {
+        /// Whether the daemon is a vault, which hosts back up to.
+        is_vault: bool,
+        /// The vault the daemon backs up to; absent when it backs up nowhere, as a vault
+        /// never does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vault: Option<LinkedVault>,
+    },
+    /// A one-time code that pairs a host with this vault to replicate and only that,
+    /// answering `pair_vault_host`.
+    HostPairing {
+        /// The code, for `link_vault`.
+        code: String,
+        /// When the code stops working.
+        expires_at: Timestamp,
+    },
+}
+
+/// The vault a host backs up to, as its `[vault]` table names it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LinkedVault {
+    /// The vault's address, as `host:port`.
+    pub address: String,
+    /// SHA-256 of the vault's TLS certificate, lowercase hex.
+    pub fingerprint: String,
 }
 
 /// One entry of a folder.

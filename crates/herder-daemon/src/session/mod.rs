@@ -657,6 +657,21 @@ impl SessionManager {
                     "the session manager does not handle this command yet",
                 ));
             }
+            // The daemon's vault link answers these ([`crate::vault::Link`]).
+            CommandBody::GetVaultLink
+            | CommandBody::LinkVault { .. }
+            | CommandBody::UnlinkVault => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon cannot back up to a vault",
+                ));
+            }
+            CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon is not a vault; pair hosts on the vault",
+                ));
+            }
         };
         self.send(session_id, Some(by), request).await
     }
@@ -1504,6 +1519,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
         CommandBody::GetAttachment { .. }
             | CommandBody::ListDirectory { .. }
             | CommandBody::GetProjectIcon { .. }
+            | CommandBody::GetVaultLink
     )
 }
 

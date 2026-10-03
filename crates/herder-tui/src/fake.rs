@@ -1167,3 +1167,49 @@ pub fn live() -> App {
     );
     app
 }
+
+/// The fleet view of three machines this client owns, each saying where it backs up: `devbox`
+/// nowhere, `laptop` to `vault`, and `vault` is the vault. `devbox` is selected.
+pub fn backups() -> App {
+    let mut app = App {
+        // Times the screen shows are counted from a clock that stands still.
+        clock: Some(Timestamp::UNIX_EPOCH),
+        ..App::default()
+    };
+    let at = |host: &str, name: &str, address: &str, digits: &str| Machine {
+        addresses: vec![address.to_owned()],
+        fingerprint: digits.repeat(16),
+        ..machine(host, name, &[])
+    };
+    let vault = at("v", "vault", "vault.lan:7447", "3f9a");
+    let machines = vec![
+        at("devbox", "devbox", "devbox.lan:7447", "9c2e"),
+        at("laptop", "laptop", "10.0.0.12:7447", "01de"),
+        vault.clone(),
+    ];
+    app.update(Msg::Machines(machines));
+    let linked = herder_protocol::LinkedVault {
+        address: vault.addresses[0].clone(),
+        fingerprint: vault.fingerprint,
+    };
+    let effects = app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
+        ratatui::crossterm::event::KeyCode::Char('m'),
+        ratatui::crossterm::event::KeyModifiers::NONE,
+    )));
+    for effect in effects {
+        let crate::app::Effect::Send {
+            host_id, origin, ..
+        } = effect
+        else {
+            continue;
+        };
+        let (is_vault, vault) = match host_id.as_str() {
+            "v" => (true, None),
+            "laptop" => (false, Some(linked.clone())),
+            _ => (false, None),
+        };
+        let result = Ok(herder_protocol::CommandResult::VaultLink { is_vault, vault });
+        app.update(Msg::Sent { origin, result });
+    }
+    app
+}
