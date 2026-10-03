@@ -2,11 +2,19 @@
 //! cache's cursor, feeds what the daemon sends into the cache, dispatches commands, and on any
 //! failure waits out a capped, jittered exponential backoff before trying again.
 //!
+//! While the app is in the background ([`Supervisor::suspend`]) the task keeps a connection
+//! that is up but does not retry a lost one. Back in the foreground ([`Supervisor::wake`]) it
+//! reconnects at once, and checks a connection that is up before trusting it: one silent for
+//! longer than [`SILENCE_LIMIT`] (a suspension the OS may have killed it in, unnoticed) is
+//! replaced right away, any other is pinged and replaced if nothing comes back within
+//! [`PROBE_TIMEOUT`].
+//!
 //! Terminal attachments belong to a connection on the daemon, so the task re-attaches every
 //! terminal this client holds a stream for on each new connection, with fresh command ids (a
 //! resent id would be answered from the daemon's memory without attaching anything).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -21,7 +29,7 @@ use herder_protocol::{
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
@@ -33,6 +41,7 @@ use tracing::{debug, warn};
 
 use crate::auth::{DeviceKey, client_config};
 use crate::cache::SessionLog;
+use crate::offline::{self, Cached};
 use crate::profile::SavedMachine;
 use crate::terminal::{TerminalEvent, TerminalStream};
 use crate::{ConnectionState, Error, Machine, SessionUpdate, new_command_id};
@@ -51,6 +60,12 @@ const PING_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Silence after which a connection is considered dead, though TCP has not noticed yet.
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+
+/// Time a connection gets to answer the probe a wake sends before it is replaced.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How often a connection saves what changed to the offline cache.
+const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
 type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
@@ -77,6 +92,10 @@ enum Op {
     Once(CommandBody),
     /// Report once the daemon sent everything it owes for what was sent before.
     Sync(oneshot::Sender<()>),
+    /// The app went to the background: stop retrying until [`Op::Wake`].
+    Suspend,
+    /// The app is in the foreground: reconnect now, or probe the connection that is up.
+    Wake,
 }
 
 /// A machine's supervisor: the state its task maintains, and the handle the client drives it
@@ -89,8 +108,11 @@ pub(crate) struct Supervisor {
     /// Bumped whenever [`Supervisor::view`] would change.
     changed: Arc<watch::Sender<u64>>,
     ops: mpsc::UnboundedSender<Op>,
-    wake: Notify,
     pub(crate) stop: CancellationToken,
+    /// The client's config dir, which holds the offline cache.
+    config_dir: PathBuf,
+    /// Held across each offline cache save, from taking the state to writing it.
+    saving: Mutex<()>,
 }
 
 #[derive(Default)]
@@ -112,6 +134,59 @@ struct State {
     wanted: HashMap<SessionId, usize>,
     /// Terminals this client holds a stream for; each new connection re-attaches them.
     streams: HashMap<TerminalId, Attached>,
+    /// Whether something the offline cache holds changed since the last save.
+    dirty: bool,
+}
+
+impl State {
+    /// A state holding what the offline cache had.
+    fn cached(cached: Cached) -> Self {
+        let logs = cached
+            .logs
+            .into_iter()
+            .filter_map(|events| {
+                let session_id = events.first()?.session_id.clone();
+                let log = Log {
+                    log: SessionLog::from_events(events),
+                    changed: watch::Sender::new(0),
+                };
+                Some((session_id, log))
+            })
+            .collect();
+        Self {
+            role: cached.role,
+            sessions: cached.sessions,
+            hosts: cached.hosts,
+            projects: cached.projects,
+            accounts: cached.accounts,
+            failover: cached.failover,
+            logs,
+            ..Self::default()
+        }
+    }
+
+    /// What the offline cache keeps of this state: the events of the [`offline::RECENT`]
+    /// listed sessions with the newest latest event.
+    fn to_cached(&self) -> Cached {
+        let mut logs: Vec<&[herder_protocol::Event]> = self
+            .sessions
+            .iter()
+            .filter_map(|head| self.logs.get(&head.session_id))
+            .map(|log| log.log.events())
+            .filter(|events| !events.is_empty())
+            .collect();
+        logs.sort_by_key(|events| std::cmp::Reverse(events.last().map(|event| event.at)));
+        logs.truncate(offline::RECENT);
+        Cached {
+            role: self.role,
+            sessions: self.sessions.clone(),
+            hosts: self.hosts.clone(),
+            projects: self.projects.clone(),
+            accounts: self.accounts.clone(),
+            failover: self.failover.clone(),
+            logs: logs.into_iter().map(<[_]>::to_vec).collect(),
+        }
+    }
 }
 
 /// A terminal with a [`TerminalStream`].
@@ -142,9 +217,11 @@ impl Default for Log {
 }
 
 impl Supervisor {
-    /// Starts the task that keeps `saved` connected until `stop`.
+    /// Starts the task that keeps `saved` connected until `stop`, holding what the offline
+    /// cache in `config_dir` has for it until the daemon says otherwise.
     pub(crate) fn start(
         saved: SavedMachine,
+        config_dir: PathBuf,
         client: String,
         changed: Arc<watch::Sender<u64>>,
         stop: CancellationToken,
@@ -153,13 +230,15 @@ impl Supervisor {
             message: format!("the device key of {}: {err:#}", saved.name),
         })?;
         let (ops, queue) = mpsc::unbounded_channel();
+        let state = State::cached(offline::load(&config_dir, &saved.host_id));
         let supervisor = Arc::new(Self {
             saved,
-            state: Mutex::default(),
+            state: Mutex::new(state),
             changed,
             ops,
-            wake: Notify::new(),
             stop,
+            config_dir,
+            saving: Mutex::new(()),
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, client, queue));
         Ok(supervisor)
@@ -170,9 +249,43 @@ impl Supervisor {
         self.stop.cancel();
     }
 
-    /// Skips the current backoff wait and reconnects now.
+    /// The app went to the background: a lost connection is not retried until [`Self::wake`].
+    pub(crate) fn suspend(&self) {
+        let _ = self.ops.send(Op::Suspend);
+    }
+
+    /// The app is in the foreground: reconnects now if disconnected, else probes the
+    /// connection and replaces it if it is dead.
     pub(crate) fn wake(&self) {
-        self.wake.notify_one();
+        let _ = self.ops.send(Op::Wake);
+    }
+
+    /// Saves to the offline cache what changed since the last save. Blocks on the file system.
+    pub(crate) fn save(&self) {
+        let _saving = self.saving.lock().unwrap_or_else(PoisonError::into_inner);
+        // A forgotten machine's cache is gone and stays gone.
+        if self.stop.is_cancelled() {
+            return;
+        }
+        let cached = {
+            let mut state = self.lock();
+            if !state.dirty {
+                return;
+            }
+            state.dirty = false;
+            state.to_cached()
+        };
+        if let Err(error) = offline::save(&self.config_dir, &self.saved.host_id, &cached) {
+            warn!(machine = %self.saved.name, "saving the offline cache: {error}");
+            self.lock().dirty = true;
+        }
+    }
+
+    /// Stops the task and deletes the machine's offline cache.
+    pub(crate) fn forget(&self) {
+        self.stop();
+        let _saving = self.saving.lock().unwrap_or_else(PoisonError::into_inner);
+        offline::remove(&self.config_dir, &self.saved.host_id);
     }
 
     /// The machine as it should be saved now.
@@ -534,6 +647,16 @@ impl Supervisor {
     /// Applies one daemon message to the state.
     fn apply(&self, message: ServerMessage) {
         let mut state = self.lock();
+        if matches!(
+            message,
+            ServerMessage::Sessions { .. }
+                | ServerMessage::Hosts { .. }
+                | ServerMessage::Projects { .. }
+                | ServerMessage::Accounts { .. }
+                | ServerMessage::Event(_)
+        ) {
+            state.dirty = true;
+        }
         let log = match message {
             ServerMessage::Sessions { sessions } => {
                 state.sessions = sessions;
@@ -697,6 +820,8 @@ struct Pending {
 enum Ended {
     Stopped,
     Lost(String),
+    /// A wake found it dead; reconnect without a backoff.
+    Replaced(String),
 }
 
 async fn run(
@@ -709,6 +834,7 @@ async fn run(
     // Syncs waiting for their answer, by token, sent again on each new connection.
     let mut syncs: HashMap<String, oneshot::Sender<()>> = HashMap::new();
     let mut attempt = 0;
+    let mut suspended = false;
     let saved = &supervisor.saved;
     loop {
         supervisor.set_connection(ConnectionState::Connecting);
@@ -722,32 +848,52 @@ async fn run(
             () = supervisor.stop.cancelled() => return,
             connected = connect(saved, &device, hello) => connected,
         };
-        let error = match connected {
+        let (error, now) = match connected {
             Ok((ws, hello)) => {
                 attempt = 0;
-                supervisor.lock().role = Some(hello.role);
+                {
+                    let mut state = supervisor.lock();
+                    state.role = Some(hello.role);
+                    state.dirty = true;
+                }
                 supervisor.set_connection(ConnectionState::Connected);
-                match serve(&supervisor, ws, &mut ops, &mut pending, &mut syncs).await {
+                let ended = serve(
+                    &supervisor,
+                    ws,
+                    &mut ops,
+                    &mut pending,
+                    &mut syncs,
+                    &mut suspended,
+                )
+                .await;
+                save_in_background(&supervisor);
+                match ended {
                     Ended::Stopped => return,
-                    Ended::Lost(error) => error,
+                    Ended::Lost(error) => (error, false),
+                    Ended::Replaced(error) => (error, true),
                 }
             }
-            Err(error) => error,
+            Err(error) => (error, false),
         };
         debug!(machine = %saved.name, "disconnected: {error}");
         supervisor.set_connection(ConnectionState::Disconnected { error });
+        if now {
+            continue;
+        }
         let wait = tokio::time::sleep(backoff(attempt));
         attempt = attempt.saturating_add(1);
         tokio::pin!(wait);
         loop {
             tokio::select! {
                 () = supervisor.stop.cancelled() => return,
-                () = &mut wait => break,
-                () = supervisor.wake.notified() => {
-                    attempt = 0;
-                    break;
-                }
+                () = &mut wait, if !suspended => break,
                 op = ops.recv() => match op {
+                    Some(Op::Wake) => {
+                        suspended = false;
+                        attempt = 0;
+                        break;
+                    }
+                    Some(Op::Suspend) => suspended = true,
                     Some(Op::Command(command, reply)) => pending.push(Pending {
                         command,
                         reply,
@@ -771,13 +917,20 @@ async fn run(
     }
 }
 
+/// Saves to the offline cache off the async runtime.
+fn save_in_background(supervisor: &Arc<Supervisor>) {
+    let supervisor = Arc::clone(supervisor);
+    tokio::task::spawn_blocking(move || supervisor.save());
+}
+
 /// Runs a connection until it fails or `stop`.
 async fn serve(
-    supervisor: &Supervisor,
+    supervisor: &Arc<Supervisor>,
     ws: Ws,
     ops: &mut mpsc::UnboundedReceiver<Op>,
     pending: &mut Vec<Pending>,
     syncs: &mut HashMap<String, oneshot::Sender<()>>,
+    suspended: &mut bool,
 ) -> Ended {
     let (mut sink, mut stream) = ws.split();
     // Attaches in flight on this connection, by command id.
@@ -805,10 +958,29 @@ async fn serve(
     }
     let mut ping = tokio::time::interval(PING_INTERVAL);
     ping.reset();
+    let mut save = tokio::time::interval(SAVE_INTERVAL);
+    save.reset();
     let mut heard = Instant::now();
+    // The payload of the ping a wake sent, and when its pong must have come back by. Only that
+    // pong clears it: frames read before it may have been buffered before a suspension.
+    let mut probe: Option<(String, Instant)> = None;
     loop {
+        let deadline = probe.as_ref().map(|(_, deadline)| *deadline);
+        let probed = async {
+            match deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        };
         let message = tokio::select! {
             () = supervisor.stop.cancelled() => return Ended::Stopped,
+            () = probed => {
+                return Ended::Replaced("the daemon did not answer the wake probe".to_owned());
+            }
+            _ = save.tick() => {
+                save_in_background(supervisor);
+                continue;
+            }
             _ = ping.tick() => {
                 if heard.elapsed() > SILENCE_LIMIT {
                     return Ended::Lost("the daemon stopped answering".to_owned());
@@ -856,6 +1028,27 @@ async fn serve(
                         syncs.insert(token.clone(), reply);
                         ClientMessage::Sync { token }
                     }
+                    Some(Op::Suspend) => {
+                        *suspended = true;
+                        continue;
+                    }
+                    Some(Op::Wake) => {
+                        *suspended = false;
+                        if heard.elapsed() > SILENCE_LIMIT {
+                            return Ended::Replaced(
+                                "the connection was silent through a suspension".to_owned(),
+                            );
+                        }
+                        if probe.is_none() {
+                            let payload = ulid::Ulid::new().to_string();
+                            let ping = Message::Ping(payload.clone().into_bytes().into());
+                            probe = Some((payload, Instant::now() + PROBE_TIMEOUT));
+                            if let Err(error) = write(&mut sink, ping).await {
+                                return Ended::Lost(error);
+                            }
+                        }
+                        continue;
+                    }
                 };
                 if let Err(error) = write(&mut sink, encode(&message)).await {
                     return Ended::Lost(error);
@@ -875,6 +1068,15 @@ async fn serve(
                 return Ended::Lost(format!("the daemon closed the connection: {reason}"));
             }
             Some(Ok(Message::Text(text))) => text,
+            Some(Ok(Message::Pong(payload))) => {
+                if probe
+                    .as_ref()
+                    .is_some_and(|(sent, _)| *payload == *sent.as_bytes())
+                {
+                    probe = None;
+                }
+                continue;
+            }
             Some(Ok(_)) => continue,
         };
         let message: ServerMessage = match serde_json::from_str(&text) {

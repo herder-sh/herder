@@ -1,7 +1,8 @@
 //! What the client holds of one session: its durable events and the items streaming now.
 //!
-//! In memory only. A persisted cache replaces the inside of [`SessionLog`] and keeps its
-//! methods: the supervisor resumes from [`SessionLog::last_seq`] whatever holds the events.
+//! Held in memory; the offline cache ([`crate::offline`]) saves the events of recent sessions
+//! and seeds a log with them when the client opens. The supervisor resumes from
+//! [`SessionLog::last_seq`] either way.
 
 use herder_protocol::{Event, EventBody, Item, ItemBody, ItemId, Seq};
 
@@ -15,6 +16,20 @@ pub(crate) struct SessionLog {
 }
 
 impl SessionLog {
+    /// A log holding `events`, as saved by the offline cache; nothing is streaming.
+    pub(crate) fn from_events(events: Vec<Event>) -> Self {
+        let mut log = Self::default();
+        for event in events {
+            log.event(event);
+        }
+        log
+    }
+
+    /// Every event held, oldest first.
+    pub(crate) fn events(&self) -> &[Event] {
+        &self.events
+    }
+
     /// Seq of the latest event held; 0 for none. The resume cursor.
     pub(crate) fn last_seq(&self) -> Seq {
         self.events.last().map_or(0, |event| event.seq)

@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 1`
+`CLIENT_API_VERSION = 2`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -63,7 +63,7 @@ stream a terminal. Commands are `herder_protocol::CommandBody` values sent with
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `role` | `Client::pair`, `rename`, `forget`, `wake`, `synced`; `PairingUri`                         |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`   | `send`: `CreateSession`, `ArchiveSession`, `SendPrompt`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
@@ -84,14 +84,15 @@ everything stops once the last clone is dropped.
 
 | Method | Does |
 | ------ | ---- |
-| `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir` and starts connecting to every saved machine. `client` names the client in daemon logs. |
+| `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir`, starts from its offline cache, and starts connecting to every saved machine. `client` names the client in daemon logs. |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
 | `async pair(link: String) -> Result<Machine, Error>` | Pairs with the daemon a `herder://pair` link names and saves it. |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
-| `wake()` | Reconnects every disconnected machine now. |
+| `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
+| `wake()` | The app is in the foreground: reconnects every disconnected machine now and probes every connected one, replacing a dead connection. |
 | `subscribe_session(host_id: HostId, session_id: SessionId) -> Result<SessionSubscription, Error>` | Streams a session, cached state first, across reconnects. |
 | `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
 | `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
@@ -131,6 +132,35 @@ everything stops once the last clone is dropped.
 
 - `DeviceKey` — `generate()`, `from_pem(&str)`, `to_pem() -> &str`, `fingerprint() -> String`.
 - `client_config(daemon_fingerprint: &str, device: &DeviceKey) -> anyhow::Result<rustls::ClientConfig>`.
+
+## App lifecycle
+
+An app calls `suspend()` when it goes to the background and `wake()` when it returns (the TUI
+calls `wake()` on its reconnect key).
+
+- Suspended, the client keeps connections that are up for as long as the OS lets the process
+  run, but does not retry one it loses.
+- `wake()` reconnects disconnected machines at once. A connected one is checked: if it was
+  silent for longer than 45 s, as after a long suspension in which the OS may have killed the
+  socket without either end noticing, it is replaced right away; otherwise it is pinged and
+  replaced if the pong does not come back within 5 s. A healthy connection is kept.
+- Subscriptions resume from the last seq held, so a suspension of any length shows no gap.
+
+The offline cache lives in `<config_dir>/cache/`, one private file per machine: the role, the
+session, host, project and account lists, and every event of the 20 listed sessions with the
+newest events. `open` starts from it, so `machines()` and a subscription's first update show
+the last known state at once, offline too. Live data always wins: the cache is read only when
+a machine's supervisor starts, the daemon's lists replace the cached ones and its events extend
+the cached ones by seq. It is saved every 30 s while something changed, when a connection
+ends, and on `suspend()`; `forget` deletes it.
+
+## Changes in version 2
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Client::suspend()` | Apps tell the client they went to the background: it saves the offline cache and stops retrying. |
+| `wake()` reconnects disconnected machines | it also probes connected ones and replaces a dead connection | A socket the OS killed during a suspension looks connected until the daemon is asked. |
+| a new `Client` starts empty | it starts from the offline cache | Apps open instantly, offline too. |
 
 ## Changes in version 1
 

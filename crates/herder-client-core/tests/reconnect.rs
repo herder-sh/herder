@@ -1,6 +1,7 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
-//! account login, resource figures, the sync barrier, and renaming and forgetting a machine.
+//! account login, resource figures, the sync barrier, renaming and forgetting a machine, and the
+//! app lifecycle: suspension, wake probes and the offline cache.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -569,11 +570,14 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     assert!(matches!(unknown, Err(Error::UnknownMachine { .. })));
 }
 
-/// A TCP relay to the daemon whose connections can be cut, as a network drop would, while the
-/// daemon and its terminals keep running.
+/// A TCP relay to the daemon whose connections can be cut, as a network drop would, or stalled,
+/// as an OS that kills a suspended app's socket without telling it would, while the daemon and
+/// its terminals keep running.
 struct Relay {
     addr: SocketAddr,
     cut: tokio::sync::watch::Sender<u64>,
+    stall: tokio::sync::watch::Sender<u64>,
+    accepted: Arc<AtomicU64>,
 }
 
 impl Relay {
@@ -581,25 +585,46 @@ impl Relay {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let cut = tokio::sync::watch::Sender::new(0);
-        let cuts = cut.clone();
+        let stall = tokio::sync::watch::Sender::new(0);
+        let accepted = Arc::new(AtomicU64::new(0));
+        let (cuts, stalls, count) = (cut.clone(), stall.clone(), Arc::clone(&accepted));
         tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
+                count.fetch_add(1, Ordering::SeqCst);
                 let mut cut = cuts.subscribe();
+                let mut stall = stalls.subscribe();
                 tokio::spawn(async move {
                     let mut outbound = TcpStream::connect(target).await.unwrap();
                     tokio::select! {
                         _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound) => {}
                         _ = cut.changed() => {}
+                        // Both ends stay open, and nothing goes through any more.
+                        _ = stall.changed() => std::future::pending::<()>().await,
                     }
                 });
             }
         });
-        Self { addr, cut }
+        Self {
+            addr,
+            cut,
+            stall,
+            accepted,
+        }
     }
 
     /// Drops every connection through the relay now.
     fn cut(&self) {
         self.cut.send_modify(|version| *version += 1);
+    }
+
+    /// Silently stops every connection through the relay now; new ones work.
+    fn stall(&self) {
+        self.stall.send_modify(|version| *version += 1);
+    }
+
+    /// How many connections the relay accepted.
+    fn accepted(&self) -> u64 {
+        self.accepted.load(Ordering::SeqCst)
     }
 }
 
@@ -975,4 +1000,269 @@ async fn host_and_session_resources_stay_current_while_connected() {
         !connected(&m.connection) && m.resources.is_none() && m.session_usage.is_empty()
     })
     .await;
+}
+
+async fn create_session(client: &Client, host: &HostId, repo: String) -> SessionId {
+    let created = client
+        .send(
+            host.clone(),
+            CommandBody::CreateSession {
+                repo: Some(repo),
+                project_id: None,
+                branch: None,
+                account_id: Some(account()),
+                model: None,
+                permission_mode: PermissionMode::Ask,
+                max_children: None,
+                failover_pin: None,
+            },
+        )
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a session, got {created:?}");
+    };
+    session_id
+}
+
+fn interrupted(turn: &str) -> impl Fn(&View) -> bool {
+    let turn = TurnId::new(turn);
+    move |view| {
+        view.has(|body| matches!(body, EventBody::TurnInterrupted { turn_id } if *turn_id == turn))
+    }
+}
+
+fn status(machine: &herder_client_core::Machine, session_id: &SessionId) -> SessionStatus {
+    machine
+        .sessions
+        .iter()
+        .find(|head| head.session_id == *session_id)
+        .expect("the session is listed")
+        .status
+}
+
+/// The phone goes to the background mid-turn, the OS silently kills its socket, and another
+/// device ends the turn. Ten minutes later, on a paused clock, the phone comes back: it did not
+/// retry while suspended, and its wake resumes the session with no gap.
+#[tokio::test]
+async fn a_ten_minute_suspension_resumes_without_a_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = repo(&tmp.path().join("app"));
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "interrupted_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = phone
+        .pair(daemon.pairing_link_via("alice", relay.addr))
+        .await
+        .unwrap()
+        .host_id;
+    let session_id = create_session(&phone, &host, repo).await;
+    let sub = phone
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let prompt = CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: "First.".into(),
+    };
+    assert_eq!(
+        phone.send(host.clone(), prompt).await.unwrap(),
+        CommandResult::Applied
+    );
+    let mut view = View::default();
+    view.read_until(&sub, |view| view.streaming_text() == ["Half"])
+        .await;
+
+    phone.suspend();
+    relay.stall();
+    let desktop = Client::open(
+        tmp.path().join("desktop").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    desktop.pair(daemon.pairing_link()).await.unwrap();
+    let watched = desktop
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let interrupt = CommandBody::Interrupt {
+        session_id: session_id.clone(),
+    };
+    desktop.send(host.clone(), interrupt).await.unwrap();
+    let mut full = View::default();
+    full.read_until(&watched, interrupted("turn-1")).await;
+    // Its timers would run on the paused clock too.
+    drop(watched);
+    drop(desktop);
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(10 * 60)).await;
+    // On resume the silence is noticed, and nothing is retried while suspended.
+    wait_connection(&phone, |state| {
+        matches!(state, ConnectionState::Disconnected { .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+    // One connection paired, the other was the supervisor's.
+    assert_eq!(relay.accepted(), 2);
+    assert!(matches!(
+        phone.machines()[0].connection,
+        ConnectionState::Disconnected { .. }
+    ));
+    tokio::time::resume();
+
+    phone.wake();
+    view.read_until(&sub, interrupted("turn-1")).await;
+    view.read_until(&sub, |view| view.events.len() >= full.events.len())
+        .await;
+    assert_eq!(view.events[..full.events.len()], full.events);
+    assert!(view.latest.streaming.is_empty(), "{:?}", view.latest);
+    assert_eq!(relay.accepted(), 3);
+}
+
+/// Waking with a connection up checks it: a healthy one is kept, a silently dead one replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let relay = Relay::start(daemon.addr).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = client
+        .pair(daemon.pairing_link_via("alice", relay.addr))
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    // The pairing itself went through the relay too.
+    assert_eq!(relay.accepted(), 2);
+
+    client.suspend();
+    client.wake();
+    client.synced(host.clone()).await.unwrap();
+    // Past the probe's deadline, the connection is the same one.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(relay.accepted(), 2);
+    assert_eq!(client.machines()[0].connection, ConnectionState::Connected);
+
+    relay.stall();
+    client.wake();
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while relay.accepted() < 3 || client.machines()[0].connection != ConnectionState::Connected
+        {
+            assert!(changes.next().await);
+        }
+    })
+    .await
+    .expect("the dead connection was not replaced in time");
+    client.synced(host).await.unwrap();
+}
+
+/// A client opens on its offline cache, with no daemon to talk to, then live data takes over
+/// and is what the cache holds from then on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("daemon");
+    let config = tmp.path().join("client").display().to_string();
+    let repo = repo(&tmp.path().join("app"));
+    let turns = Arc::new(AtomicU64::new(0));
+    let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
+    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let session_id = create_session(&client, &host, repo).await;
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let prompt = |text: &str| CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: text.into(),
+    };
+    client.send(host.clone(), prompt("First.")).await.unwrap();
+    let mut before = View::default();
+    before
+        .read_until(&sub, |view| view.streaming_text() == ["Half"])
+        .await;
+    // The daemon lists a session again when its status changes: it is running from here on.
+    wait_machine(&client, |machine| {
+        status(machine, &session_id) == SessionStatus::Running
+    })
+    .await;
+    client.suspend();
+    let cached = client.machines()[0].sessions.clone();
+    drop(sub);
+    drop(client);
+    let port = daemon.addr.port();
+    daemon.kill().await;
+
+    // Offline, the reopened client shows what it had.
+    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    wait_connection(&client, |state| {
+        matches!(state, ConnectionState::Disconnected { .. })
+    })
+    .await;
+    assert_eq!(client.machines()[0].role, Some(Role::Owner));
+    assert_eq!(client.machines()[0].sessions, cached);
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let mut view = View::default();
+    view.read_until(&sub, |view| !view.events.is_empty()).await;
+    assert_eq!(view.events, before.events);
+    // Only durable events are cached.
+    assert!(view.latest.streaming.is_empty());
+
+    // Back online, the session resumes after the cached events and the list is the daemon's.
+    let daemon = Daemon::start(&data, port, "after_restart.jsonl", turns).await;
+    client.wake();
+    view.read_until(&sub, turn_ended("turn-1")).await;
+    client.send(host.clone(), prompt("Second.")).await.unwrap();
+    view.read_until(&sub, |view| {
+        turn_ended("turn-2")(view)
+            && view.events.last().is_some_and(|event| {
+                event.body
+                    == EventBody::SessionStatusChanged {
+                        status: SessionStatus::Idle,
+                    }
+            })
+    })
+    .await;
+    wait_machine(&client, |machine| {
+        status(machine, &session_id) == SessionStatus::Idle
+    })
+    .await;
+    let live = client.machines()[0].sessions.clone();
+    assert!(live[0].head_seq > cached[0].head_seq, "{live:?}");
+
+    // The cache now holds the live state, never the older one it started from.
+    client.suspend();
+    drop(sub);
+    drop(client);
+    daemon.kill().await;
+    let client = Client::open(config, "herder-test/0".into()).unwrap();
+    assert_eq!(client.machines()[0].sessions, live);
+    let sub = client.subscribe_session(host, session_id).unwrap();
+    let mut reopened = View::default();
+    reopened
+        .read_until(&sub, |reopened| !reopened.events.is_empty())
+        .await;
+    assert_eq!(reopened.events, view.events);
 }
