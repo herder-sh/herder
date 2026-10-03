@@ -245,6 +245,7 @@ mod tests {
             binaries: Default::default(),
             tasks: Default::default(),
             failover: Default::default(),
+            titles: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
             mode: crate::config::Mode::Vault,
