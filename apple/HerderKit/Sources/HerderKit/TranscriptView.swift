@@ -52,6 +52,8 @@ struct TranscriptBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         case .tools(_, let calls):
             ToolGroup(calls: calls)
+        case .agents(_, let agents):
+            NativeAgentGroup(agents: agents, fleet: fleet, key: key)
         case .children(_, let children):
             ChildrenCard(children: children, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
