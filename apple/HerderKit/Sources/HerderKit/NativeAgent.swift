@@ -20,7 +20,7 @@ struct NativeAgent: Hashable, Identifiable {
         ["agent", "task"].contains(name.lowercased())
     }
 
-    init(item: Item, items: [Item], runningTurn: TurnId?) {
+    init(item: Item, items: [Item], runningTurn: TurnId?, streaming: [Item] = []) {
         id = ID(turnId: item.turnId, callId: item.id)
         var input: [String: Any] = [:]
         if case .toolCall(_, let json) = item.body {
@@ -35,7 +35,7 @@ struct NativeAgent: Hashable, Identifiable {
             return callId == item.id
         }), case .toolResult(_, let output, let isError) = last.body {
             result = output
-            outcome = isError ? .failed : .ok
+            outcome = streaming.contains(last) ? .running : isError ? .failed : .ok
         } else {
             result = nil
             outcome = runningTurn == item.turnId ? .running : .unknown
@@ -47,7 +47,15 @@ struct NativeAgent: Hashable, Identifiable {
             if case .item(let item) = entry { item } else { nil }
         } + model.streaming
         guard let item = items.first(where: { $0.id == id.callId && $0.turnId == id.turnId }) else { return nil }
-        return NativeAgent(item: item, items: items, runningTurn: model.turn)
+        return NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming)
+    }
+
+    static func summary(_ agents: [NativeAgent]) -> String {
+        let states: [(ToolCall.Outcome, String)] = [(.running, "working"), (.failed, "failed"), (.ok, "completed"), (.unknown, "stopped")]
+        return states.compactMap { outcome, label in
+            let count = agents.filter { $0.outcome == outcome }.count
+            return count > 0 ? "\(count) \(label)" : nil
+        }.joined(separator: ", ")
     }
 
     var status: String {
@@ -68,12 +76,7 @@ struct NativeAgentGroup: View {
 
     private var working: Int { agents.filter { $0.outcome == .running }.count }
     private var failed: Int { agents.filter { $0.outcome == .failed }.count }
-    private var summary: String {
-        if working > 0 { return "\(working) working" }
-        if failed > 0 { return "\(failed) failed" }
-        let completed = agents.filter { $0.outcome == .ok }.count
-        return "\(completed) completed"
-    }
+    private var summary: String { NativeAgent.summary(agents) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

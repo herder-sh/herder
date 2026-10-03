@@ -53,7 +53,9 @@ struct ChildRef: Hashable {
 enum Transcript {
     /// The session's transcript: completed entries, streaming content, and pending or failed sends.
     /// Consecutive tool calls and their results group into one block.
-    static func blocks(_ model: SessionModel, parent: NativeAgent.ID? = nil) -> [TranscriptBlock] {
+    static func blocks(_ model: SessionModel) -> [TranscriptBlock] { blocks(model, parent: nil) }
+
+    static func blocks(_ model: SessionModel, parent: NativeAgent.ID?) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
         var calls: [ToolCall] = []
         var callsTurn = ""
@@ -96,7 +98,7 @@ enum Transcript {
                     $0.turnId == item.turnId && $0.parentCallId == item.id
                 }) {
                     flushCalls()
-                    agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn))
+                    agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming))
                 } else {
                     flushAgents()
                     if callsTurn != item.turnId { flushCalls() }
