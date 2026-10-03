@@ -286,7 +286,8 @@ private fun SessionsPane(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun GroupingButtons(grouping: Grouping, onGrouping: (Grouping) -> Unit) {
-    SingleChoiceSegmentedButtonRow(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+    // Wide enough for either label beside the selected one's check mark.
+    SingleChoiceSegmentedButtonRow(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(360.dp)) {
         Grouping.entries.forEachIndexed { index, option ->
             SegmentedButton(
                 selected = grouping == option,
