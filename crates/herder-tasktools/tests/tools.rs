@@ -494,3 +494,26 @@ fn host_busy_carries_its_retry_hint() {
         serde_json::from_value(json!({ "code": "internal", "message": "no" })).unwrap();
     assert_eq!(plain.retry_after_secs, None);
 }
+
+#[test]
+fn send_session_accepts_only_destination_text_and_delivery_key() {
+    let args = json!({"session_id":"peer","text":"Review this","message_id":"review-1"});
+    assert!(matches!(
+        ToolCall::parse(Tool::SendSession, Some(args.clone())),
+        Ok(ToolCall::SendSession(_))
+    ));
+    for (field, value) in [
+        ("sender_session_id", json!("forged")),
+        ("hop_count", json!(0)),
+        ("permission_ceiling", json!("full_access")),
+    ] {
+        let mut forged = args.clone();
+        forged[field] = value;
+        assert_eq!(
+            ToolCall::parse(Tool::SendSession, Some(forged))
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArguments
+        );
+    }
+}
