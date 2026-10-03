@@ -60,7 +60,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
         Row::new([Text::styled(*key, super::bold()), Text::from(text)]).height(height)
     });
     let hint = if last_top > 0 {
-        " j/k scroll · any other key or a tap closes "
+        " j/k scroll · other keys or a tap close "
     } else {
         " any key or a tap closes "
     };

@@ -12,6 +12,7 @@ use ratatui::widgets::ListState;
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
+use crate::glyphs::Glyphs;
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::mouse::{Click, Hits};
@@ -30,6 +31,9 @@ pub enum Msg {
     Mouse(MouseEvent),
     /// The terminal changed size: the screen is repainted from scratch.
     Resize,
+    /// The terminal got focus back, as a phone app brought to the front: the screen is
+    /// repainted from scratch.
+    Focus,
     /// The paired machines, as [`herder_client_core::Client::machines`] now lists them.
     Machines(Vec<Machine>),
     /// What changed in a subscribed session.
@@ -94,8 +98,10 @@ pub enum Effect {
         /// What to attach to.
         target: terminal::Target,
     },
-    /// Turn the terminal's mouse reporting on or off, and save that in the client profile.
+    /// Turn the terminal's mouse reporting on or off.
     Mouse(bool),
+    /// Save the app's [`crate::settings::Settings`] in the client profile.
+    Save,
 }
 
 /// Which pane keys go to.
@@ -230,6 +236,8 @@ pub struct App {
     pub grouping: Grouping,
     /// Whether taps and the wheel drive the TUI; `:mouse off` hands them to the terminal.
     pub mouse: bool,
+    /// The glyph set `:glyphs` chose; `None` picks by the screen's width.
+    pub glyphs: Option<Glyphs>,
     /// Where the last frame's tappable and scrollable spots are.
     pub hits: Hits,
     /// What the press of a tap in progress landed on.
@@ -259,6 +267,7 @@ impl Default for App {
             switch: None,
             grouping: Grouping::default(),
             mouse: true,
+            glyphs: None,
             hits: Hits::default(),
             pressed: None,
         }
@@ -281,7 +290,7 @@ impl App {
                 self.notice = Some(ended.notice());
                 Vec::new()
             }
-            Msg::Resize => vec![Effect::Repaint],
+            Msg::Resize | Msg::Focus => vec![Effect::Repaint],
             Msg::Machines(machines) => {
                 self.machines(machines);
                 self.open_pending();
@@ -963,9 +972,10 @@ mod tests {
     }
 
     #[test]
-    fn a_resize_asks_for_a_repaint() {
+    fn a_resize_or_focus_asks_for_a_repaint() {
         let mut app = fake::tree();
         assert_eq!(app.update(Msg::Resize), [Effect::Repaint]);
+        assert_eq!(app.update(Msg::Focus), [Effect::Repaint]);
     }
 
     #[test]

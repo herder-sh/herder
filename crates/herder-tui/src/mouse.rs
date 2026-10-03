@@ -6,8 +6,10 @@
 //! what the matching key would: a button names its key or action, a row selects itself, and a
 //! tap on the selected row opens it. With `:mouse off` the TUI stops asking, so the terminal
 //! selects text again; Shift-drag (Option-drag on macOS) selects text either way.
-
-use std::path::Path;
+//!
+//! mosh 1.4 passes this through: mosh-client turns on the same reporting (1000, SGR 1006) in
+//! the terminal it runs in, and the reports reach the TUI. mosh has no alternate screen,
+//! though, which [`crate::views::paint`] and the exit's clear make up for.
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -22,9 +24,6 @@ use crate::switch;
 
 /// Lines a wheel step scrolls the transcript.
 const WHEEL_LINES: isize = 3;
-
-/// The client profile's file of TUI settings, next to its machines.
-const SETTINGS: &str = "tui.json";
 
 /// What a tap on a spot does.
 #[derive(Clone, Debug, PartialEq)]
@@ -155,22 +154,6 @@ impl Hits {
 /// A key without modifiers, as a button presses it.
 pub fn key(code: KeyCode) -> Click {
     Click::Key(KeyEvent::new(code, KeyModifiers::NONE))
-}
-
-/// Whether the profile in `config_dir` asks for mouse reporting: yes unless `:mouse off` was
-/// saved.
-pub fn load(config_dir: &Path) -> bool {
-    std::fs::read(config_dir.join(SETTINGS))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|settings| settings.get("mouse")?.as_bool())
-        .unwrap_or(true)
-}
-
-/// Saves whether to ask for mouse reporting in the profile in `config_dir`.
-pub fn save(config_dir: &Path, on: bool) -> std::io::Result<()> {
-    let settings = serde_json::json!({ "mouse": on });
-    std::fs::write(config_dir.join(SETTINGS), format!("{settings}\n"))
 }
 
 /// Turns the terminal's mouse reporting on or off: clicks with their release, and the wheel,

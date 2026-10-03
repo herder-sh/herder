@@ -19,12 +19,14 @@ mod app;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod glyphs;
 mod inbox;
 mod machines;
 mod mouse;
 mod projects;
 mod prs;
 mod session;
+mod settings;
 mod switch;
 mod terminal;
 mod views;
@@ -40,6 +42,11 @@ use tokio::task::JoinHandle;
 
 use app::{App, Effect, Msg};
 use session::SessionKey;
+use settings::Settings;
+
+/// How long the screen may sit unchanged before it is repainted from scratch, in case the
+/// terminal lost track of it: cheap when nothing changed, as mosh then sends nothing.
+const IDLE_REPAINT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Opens the TUI on this device's profile and runs it until the user quits.
 pub fn run() -> Result<()> {
@@ -50,8 +57,10 @@ pub fn run() -> Result<()> {
 }
 
 async fn run_in(config_dir: PathBuf) -> Result<()> {
+    let settings = settings::load(&config_dir);
     let mut app = App {
-        mouse: mouse::load(&config_dir),
+        mouse: settings.mouse,
+        glyphs: settings.glyphs,
         ..App::default()
     };
     let client = Client::open(
@@ -78,13 +87,19 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         return Err(err);
     }
     let mut subscriptions = Subscriptions::default();
-    let mut repaint = false;
+    // The first frame covers what the shell left where the alternate screen is missing.
+    let mut repaint = true;
     let result = loop {
-        if let Err(err) = views::paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
-            break Err(err.into());
+        if let Err(err) = paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
+            break Err(err);
         }
-        let Some(msg) = rx.recv().await else {
-            break Ok(());
+        let msg = match tokio::time::timeout(IDLE_REPAINT, rx.recv()).await {
+            Ok(Some(msg)) => msg,
+            Ok(None) => break Ok(()),
+            Err(_) => {
+                repaint = true;
+                continue;
+            }
         };
         // Fold in everything that queued up while drawing, then draw once.
         let mut quit = false;
@@ -114,11 +129,10 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         }
                     }
                     Effect::AttachTerminal { host_id, target } => attach = Some((host_id, target)),
-                    Effect::Mouse(on) => {
-                        modes.mouse = mouse::report(on).is_ok() && on;
-                        if let Err(err) = mouse::save(&config_dir, on) {
-                            let _ =
-                                tx.send(Msg::Notice(format!("saving the mouse setting: {err}")));
+                    Effect::Mouse(on) => modes.mouse = mouse::report(on).is_ok() && on,
+                    Effect::Save => {
+                        if let Err(err) = settings::save(&config_dir, Settings::of(&app)) {
+                            let _ = tx.send(Msg::Notice(format!("saving the settings: {err}")));
                         }
                     }
                 }
@@ -142,6 +156,21 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     result
 }
 
+/// Draws the screen; with `full`, every cell anew, as one synchronized update where the
+/// terminal supports that, so the cleared screen never shows.
+fn paint(terminal: &mut ratatui::DefaultTerminal, app: &mut App, full: bool) -> Result<()> {
+    use ratatui::crossterm::execute;
+    use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
+    if full {
+        execute!(std::io::stdout(), BeginSynchronizedUpdate)?;
+    }
+    let painted = views::paint(terminal, app, full);
+    if full {
+        execute!(std::io::stdout(), EndSynchronizedUpdate)?;
+    }
+    Ok(painted?)
+}
+
 /// The input modes [`enable_input_modes`] turned on.
 #[derive(Clone, Copy, Debug)]
 struct Modes {
@@ -152,16 +181,18 @@ struct Modes {
 }
 
 /// Turns on bracketed paste, so a pasted prompt is one edit and not a key per character;
-/// where the terminal supports it, disambiguated keys, so Shift-Enter is not Enter; and with
+/// focus reports, so the screen is repainted when a phone app comes back to the front; where
+/// the terminal supports it, disambiguated keys, so Shift-Enter is not Enter; and with
 /// `mouse`, mouse reporting, so a phone's taps and swipes reach the TUI.
 fn enable_input_modes(mouse: bool) -> Modes {
     use ratatui::crossterm::event::{
-        EnableBracketedPaste, KeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        EnableBracketedPaste, EnableFocusChange, KeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     };
     use ratatui::crossterm::{execute, terminal};
     let mut out = std::io::stdout();
     // All are conveniences: without them typing still works, only less well.
-    let _ = execute!(out, EnableBracketedPaste);
+    let _ = execute!(out, EnableBracketedPaste, EnableFocusChange);
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false)
         && execute!(
             out,
@@ -174,15 +205,25 @@ fn enable_input_modes(mouse: bool) -> Modes {
     }
 }
 
-/// Undoes [`enable_input_modes`] and restores the terminal.
+/// Undoes [`enable_input_modes`] and restores the terminal, blank: where the alternate
+/// screen is missing, as under mosh, the shell's prompt then starts on an empty screen
+/// rather than over the last frame.
 fn restore(modes: Modes) {
+    use ratatui::crossterm::{cursor, execute, terminal};
     disable_input_modes(modes);
+    let _ = execute!(
+        std::io::stdout(),
+        terminal::Clear(terminal::ClearType::All),
+        cursor::MoveTo(0, 0)
+    );
     ratatui::restore();
 }
 
 /// Undoes [`enable_input_modes`].
 fn disable_input_modes(modes: Modes) {
-    use ratatui::crossterm::event::{DisableBracketedPaste, PopKeyboardEnhancementFlags};
+    use ratatui::crossterm::event::{
+        DisableBracketedPaste, DisableFocusChange, PopKeyboardEnhancementFlags,
+    };
     use ratatui::crossterm::execute;
     let mut out = std::io::stdout();
     if modes.mouse {
@@ -191,7 +232,7 @@ fn disable_input_modes(modes: Modes) {
     if modes.enhanced {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(out, DisableBracketedPaste);
+    let _ = execute!(out, DisableBracketedPaste, DisableFocusChange);
 }
 
 /// Sends a command on its own task and feeds the daemon's answer back to the loop.
@@ -300,6 +341,7 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Res
                 let msg = match event::read() {
                     Ok(Event::Key(key)) => Msg::Key(key),
                     Ok(Event::Resize(..)) => Msg::Resize,
+                    Ok(Event::FocusGained) => Msg::Focus,
                     Ok(Event::Paste(text)) => Msg::Paste(text),
                     Ok(Event::Mouse(mouse))
                         if matches!(
