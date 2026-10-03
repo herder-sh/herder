@@ -144,7 +144,7 @@ private fun CameraQrPreview(
     DisposableEffect(lifecycleOwner) {
         val executor = ContextCompat.getMainExecutor(context)
         controller.cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-        controller.setEnabledUseCases(CameraController.IMAGE_ANALYSIS or CameraController.PREVIEW)
+        controller.setEnabledUseCases(CameraController.IMAGE_ANALYSIS)
         controller.setImageAnalysisAnalyzer(
             executor,
             MlKitAnalyzer(
