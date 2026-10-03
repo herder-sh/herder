@@ -19,6 +19,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         status: SessionStatus::Idle,
         parent: None,
         task: None,
+        title: None,
         project_id: project.map(herder_protocol::ProjectId::new),
         account_id: AccountId::new("claude-main"),
         children_need_you: 0,

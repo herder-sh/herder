@@ -61,6 +61,17 @@ class MachinesScreenTest {
     }
 
     @Test
+    fun pullRequestsOpensEverySessionsPrs() {
+        compose.setContent { HerderTheme { MachinesScreen(sampleFleet(now), now) } }
+        compose.onNodeWithText("2 open").assertIsDisplayed()
+        compose.onNodeWithText("Pull requests").performClick()
+        compose.onNodeWithText("Pull requests").assertIsDisplayed()
+        compose.onNodeWithText("Add a health endpoint").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Machines").assertIsDisplayed()
+    }
+
+    @Test
     fun aMachineOpensItsSessionsByProjectOrByMachine() {
         compose.setContent { HerderTheme { MachinesScreen(sampleFleet(now), now) } }
         compose.onNodeWithText("box").performClick()

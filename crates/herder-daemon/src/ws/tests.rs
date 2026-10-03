@@ -71,6 +71,7 @@ impl Backend for TestBackend {
                 status: session.status,
                 parent: session.parent,
                 task: session.task,
+                title: session.title,
                 project_id: None,
                 account_id: session.account_id,
                 children_need_you: 0,

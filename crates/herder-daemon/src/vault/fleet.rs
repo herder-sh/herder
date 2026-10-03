@@ -269,6 +269,8 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::AnswerQuestion { session_id, .. }
         | CommandBody::SwitchAccount { session_id, .. }
         | CommandBody::SwitchProvider { session_id, .. }
+        | CommandBody::RenameSession { session_id, .. }
+        | CommandBody::RetitleSession { session_id }
         | CommandBody::LinkPr { session_id, .. }
         | CommandBody::UnlinkPr { session_id, .. }
         | CommandBody::ComposeDown { session_id, .. }

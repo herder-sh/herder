@@ -28,8 +28,16 @@ class MainActivity : ComponentActivity() {
                 val state by app.profile.collectAsStateWithLifecycle()
                 MachinesScreen(
                     state,
-                    session = { key, _, onOpen, onBack ->
-                        app.client?.let { LiveSession(it, state, key, onOpen, onBack) }
+                    send = { host, command ->
+                        try {
+                            app.client?.send(host, command)
+                            null
+                        } catch (error: HerderException) {
+                            error.reason()
+                        }
+                    },
+                    session = { key, compact, onOpen, onBack ->
+                        app.client?.let { LiveSession(it, state, key, compact, onOpen, onBack) }
                     },
                 )
             }
@@ -46,6 +54,7 @@ private fun LiveSession(
     client: Client,
     profile: Profile,
     key: SessionKey,
+    compact: Boolean,
     onOpen: (SessionKey) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -69,5 +78,6 @@ private fun LiveSession(
         },
         onOpen = onOpen,
         onBack = onBack,
+        compact = compact,
     )
 }

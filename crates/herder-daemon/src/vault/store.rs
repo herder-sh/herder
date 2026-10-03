@@ -290,6 +290,7 @@ impl VaultStore {
                     status: summary.status,
                     parent: summary.parent.clone(),
                     task: summary.task.clone(),
+                    title: summary.title.clone(),
                     project_id: Some(summary.project_id.clone()),
                     account_id: account.as_ref()?.account_id.clone(),
                     children_need_you: need_you(&summary.session_id),
@@ -714,6 +715,7 @@ mod tests {
             prs: Vec::new(),
             parent: parent.map(SessionId::new),
             task: None,
+            title: None,
             head_seq: 1,
             updated_at: "2027-01-15T08:00:00Z".parse().unwrap(),
         }

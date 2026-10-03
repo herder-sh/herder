@@ -318,7 +318,8 @@ private class Fold(var session: Session) {
                 session = s.copy(prs = s.prs.filter { it.number != body.number })
                 Entry.Notice("pull request #${body.number} unlinked")
             }
-            EventBody.Unknown -> null
+            // Shown from the session list's title.
+            is EventBody.TitleChanged, EventBody.Unknown -> null
         }
         entry?.let(entries::add)
     }

@@ -51,7 +51,7 @@ struct DesktopShell: View {
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
-                     icon: ProjectIcon(projectId: project?.projectId, name: project?.name, size: 30),
+                     icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
                     ScrollView {
                         if let project {
@@ -328,7 +328,7 @@ struct Sidebar: View {
                     ForEach(lists.projects) { project in
                         SidebarRow(
                             title: project.name, symbol: "shippingbox",
-                            icon: ProjectIcon(projectId: project.projectId, name: project.name),
+                            icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
                             badge: project.sessions.count,
                             selected: item == .project(project.id),
                             settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
@@ -386,7 +386,7 @@ private struct SidebarRail: View {
             if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in
                 rail("shippingbox", project.name, .project(project.id), badge: 0,
-                     icon: ProjectIcon(projectId: project.projectId, name: project.name, size: 22))
+                     icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 22))
             }
             Spacer()
             ForEach(lists.machines) { machine in
