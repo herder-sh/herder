@@ -173,6 +173,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             number: 42,
         }),
+        command(CommandBody::RenameSession {
+            session_id: session_id(),
+            title: "Flaky auth tests".into(),
+        }),
         command(CommandBody::ComposeDown {
             session_id: session_id(),
             project: "app".into(),
@@ -264,6 +268,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     status: SessionStatus::Running,
                     parent: None,
                     task: None,
+                    title: Some("Flaky auth tests".into()),
                     project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
                     account_id: account_id(),
                     children_need_you: 1,
@@ -275,6 +280,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     status: SessionStatus::NeedsYou,
                     parent: Some(session_id()),
                     task: Some("Fix the flaky auth tests".into()),
+                    title: None,
                     project_id: None,
                     account_id: account_id(),
                     children_need_you: 0,
@@ -480,6 +486,22 @@ fn server_fixtures() -> Vec<ServerMessage> {
             None,
             EventBody::BranchCheckedOut {
                 branch: "herder/spike".into(),
+            },
+        ),
+        event(
+            18,
+            None,
+            EventBody::TitleChanged {
+                title: "Fix the auth tests".into(),
+                source: TitleSource::Auto,
+            },
+        ),
+        event(
+            19,
+            owner,
+            EventBody::TitleChanged {
+                title: "Flaky auth tests".into(),
+                source: TitleSource::User,
             },
         ),
         ServerMessage::Terminals {
@@ -1262,8 +1284,8 @@ fn project_optional_fields_may_be_absent() {
     };
     let head = &sessions[0];
     assert_eq!(
-        (&head.project_id, &head.parent, &head.task),
-        (&None, &None, &None)
+        (&head.project_id, &head.parent, &head.task, &head.title),
+        (&None, &None, &None, &None)
     );
 
     let command: CommandBody = serde_json::from_value(json!({
@@ -1315,6 +1337,26 @@ fn project_optional_fields_may_be_absent() {
             setup_command: None,
         }
     );
+}
+
+#[test]
+fn titles_are_trimmed_single_lines_of_bounded_length() {
+    assert_eq!(
+        clean_title("  Fix the auth tests \n"),
+        Some("Fix the auth tests")
+    );
+    assert_eq!(clean_title("Ünïcode ✓"), Some("Ünïcode ✓"));
+    let longest = "é".repeat(MAX_TITLE_CHARS);
+    assert_eq!(clean_title(&longest), Some(longest.as_str()));
+    for invalid in [
+        String::new(),
+        " \t ".into(),
+        "two\nlines".into(),
+        "tab\tinside".into(),
+        "é".repeat(MAX_TITLE_CHARS + 1),
+    ] {
+        assert_eq!(clean_title(&invalid), None, "{invalid:?}");
+    }
 }
 
 #[test]
@@ -1422,6 +1464,7 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
         prs,
         parent: None,
         task: None,
+        title: None,
         head_seq: 17,
         updated_at: at(),
     }
@@ -1447,6 +1490,7 @@ fn host_fixtures() -> Vec<HostMessage> {
         HostMessage::Session(SessionSummary {
             parent: Some(SessionId::new("01J9PRIMARY")),
             task: Some("write the tests".into()),
+            title: Some("Write the tests".into()),
             ..summary(SessionStatus::Running, Vec::new())
         }),
     ];
@@ -1677,7 +1721,10 @@ fn replication_optional_fields_may_be_absent() {
     let HostMessage::Session(session) = session else {
         panic!("not a session: {session:?}")
     };
-    assert_eq!((session.parent, session.task), (None, None));
+    assert_eq!(
+        (session.parent, session.task, session.title),
+        (None, None, None)
+    );
 }
 
 /// The vault never writes to a host's sessions: nothing it can send carries an event or a command.

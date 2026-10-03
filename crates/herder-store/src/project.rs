@@ -71,6 +71,12 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             tx.prepare_cached("UPDATE sessions SET permission_mode = ?2 WHERE session_id = ?1")?
                 .execute(params![id, tag(mode)?])?;
         }
+        EventBody::TitleChanged { title, source } => {
+            tx.prepare_cached(
+                "UPDATE sessions SET title = ?2, title_source = ?3 WHERE session_id = ?1",
+            )?
+            .execute(params![id, title, tag(source)?])?;
+        }
         EventBody::PrLinked { pr } => {
             write_pr(
                 tx,

@@ -19,9 +19,9 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
-    ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, PermissionMode,
-    Project, ProjectId, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
-    TurnError, TurnId, UsageWindow, UserId,
+    ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, MAX_TITLE_CHARS,
+    PermissionMode, Project, ProjectId, Provider, QuestionId, SessionHead, SessionId,
+    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use tokio::sync::mpsc;
@@ -505,6 +505,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             status: SessionStatus::Idle,
             parent: None,
             task: None,
+            title: None,
             project_id: None,
             account_id: account(),
             children_need_you: 0,
@@ -1249,6 +1250,77 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
+}
+
+#[tokio::test]
+async fn rename_journals_a_user_title_and_lists_it_until_the_session_is_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let rename = |title: &str| CommandBody::RenameSession {
+        session_id: session.clone(),
+        title: title.into(),
+    };
+
+    let result = daemon
+        .manager
+        .handle(bob(), rename("  Flaky auth tests \n"))
+        .await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    let events = daemon
+        .events_until(|body| matches!(body, EventBody::TitleChanged { .. }))
+        .await;
+    let titled = events.last().unwrap();
+    assert_eq!(titled.by, Some(bob()));
+    assert_eq!(
+        titled.body,
+        EventBody::TitleChanged {
+            title: "Flaky auth tests".into(),
+            source: TitleSource::User,
+        }
+    );
+    // The session list follows the event, with the new title.
+    let Some(Seen::Sessions(heads)) = daemon.seen.recv().await else {
+        panic!("a title change is not followed by the session list");
+    };
+    assert_eq!(heads[0].title.as_deref(), Some("Flaky auth tests"));
+
+    // The title it already has changes nothing.
+    let journaled = daemon.journal(&session).await.len();
+    let result = daemon
+        .manager
+        .handle(alice(), rename("Flaky auth tests"))
+        .await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    assert_eq!(daemon.journal(&session).await.len(), journaled);
+
+    let too_long = "x".repeat(MAX_TITLE_CHARS + 1);
+    for invalid in ["", "  ", "two\nlines", too_long.as_str()] {
+        let error = daemon.manager.handle(alice(), rename(invalid)).await;
+        assert_eq!(
+            error.unwrap_err().code,
+            ErrorCode::BadRequest,
+            "{invalid:?}"
+        );
+    }
+    let missing = CommandBody::RenameSession {
+        session_id: SessionId::new("missing"),
+        title: "Anything".into(),
+    };
+    let error = daemon.manager.handle(alice(), missing).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
+
+    daemon
+        .manager
+        .archive(alice(), session.clone(), false)
+        .await
+        .unwrap();
+    let error = daemon.manager.handle(alice(), rename("Later")).await;
+    assert_eq!(error.unwrap_err().code, ErrorCode::Conflict);
+    assert_eq!(
+        daemon.manager.sessions().await.unwrap()[0].title.as_deref(),
+        Some("Flaky auth tests")
+    );
 }
 
 #[tokio::test]

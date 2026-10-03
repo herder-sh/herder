@@ -926,6 +926,7 @@ mod tests {
                 status: herder_protocol::SessionStatus::Idle,
                 parent: None,
                 task: None,
+                title: None,
                 project_id: None,
                 account_id: herder_protocol::AccountId::new("claude"),
                 children_need_you: 0,

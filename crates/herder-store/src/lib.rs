@@ -1,7 +1,7 @@
 //! SQLite append-only event journal and the projections derived from it.
 //!
 //! One [`Store`] owns the daemon's database file. Every durable [`Event`] is appended to the
-//! journal, and the read models it affects (the [`Session`] row, the session's tracked pull
+//! journal, and the read models it affects (the [`Session`] row with its title, the session's tracked pull
 //! requests and the branches it owns) are updated in the same transaction, so a projection is never ahead of, or behind,
 //! the journal.
 //!
@@ -26,7 +26,7 @@ use std::path::Path;
 use herder_protocol::{
     AccountId, Attachment, CommandId, CommandResult, Event, EventBody, JournalRecord,
     PermissionMode, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus, Timestamp,
-    UserId,
+    TitleSource, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -103,6 +103,10 @@ pub struct Session {
     pub parent: Option<SessionId>,
     /// Short label of the session's task, shown in the task tree.
     pub task: Option<String>,
+    /// Current title, from the latest `title_changed`; `None` until the first.
+    pub title: Option<String>,
+    /// Who chose the current title; `None` while there is none.
+    pub title_source: Option<TitleSource>,
     /// Current status; `Idle` until the first status change.
     pub status: SessionStatus,
     /// Seq of the latest event, equal to [`Store::latest_seq`].
@@ -503,7 +507,8 @@ impl Store {
 }
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,
-    model, permission_mode, parent, task, status, last_seq, updated_at FROM sessions";
+    model, permission_mode, parent, task, status, last_seq, updated_at, title, title_source
+    FROM sessions";
 
 fn latest_seq(conn: &Connection, session: &SessionId) -> Result<Seq> {
     let max: Option<Seq> = conn
@@ -538,6 +543,8 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         status: get_tag(row, 10)?,
         last_seq: row.get(11)?,
         updated_at: row.get(12)?,
+        title: row.get(13)?,
+        title_source: get_tag(row, 14)?,
     })
 }
 
@@ -551,10 +558,13 @@ fn tag(value: &impl Serialize) -> Result<String> {
     }
 }
 
-/// Reads a column written by [`tag`] back into its enum.
+/// Reads a column written by [`tag`] back into its enum, or a nullable one into an `Option`.
 fn get_tag<T: DeserializeOwned>(row: &Row<'_>, idx: usize) -> rusqlite::Result<T> {
-    let tag: String = row.get(idx)?;
-    serde_json::from_value(serde_json::Value::String(tag))
+    let tag = match row.get::<_, Option<String>>(idx)? {
+        Some(tag) => serde_json::Value::String(tag),
+        None => serde_json::Value::Null,
+    };
+    serde_json::from_value(tag)
         .map_err(|err| rusqlite::Error::FromSqlConversionFailure(idx, Type::Text, Box::new(err)))
 }
 

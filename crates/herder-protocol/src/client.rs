@@ -119,6 +119,13 @@ pub enum CommandBody {
         /// Target session.
         session_id: SessionId,
     },
+    /// Set the session's title; archived and moved sessions refuse it.
+    RenameSession {
+        /// Target session.
+        session_id: SessionId,
+        /// New title, as [`crate::clean_title`] accepts it; stored trimmed.
+        title: String,
+    },
     /// Start a turn with a prompt.
     SendPrompt {
         /// Target session.

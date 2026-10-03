@@ -18,7 +18,7 @@
       ]
     },
     {
-      "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account or project changes.",
+      "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account, project or title changes.",
       "type": "object",
       "properties": {
         "sessions": {
@@ -1579,6 +1579,29 @@
             "type",
             "number"
           ]
+        },
+        {
+          "description": "The session's title changed; `by` names the user for a `user` title.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "Who chose it.",
+              "$ref": "#/$defs/TitleSource"
+            },
+            "title": {
+              "description": "New title, as [`crate::clean_title`] returns it.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "title_changed"
+            }
+          },
+          "required": [
+            "type",
+            "title",
+            "source"
+          ]
         }
       ]
     },
@@ -2246,6 +2269,13 @@
             "string",
             "null"
           ]
+        },
+        "title": {
+          "description": "The session's current title, from its latest `title_changed`; absent until it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2396,6 +2426,21 @@
             "type",
             "account_id"
           ]
+        }
+      ]
+    },
+    "TitleSource": {
+      "description": "Who chose a session's title.",
+      "oneOf": [
+        {
+          "description": "The daemon's automatic titler; a later automatic title may replace it.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "A user, by renaming the session; the automatic titler leaves it alone.",
+          "type": "string",
+          "const": "user"
         }
       ]
     },

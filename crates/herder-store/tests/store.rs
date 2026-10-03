@@ -9,7 +9,7 @@ use std::time::Duration;
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, Event, EventBody,
     Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, Provider,
-    PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TurnId, UserId,
+    PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TitleSource, TurnId, UserId,
 };
 use herder_store::{
     COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
@@ -104,6 +104,13 @@ fn new_event(session: &SessionId, second: i64, body: EventBody) -> NewEvent {
     }
 }
 
+fn titled(title: &str, source: TitleSource) -> EventBody {
+    EventBody::TitleChanged {
+        title: title.into(),
+        source,
+    }
+}
+
 fn checked_out(branch: &str) -> EventBody {
     EventBody::BranchCheckedOut {
         branch: branch.into(),
@@ -148,6 +155,8 @@ fn fold(events: &[Event]) -> Projections {
                 permission_mode: *permission_mode,
                 parent: parent.clone(),
                 task: task.clone(),
+                title: None,
+                title_source: None,
                 status: SessionStatus::Idle,
                 last_seq: 0,
                 updated_at: event.at,
@@ -171,6 +180,10 @@ fn fold(events: &[Event]) -> Projections {
                 s.model = model.clone();
             }
             EventBody::PermissionModeChanged { mode } => s.permission_mode = *mode,
+            EventBody::TitleChanged { title, source } => {
+                s.title = Some(title.clone());
+                s.title_source = Some(*source);
+            }
             EventBody::PrLinked { pr } => {
                 prs.insert(pr.number, pr.clone());
             }
@@ -278,6 +291,42 @@ fn append_assigns_seqs_and_updates_projections() {
     assert_eq!(store.session_branches(&s).unwrap(), ["feature", "spike"]);
     assert_eq!(store.sessions().unwrap(), vec![session]);
     assert_projections_match_journal(&store, &s);
+}
+
+#[test]
+fn the_latest_title_and_its_source_are_projected() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let s = SessionId::new("s1");
+    let mut store = Store::open(&path).unwrap();
+    store.append(new_event(&s, 0, created())).unwrap();
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!((session.title, session.title_source), (None, None));
+
+    let titles = [
+        ("Fix the auth tests", TitleSource::Auto),
+        ("Flaky auth tests", TitleSource::User),
+        ("Auth test fixes", TitleSource::Auto),
+    ];
+    for (second, (title, source)) in titles.into_iter().enumerate() {
+        store
+            .append(new_event(&s, second as i64 + 1, titled(title, source)))
+            .unwrap();
+        let session = store.session(&s).unwrap().unwrap();
+        assert_eq!(
+            (session.title.as_deref(), session.title_source),
+            (Some(title), Some(source))
+        );
+    }
+    assert_projections_match_journal(&store, &s);
+    drop(store);
+
+    let store = Store::open(&path).unwrap();
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!(
+        (session.title.as_deref(), session.title_source),
+        (Some("Auth test fixes"), Some(TitleSource::Auto))
+    );
 }
 
 #[test]
@@ -542,11 +591,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 7);
+    assert_eq!(version(&path), 8);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 7);
+    assert_eq!(version(&path), 8);
     store
         .append(new_event(
             &s,
@@ -558,17 +607,33 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap();
     drop(store);
 
+    // Back to the v7 schema, as a build before session titles left it; reopening migrates
+    // it, and the session is untitled until its first title.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(version(&path), 8);
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!((session.title, session.title_source), (None, None));
+    drop(store);
+
     // Back to the v4 schema, as a build before pull request branches left it; reopening
     // migrates it, and a pull request tracked before has no branch until it updates.
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
+            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+             ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN attachments; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 7);
+    assert_eq!(version(&path), 8);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -592,13 +657,14 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE session_prs DROP COLUMN head_branch;
+            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+             ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
              DROP TABLE native_sessions; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 7);
+    assert_eq!(version(&path), 8);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -618,11 +684,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              DROP INDEX sessions_parent;
              ALTER TABLE sessions DROP COLUMN parent;
              ALTER TABLE sessions DROP COLUMN task;
+             ALTER TABLE sessions DROP COLUMN title;
+             ALTER TABLE sessions DROP COLUMN title_source;
              PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 7);
+    assert_eq!(version(&path), 8);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -631,17 +699,25 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .append(new_event(&child, 1, child_created(&s, "t")))
         .unwrap();
     assert_eq!(store.children(&s).unwrap().len(), 1);
+    store
+        .append(new_event(&s, 2, titled("Auth", TitleSource::User)))
+        .unwrap();
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!(
+        (session.title.as_deref(), session.title_source),
+        (Some("Auth"), Some(TitleSource::User))
+    );
     drop(store);
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 8)
+        .pragma_update(None, "user_version", 9)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 8,
-            supported: 7
+            found: 9,
+            supported: 8
         })
     ));
 }
@@ -664,6 +740,11 @@ fn body_strategy() -> impl Strategy<Value = EventBody> {
         }),
         (1u64..4).prop_map(|number| EventBody::PrUnlinked { number }),
         prop_oneof![Just("feature"), Just("spike"), Just("fix/login")].prop_map(checked_out),
+        (
+            "[A-Za-z ]{1,20}",
+            prop_oneof![Just(TitleSource::Auto), Just(TitleSource::User)]
+        )
+            .prop_map(|(title, source)| EventBody::TitleChanged { title, source }),
     ]
 }
 
