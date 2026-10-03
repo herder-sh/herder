@@ -12,8 +12,11 @@ struct TranscriptBlockView: View {
 
     var body: some View {
         switch block {
-        case .user(_, let text, let attachments, let outgoing):
+        case .user(_, let text, let attachments, let outgoing, let agentMessage):
             VStack(alignment: .trailing, spacing: 6) {
+                if let agentMessage {
+                    AgentMessageSource(message: agentMessage, fleet: fleet, hostId: hostId, open: open)
+                }
                 if !attachments.isEmpty {
                     MessageImages(fleet: fleet, key: key, attachments: attachments)
                 }

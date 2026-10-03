@@ -106,7 +106,7 @@ struct FleetTests {
             return Transcript.blocks(model).contains { $0 == .assistant(id: $0.id, text: "Hello, world.", streaming: false) }
         })
         let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
-        #expect(blocks.contains { if case .user(_, "Say hello.", _, nil) = $0 { true } else { false } })
+        #expect(blocks.contains { if case .user(_, "Say hello.", _, nil, nil) = $0 { true } else { false } })
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
