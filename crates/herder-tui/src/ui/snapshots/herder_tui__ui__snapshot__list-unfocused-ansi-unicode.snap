@@ -21,7 +21,9 @@ expression: dump(&buffer)
  2  44..45  fg=Reset bg=Reset
  3   0..1   fg=DarkGray bg=Reset
  3   1..2   fg=Reset bg=Reset
- 3   2..19  fg=Reset bg=Reset BOLD
+ 3   2..3   fg=Cyan bg=Reset BOLD
+ 3   3..13  fg=Reset bg=Reset BOLD
+ 3  13..19  fg=DarkGray bg=Reset BOLD
  3  19..41  fg=Reset bg=Reset
  3  41..44  fg=DarkGray bg=Reset
  3  44..45  fg=Reset bg=Reset

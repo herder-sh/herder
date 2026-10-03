@@ -16,7 +16,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -202,12 +202,16 @@ impl<'a> ListView<'a> {
                                 ui.muted()
                             };
                             Span::styled(pointer, style).render(row, buf);
+                            // Bold, keeping each span's colour: a status dot stays its
+                            // state's.
                             let left = if selected {
                                 Line::from(
                                     left.spans
                                         .into_iter()
                                         .map(|span| {
-                                            span.patch_style(ui.text().add_modifier(Modifier::BOLD))
+                                            span.patch_style(
+                                                Style::new().add_modifier(Modifier::BOLD),
+                                            )
                                         })
                                         .collect::<Vec<_>>(),
                                 )
