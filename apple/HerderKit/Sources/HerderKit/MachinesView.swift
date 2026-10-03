@@ -11,7 +11,7 @@ struct MachinesView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
                 ForEach(fleet.lists.machines) { machine in
                     MachineCard(machine: machine)
                         .contextMenu {
@@ -23,8 +23,6 @@ struct MachinesView: View {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)
                 }
             }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }

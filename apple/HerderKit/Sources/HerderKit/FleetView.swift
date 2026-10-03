@@ -3,11 +3,11 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case home, projects, machines
+    case home, machines
     case project(String)
 }
 
-/// The fleet: tabs on iPhone, a sidebar with a session list beside it on iPad and the Mac.
+/// The fleet: tabs on iPhone; herder's own sidebar and panes on iPad and the Mac.
 struct FleetView: View {
     let fleet: Fleet
     @State private var pairing = false
@@ -18,9 +18,9 @@ struct FleetView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if sizeClass == .compact { tabs } else { split }
+            if sizeClass == .compact { tabs } else { DesktopShell(fleet: fleet, pairing: $pairing) }
             #else
-            split
+            DesktopShell(fleet: fleet, pairing: $pairing)
             #endif
         }
         .tint(Theme.text)
@@ -41,49 +41,14 @@ struct FleetView: View {
         }
     }
     #endif
-
-    @State private var section: SidebarItem? = .home
-
-    private var split: some View {
-        NavigationSplitView {
-            List(selection: $section) {
-                Label("Home", systemImage: "tray.full")
-                    .badge(fleet.lists.requests.count)
-                    .tag(SidebarItem.home)
-                Label("Machines", systemImage: "server.rack").tag(SidebarItem.machines)
-                Section("Projects") {
-                    ForEach(fleet.lists.projects) { project in
-                        Label(project.name, systemImage: "shippingbox")
-                            .badge(project.sessions.count)
-                            .tag(SidebarItem.project(project.id))
-                    }
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 230)
-            .toolbar {
-                Button("Add Machine", systemImage: "plus") { pairing = true }
-                Button("Reconnect", systemImage: "arrow.clockwise") { fleet.wake() }
-                    .keyboardShortcut("r")
-            }
-        } detail: {
-            NavigationStack {
-                switch section ?? .home {
-                case .home: HomeView(fleet: fleet, pairing: $pairing)
-                case .projects: ProjectsView(fleet: fleet, projects: fleet.lists.projects)
-                case .machines: MachinesView(fleet: fleet, pairing: $pairing)
-                case .project(let id):
-                    let projects = fleet.lists.projects.filter { $0.id == id }
-                    ProjectsView(fleet: fleet, projects: projects, title: projects.first?.name ?? "Project")
-                }
-            }
-        }
-    }
 }
 
 /// What needs you, then what is running, then what finished.
 struct HomeView: View {
     let fleet: Fleet
     @Binding var pairing: Bool
+    /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
+    var selection: Binding<SessionKey?>?
 
     var body: some View {
         let lists = fleet.lists
@@ -101,8 +66,8 @@ struct HomeView: View {
                         ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet) }
                     }
                 }
-                SessionGroup(title: "Active", sessions: lists.active, fleet: fleet)
-                SessionGroup(title: "Recent", sessions: Array(lists.recent.prefix(20)), fleet: fleet)
+                SessionGroup(title: "Active", sessions: lists.active, selection: selection)
+                SessionGroup(title: "Recent", sessions: Array(lists.recent.prefix(20)), selection: selection)
             }
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
@@ -164,10 +129,11 @@ private struct EmptyFleet: View {
 }
 
 /// A titled card of session rows.
-private struct SessionGroup: View {
+struct SessionGroup: View {
     let title: String
     let sessions: [SessionSummary]
-    let fleet: Fleet
+    var selection: Binding<SessionKey?>?
+    var showsProject = true
 
     var body: some View {
         if !sessions.isEmpty {
@@ -175,17 +141,39 @@ private struct SessionGroup: View {
                 SectionHeading(title: title, count: sessions.count)
                 VStack(spacing: 0) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                        if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 30) }
-                        NavigationLink(value: session.key) {
-                            SessionRow(session: session)
-                        }
-                        .buttonStyle(.plain)
+                        if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
+                        SessionLink(session: session, selection: selection, showsProject: showsProject)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(4)
                 .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             }
         }
+    }
+}
+
+/// A session row that opens the session: into `selection` when given, else by pushing it.
+struct SessionLink: View {
+    let session: SessionSummary
+    let selection: Binding<SessionKey?>?
+    var showsProject = true
+
+    var body: some View {
+        if let selection {
+            Button { selection.wrappedValue = session.key } label: { row }
+                .buttonStyle(.plain)
+                .background(
+                    selection.wrappedValue == session.key ? Theme.raised : .clear,
+                    in: .rect(cornerRadius: Theme.corner - 2))
+        } else {
+            NavigationLink(value: session.key) { row }
+                .buttonStyle(.plain)
+        }
+    }
+
+    private var row: some View {
+        SessionRow(session: session, showsProject: showsProject)
+            .padding(.horizontal, 8)
     }
 }
 

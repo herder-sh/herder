@@ -21,6 +21,10 @@ public struct HerderScene: Scene {
                     description: Text(message))
             }
         }
+        #if os(macOS)
+        // herder draws its own window: the sidebar runs up under the traffic lights.
+        .windowStyle(.hiddenTitleBar)
+        #endif
         .onChange(of: scenePhase) { _, phase in
             guard case .opened(let fleet) = profile else { return }
             switch phase {
