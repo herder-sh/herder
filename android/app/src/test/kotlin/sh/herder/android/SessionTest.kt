@@ -114,7 +114,7 @@ class SessionTest {
 
     @Test
     fun streamingItemsAreReplacedByEachUpdate() {
-        val streaming = listOf(sh.herder.ffi.Item(null, "i1", "t1", ItemBody.AssistantMessage("Hel")))
+        val streaming = listOf(sh.herder.ffi.Item(null, null, "i1", "t1", ItemBody.AssistantMessage("Hel")))
         var session = Session().applied(SessionUpdate(emptyList(), streaming))
         assertTrue(session.loaded)
         assertEquals(streaming, session.streaming)

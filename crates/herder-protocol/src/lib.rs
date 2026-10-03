@@ -27,9 +27,9 @@ pub use attachment::{
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
 pub use event::{
-    Answer, Answerer, ApprovalDecision, ApprovalOutcome, CiStatus, ErrorClass, EscalationReason,
-    Event, EventBody, Item, ItemBody, Mergeable, PrState, PullRequest, ReviewStatus, Route,
-    SessionStatus, TitleSource, TurnError,
+    AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalOutcome, CiStatus, ErrorClass,
+    EscalationReason, Event, EventBody, Item, ItemBody, Mergeable, PrState, PullRequest,
+    ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
     AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, QuestionId,

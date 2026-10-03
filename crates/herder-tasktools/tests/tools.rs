@@ -35,7 +35,15 @@ fn tools_list_is_the_mcp_shape() {
         .collect();
     assert_eq!(
         names,
-        ["spawn", "send", "status", "wait_for", "answer", "escalate"]
+        [
+            "spawn",
+            "send",
+            "send_session",
+            "status",
+            "wait_for",
+            "answer",
+            "escalate"
+        ]
     );
     for tool in tools {
         let keys: BTreeSet<_> = tool.as_object().unwrap().keys().cloned().collect();
@@ -218,6 +226,7 @@ fn calls_parse_validate_and_round_trip() {
         let back = match expected {
             ToolCall::Spawn(input) => serde_json::to_value(input),
             ToolCall::Send(input) => serde_json::to_value(input),
+            ToolCall::SendSession(input) => serde_json::to_value(input),
             ToolCall::Status(input) => serde_json::to_value(input),
             ToolCall::WaitFor(input) => serde_json::to_value(input),
             ToolCall::Answer(input) => serde_json::to_value(input),
@@ -484,4 +493,27 @@ fn host_busy_carries_its_retry_hint() {
     let plain: ToolError =
         serde_json::from_value(json!({ "code": "internal", "message": "no" })).unwrap();
     assert_eq!(plain.retry_after_secs, None);
+}
+
+#[test]
+fn send_session_accepts_only_destination_text_and_delivery_key() {
+    let args = json!({"session_id":"peer","text":"Review this","message_id":"review-1"});
+    assert!(matches!(
+        ToolCall::parse(Tool::SendSession, Some(args.clone())),
+        Ok(ToolCall::SendSession(_))
+    ));
+    for (field, value) in [
+        ("sender_session_id", json!("forged")),
+        ("hop_count", json!(0)),
+        ("permission_ceiling", json!("full_access")),
+    ] {
+        let mut forged = args.clone();
+        forged[field] = value;
+        assert_eq!(
+            ToolCall::parse(Tool::SendSession, Some(forged))
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArguments
+        );
+    }
 }

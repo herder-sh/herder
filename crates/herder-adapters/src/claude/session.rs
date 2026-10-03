@@ -268,7 +268,9 @@ impl Session {
                 turn_id,
                 text,
                 images,
+                agent_sender,
             } => {
+                let text = crate::agent_prompt(&text, agent_sender.as_ref());
                 self.turn = Some(OpenTurn {
                     id: turn_id.clone(),
                     interrupted: false,
@@ -283,7 +285,9 @@ impl Session {
                     parent_tool_use_id: None,
                     session_id: "",
                     should_query: None,
-                    origin: Some(wire::Origin { kind: "human" }),
+                    origin: agent_sender
+                        .is_none()
+                        .then_some(wire::Origin { kind: "human" }),
                 })
                 .await;
                 self.emit(AdapterEvent::TurnStarted { turn_id }).await;
@@ -459,6 +463,7 @@ impl Session {
                     });
                     let body = streamed_body(reasoning, String::new());
                     let item = Item {
+                        agent_message: None,
                         parent_call_id: None,
                         id,
                         turn_id,
@@ -545,6 +550,7 @@ impl Session {
                     id,
                     turn_id: turn_id.clone(),
                     body,
+                    agent_message: None,
                     parent_call_id: Some(parent_call_id.clone()),
                 },
             })
@@ -603,6 +609,7 @@ impl Session {
                 id: id.clone(),
                 turn_id,
                 body,
+                agent_message: None,
                 parent_call_id,
             },
         })
@@ -648,6 +655,7 @@ impl Session {
                     id,
                     turn_id: turn_id.clone(),
                     body,
+                    agent_message: None,
                     parent_call_id: parent_call_id.clone(),
                 },
             })
@@ -860,6 +868,7 @@ impl Session {
 
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -1011,7 +1020,13 @@ fn seed_text(seed: &[Item]) -> Option<String> {
         .filter_map(|item| match &item.body {
             ItemBody::UserMessage { text, attachments } => Some(format!(
                 "User: {}",
-                crate::seed_user_text(text, attachments)
+                crate::seed_user_text(
+                    &crate::agent_prompt(
+                        text,
+                        item.agent_message.as_ref().map(|m| &m.sender_session_id)
+                    ),
+                    attachments
+                )
             )),
             ItemBody::AssistantMessage { text } => Some(format!("Assistant: {text}")),
             ItemBody::ToolCall { name, input } => {
@@ -1120,6 +1135,7 @@ mod tests {
         use herder_protocol::{Attachment, AttachmentId};
 
         let item = |body| Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: TurnId::new("t"),
@@ -1159,5 +1175,26 @@ mod tests {
                  {{\"command\":\"ls\"}}]\n\n[Tool failed: nope]\n\nAssistant: Done."
             )
         );
+    }
+    #[test]
+    fn seed_retains_agent_sender_identity() {
+        let item = Item {
+            agent_message: Some(herder_protocol::AgentMessage {
+                sender_session_id: herder_protocol::SessionId::new("peer"),
+                message_id: "key".into(),
+                hop_count: 1,
+                permission_ceiling: PermissionMode::Ask,
+            }),
+            parent_call_id: None,
+            id: ItemId::new("prompt"),
+            turn_id: TurnId::new("turn"),
+            body: ItemBody::UserMessage {
+                text: "Review this".into(),
+                attachments: vec![],
+            },
+        };
+        let rendered = seed_text(&[item]).unwrap();
+        assert!(rendered.contains("Sent by another agent: session peer"));
+        assert!(rendered.contains("not a human instruction"));
     }
 }

@@ -267,6 +267,7 @@ impl Drop for Daemon {
 
 fn message(id: &str, text: &str) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new("t1"),

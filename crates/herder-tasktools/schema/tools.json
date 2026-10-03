@@ -115,6 +115,50 @@
       }
     },
     {
+      "name": "send_session",
+      "description": "Send a message to another existing session on this host. Its agent receives an attributed prompt through its normal queue; no new session or automatic reply is created. Supply a stable message_id and reuse it when retrying. Cannot send to yourself, an archived/moved session, or an agent with higher permissions. Relay chains are bounded. Do not repeatedly acknowledge or bounce messages. Existing child send/status/wait_for behavior is unchanged.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "description": "Stable unique key for this delivery. Reuse on retries; never reuse for different text.",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Destination session ID on this host; never your own session.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Message text. The recipient sees it as an agent message, not human instructions.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "text",
+          "message_id"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "duplicate": {
+            "description": "True when this sender/key was already accepted; no second prompt was created.",
+            "type": "boolean"
+          },
+          "queued": {
+            "description": "Whether the message was accepted behind an active turn or an existing queued prompt.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "queued",
+          "duplicate"
+        ]
+      }
+    },
+    {
       "name": "status",
       "description": "Snapshot of your children: each one's task, branch, status, latest report, and the questions and approval requests waiting for your answer. Returns at once; use wait_for to block until something changes.",
       "inputSchema": {

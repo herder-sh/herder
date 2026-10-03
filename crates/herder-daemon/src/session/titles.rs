@@ -444,6 +444,7 @@ mod tests {
 
     fn item(turn: &str, body: ItemBody) -> Item {
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: TurnId::new(turn),

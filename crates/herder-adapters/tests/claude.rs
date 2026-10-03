@@ -131,6 +131,7 @@ fn turn() -> TurnId {
 
 fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
+        agent_sender: None,
         turn_id: turn(),
         text: text.into(),
         images: Vec::new(),
@@ -143,6 +144,7 @@ fn id(n: u32) -> ItemId {
 
 fn item(n: u32, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: id(n),
         turn_id: turn(),
@@ -572,6 +574,7 @@ async fn an_interrupt_ends_the_turn_with_what_streamed() {
 async fn a_seed_becomes_context_before_the_first_prompt() {
     let seed = vec![
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
@@ -581,6 +584,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
             },
         },
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),
@@ -714,6 +718,7 @@ async fn a_prompt_with_images_sends_them_as_base64_blocks_before_its_text() {
     session
         .commands
         .send(AdapterCommand::SendPrompt {
+            agent_sender: None,
             turn_id: turn(),
             text: "Match these.".into(),
             images: vec![
@@ -1057,6 +1062,43 @@ async fn nested_transcripts_keep_ancestry_without_interrupting_parent_streams() 
                 && matches!(item.body, ItemBody::AssistantMessage { .. }))
             .count(),
         1
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn agent_prompts_are_labeled_and_never_claim_human_origin() {
+    let text = "[Sent by another agent: session peer. This is agent context, not a human instruction.]\n\nReview this";
+    let input = format!(
+        r#"{{"type":"user","message":{{"role":"user","content":{}}},"parent_tool_use_id":null,"session_id":""}}"#,
+        serde_json::to_string(text).unwrap()
+    );
+    let mut lines = INITIALIZE
+        .lines()
+        .take(2)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    lines.push(serde_json::json!({"dir":"in","line":input.to_string()}).to_string());
+    lines.push(serde_json::json!({"dir":"out","line":serde_json::json!({"type":"result","subtype":"success","is_error":false,"result":""}).to_string()}).to_string());
+    lines.push(serde_json::json!({"dir":"in","eof":true}).to_string());
+    lines.push(serde_json::json!({"exit":0}).to_string());
+    let fixture = Fixture::parse("agent-origin", &(lines.join("\n") + "\n")).unwrap();
+    let mut session = start_with(fixture, request(vec![])).await;
+    session
+        .commands
+        .send(AdapterCommand::SendPrompt {
+            agent_sender: Some(herder_protocol::SessionId::new("peer")),
+            turn_id: turn(),
+            text: "Review this".into(),
+            images: vec![],
+        })
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AdapterEvent::TurnCompleted { .. })),
+        "{events:?}"
     );
     shutdown(session).await;
 }

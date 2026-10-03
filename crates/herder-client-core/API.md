@@ -213,3 +213,20 @@ Clients must group these items beneath their call instead of mixing their text i
 main conversation. This reference is preserved in durable events, offline caches and
 streaming snapshots. Claude emits completed nested messages live; nested token deltas
 are not currently exposed. These are parts of the parent session, not separate sessions.
+
+### Agent message attribution (client API 5)
+
+`Item.agent_message` is optional authenticated same-host sender metadata: sender session,
+caller-chosen delivery ID, trusted relay hop count, and a permission ceiling retained while
+queued. The daemon alone sets it on user-message items, with no human `Event.by`. Provider
+items cannot set it. Clients label these prompts as sent by another agent and must not match
+them against pending human outbox entries. Older human prompts omit this field.
+
+The MCP `send_session` tool accepts a destination session, text and stable `message_id`.
+It does not create a child or change task ancestry. Its acceptance means persisted normal
+queue delivery; it promises neither immediate execution nor an automatic reply. Retries of
+the same sender/destination/key do not create a second queued or journaled prompt, even
+after a queued message was discarded by archiving. Durable receipts retain the accepted key. Different
+text under a used key fails. Self-send, read-only targets, permission escalation and relay
+chains beyond eight hops are refused. Existing child send/spawn retain their restrictions
+and carry the same provenance so they cannot reset relay depth. A human prompt resets it.

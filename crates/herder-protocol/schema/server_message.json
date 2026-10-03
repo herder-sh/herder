@@ -397,6 +397,36 @@
       "description": "Identifies a provider account on a host; the name its owner gave it, opaque to receivers.",
       "type": "string"
     },
+    "AgentMessage": {
+      "description": "Durable provenance for a message sent by another session on this host.",
+      "type": "object",
+      "properties": {
+        "hop_count": {
+          "description": "Trusted relay depth; a human-origin turn starts at zero.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "message_id": {
+          "description": "Caller-chosen stable delivery key, scoped to sender and destination.",
+          "type": "string"
+        },
+        "permission_ceiling": {
+          "description": "Maximum permissions this message may exercise, retained while queued.",
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "sender_session_id": {
+          "description": "Session authenticated by the caller's MCP token, never supplied by its prompt.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sender_session_id",
+        "message_id",
+        "hop_count",
+        "permission_ceiling"
+      ]
+    },
     "Answer": {
       "description": "An answer to a question.",
       "oneOf": [
@@ -1828,6 +1858,17 @@
       "description": "One entry of the transcript.",
       "type": "object",
       "properties": {
+        "agent_message": {
+          "description": "Authenticated agent sender of a prompt. Only the daemon sets this; absent for humans.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "body": {
           "description": "The item's content.",
           "$ref": "#/$defs/ItemBody"
