@@ -18,6 +18,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         project_id: ProjectId::new(id),
         name: name.to_owned(),
         paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        default_permission_mode: None,
         default_account: None,
         setup_command: None,
     }
@@ -278,6 +279,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
             sink: Arc::clone(&hub) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
         },
         shutdown.clone(),
     )
@@ -287,15 +289,18 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
     let task = tokio::spawn(
         Discovery {
             host: host(),
-            config: ProjectsConfig {
-                roots: vec![root.clone()],
-                entries: vec![ProjectEntry {
-                    name: Some("Notes".to_owned()),
-                    paths: vec![declared.clone()],
-                    ..ProjectEntry::default()
-                }],
-                ..ProjectsConfig::default()
-            },
+            config: Arc::new(Overrides::new(
+                tmp.path().join("daemon.toml"),
+                ProjectsConfig {
+                    roots: vec![root.clone()],
+                    entries: vec![ProjectEntry {
+                        name: Some("Notes".to_owned()),
+                        paths: vec![declared.clone()],
+                        ..ProjectEntry::default()
+                    }],
+                    ..ProjectsConfig::default()
+                },
+            )),
             hub: Arc::clone(&hub),
             sessions,
             sessions_changed: Arc::clone(&sessions_changed),
@@ -366,6 +371,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             sink: Arc::clone(&hub) as Arc<dyn EventSink>,
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
         },
         shutdown.clone(),
     )
@@ -375,7 +381,10 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
     let task = tokio::spawn(
         Discovery {
             host: host(),
-            config: ProjectsConfig::default(),
+            config: Arc::new(Overrides::new(
+                tmp.path().join("daemon.toml"),
+                ProjectsConfig::default(),
+            )),
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
@@ -397,6 +406,128 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
     let app_id = Some(ProjectId::new("github.com/org/app"));
     assert_eq!(heads[0].project_id, app_id);
     assert_eq!(sessions.sessions().await.unwrap()[0].project_id, app_id);
+
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("src/app");
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    let file = tmp.path().join("daemon.toml");
+    fs::write(
+        &file,
+        "# mine\n[[accounts]]\nid = \"main\"\nprovider = \"claude\"\n",
+    )
+    .unwrap();
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::from([(
+                AccountId::new("main"),
+                crate::session::AccountConfig {
+                    provider: herder_protocol::Provider::Claude,
+                    label: "Main".into(),
+                    config_dir: None,
+                },
+            )]),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    let overrides = Arc::new(Overrides::new(file.clone(), ProjectsConfig::default()));
+    sessions
+        .manage_projects(host(), Arc::clone(&overrides))
+        .unwrap();
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: overrides,
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed: Arc::new(Notify::new()),
+        }
+        .run(shutdown.clone()),
+    );
+    assert_eq!(next_projects(&outbox).await, []);
+    let owner = herder_protocol::UserId::new("owner");
+    let handle = |command| sessions.handle(owner.clone(), command);
+
+    let not_a_repo = herder_protocol::CommandBody::AddProject {
+        path: tmp.path().join("src").to_string_lossy().into_owned(),
+    };
+    let error = handle(not_a_repo).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
+    let add = herder_protocol::CommandBody::AddProject {
+        path: format!("{}/", app.display()),
+    };
+    let added = herder_protocol::CommandResult::ProjectAdded {
+        project_id: ProjectId::new("github.com/org/app"),
+    };
+    assert_eq!(handle(add.clone()).await, Ok(added.clone()));
+    let path = app.to_string_lossy().into_owned();
+    assert_eq!(
+        next_projects(&outbox).await,
+        [project("github.com/org/app", "app", &[&path])]
+    );
+    // Adding it again changes nothing.
+    assert_eq!(handle(add).await, Ok(added));
+
+    let set = |default_account: &str| herder_protocol::CommandBody::SetProjectSettings {
+        project_id: ProjectId::new("github.com/org/app"),
+        default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
+        default_account: Some(AccountId::new(default_account)),
+        setup_command: Some("make setup".into()),
+    };
+    let error = handle(set("nobody")).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+    assert_eq!(
+        handle(set("main")).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    let mut expected = project("github.com/org/app", "app", &[&path]);
+    expected.default_permission_mode = Some(herder_protocol::PermissionMode::AutoEdit);
+    expected.default_account = Some(AccountId::new("main"));
+    expected.setup_command = Some("make setup".into());
+    assert_eq!(next_projects(&outbox).await, [expected]);
+    let unknown = herder_protocol::CommandBody::SetProjectSettings {
+        project_id: ProjectId::new("github.com/org/other"),
+        default_permission_mode: None,
+        default_account: None,
+        setup_command: None,
+    };
+    let error = handle(unknown).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+
+    // The file keeps what was there and holds the project, as a restart reads it.
+    let text = fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("# mine\n"), "{text}");
+    let entries = crate::config::read_projects(&file).unwrap().entries;
+    assert_eq!(
+        entries,
+        [ProjectEntry {
+            paths: vec![app.clone()],
+            default_account: Some(AccountId::new("main")),
+            default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
+            setup_command: Some("make setup".into()),
+            ..ProjectEntry::default()
+        }]
+    );
 
     shutdown.cancel();
     task.await.unwrap();

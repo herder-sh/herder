@@ -1,14 +1,17 @@
-//! Reactive failover: which account a session moves to when its turn hits a usage limit.
+//! Reactive failover: which account a session rotates to when its turn hits a usage limit.
 //!
 //! Only a turn that fails with `limit_reached` triggers it, never usage percentages alone. The
-//! session then moves to the first eligible account ([`next`]) and retries the failed turn's
-//! prompt there, once ([`super::actor`]). An account is eligible when it opted in
-//! (`failover = true`), is not the failing one, has an adapter, and is not limited: no window of
-//! its usage ([`crate::usage`]) is at 100% before it resets, and it has not hit a limit since
-//! its reset time ([`Limits`]). Only accounts of the session's own provider qualify, most quota
-//! left first, then by id; the session keeps its model, so a failover never changes provider or
-//! model. A session pinned to its account (created with `failover_pin`, else by
+//! session then rotates to the best available account ([`best`]) and retries the failed turn's
+//! prompt there, once ([`super::actor`]). Every account takes part; none opts in. An account is
+//! available when it is of the session's own provider, is not the failing one, has an adapter,
+//! and is not limited: no window of its usage ([`crate::usage`]) is at 100% before it resets,
+//! and it has not hit a limit since its reset time ([`Limits`]). The one with the most quota
+//! left is best, then by id; the session keeps its model, so a failover never changes provider
+//! or model. A session pinned to its account (created with `failover_pin`, else by
 //! [`FailoverConfig::pin`]) never fails over.
+//!
+//! A `create_session` naming a provider instead of an account starts on its best available
+//! account the same way.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -69,7 +72,7 @@ impl Limits {
     }
 }
 
-/// What failover picks from.
+/// What an account is picked from.
 pub(crate) struct Choice<'a> {
     pub(crate) accounts: &'a Accounts,
     pub(crate) adapters: &'a Adapters,
@@ -78,11 +81,12 @@ pub(crate) struct Choice<'a> {
     pub(crate) now: Timestamp,
 }
 
-/// The account a session of `provider` on `failing` moves to, if any is eligible.
-pub(crate) fn next(
+/// The available account of `provider` with the most quota left, other than `except`, if
+/// any is available.
+pub(crate) fn best(
     choice: &Choice<'_>,
     provider: &Provider,
-    failing: &AccountId,
+    except: Option<&AccountId>,
 ) -> Option<AccountId> {
     choice.adapters.get(provider)?;
     choice
@@ -90,8 +94,7 @@ pub(crate) fn next(
         .iter()
         .filter(|(id, account)| {
             account.provider == *provider
-                && account.failover
-                && *id != failing
+                && Some(*id) != except
                 && !choice.limits.limited(id, choice.now)
         })
         .filter_map(|(id, _)| Some((left(choice.usage.get(id), choice.now)?, id)))
@@ -137,15 +140,14 @@ mod tests {
         }
     }
 
-    fn accounts(entries: &[(&str, Provider, bool)]) -> Accounts {
+    fn accounts(entries: &[(&str, Provider)]) -> Accounts {
         entries
             .iter()
-            .map(|(id, provider, failover)| {
+            .map(|(id, provider)| {
                 let account = AccountConfig {
                     provider: provider.clone(),
                     label: id.to_string(),
                     config_dir: None,
-                    failover: *failover,
                 };
                 (AccountId::new(*id), account)
             })
@@ -169,7 +171,7 @@ mod tests {
     }
 
     impl Case {
-        fn new(entries: &[(&str, Provider, bool)]) -> Self {
+        fn new(entries: &[(&str, Provider)]) -> Self {
             Self {
                 accounts: accounts(entries),
                 adapters: adapters(&[Provider::Claude, Provider::Codex, Provider::Cursor]),
@@ -188,7 +190,18 @@ mod tests {
                 now: self.now,
             };
             let provider = &self.accounts[&AccountId::new(failing)].provider;
-            next(&choice, provider, &AccountId::new(failing)).map(|id| id.to_string())
+            best(&choice, provider, Some(&AccountId::new(failing))).map(|id| id.to_string())
+        }
+
+        fn any(&self, provider: Provider) -> Option<String> {
+            let choice = Choice {
+                accounts: &self.accounts,
+                adapters: &self.adapters,
+                usage: &self.usage,
+                limits: &self.limits,
+                now: self.now,
+            };
+            best(&choice, &provider, None).map(|id| id.to_string())
         }
 
         fn usage(&mut self, id: &str, windows: Vec<UsageWindow>) {
@@ -199,19 +212,25 @@ mod tests {
     #[test]
     fn the_same_providers_account_with_most_quota_left_comes_first() {
         let mut case = Case::new(&[
-            ("a", Provider::Claude, true),
-            ("b", Provider::Claude, true),
-            ("c", Provider::Claude, true),
-            ("d", Provider::Claude, false),
+            ("a", Provider::Claude),
+            ("b", Provider::Claude),
+            ("c", Provider::Claude),
+            ("d", Provider::Claude),
         ]);
         // Unknown usage counts as untouched; ties go by id.
         assert_eq!(case.next("a").as_deref(), Some("b"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
+        case.usage("a", vec![window(50.0, "2026-10-02T15:00:00Z")]);
         case.usage("b", vec![window(80.0, "2026-10-02T15:00:00Z")]);
         case.usage("c", vec![window(10.0, "2026-10-02T15:00:00Z")]);
+        case.usage("d", vec![window(30.0, "2026-10-02T15:00:00Z")]);
         assert_eq!(case.next("a").as_deref(), Some("c"));
+        // Every account takes part, without opting in.
+        assert_eq!(case.next("c").as_deref(), Some("d"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("c"));
         // A window used up excludes the account until it resets.
         case.usage("c", vec![window(100.0, "2026-10-02T15:00:00Z")]);
-        assert_eq!(case.next("a").as_deref(), Some("b"));
+        assert_eq!(case.next("a").as_deref(), Some("d"));
         case.usage("c", vec![window(100.0, "2026-10-02T11:00:00Z")]);
         assert_eq!(case.next("a").as_deref(), Some("c"));
     }
@@ -219,28 +238,29 @@ mod tests {
     #[test]
     fn accounts_of_other_providers_are_never_chosen() {
         let mut case = Case::new(&[
-            ("claude-a", Provider::Claude, true),
-            ("claude-b", Provider::Claude, false),
-            ("codex", Provider::Codex, true),
-            ("cursor", Provider::Cursor, true),
+            ("claude-a", Provider::Claude),
+            ("codex", Provider::Codex),
+            ("cursor", Provider::Cursor),
         ]);
         assert_eq!(case.next("claude-a"), None);
         assert_eq!(case.next("codex"), None);
+        assert_eq!(case.any(Provider::Grok), None);
         // Without its provider's adapter, a session has nowhere to go.
         case.accounts = accounts(&[
-            ("claude-a", Provider::Claude, true),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ]);
         case.adapters = adapters(&[Provider::Codex]);
         assert_eq!(case.next("claude-a"), None);
+        assert_eq!(case.any(Provider::Claude), None);
     }
 
     #[test]
     fn an_account_that_hit_its_limit_waits_for_its_reset() {
         let mut case = Case::new(&[
-            ("a", Provider::Claude, true),
-            ("b", Provider::Claude, true),
-            ("c", Provider::Claude, true),
+            ("a", Provider::Claude),
+            ("b", Provider::Claude),
+            ("c", Provider::Claude),
         ]);
         // The reset of its used-up window, as reported.
         let used_up = [window(100.0, "2026-10-02T14:00:00Z")];
@@ -248,6 +268,7 @@ mod tests {
         // No reset time known: thirty minutes.
         case.limits.hit(&AccountId::new("a"), &[], case.now);
         assert_eq!(case.next("c"), None);
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("c"));
         case.now = at("2026-10-02T12:31:00Z");
         assert_eq!(case.next("c").as_deref(), Some("a"));
         assert_eq!(case.next("a").as_deref(), Some("c"));

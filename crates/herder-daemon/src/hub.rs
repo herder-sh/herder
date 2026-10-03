@@ -448,7 +448,7 @@ impl Hub {
 /// Appends a delta to an item's streamed text, the way clients apply it.
 pub(crate) fn append(body: &mut ItemBody, delta: &str) {
     match body {
-        ItemBody::UserMessage { text }
+        ItemBody::UserMessage { text, .. }
         | ItemBody::AssistantMessage { text }
         | ItemBody::Reasoning { text } => text.push_str(delta),
         ItemBody::ToolResult { output, .. } => output.push_str(delta),
@@ -987,7 +987,6 @@ mod tests {
                     used_percent,
                     resets_at: None,
                 }],
-                failover: true,
             }]
         };
         let failover = FailoverSettings { pin: true };
@@ -1058,6 +1057,7 @@ mod tests {
             project_id: herder_protocol::ProjectId::new("github.com/org/repo"),
             name: "repo".to_owned(),
             paths: vec!["/src/repo".to_owned()],
+            default_permission_mode: None,
             default_account: None,
             setup_command: None,
         }];

@@ -68,7 +68,8 @@ cargo test --workspace
   herder only drives the unmodified vendor CLI under a per-account config dir.
 - Terminals are owner-only: only users with the owner role on that daemon can open, attach to
   or see one. Members can drive sessions but never get a shell.
-- Failover is reactive-only and opt-in per account. Never switch accounts pre-emptively.
+- Failover is reactive-only; it rotates across the provider's available accounts. Never switch
+  accounts pre-emptively.
 
 ## Engineering principles
 

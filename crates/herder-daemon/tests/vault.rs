@@ -188,6 +188,7 @@ impl HostDaemon {
                     sink,
                     turn_ids: Box::new(|| TurnId::new("turn")),
                     worktrees: Worktrees::new(dir.join("worktrees")),
+                    attachments: dir.join("attachments"),
                 };
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -447,6 +448,7 @@ async fn refusal(client: &Client, vault: &HostId, session: &str) -> herder_proto
     let command = CommandBody::SendPrompt {
         session_id: SessionId::new(session),
         text: "hi".into(),
+        images: Vec::new(),
     };
     match client.send(vault.clone(), command).await {
         Err(Error::Rejected { info: error }) => error,

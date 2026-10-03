@@ -13,7 +13,7 @@ use herder_client_core::PairingUri;
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
-use herder_daemon::projects::{Discovery, OnSessionsChanged, ProjectsConfig};
+use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, ulid_turn_ids,
 };
@@ -75,7 +75,6 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
             provider: fake,
             label: "Account 1".into(),
             config_dir: Some(dir.join("account")),
-            failover: false,
         },
     );
     let sessions_changed = Arc::new(tokio::sync::Notify::new());
@@ -89,6 +88,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
         }),
         turn_ids: ulid_turn_ids(),
         worktrees: Worktrees::new(dir.join("worktrees")),
+        attachments: dir.join("attachments"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     let host = Host {
@@ -98,7 +98,10 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
     tokio::spawn(
         Discovery {
             host: host.id.clone(),
-            config: ProjectsConfig::default(),
+            config: Arc::new(Overrides::new(
+                dir.join("daemon.toml"),
+                ProjectsConfig::default(),
+            )),
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
@@ -154,8 +157,9 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             project_id: None,
             branch: None,
             account_id: Some(account()),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         };

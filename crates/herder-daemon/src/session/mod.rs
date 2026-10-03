@@ -47,7 +47,18 @@
 //! the worktree is removed, so the session keeps owning it once the worktree, and the reflog it
 //! was read from, are gone. `archive_session` ([`SessionManager::archive`]) removes the
 //! worktree, keeps its branches and journals the `archived` status; an archived session takes
-//! no further commands.
+//! no further commands but `unarchive_session`, which adds the worktree back at the path it had,
+//! on the session's own branch, and journals the `idle` status.
+//!
+//! # Images
+//!
+//! A prompt may carry images when its session's adapter takes them
+//! ([`herder_adapters::Adapter::accepts_images`]); otherwise it is refused as `unsupported`.
+//! They are checked and kept as files when the prompt arrives ([`attachments`]), journaled as
+//! the attachments of its `user_message`, and handed to the agent with the prompt's text when
+//! its turn starts. `get_attachment` reads one back; it changes nothing, so its answer is not
+//! remembered ([`changes_nothing`]). A transcript replayed into another CLI carries the text
+//! only.
 //!
 //! # Checkpoints
 //!
@@ -135,19 +146,19 @@
 //! ([`herder_adapters::AdapterEvent::SessionIdentified`], kept in the store with the account it
 //! ran on): that session's one transcript file is copied into the new account's config dir
 //! ([`crate::handoff::native`]) and the CLI started with [`herder_adapters::StartRequest::resume`].
-//! When the copy or that start fails, the transcript is replayed after all. A child session may only switch to its primary's account or to an account
-//! that opted in to failover: the task's failover chain.
+//! When the copy or that start fails, the transcript is replayed after all.
 //!
 //! # Failover
 //!
-//! When a turn fails with `limit_reached`, and only then, the session fails over: it switches
-//! to the next eligible account ([`failover`]) the same way, journaling the switch with no
+//! When a turn fails with `limit_reached`, and only then, the session fails over: it rotates
+//! to the available account of its provider with the most room left ([`failover`]), switching
+//! the same way, journaling the switch with no
 //! `by` since the daemon caused it, and retries the failed turn's prompt there, once, ahead of
 //! any queued prompt. The failed turn stays journaled and its partial items are replayed with
 //! the transcript. A child does not report the failed turn to its primary, only the retry. The
 //! account that hit its limit is passed over by every session until it resets. Failover only
 //! moves to an account of the session's own provider and keeps the session's model: the retry
-//! starts that account's CLI on it. With no eligible
+//! starts that account's CLI on it. Every account takes part; none opts in. With no available
 //! account, with the session pinned (its `failover_pin`, else [`FailoverConfig::pin`]), or when
 //! the retry hits a limit too, the session is `needs_you` with the limit error; when the retry
 //! fails otherwise, as when the account rejects the model, it is `needs_you` with that error,
@@ -169,6 +180,7 @@
 //! ([`crate::handoff`]).
 
 mod actor;
+mod attachments;
 pub mod failover;
 pub(crate) mod journal;
 mod recover;
@@ -186,9 +198,10 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemId, JournalRecord, Project, ProjectId, Provider, Seq, SessionHead,
-    SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UsageWindow, UserId,
+    Account, AccountId, AttachmentId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
+    Event, EventBody, HostId, Item, ItemId, JournalRecord, PermissionMode, Project, ProjectId,
+    Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
+    UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -202,8 +215,9 @@ use journal::Journal;
 pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
 
+use crate::config::ProjectSettings;
 use crate::mcp::{self, Mcp};
-use crate::projects::{self, ProjectsConfig};
+use crate::projects::{self, Overrides};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Docker, Scopes};
 use crate::usage::{self, Usage};
@@ -235,8 +249,6 @@ pub struct AccountConfig {
     pub label: String,
     /// The account's config dir, handed to the adapter; `None` is the CLI's default location.
     pub config_dir: Option<PathBuf>,
-    /// Whether sessions may fail over to this account when theirs hits a limit; opt-in.
-    pub failover: bool,
 }
 
 /// Every account sessions may run on, by id.
@@ -284,6 +296,8 @@ pub struct Setup {
     pub turn_ids: TurnIds,
     /// Where session worktrees go.
     pub worktrees: Worktrees,
+    /// Where the images prompts carry are kept, a directory per session.
+    pub attachments: PathBuf,
 }
 
 impl Inner {
@@ -311,6 +325,8 @@ struct Inner {
     accounts: RwLock<Accounts>,
     turn_ids: TurnIds,
     worktrees: Worktrees,
+    /// Where prompts' images are kept ([`attachments`]).
+    attachments: PathBuf,
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
     /// Pull request tracking, once started.
     prs: OnceLock<Arc<PrTracker>>,
@@ -334,8 +350,8 @@ struct Inner {
     failover: OnceLock<FailoverConfig>,
     /// Accounts that hit a limit, until they reset.
     limits: Limits,
-    /// This host and the projects whose setup commands new worktrees run, once set.
-    projects: OnceLock<(HostId, ProjectsConfig)>,
+    /// This host and its projects' settings, once set.
+    projects: OnceLock<(HostId, Arc<Overrides>)>,
     /// Where turn-end checkpoints go, once set.
     checkpoints: OnceLock<checkpoint::Config>,
     shutdown: CancellationToken,
@@ -358,11 +374,11 @@ impl Inner {
         self.limits.hit(account_id, windows, Timestamp::now());
     }
 
-    /// The account a session of `provider` on `failing` fails over to, if any is eligible.
-    pub(super) fn failover_target(
+    /// The available account of `provider` with the most room left, other than `except`.
+    pub(super) fn available_account(
         &self,
         provider: &Provider,
-        failing: &AccountId,
+        except: Option<&AccountId>,
     ) -> Option<AccountId> {
         let accounts = self.accounts_lock();
         let choice = failover::Choice {
@@ -372,12 +388,13 @@ impl Inner {
             limits: &self.limits,
             now: Timestamp::now(),
         };
-        failover::next(&choice, provider, failing)
+        failover::best(&choice, provider, except)
     }
 
     /// The setup command of `repo`'s project and how long it may run, if it has one.
     pub(super) async fn setup_command(&self, repo: &Path) -> Option<(String, std::time::Duration)> {
-        let (host, config) = self.projects.get()?.clone();
+        let (host, overrides) = self.projects.get()?.clone();
+        let config = overrides.config();
         let timeout = config.setup_timeout;
         let repo = repo.to_owned();
         let project =
@@ -416,6 +433,7 @@ impl SessionManager {
                 accounts: RwLock::new(setup.accounts),
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
+                attachments: setup.attachments,
                 actors: Mutex::new(HashMap::new()),
                 prs: OnceLock::new(),
                 mcp: OnceLock::new(),
@@ -449,18 +467,18 @@ impl SessionManager {
                 project_id,
                 branch,
                 account_id,
+                provider,
                 model,
                 permission_mode,
                 max_children,
                 failover_pin,
             } => {
-                let (repo, default_account) = self.resolve_repo(repo, project_id)?;
-                let account_id = account_id.or(default_account).ok_or_else(|| {
-                    error(
-                        ErrorCode::BadRequest,
-                        format!("pick an account: the project of {repo} has no default_account"),
-                    )
-                })?;
+                let (repo, project) = self.resolve_repo(repo, project_id)?;
+                let account_id =
+                    self.pick_account(account_id, provider, &repo, project.as_ref())?;
+                let permission_mode = permission_mode
+                    .or(project.and_then(|project| project.default_permission_mode))
+                    .unwrap_or(PermissionMode::Ask);
                 let request = CreateRequest {
                     repo,
                     branch,
@@ -475,8 +493,41 @@ impl SessionManager {
                 let (session_id, _) = self.create_session(Some(by), request).await?;
                 return Ok(CommandResult::SessionCreated { session_id });
             }
-            CommandBody::SendPrompt { session_id, text } => {
-                (session_id, Request::SendPrompt { text, queued: None })
+            CommandBody::SendPrompt {
+                session_id,
+                text,
+                images,
+            } => (
+                session_id,
+                Request::SendPrompt {
+                    text,
+                    images,
+                    queued: None,
+                },
+            ),
+            CommandBody::GetAttachment {
+                session_id,
+                attachment_id,
+            } => return self.attachment(&session_id, &attachment_id).await,
+            CommandBody::UnarchiveSession { session_id } => (session_id, Request::Unarchive),
+            CommandBody::ListDirectory { path } => {
+                return tokio::task::spawn_blocking(move || crate::browse::list(&path))
+                    .await
+                    .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
+            }
+            CommandBody::AddProject { path } => return self.add_project(&path).await,
+            CommandBody::SetProjectSettings {
+                project_id,
+                default_permission_mode,
+                default_account,
+                setup_command,
+            } => {
+                let settings = ProjectSettings {
+                    default_permission_mode,
+                    default_account,
+                    setup_command,
+                };
+                return self.set_project_settings(&project_id, settings).await;
             }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
             CommandBody::SetModel { session_id, model } => {
@@ -568,6 +619,9 @@ impl SessionManager {
         command_id: CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        if changes_nothing(&command) {
+            return self.handle(by, command).await;
+        }
         let journal = &self.inner.journal;
         let remembered = journal
             .command_result(by.clone(), command_id.clone())
@@ -666,12 +720,96 @@ impl SessionManager {
     }
 
     /// Runs the setup command of its project, as `projects` on `host` resolves it, in every new
-    /// session's worktree from now on; once per manager. Without it, worktrees get no setup.
-    pub fn set_up_worktrees(&self, host: HostId, projects: ProjectsConfig) -> anyhow::Result<()> {
+    /// session's worktree from now on, and lets owners change `projects` with `add_project` and
+    /// `set_project_settings`; once per manager. Without it, worktrees get no setup and those
+    /// commands are unsupported.
+    pub fn manage_projects(&self, host: HostId, projects: Arc<Overrides>) -> anyhow::Result<()> {
         self.inner
             .projects
             .set((host, projects))
-            .map_err(|_| anyhow::anyhow!("worktree setup is configured already"))
+            .map_err(|_| anyhow::anyhow!("projects are managed already"))
+    }
+
+    /// The bytes of the image `attachment_id` a prompt of `session_id` carried.
+    async fn attachment(
+        &self,
+        session_id: &SessionId,
+        attachment_id: &AttachmentId,
+    ) -> Result<CommandResult, ErrorInfo> {
+        self.inner
+            .journal
+            .session(session_id.clone())
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| not_found(session_id))?;
+        let image = attachments::fetch(&self.inner.attachments, session_id, attachment_id).await?;
+        Ok(CommandResult::Attachment {
+            media_type: image.media_type,
+            data: image.data,
+        })
+    }
+
+    /// Declares the repository at `path` as a project ([`Overrides::add`]).
+    async fn add_project(&self, path: &str) -> Result<CommandResult, ErrorInfo> {
+        let (host, overrides) = self.projects()?;
+        let repo = crate::browse::absolute(path)?;
+        let added = tokio::task::spawn_blocking(move || {
+            if !projects::scan::is_repo(&repo) {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!("{} is not the top of a git repository", repo.display()),
+                ));
+            }
+            overrides.add(&host, &repo).map_err(internal)
+        })
+        .await
+        .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
+        let project_id = added?;
+        Ok(CommandResult::ProjectAdded { project_id })
+    }
+
+    /// Replaces the settings of `project_id`, one of the listed projects
+    /// ([`Overrides::set`]).
+    async fn set_project_settings(
+        &self,
+        project_id: &ProjectId,
+        settings: ProjectSettings,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let (_, overrides) = self.projects()?;
+        let project = self
+            .inner
+            .journal
+            .projects()
+            .list
+            .iter()
+            .find(|project| project.project_id == *project_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::NotFound,
+                    format!("project {project_id} has no clone on this host"),
+                )
+            })?;
+        if let Some(account_id) = &settings.default_account
+            && self.inner.account(account_id).is_none()
+        {
+            return Err(error(
+                ErrorCode::NotFound,
+                format!("account {account_id} does not exist"),
+            ));
+        }
+        tokio::task::spawn_blocking(move || overrides.set(&project, &settings).map_err(internal))
+            .await
+            .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
+        Ok(CommandResult::Applied)
+    }
+
+    fn projects(&self) -> Result<(HostId, Arc<Overrides>), ErrorInfo> {
+        self.inner
+            .projects
+            .get()
+            .cloned()
+            .ok_or_else(|| error(ErrorCode::Unsupported, "projects are not managed here"))
     }
 
     /// Checkpoints every session's worktree at each turn's end from now on, into `config`;
@@ -897,20 +1035,86 @@ impl SessionManager {
             .await
     }
 
-    /// The repository a `create_session` names, by path or by project, and its project's
-    /// default account.
+    /// The account a `create_session` runs on: `account_id`, which must be of `provider` when
+    /// both are given; else the available account of `provider` with the most room left; else
+    /// the default account of `project`, the project of `repo`.
+    fn pick_account(
+        &self,
+        account_id: Option<AccountId>,
+        provider: Option<Provider>,
+        repo: &str,
+        project: Option<&Project>,
+    ) -> Result<AccountId, ErrorInfo> {
+        let inner = &self.inner;
+        match (account_id, provider) {
+            (Some(account_id), Some(provider)) => {
+                let account = inner.account(&account_id).ok_or_else(|| {
+                    error(
+                        ErrorCode::NotFound,
+                        format!("account {account_id} does not exist"),
+                    )
+                })?;
+                if account.provider != provider {
+                    return Err(error(
+                        ErrorCode::BadRequest,
+                        format!(
+                            "account {account_id} runs {}, not {}",
+                            account.provider.as_str(),
+                            provider.as_str()
+                        ),
+                    ));
+                }
+                Ok(account_id)
+            }
+            (Some(account_id), None) => Ok(account_id),
+            (None, Some(provider)) => {
+                if let Some(account_id) = inner.available_account(&provider, None) {
+                    return Ok(account_id);
+                }
+                let any = inner
+                    .accounts_lock()
+                    .values()
+                    .any(|account| account.provider == provider);
+                Err(if any {
+                    error(
+                        ErrorCode::Conflict,
+                        format!(
+                            "every {} account is at its limit; try again once one resets",
+                            provider.as_str()
+                        ),
+                    )
+                } else {
+                    error(
+                        ErrorCode::NotFound,
+                        format!("there is no {} account here", provider.as_str()),
+                    )
+                })
+            }
+            (None, None) => project
+                .and_then(|project| project.default_account.clone())
+                .ok_or_else(|| {
+                    error(
+                        ErrorCode::BadRequest,
+                        format!(
+                            "pick an account or a provider: the project of {repo} has no \
+                             default_account"
+                        ),
+                    )
+                }),
+        }
+    }
+
+    /// The repository a `create_session` names, by path or by project, and its project.
     fn resolve_repo(
         &self,
         repo: Option<String>,
         project_id: Option<ProjectId>,
-    ) -> Result<(String, Option<AccountId>), ErrorInfo> {
+    ) -> Result<(String, Option<Project>), ErrorInfo> {
         let projects = self.inner.journal.projects();
         match (repo, project_id) {
             (Some(repo), None) => {
-                let default_account = projects
-                    .of_repo(&repo)
-                    .and_then(|project| project.default_account.clone());
-                Ok((repo, default_account))
+                let project = projects.of_repo(&repo).cloned();
+                Ok((repo, project))
             }
             (None, Some(project_id)) => {
                 let project = projects
@@ -929,7 +1133,7 @@ impl SessionManager {
                         format!("project {project_id} has no clone on this host"),
                     )
                 })?;
-                Ok((repo, project.default_account.clone()))
+                Ok((repo, Some(project.clone())))
             }
             _ => Err(error(
                 ErrorCode::BadRequest,
@@ -1027,6 +1231,7 @@ impl SessionManager {
         let (queued, busy) = oneshot::channel();
         let request = Request::SendPrompt {
             text,
+            images: Vec::new(),
             queued: Some(queued),
         };
         self.send(session_id.clone(), None, request).await?;
@@ -1090,6 +1295,15 @@ struct CreateRequest {
     max_children: Option<u32>,
     /// The session's own failover pin.
     failover_pin: Option<bool>,
+}
+
+/// Whether `command` only reads: it changes nothing, so its answer, which may be large, is
+/// never remembered and a resend is answered afresh.
+pub fn changes_nothing(command: &CommandBody) -> bool {
+    matches!(
+        command,
+        CommandBody::GetAttachment { .. } | CommandBody::ListDirectory { .. }
+    )
 }
 
 fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {

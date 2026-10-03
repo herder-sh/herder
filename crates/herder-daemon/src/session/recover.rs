@@ -121,7 +121,8 @@ impl SessionManager {
                 format!("session {session_id} is read-only; there is nothing to recover"),
             ));
         }
-        let (repo, default_account) = self.resolve_repo(None, Some(project_id))?;
+        let (repo, project) = self.resolve_repo(None, Some(project_id))?;
+        let default_account = project.and_then(|project| project.default_account);
         let account_id =
             self.recovery_account(&provider, account_id, current.clone(), default_account)?;
         let checkpoint =

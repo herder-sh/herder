@@ -36,7 +36,8 @@ pub enum ServerMessage {
     },
     /// Every account on this daemon with its usage; sent after hello and whenever any of it changes.
     Accounts {
-        /// The accounts.
+        /// The accounts; a session whose account hits a limit may rotate to any other of its
+        /// provider.
         accounts: Vec<Account>,
         /// How this daemon's sessions fail over.
         failover: FailoverSettings,
@@ -205,11 +206,10 @@ pub struct Account {
     pub label: String,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
-    /// Whether sessions may fail over to this account when theirs hits a limit.
-    pub failover: bool,
 }
 
-/// How a daemon's sessions fail over when their account hits a limit.
+/// How a daemon's sessions fail over when their account hits a limit: they rotate to the
+/// available account of their provider with the most room left, unless pinned.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FailoverSettings {
     /// Whether sessions stay on their account by default; a session created with
@@ -271,6 +271,37 @@ pub enum CommandResult {
         /// The new terminal.
         terminal_id: TerminalId,
     },
+    /// The bytes of an image, answering `get_attachment`.
+    Attachment {
+        /// The image's media type.
+        media_type: String,
+        /// The image file's bytes.
+        data: Bytes,
+    },
+    /// A folder's entries, answering `list_directory`.
+    Directory {
+        /// The folder, as an absolute path with `~` expanded.
+        path: String,
+        /// Its entries, ordered by name.
+        entries: Vec<DirectoryEntry>,
+    },
+    /// A repository is a project of this daemon, answering `add_project`; the project list
+    /// with it follows.
+    ProjectAdded {
+        /// The project the repository belongs to.
+        project_id: ProjectId,
+    },
+}
+
+/// One entry of a folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DirectoryEntry {
+    /// File name of the entry.
+    pub name: String,
+    /// Whether it is a folder, following symlinks.
+    pub is_dir: bool,
+    /// Whether it is a folder at the top of a git repository or worktree.
+    pub is_repo: bool,
 }
 
 /// A failure reported to the client.

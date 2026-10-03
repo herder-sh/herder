@@ -46,6 +46,7 @@ class SessionTest {
                     projectId = null,
                     branch = null,
                     accountId = account,
+                    provider = null,
                     model = null,
                     permissionMode = PermissionMode.ASK,
                     maxChildren = null,
@@ -57,7 +58,7 @@ class SessionTest {
             client.subscribeSession(host, sessionId).use { subscription ->
                 assertEquals(
                     CommandResult.Applied,
-                    client.send(host, CommandBody.SendPrompt(sessionId, "Say hello.")),
+                    client.send(host, CommandBody.SendPrompt(sessionId, "Say hello.", emptyList())),
                 )
                 val events = mutableListOf<EventBody>()
                 while (EventBody.SessionStatusChanged(SessionStatus.IDLE) !in events ||

@@ -60,7 +60,6 @@ impl FakeDaemon {
                 provider: fake,
                 label: "Fake".into(),
                 config_dir: Some(dir.join("account")),
-                failover: false,
             },
         );
         let turns = AtomicU64::new(0);
@@ -73,6 +72,7 @@ impl FakeDaemon {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
+            attachments: dir.join("attachments"),
         };
         let shutdown = CancellationToken::new();
         let sessions = SessionManager::open(setup, shutdown.clone()).await?;

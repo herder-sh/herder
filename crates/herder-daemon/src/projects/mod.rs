@@ -9,6 +9,10 @@
 //! [`Discovery::run`] scans at startup and every [`RESCAN_INTERVAL`], and looks at the session
 //! repos again whenever a session is created ([`OnSessionsChanged`]). Each time the resolved
 //! list differs from the last, it goes to every client through [`Hub::projects_changed`].
+//!
+//! Owners change the `[[project]]` entries from a client: `add_project` declares a repository
+//! and `set_project_settings` replaces a project's settings. Both rewrite the daemon's config
+//! file and take effect at once ([`Overrides`]); discovery then rescans and publishes the list.
 
 pub mod scan;
 #[cfg(test)]
@@ -16,11 +20,13 @@ mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use anyhow::Context;
 use herder_protocol::{
-    Account, AccountId, Event, HostId, Item, ItemId, Project, ProjectId, SessionHead, SessionId,
+    Account, AccountId, Event, HostId, Item, ItemId, PermissionMode, Project, ProjectId,
+    SessionHead, SessionId,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -68,8 +74,105 @@ pub struct ProjectEntry {
     pub paths: Vec<PathBuf>,
     /// Account new sessions of the project use when none is chosen.
     pub default_account: Option<AccountId>,
+    /// Permission mode new sessions of the project start in when none is chosen.
+    pub default_permission_mode: Option<PermissionMode>,
     /// Shell command run in each new worktree of the project.
     pub setup_command: Option<String>,
+}
+
+/// The `[projects]` table and `[[project]]` entries as they are now: what the daemon started
+/// with, then each change a client made, which is also written to the config file. Shared by
+/// discovery and the session manager.
+#[derive(Debug)]
+pub struct Overrides {
+    /// The daemon's config file.
+    file: PathBuf,
+    config: RwLock<ProjectsConfig>,
+    changed: Notify,
+}
+
+impl Overrides {
+    /// Starts from `config`, as loaded from the config file `file`, where changes go.
+    pub fn new(file: PathBuf, config: ProjectsConfig) -> Self {
+        Self {
+            file,
+            config: RwLock::new(config),
+            changed: Notify::new(),
+        }
+    }
+
+    /// The table and entries now.
+    pub fn config(&self) -> ProjectsConfig {
+        self.config
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Resolves once a client changed the entries since the last call returned.
+    pub async fn changed(&self) {
+        self.changed.notified().await;
+    }
+
+    /// Declares the repository at `repo`, a normalised absolute path, as a project on `host`:
+    /// adds it to the paths of the entry its remote already belongs to, else to a new entry;
+    /// nothing when an entry lists it already. Returns its project. Blocks on the file system.
+    pub fn add(&self, host: &HostId, repo: &Path) -> anyhow::Result<ProjectId> {
+        let current = crate::config::read_projects(&self.file)?;
+        let entries = &current.entries;
+        let declared = entries
+            .iter()
+            .any(|entry| entry.paths.iter().any(|p| p == repo));
+        let config = if declared {
+            current
+        } else {
+            let own = scan::origin(repo)
+                .as_deref()
+                .and_then(ProjectId::from_remote);
+            let entry = own.and_then(|own| {
+                entries
+                    .iter()
+                    .position(|entry| entry.remotes.contains(&own))
+            });
+            crate::config::add_project(&self.file, entry, repo)?
+        };
+        let project = of_repo(host, repo, &config.entries)
+            .with_context(|| format!("{} cannot be a project", repo.display()))?;
+        self.replace(config);
+        Ok(project.project_id)
+    }
+
+    /// Replaces the settings of `project`, as discovery last listed it, in the entry that
+    /// shapes it, or a new entry declaring its first clone. Blocks on the file system.
+    pub fn set(
+        &self,
+        project: &Project,
+        settings: &crate::config::ProjectSettings,
+    ) -> anyhow::Result<()> {
+        let current = crate::config::read_projects(&self.file)?;
+        let clone = project
+            .paths
+            .first()
+            .with_context(|| format!("project {} has no clone here", project.project_id))?;
+        let entry = current.entries.iter().position(|entry| {
+            entry.remotes.first() == Some(&project.project_id)
+                || entry.paths.iter().any(|path| {
+                    project
+                        .paths
+                        .iter()
+                        .any(|clone| Path::new(clone) == path.as_path())
+                })
+        });
+        let config =
+            crate::config::set_project_settings(&self.file, entry, Path::new(clone), settings)?;
+        self.replace(config);
+        Ok(())
+    }
+
+    fn replace(&self, config: ProjectsConfig) {
+        *self.config.write().unwrap_or_else(PoisonError::into_inner) = config;
+        self.changed.notify_one();
+    }
 }
 
 /// A repository on this host and its `origin` remote URL.
@@ -145,6 +248,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                     .unwrap_or_else(|| default_name(&project_id)),
                 paths: paths.into_iter().collect(),
                 default_account: entry.and_then(|e| e.default_account.clone()),
+                default_permission_mode: entry.and_then(|e| e.default_permission_mode),
                 setup_command: entry.and_then(|e| e.setup_command.clone()),
                 project_id,
             }
@@ -209,7 +313,7 @@ pub struct Discovery {
     /// This host, for the ids of repositories without a remote.
     pub host: HostId,
     /// Roots and overrides.
-    pub config: ProjectsConfig,
+    pub config: Arc<Overrides>,
     /// Where the list is published.
     pub hub: Arc<Hub>,
     /// Whose repos are discovered.
@@ -232,7 +336,10 @@ impl Discovery {
                 () = shutdown.cancelled() => return,
                 _ = rescan.tick() => true,
                 () = self.sessions_changed.notified() => false,
+                // New roots or entries: scan everything again.
+                () = self.config.changed() => true,
             };
+            let config = self.config.config();
             let session_repos = match self.sessions.repos().await {
                 Ok(paths) => paths,
                 Err(err) => {
@@ -241,7 +348,7 @@ impl Discovery {
                 }
             };
             if full {
-                let roots = self.config.roots.clone();
+                let roots = config.roots.clone();
                 scanned = tokio::task::spawn_blocking(move || scan::repos(&roots))
                     .await
                     .unwrap_or_else(|err| {
@@ -250,7 +357,7 @@ impl Discovery {
                     });
                 repos.clear();
             }
-            let wanted = self.wanted(&scanned, session_repos);
+            let wanted = wanted(&config, &scanned, session_repos);
             repos.retain(|path, _| wanted.contains(path));
             let new: Vec<PathBuf> = wanted
                 .into_iter()
@@ -277,7 +384,7 @@ impl Discovery {
                     origin: origin.clone(),
                 })
                 .collect();
-            let projects = resolve(&self.host, &list, &self.config.entries);
+            let projects = resolve(&self.host, &list, &config.entries);
             if published.as_ref() != Some(&projects) {
                 debug!(projects = projects.len(), "project list changed");
                 self.hub.projects_changed(projects.clone());
@@ -286,14 +393,18 @@ impl Discovery {
             }
         }
     }
+}
 
-    /// Every repository to resolve: those `scanned`, the session repos still there and the
-    /// declared paths that are directories.
-    fn wanted(&self, scanned: &[PathBuf], session_repos: Vec<PathBuf>) -> BTreeSet<PathBuf> {
-        let declared = self.config.entries.iter().flat_map(|entry| &entry.paths);
-        let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
-        wanted.extend(session_repos.into_iter().filter(|path| scan::is_repo(path)));
-        wanted.extend(declared.filter(|path| path.is_dir()).cloned());
-        wanted
-    }
+/// Every repository to resolve: those `scanned`, the session repos still there and the paths
+/// `config` declares that are directories.
+fn wanted(
+    config: &ProjectsConfig,
+    scanned: &[PathBuf],
+    session_repos: Vec<PathBuf>,
+) -> BTreeSet<PathBuf> {
+    let declared = config.entries.iter().flat_map(|entry| &entry.paths);
+    let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
+    wanted.extend(session_repos.into_iter().filter(|path| scan::is_repo(path)));
+    wanted.extend(declared.filter(|path| path.is_dir()).cloned());
+    wanted
 }

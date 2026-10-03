@@ -148,8 +148,9 @@ fn a_new_session_starts_from_the_project_on_the_clone_used_last() {
                 project_id: None,
                 branch: None,
                 account_id: Some(AccountId::new("claude-main")),
+                provider: None,
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },
@@ -223,6 +224,7 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
         project_id: app_id.clone(),
         name: "Acme app".into(),
         paths: vec!["/work/app".into(), "/srv/app".into()],
+        default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
         default_account: Some(AccountId::new("claude-work")),
         setup_command: None,
     }];
@@ -250,12 +252,14 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
         ]
     );
 
-    // On laptop, the dialog starts on the project's default account; on box, the first.
+    // On laptop, the dialog starts on the project's default account and permission mode; on
+    // box, the first account.
     press(&mut app, KeyCode::Char('g'));
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Enter);
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h2"), 1));
+    assert_eq!(dialog.mode, herder_protocol::PermissionMode::AutoEdit);
     assert_eq!(dialog.repo.lines(), ["/work/app"]);
     press(&mut app, KeyCode::Backspace);
     press(&mut app, KeyCode::Down);

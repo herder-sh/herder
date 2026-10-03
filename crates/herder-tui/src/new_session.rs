@@ -446,6 +446,7 @@ impl App {
             Choice::Machine(host_id, repo) => {
                 let project = dialog.project.clone();
                 let account = self.default_account(&host_id, project.as_ref());
+                let mode = self.default_mode(&host_id, project.as_ref());
                 // By path, the open session's repo on that machine is a good guess.
                 let guess = self
                     .open_session()
@@ -458,6 +459,7 @@ impl App {
                 dialog.repo = line(&path, "/absolute/path/to/repo");
                 dialog.host_id = host_id;
                 dialog.account = account;
+                dialog.mode = mode;
                 dialog.field = if repo.is_some() {
                     Field::Account
                 } else {
@@ -520,8 +522,9 @@ impl App {
             project_id: None,
             branch: None,
             account_id: Some(account.account_id.clone()),
+            provider: None,
             model: (!model.is_empty()).then_some(model),
-            permission_mode: dialog.mode,
+            permission_mode: Some(dialog.mode),
             max_children: None,
             failover_pin: None,
         };
@@ -617,8 +620,9 @@ mod tests {
                 project_id: None,
                 branch: None,
                 account_id: Some(AccountId::new("claude-work")),
+                provider: None,
                 model: Some("claude-opus".into()),
-                permission_mode: PermissionMode::ReadOnly,
+                permission_mode: Some(PermissionMode::ReadOnly),
                 max_children: None,
                 failover_pin: None,
             },

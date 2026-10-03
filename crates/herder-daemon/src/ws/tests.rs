@@ -55,7 +55,6 @@ impl Backend for TestBackend {
             provider: Provider::Claude,
             label: "Main".into(),
             usage: Vec::new(),
-            failover: false,
         }]
     }
 
@@ -101,6 +100,10 @@ impl Backend for TestBackend {
         self.commands.fetch_add(1, Ordering::SeqCst);
         match command {
             CommandBody::SendPrompt { .. } => Ok(CommandResult::Applied),
+            CommandBody::ListDirectory { path } => Ok(CommandResult::Directory {
+                path,
+                entries: Vec::new(),
+            }),
             _ => Err(ErrorInfo {
                 code: ErrorCode::Unsupported,
                 message: "test backend".into(),
@@ -506,6 +509,7 @@ async fn commands_are_answered_by_the_backend() {
     let prompt = CommandBody::SendPrompt {
         session_id: session.clone(),
         text: "hi".into(),
+        images: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert_eq!(
@@ -519,6 +523,7 @@ async fn commands_are_answered_by_the_backend() {
     let prompt = CommandBody::SendPrompt {
         session_id: session.clone(),
         text: "hi".into(),
+        images: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert!(matches!(
@@ -859,6 +864,7 @@ async fn terminals_are_for_owners_only() {
             body: CommandBody::SendPrompt {
                 session_id: session.clone(),
                 text: "hi".into(),
+                images: Vec::new(),
             },
         }))
         .await;
@@ -884,6 +890,7 @@ async fn terminals_are_for_owners_only() {
     let prompt = CommandBody::SendPrompt {
         session_id: session.clone(),
         text: "hi".into(),
+        images: Vec::new(),
     };
     assert!(matches!(
         member.command("c4", prompt).await,
@@ -918,6 +925,48 @@ async fn compose_down_is_for_owners_only() {
     };
     assert_eq!(error.code, ErrorCode::Unsupported);
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn browsing_folders_is_for_owners_only_and_never_remembered() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let list = || CommandBody::ListDirectory {
+        path: "/srv".into(),
+    };
+    for body in [
+        list(),
+        CommandBody::AddProject {
+            path: "/srv/app".into(),
+        },
+        CommandBody::SetProjectSettings {
+            project_id: herder_protocol::ProjectId::new("github.com/org/app"),
+            default_permission_mode: None,
+            default_account: None,
+            setup_command: None,
+        },
+    ] {
+        let ServerMessage::CommandRejected { error, .. } = member.command("c1", body).await else {
+            panic!("expected a rejection");
+        };
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    // A listing changes nothing: a resend under the same id lists again.
+    for _ in 0..2 {
+        let ServerMessage::CommandAccepted { result, .. } = owner.command("c2", list()).await
+        else {
+            panic!("expected a listing");
+        };
+        assert!(matches!(result, CommandResult::Directory { .. }));
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

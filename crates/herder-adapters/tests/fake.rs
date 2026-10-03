@@ -59,6 +59,7 @@ fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
         turn_id: turn(),
         text: text.into(),
+        images: Vec::new(),
     }
 }
 

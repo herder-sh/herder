@@ -42,7 +42,6 @@ async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
             provider: fake,
             label: "Work".into(),
             config_dir: Some(dir.join("account")),
-            failover: false,
         },
     )]);
     let turns = AtomicU64::new(0);
@@ -55,6 +54,7 @@ async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
             TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
         }),
         worktrees: Worktrees::new(dir.join("worktrees")),
+        attachments: dir.join("attachments"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -182,6 +182,23 @@ async fn a_script_runs_a_session_from_new_to_archive() {
     session(&home, &["archive", &id], "", 0).await;
     let archived = session(&home, &["status", &id], "", 0).await;
     assert_eq!(archived["status"], "archived");
+    session(&home, &["unarchive", &id], "", 0).await;
+    let back = session(&home, &["status", &id], "", 0).await;
+    assert_eq!(back["status"], "idle");
+    session(&home, &["archive", &id], "", 0).await;
+
+    // By provider, without a prompt, on its account with the most room: the only one here.
+    let created = session(
+        &home,
+        &["new", "--repo", &repo, "--provider", "fake"],
+        "",
+        0,
+    )
+    .await;
+    let by_provider = created["session_id"].as_str().unwrap().to_owned();
+    let status = session(&home, &["status", &by_provider], "", 0).await;
+    assert_eq!(status["account_id"], "work");
+    session(&home, &["archive", &by_provider], "", 0).await;
 
     // Failures exit 1 with a reason; a wait on an archived session is one.
     let unknown = herder(&home, &["session", "status", "nope"], "").await;

@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use herder_protocol::{HostId, Project, ProjectId};
+use herder_protocol::{HostId, PermissionMode, Project, ProjectId};
 
 use crate::app::{App, Row};
 use crate::session::SessionKey;
@@ -71,6 +71,22 @@ impl App {
             .and_then(|p| p.default_account.as_ref())
             .and_then(|id| machine.accounts.iter().position(|a| a.account_id == *id))
             .unwrap_or(0)
+    }
+
+    /// The permission mode `project` starts sessions in on `host_id`; `ask` when it names
+    /// none.
+    pub fn default_mode(&self, host_id: &HostId, project: Option<&ProjectId>) -> PermissionMode {
+        self.machines
+            .iter()
+            .find(|m| m.host_id == *host_id)
+            .and_then(|machine| {
+                machine
+                    .projects
+                    .iter()
+                    .find(|p| Some(&p.project_id) == project)
+            })
+            .and_then(|p| p.default_permission_mode)
+            .unwrap_or(PermissionMode::Ask)
     }
 
     /// Switches the session list between projects and machines, keeping a selected session.

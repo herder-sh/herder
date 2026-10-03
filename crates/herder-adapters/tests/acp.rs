@@ -109,6 +109,7 @@ fn prompt(session: &AdapterSession, text: &str) {
         .send(AdapterCommand::SendPrompt {
             turn_id: turn(),
             text: text.into(),
+            images: Vec::new(),
         })
         .unwrap();
 }
@@ -444,6 +445,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
             turn_id: TurnId::new("old"),
             body: ItemBody::UserMessage {
                 text: "what is 2+2?".into(),
+                attachments: Vec::new(),
             },
         },
         Item {

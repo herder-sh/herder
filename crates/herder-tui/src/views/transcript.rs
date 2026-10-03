@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use herder_protocol::{ErrorClass, Item, ItemBody, ItemId, SessionId};
+use herder_protocol::{Attachment, ErrorClass, Item, ItemBody, ItemId, SessionId};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -325,7 +325,9 @@ impl<'a> Builder<'a> {
     fn item(&mut self, item: &'a Item, streaming: bool) {
         let ui = self.ui;
         match &item.body {
-            ItemBody::UserMessage { text } => self.user(Some(&item.id), text, false),
+            ItemBody::UserMessage { text, attachments } => {
+                self.user(Some(&item.id), text, attachments, false);
+            }
             ItemBody::AssistantMessage { text } => {
                 self.start(true);
                 self.select(&item.id);
@@ -394,7 +396,7 @@ impl<'a> Builder<'a> {
 
     /// The user's message: a bar in the accent, the text on the panel; `queued` while the
     /// daemon holds it behind a running turn.
-    fn user(&mut self, id: Option<&ItemId>, text: &str, queued: bool) {
+    fn user(&mut self, id: Option<&ItemId>, text: &str, images: &[Attachment], queued: bool) {
         let ui = self.ui;
         self.start(true);
         if let Some(id) = id {
@@ -415,6 +417,10 @@ impl<'a> Builder<'a> {
         }
         for line in lines {
             self.push(Row::panel(ui, bar, line.spans));
+        }
+        for image in images {
+            let line = format!("image · {}", describe_image(image));
+            self.push(Row::panel(ui, bar, vec![Span::styled(line, ui.muted())]));
         }
         if self.padded {
             self.push(Row::panel(ui, bar, vec![]));
@@ -507,7 +513,7 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
         builder.item(item, true);
     }
     for prompt in &session.queued {
-        builder.user(None, prompt, true);
+        builder.user(None, prompt, &[], true);
     }
     (builder.rows, builder.items)
 }
@@ -582,4 +588,19 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
         }
     }
     hits.wheel(area, Wheel::Transcript);
+}
+
+/// An attached image as a line of the transcript tells it: its type and size, as in
+/// `png · 12 KB`. The terminal shows no images; the apps fetch and show them inline.
+fn describe_image(image: &Attachment) -> String {
+    let kind = image
+        .media_type
+        .strip_prefix("image/")
+        .unwrap_or(&image.media_type);
+    let size = match image.size {
+        size if size >= 1024 * 1024 => format!("{:.1} MB", size as f64 / (1024.0 * 1024.0)),
+        size if size >= 1024 => format!("{} KB", size / 1024),
+        size => format!("{size} B"),
+    };
+    format!("{kind} · {size}")
 }

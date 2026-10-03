@@ -8,13 +8,13 @@ use herder_client_core::{
     ConnectionState, Machine, NewAccount, PairingUri, SessionUpdate, TerminalEvent,
 };
 use herder_protocol::{
-    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Bytes,
-    CiStatus, CommandBody, CommandResult, Constraint, Container, ContainerState, ErrorClass,
-    ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId,
-    HostResources, Item, ItemBody, ItemId, Mergeable, PermissionMode, PrState, Pressure, Project,
-    ProjectId, Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead,
-    SessionId, SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp,
-    TurnError, TurnId, UsageWindow, UserId,
+    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
+    Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
+    ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
+    EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image, Item, ItemBody, ItemId,
+    Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider, PullRequest,
+    QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus, SessionUsage,
+    Terminal, TerminalId, TerminalPurpose, Timestamp, TurnError, TurnId, UsageWindow, UserId,
 };
 use serde_json::Value as Json;
 
@@ -29,8 +29,17 @@ macro_rules! string_ids {
 }
 
 string_ids!(
-    SessionId, TurnId, ItemId, ApprovalId, QuestionId, HostId, AccountId, UserId, TerminalId,
+    SessionId,
+    TurnId,
+    ItemId,
+    ApprovalId,
+    QuestionId,
+    HostId,
+    AccountId,
+    UserId,
+    TerminalId,
     ProjectId,
+    AttachmentId,
 );
 
 // A provider is its wire name; unknown names stay verbatim, as on the wire.
@@ -271,6 +280,7 @@ pub struct Item {
 pub enum ItemBody {
     UserMessage {
         text: String,
+        attachments: Vec<Attachment>,
     },
     AssistantMessage {
         text: String,
@@ -288,6 +298,13 @@ pub enum ItemBody {
         is_error: bool,
     },
     Unknown,
+}
+
+#[uniffi::remote(Record)]
+pub struct Attachment {
+    pub attachment_id: AttachmentId,
+    pub media_type: String,
+    pub size: u64,
 }
 
 #[uniffi::remote(Enum)]
@@ -388,8 +405,9 @@ pub enum CommandBody {
         project_id: Option<ProjectId>,
         branch: Option<String>,
         account_id: Option<AccountId>,
+        provider: Option<Provider>,
         model: Option<String>,
-        permission_mode: PermissionMode,
+        permission_mode: Option<PermissionMode>,
         max_children: Option<u32>,
         failover_pin: Option<bool>,
     },
@@ -397,9 +415,17 @@ pub enum CommandBody {
         session_id: SessionId,
         force: bool,
     },
+    UnarchiveSession {
+        session_id: SessionId,
+    },
     SendPrompt {
         session_id: SessionId,
         text: String,
+        images: Vec<Image>,
+    },
+    GetAttachment {
+        session_id: SessionId,
+        attachment_id: AttachmentId,
     },
     Interrupt {
         session_id: SessionId,
@@ -448,6 +474,18 @@ pub enum CommandBody {
         cols: u16,
         rows: u16,
     },
+    ListDirectory {
+        path: String,
+    },
+    AddProject {
+        path: String,
+    },
+    SetProjectSettings {
+        project_id: ProjectId,
+        default_permission_mode: Option<PermissionMode>,
+        default_account: Option<AccountId>,
+        setup_command: Option<String>,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -473,11 +511,39 @@ pub enum CommandBody {
     },
 }
 
+#[uniffi::remote(Record)]
+pub struct Image {
+    pub media_type: String,
+    pub data: Bytes,
+}
+
 #[uniffi::remote(Enum)]
 pub enum CommandResult {
     Applied,
-    SessionCreated { session_id: SessionId },
-    TerminalOpened { terminal_id: TerminalId },
+    SessionCreated {
+        session_id: SessionId,
+    },
+    TerminalOpened {
+        terminal_id: TerminalId,
+    },
+    Attachment {
+        media_type: String,
+        data: Bytes,
+    },
+    Directory {
+        path: String,
+        entries: Vec<DirectoryEntry>,
+    },
+    ProjectAdded {
+        project_id: ProjectId,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub is_dir: bool,
+    pub is_repo: bool,
 }
 
 #[uniffi::remote(Record)]
@@ -532,7 +598,6 @@ pub struct Account {
     pub provider: Provider,
     pub label: String,
     pub usage: Vec<UsageWindow>,
-    pub failover: bool,
 }
 
 #[uniffi::remote(Record)]
@@ -564,6 +629,7 @@ pub struct Project {
     pub project_id: ProjectId,
     pub name: String,
     pub paths: Vec<String>,
+    pub default_permission_mode: Option<PermissionMode>,
     pub default_account: Option<AccountId>,
     pub setup_command: Option<String>,
 }

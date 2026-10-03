@@ -9,7 +9,7 @@ use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
-use herder_daemon::projects::{ProjectEntry, ProjectsConfig};
+use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
 use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup, TaskLimits,
@@ -18,10 +18,10 @@ use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    CommandBody, CommandId, CommandResult, Constraint, ErrorClass, ErrorCode, ErrorInfo, Event,
-    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Project, ProjectId, Provider,
-    QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UsageWindow,
-    UserId,
+    Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
+    ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, PermissionMode,
+    Project, ProjectId, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
+    TurnError, TurnId, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use tokio::sync::mpsc;
@@ -66,6 +66,10 @@ struct Recording {
 }
 
 impl Adapter for Recording {
+    fn accepts_images(&self) -> bool {
+        self.adapter.accepts_images()
+    }
+
     fn start(&self, request: StartRequest) -> StartFuture {
         self.starts.lock().unwrap().push(request.clone());
         let started = self.adapter.start(request);
@@ -182,7 +186,6 @@ impl Daemon {
                 provider: fake(),
                 label: "Account 1".into(),
                 config_dir: Some(dir.join("account")),
-                failover: false,
             },
         );
         let setup = Setup {
@@ -194,6 +197,7 @@ impl Daemon {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
+            attachments: dir.join("attachments"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -225,8 +229,9 @@ impl Daemon {
                     project_id: None,
                     branch: None,
                     account_id: Some(account()),
+                    provider: None,
                     model: None,
-                    permission_mode: PermissionMode::Ask,
+                    permission_mode: Some(PermissionMode::Ask),
                     max_children: None,
                     failover_pin: None,
                 },
@@ -243,6 +248,7 @@ impl Daemon {
         let command = CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
+            images: Vec::new(),
         };
         let result = self.manager.handle(by, command).await.unwrap();
         assert_eq!(result, CommandResult::Applied);
@@ -341,7 +347,7 @@ fn describe(events: &[Event]) -> Vec<String> {
                     format!("turn_failed {turn_id} {:?}", error.class)
                 }
                 EventBody::ItemAdded { item } => match &item.body {
-                    ItemBody::UserMessage { text } => format!("user {} {text}", item.turn_id),
+                    ItemBody::UserMessage { text, .. } => format!("user {} {text}", item.turn_id),
                     ItemBody::AssistantMessage { text } => {
                         format!("assistant {} {text}", item.turn_id)
                     }
@@ -525,7 +531,8 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
         seed,
         [
             &ItemBody::UserMessage {
-                text: "First.".into()
+                text: "First.".into(),
+                attachments: Vec::new(),
             },
             &ItemBody::AssistantMessage {
                 text: "One.".into()
@@ -997,6 +1004,7 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
     let prompt = CommandBody::SendPrompt {
         session_id: SessionId::new("nope"),
         text: "Hi.".into(),
+        images: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
@@ -1006,8 +1014,9 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
         project_id: None,
         branch: None,
         account_id: Some(AccountId::new("account-9")),
+        provider: None,
         model: None,
-        permission_mode: PermissionMode::Ask,
+        permission_mode: Some(PermissionMode::Ask),
         max_children: None,
         failover_pin: None,
     };
@@ -1024,6 +1033,7 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         project_id: ProjectId::new("github.com/org/app"),
         name: "app".into(),
         paths: vec![repo.clone()],
+        default_permission_mode: None,
         default_account,
         setup_command: None,
     };
@@ -1032,8 +1042,9 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         project_id: project_id.map(ProjectId::new),
         branch: None,
         account_id: None,
+        provider: None,
         model: None,
-        permission_mode: PermissionMode::Ask,
+        permission_mode: Some(PermissionMode::Ask),
         max_children: None,
         failover_pin: None,
     };
@@ -1138,8 +1149,9 @@ async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
         project_id: None,
         branch: Some(branch.to_owned()),
         account_id: Some(account()),
+        provider: None,
         model: None,
-        permission_mode: PermissionMode::Ask,
+        permission_mode: Some(PermissionMode::Ask),
         max_children: None,
         failover_pin: None,
     };
@@ -1216,6 +1228,7 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     let prompt = CommandBody::SendPrompt {
         session_id: session.clone(),
         text: "Again.".into(),
+        images: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -1232,6 +1245,7 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     let prompt = CommandBody::SendPrompt {
         session_id: session,
         text: "Again.".into(),
+        images: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -1282,7 +1296,6 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 provider: Provider::Claude,
                 label: "Main".into(),
                 config_dir: None,
-                failover: false,
             },
         ),
         (
@@ -1291,7 +1304,6 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 provider: Provider::Codex,
                 label: "Work".into(),
                 config_dir: Some(codex_home.clone()),
-                failover: true,
             },
         ),
     ]);
@@ -1303,6 +1315,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
         sink: Arc::new(Recorder(tx)),
         turn_ids: Box::new(|| TurnId::new("turn-1")),
         worktrees: Worktrees::new(dir.path().join("worktrees")),
+        attachments: dir.path().join("attachments"),
     };
     let shutdown = CancellationToken::new();
     let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -1336,8 +1349,9 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
             project_id: None,
             branch: None,
             account_id: Some(AccountId::new(account)),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         };
@@ -1349,6 +1363,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
         let prompt = CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: "First.".into(),
+            images: Vec::new(),
         };
         manager.handle(alice(), prompt).await.unwrap();
         loop {
@@ -1526,13 +1541,15 @@ async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() 
     assert_eq!(
         seed[0].body,
         ItemBody::UserMessage {
-            text: "Request 1".into()
+            text: "Request 1".into(),
+            attachments: Vec::new(),
         }
     );
     assert_eq!(
         seed[1].body,
         ItemBody::UserMessage {
-            text: handoff::NOTE.into()
+            text: handoff::NOTE.into(),
+            attachments: Vec::new(),
         }
     );
     let last: Vec<_> = seed[seed.len() - 4..]
@@ -1542,7 +1559,8 @@ async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() 
     assert_eq!(
         last[0],
         &ItemBody::UserMessage {
-            text: "Request 200".into()
+            text: "Request 200".into(),
+            attachments: Vec::new(),
         }
     );
     let ItemBody::ToolResult {
@@ -1768,7 +1786,7 @@ impl Adapter for Scripted {
     }
 }
 
-/// A manager running `adapters` on `accounts`, each `(id, provider, failover)` with its config
+/// A manager running `adapters` on `accounts`, each `(id, provider)` with its config
 /// dir under `dir`, over a store where `events` were journaled first.
 struct Switching {
     manager: SessionManager,
@@ -1781,7 +1799,7 @@ impl Switching {
     async fn open(
         dir: &Path,
         adapters: &[(Provider, Arc<Scripted>)],
-        accounts: &[(&str, Provider, bool)],
+        accounts: &[(&str, Provider)],
         events: Vec<(SessionId, EventBody)>,
     ) -> Self {
         let mut registry = Adapters::new();
@@ -1790,12 +1808,11 @@ impl Switching {
         }
         let accounts = accounts
             .iter()
-            .map(|(id, provider, failover)| {
+            .map(|(id, provider)| {
                 let config = AccountConfig {
                     provider: provider.clone(),
                     label: id.to_string(),
                     config_dir: Some(dir.join(id)),
-                    failover: *failover,
                 };
                 (AccountId::new(*id), config)
             })
@@ -1821,6 +1838,7 @@ impl Switching {
                 TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
+            attachments: dir.join("attachments"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -1857,8 +1875,9 @@ impl Switching {
             project_id: None,
             branch: None,
             account_id: Some(AccountId::new(account)),
+            provider: None,
             model: model.map(str::to_owned),
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin,
         };
@@ -1879,6 +1898,7 @@ impl Switching {
         let prompt = CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
+            images: Vec::new(),
         };
         assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
         self.until(|body| {
@@ -1924,7 +1944,7 @@ fn seed_texts(start: &StartRequest) -> Vec<String> {
         .seed
         .iter()
         .map(|item| match &item.body {
-            ItemBody::UserMessage { text } => format!("user: {text}"),
+            ItemBody::UserMessage { text, .. } => format!("user: {text}"),
             ItemBody::AssistantMessage { text } => format!("assistant: {text}"),
             other => format!("{other:?}"),
         })
@@ -1945,10 +1965,10 @@ async fn one_session_moves_from_claude_to_codex_to_cursor_and_keeps_going() {
             (Provider::Cursor, cursor.clone()),
         ],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, false),
-            ("codex-work", Provider::Codex, false),
-            ("cursor-work", Provider::Cursor, false),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("codex-work", Provider::Codex),
+            ("cursor-work", Provider::Cursor),
         ],
         Vec::new(),
     )
@@ -2096,8 +2116,8 @@ async fn switching_claude(
         dir,
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, false),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -2247,8 +2267,8 @@ async fn a_session_moves_to_grok_and_back_to_claude() {
             (Provider::Grok, grok.clone()),
         ],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("grok-work", Provider::Grok, false),
+            ("claude-a", Provider::Claude),
+            ("grok-work", Provider::Grok),
         ],
         Vec::new(),
     )
@@ -2351,9 +2371,9 @@ async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
         dir.path(),
         &[(fake(), fakes.clone()), (Provider::Codex, codex.clone())],
         &[
-            ("account-1", fake(), false),
-            ("account-2", fake(), false),
-            ("codex-work", Provider::Codex, false),
+            ("account-1", fake()),
+            ("account-2", fake()),
+            ("codex-work", Provider::Codex),
         ],
         Vec::new(),
     )
@@ -2362,6 +2382,7 @@ async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
     let prompt = CommandBody::SendPrompt {
         session_id: session.clone(),
         text: "Work forever.".into(),
+        images: Vec::new(),
     };
     daemon.handle(prompt).await.unwrap();
     daemon
@@ -2420,9 +2441,9 @@ async fn switches_to_the_wrong_kind_of_account_are_refused() {
         dir.path(),
         &[(Provider::Claude, Scripted::new(&[]))],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, false),
-            ("codex-work", Provider::Codex, false),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("codex-work", Provider::Codex),
         ],
         Vec::new(),
     )
@@ -2457,7 +2478,7 @@ async fn switches_to_the_wrong_kind_of_account_are_refused() {
 }
 
 #[tokio::test]
-async fn a_child_switches_only_within_its_tasks_failover_chain() {
+async fn a_child_switches_to_any_account_like_its_primary() {
     let dir = tempfile::tempdir().unwrap();
     let created = |account: &str, parent: Option<SessionId>| EventBody::SessionCreated {
         repo: "/nowhere".into(),
@@ -2480,10 +2501,10 @@ async fn a_child_switches_only_within_its_tasks_failover_chain() {
             (Provider::Codex, Scripted::new(&[])),
         ],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, false),
-            ("claude-spare", Provider::Claude, true),
-            ("codex-spare", Provider::Codex, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("claude-spare", Provider::Claude),
+            ("codex-spare", Provider::Codex),
         ],
         vec![
             (primary.clone(), created("claude-b", None)),
@@ -2499,14 +2520,11 @@ async fn a_child_switches_only_within_its_tasks_failover_chain() {
         switch_account(&child, "claude-spare"),
         switch_account(&child, "claude-b"),
         switch_provider(&child, "codex-spare", None),
+        // Neither its primary's account nor one that once opted in.
+        switch_provider(&child, "claude-a", None),
     ] {
         assert_eq!(daemon.handle(switch).await, applied);
     }
-    let back = switch_provider(&child, "claude-a", None);
-    let refused = daemon.handle(back).await.unwrap_err();
-    assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
-    assert!(refused.message.contains("failover chain"), "{refused:?}");
-    // The primary itself is not bound to a chain.
     assert_eq!(
         daemon.handle(switch_account(&primary, "claude-a")).await,
         applied
@@ -2827,8 +2845,9 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
         project_id: None,
         branch: None,
         account_id: Some(account()),
+        provider: None,
         model: None,
-        permission_mode: PermissionMode::Ask,
+        permission_mode: Some(PermissionMode::Ask),
         max_children: None,
         failover_pin: None,
     };
@@ -2847,6 +2866,7 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
     let prompt = |text: &str| CommandBody::SendPrompt {
         session_id: session.clone(),
         text: text.into(),
+        images: Vec::new(),
     };
     let sent = daemon
         .manager
@@ -2890,6 +2910,7 @@ impl Switching {
         let prompt = CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
+            images: Vec::new(),
         };
         assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
     }
@@ -2913,17 +2934,18 @@ fn from_first_turn(journal: &[Event]) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn a_limit_on_one_account_retries_the_turn_on_the_next_opted_in_one() {
+async fn a_limit_on_one_account_rotates_the_turn_to_another_of_its_provider() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry.jsonl"]);
     let mut daemon = Switching::open(
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, false),
-            // Not opted in: skipped, though it comes first by id.
-            ("claude-b", Provider::Claude, false),
-            ("claude-c", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            // Every account takes part; with no usage known, the first by id has most room.
+            ("claude-b", Provider::Claude),
+            ("claude-c", Provider::Claude),
+            ("codex", Provider::Codex),
         ],
         Vec::new(),
     )
@@ -2940,7 +2962,7 @@ async fn a_limit_on_one_account_retries_the_turn_on_the_next_opted_in_one() {
             "-: turn_started turn-1",
             "-: assistant turn-1 Splitting the lexer out.",
             "-: turn_failed turn-1 LimitReached",
-            "-: account_switched claude-c",
+            "-: account_switched claude-b",
             "alice: user turn-2 Refactor the parser.",
             "-: turn_started turn-2",
             "-: assistant turn-2 Refactored the parser.",
@@ -2949,13 +2971,13 @@ async fn a_limit_on_one_account_retries_the_turn_on_the_next_opted_in_one() {
         ]
     );
     let starts = claude.starts();
-    let [on_a, on_c] = starts.as_slice() else {
+    let [on_a, on_b] = starts.as_slice() else {
         panic!("expected two starts, got {starts:?}");
     };
     assert_eq!(on_a.config_dir, Some(dir.path().join("claude-a")));
-    assert_eq!(on_c.config_dir, Some(dir.path().join("claude-c")));
+    assert_eq!(on_b.config_dir, Some(dir.path().join("claude-b")));
     assert_eq!(
-        seed_texts(on_c),
+        seed_texts(on_b),
         [
             "user: Refactor the parser.",
             "assistant: Splitting the lexer out."
@@ -2972,8 +2994,8 @@ async fn a_pinned_session_does_not_fail_over() {
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3001,8 +3023,8 @@ async fn a_session_pinned_at_creation_does_not_fail_over() {
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3028,8 +3050,8 @@ async fn a_session_unpinned_at_creation_fails_over_on_a_pinning_daemon() {
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3060,8 +3082,8 @@ async fn an_account_that_hit_its_limit_is_passed_over_and_with_none_left_the_ses
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, true),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3095,9 +3117,9 @@ async fn a_retry_that_hits_a_limit_too_is_not_retried_again() {
         dir.path(),
         &[(Provider::Claude, claude.clone())],
         &[
-            ("claude-a", Provider::Claude, true),
-            ("claude-b", Provider::Claude, true),
-            ("claude-c", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("claude-c", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3134,10 +3156,10 @@ async fn failover_keeps_the_sessions_provider_and_model() {
             (Provider::Codex, codex.clone()),
         ],
         &[
-            ("claude-a", Provider::Claude, false),
+            ("claude-a", Provider::Claude),
             // Opted in and first by id, but of another provider.
-            ("a-codex", Provider::Codex, true),
-            ("claude-b", Provider::Claude, true),
+            ("a-codex", Provider::Codex),
+            ("claude-b", Provider::Claude),
         ],
         Vec::new(),
     )
@@ -3189,11 +3211,11 @@ async fn a_failover_target_that_rejects_the_model_leaves_the_session_needing_you
             (Provider::Codex, codex.clone()),
         ],
         &[
-            ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, true),
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
             // Eligible too: the session moves on to neither.
-            ("claude-c", Provider::Claude, true),
-            ("codex", Provider::Codex, true),
+            ("claude-c", Provider::Claude),
+            ("codex", Provider::Codex),
         ],
         Vec::new(),
     )
@@ -3231,8 +3253,8 @@ async fn an_opencode_account_at_its_limit_fails_over_to_another_by_replay() {
         dir.path(),
         &[(Provider::Opencode, opencode.clone())],
         &[
-            ("opencode-a", Provider::Opencode, false),
-            ("opencode-b", Provider::Opencode, true),
+            ("opencode-a", Provider::Opencode),
+            ("opencode-b", Provider::Opencode),
         ],
         Vec::new(),
     )
@@ -3272,6 +3294,7 @@ async fn an_opencode_account_at_its_limit_fails_over_to_another_by_replay() {
 
 /// Gives `daemon`'s repo the setup command `command`, which may run for `timeout`.
 fn set_up_with(daemon: &Daemon, command: &str, timeout: Duration) {
+    let dir = daemon.repo.parent().unwrap();
     let projects = ProjectsConfig {
         setup_timeout: timeout,
         entries: vec![ProjectEntry {
@@ -3281,9 +3304,10 @@ fn set_up_with(daemon: &Daemon, command: &str, timeout: Duration) {
         }],
         ..ProjectsConfig::default()
     };
+    let overrides = Overrides::new(dir.join("daemon.toml"), projects);
     daemon
         .manager
-        .set_up_worktrees(HostId::new("host-1"), projects)
+        .manage_projects(HostId::new("host-1"), Arc::new(overrides))
         .unwrap();
 }
 
@@ -3625,5 +3649,359 @@ async fn a_running_setup_command_blocks_archive_and_stops_on_interrupt() {
         turn_error(&events).message,
         "the setup command `sleep 30` was interrupted"
     );
+    daemon.stop().await;
+}
+
+fn png() -> Image {
+    Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\npng".to_vec()),
+    }
+}
+
+fn prompt_with(session_id: &SessionId, text: &str, images: Vec<Image>) -> CommandBody {
+    CommandBody::SendPrompt {
+        session_id: session_id.clone(),
+        text: text.into(),
+        images,
+    }
+}
+
+/// The attachments of the first prompt in `events`.
+fn attachments(events: &[Event]) -> Vec<Attachment> {
+    events
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { attachments, .. } => Some(attachments.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("a prompt")
+}
+
+#[tokio::test]
+async fn a_prompts_images_reach_the_agent_and_clients_fetch_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "image.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let prompt = prompt_with(&session, "Like this.", vec![png()]);
+    assert_eq!(
+        daemon.manager.handle(alice(), prompt).await,
+        Ok(CommandResult::Applied)
+    );
+    let events = daemon.until_status(SessionStatus::Idle).await;
+    // The script only matches a prompt that carries the image.
+    assert!(
+        describe(&events).contains(&"-: assistant turn-1 Done.".to_owned()),
+        "{:?}",
+        describe(&events)
+    );
+    let kept = attachments(&events);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(
+        (kept[0].media_type.as_str(), kept[0].size),
+        ("image/png", 11)
+    );
+    let sent: Vec<_> = daemon
+        .commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|command| match command {
+            AdapterCommand::SendPrompt { images, .. } => Some(images.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, [vec![png()]]);
+
+    // Any user fetches it, as often as asked: a fetch is not remembered as applied.
+    let fetch = |attachment_id: AttachmentId| CommandBody::GetAttachment {
+        session_id: session.clone(),
+        attachment_id,
+    };
+    let fetched = CommandResult::Attachment {
+        media_type: "image/png".into(),
+        data: png().data,
+    };
+    for _ in 0..2 {
+        let id = CommandId::new("fetch-1");
+        let answer = daemon
+            .manager
+            .handle_once(bob(), id, fetch(kept[0].attachment_id.clone()))
+            .await;
+        assert_eq!(answer, Ok(fetched.clone()));
+    }
+    let missing = fetch(AttachmentId::new("01J9NOPE"));
+    let error = daemon.manager.handle(bob(), missing).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
+    let elsewhere = CommandBody::GetAttachment {
+        session_id: SessionId::new("nope"),
+        attachment_id: kept[0].attachment_id.clone(),
+    };
+    let error = daemon.manager.handle(bob(), elsewhere).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::NotFound);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn images_that_are_not_images_or_go_to_a_cli_without_images_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let fake_png = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"GIF89a".to_vec()),
+    };
+    let prompt = prompt_with(&session, "First.", vec![fake_png]);
+    let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::BadRequest, "{error:?}");
+    daemon.stop().await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut blind = FakeAdapter::new(fixture("first.jsonl"));
+    blind.images = false;
+    let recording = Recording {
+        adapter: Box::new(blind),
+        starts: Default::default(),
+        commands: Default::default(),
+    };
+    let (starts, commands) = (recording.starts.clone(), recording.commands.clone());
+    let daemon = Daemon::open_with(
+        dir.path(),
+        Arc::new(recording),
+        starts,
+        commands,
+        Default::default(),
+    )
+    .await;
+    let session = daemon.create().await;
+    let prompt = prompt_with(&session, "First.", vec![png()]);
+    let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported, "{error:?}");
+    // Nothing was queued or journaled.
+    assert_eq!(daemon.journal(&session).await.len(), 1);
+    daemon.stop().await;
+}
+
+/// A probe answering each account's five-hour window from `used`, by its config dir's name.
+struct ByAccount {
+    used: Vec<(&'static str, f64)>,
+}
+
+impl Probe for ByAccount {
+    fn read(&self, request: StartRequest) -> ProbeFuture {
+        let name = request
+            .config_dir
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let used = self
+            .used
+            .iter()
+            .find(|(account, _)| *account == name)
+            .map_or(0.0, |(_, used)| *used);
+        Box::pin(async move { Ok(vec![window("five_hour", used, "2099-01-01T00:00:00Z")]) })
+    }
+}
+
+#[tokio::test]
+async fn a_session_created_by_provider_starts_on_its_account_with_most_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, Scripted::new(&[])),
+            (Provider::Codex, Scripted::new(&[])),
+        ],
+        &[
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("codex", Provider::Codex),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let probe: Arc<dyn Probe> = Arc::new(ByAccount {
+        used: vec![("claude-a", 90.0), ("claude-b", 20.0)],
+    });
+    daemon
+        .manager
+        .track_usage(usage::Config {
+            probes: Probes::from([(Provider::Claude, probe)]),
+            dir: dir.path().join("usage"),
+            interval: Duration::from_secs(3600),
+            fresh: Duration::ZERO,
+        })
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while daemon
+            .manager
+            .accounts()
+            .iter()
+            .filter(|account| account.provider == Provider::Claude)
+            .any(|account| account.usage.is_empty())
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("usage of both claude accounts");
+
+    let create =
+        |account_id: Option<&str>, provider: Option<Provider>| CommandBody::CreateSession {
+            repo: Some(daemon.repo.to_str().unwrap().to_owned()),
+            project_id: None,
+            branch: None,
+            account_id: account_id.map(AccountId::new),
+            provider,
+            model: None,
+            permission_mode: None,
+            max_children: None,
+            failover_pin: None,
+        };
+    let Ok(CommandResult::SessionCreated { session_id }) =
+        daemon.handle(create(None, Some(Provider::Claude))).await
+    else {
+        panic!("expected a session");
+    };
+    let journal = daemon.manager.read_since(&session_id, 0, 10).await.unwrap();
+    let EventBody::SessionCreated {
+        account_id,
+        permission_mode,
+        ..
+    } = &journal[0].body
+    else {
+        panic!("expected session_created");
+    };
+    // Without a mode, nor a project default, a session asks.
+    assert_eq!(
+        (account_id, *permission_mode),
+        (&AccountId::new("claude-b"), PermissionMode::Ask)
+    );
+
+    let code = |result: Result<CommandResult, ErrorInfo>| result.unwrap_err().code;
+    let mismatch = create(Some("codex"), Some(Provider::Claude));
+    assert_eq!(code(daemon.handle(mismatch).await), ErrorCode::BadRequest);
+    let none = create(None, Some(Provider::Grok));
+    assert_eq!(code(daemon.handle(none).await), ErrorCode::NotFound);
+    let neither = create(None, None);
+    assert_eq!(code(daemon.handle(neither).await), ErrorCode::BadRequest);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let repo = daemon.repo.to_str().unwrap().to_owned();
+    daemon
+        .manager
+        .set_projects(&[Project {
+            project_id: ProjectId::new("github.com/org/app"),
+            name: "app".into(),
+            paths: vec![repo.clone()],
+            default_permission_mode: Some(PermissionMode::FullAccess),
+            default_account: Some(account()),
+            setup_command: None,
+        }])
+        .await;
+    for (given, started) in [
+        (None, PermissionMode::FullAccess),
+        (Some(PermissionMode::ReadOnly), PermissionMode::ReadOnly),
+    ] {
+        let create = CommandBody::CreateSession {
+            repo: None,
+            project_id: Some(ProjectId::new("github.com/org/app")),
+            branch: None,
+            account_id: None,
+            provider: None,
+            model: None,
+            permission_mode: given,
+            max_children: None,
+            failover_pin: None,
+        };
+        let Ok(CommandResult::SessionCreated { session_id }) =
+            daemon.manager.handle(alice(), create).await
+        else {
+            panic!("expected a session");
+        };
+        let journal = daemon.journal(&session_id).await;
+        let EventBody::SessionCreated {
+            permission_mode, ..
+        } = &journal[0].body
+        else {
+            panic!("expected session_created");
+        };
+        assert_eq!(*permission_mode, started);
+    }
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_runs_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let created = daemon.journal(&session).await;
+    let EventBody::SessionCreated {
+        worktree, branch, ..
+    } = &created[0].body
+    else {
+        panic!("expected session_created");
+    };
+    let worktree = PathBuf::from(worktree);
+    std::fs::write(worktree.join("work.txt"), "kept").unwrap();
+    git(&worktree, &["add", "work.txt"]);
+    git(&worktree, &["commit", "--quiet", "-m", "work"]);
+
+    let unarchive = CommandBody::UnarchiveSession {
+        session_id: session.clone(),
+    };
+    let error = daemon
+        .manager
+        .handle(alice(), unarchive.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict, "not archived: {error:?}");
+    daemon
+        .manager
+        .archive(alice(), session.clone(), false)
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    assert!(!worktree.exists());
+
+    let result = daemon.manager.handle(bob(), unarchive.clone()).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    let events = daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(describe(&events).last().unwrap(), "bob: status Idle");
+    assert_eq!(git(&worktree, &["branch", "--show-current"]), *branch);
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("work.txt")).unwrap(),
+        "kept"
+    );
+    assert_eq!(
+        daemon.manager.worktree(&session).await,
+        Ok(worktree.clone())
+    );
+
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap()[0].cwd, worktree);
+
+    // Without its branch, there is nothing to bring back.
+    daemon
+        .manager
+        .archive(alice(), session.clone(), false)
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    git(&daemon.repo, &["branch", "--quiet", "-D", branch]);
+    let error = daemon.manager.handle(alice(), unarchive).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Conflict, "{error:?}");
     daemon.stop().await;
 }

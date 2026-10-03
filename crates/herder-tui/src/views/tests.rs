@@ -34,6 +34,7 @@ pub(super) fn mid_turn() -> App {
             "i1",
             ItemBody::UserMessage {
                 text: "Add a health endpoint and test it.".into(),
+                attachments: Vec::new(),
             },
         ),
         added(
@@ -126,7 +127,6 @@ pub(super) fn herd() -> App {
         provider: Provider::Claude,
         label: "claude-main".to_owned(),
         usage: vec![window("five_hour", 38.0), window("seven_day", 12.0)],
-        failover: true,
     }];
     machines[1].accounts = machines[0].accounts.clone();
     machines[0].resources = Some(fake::host_resources(2));
@@ -187,6 +187,7 @@ pub(super) fn herd() -> App {
             "i1",
             ItemBody::UserMessage {
                 text: "Add a health endpoint and test it.".into(),
+                attachments: Vec::new(),
             },
         ),
         added(
@@ -424,6 +425,7 @@ fn an_approval_is_prompted_and_badged() {
             "i1",
             ItemBody::UserMessage {
                 text: "Clean the build.".into(),
+                attachments: Vec::new(),
             },
         ),
         fake::approval("a1", "Bash: rm -rf target"),
@@ -433,6 +435,34 @@ fn an_approval_is_prompted_and_badged() {
     insta::assert_snapshot!(terminal.backend());
     let screen = terminal.backend().to_string();
     assert!(screen.contains("APPROVAL"), "{screen}");
+}
+
+#[test]
+fn a_prompts_images_show_under_it() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Match the mockup.".into(),
+                attachments: vec![
+                    herder_protocol::Attachment {
+                        attachment_id: herder_protocol::AttachmentId::new("01J9A"),
+                        media_type: "image/png".into(),
+                        size: 12 * 1024 + 7,
+                    },
+                    herder_protocol::Attachment {
+                        attachment_id: herder_protocol::AttachmentId::new("01J9B"),
+                        media_type: "image/jpeg".into(),
+                        size: 3 * 1024 * 1024 / 2,
+                    },
+                ],
+            },
+        ),
+    ]);
+    let screen = render(&mut app, 100, 20).backend().to_string();
+    assert!(screen.contains("image · png · 12 KB"), "{screen}");
+    assert!(screen.contains("image · jpeg · 1.5 MB"), "{screen}");
 }
 
 #[test]
@@ -608,7 +638,6 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         provider: herder_protocol::Provider::Claude,
         label: "Main".into(),
         usage: Vec::new(),
-        failover: false,
     }];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));
@@ -884,9 +913,8 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
     assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 45, 40));
 }
 
-/// [`fake::tree`] whose machine has three accounts, two with usage and `claude-work` opted in
-/// to failover, and pins its sessions and fails over to codex, beside a disconnected machine
-/// with none; `s2` and `s3` run on `claude-main`.
+/// [`fake::tree`] whose machine has three accounts, two with usage, and pins its sessions,
+/// beside a disconnected machine with none; `s2` and `s3` run on `claude-main`.
 fn with_accounts() -> App {
     let mut app = fake::tree();
     add_accounts(&mut app);
@@ -917,8 +945,7 @@ pub(super) fn add_accounts(app: &mut App) {
         window("five_hour", 8.0, 40 * 60),
         window("weekly", 20.0, 86400),
     ];
-    let mut work = fake::account("claude-work", "Work");
-    work.failover = true;
+    let work = fake::account("claude-work", "Work");
     machines[0].accounts = vec![main, work, codex];
     machines[0].failover = herder_protocol::FailoverSettings { pin: true };
     let mut laptop = fake::machine("h2", "laptop", &[]);

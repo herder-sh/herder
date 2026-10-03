@@ -1,6 +1,5 @@
 //! The accounts screen, over the main screen: each machine with its failover settings and its
-//! accounts, which ones sessions fail over to, and how much of each usage window they used,
-//! with a bar and when it resets.
+//! accounts, and how much of each usage window they used, with a bar and when it resets.
 
 use herder_client_core::Machine;
 use herder_protocol::{Account, SessionStatus, Timestamp, UsageWindow};
@@ -17,11 +16,11 @@ use crate::mouse::{Click, Hits, List as Rows};
 /// The widest a usage bar gets.
 const BAR: usize = 30;
 
-/// What the failover marks mean, and where they are set.
-const FAILOVER: &str = "A session whose account hits a limit moves to an account marked \
-                        failover of the same provider, on the same model, unless sessions are \
-                        pinned. Both are set in the machine's daemon config (failover = true \
-                        per account, [failover] pin).";
+/// How failover works, and where pinning is set.
+const FAILOVER: &str = "A session whose account hits a limit rotates to the account of the same \
+                        provider with the most room left, on the same model, unless sessions \
+                        are pinned. Pinning is set in the machine's daemon config \
+                        ([failover] pin).";
 
 pub(super) fn draw(
     frame: &mut Frame,
@@ -150,9 +149,6 @@ fn account_text(
     let mut facts = account.provider.as_str().to_owned();
     if account.label != account.account_id.as_str() {
         facts.push_str(&format!(" · {}", account.account_id));
-    }
-    if account.failover {
-        facts.push_str(" · failover");
     }
     match sessions {
         0 => {}

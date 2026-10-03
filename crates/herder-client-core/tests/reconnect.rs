@@ -110,7 +110,6 @@ impl Daemon {
                     provider: fake,
                     label: "Account 1".into(),
                     config_dir: Some(dir.join("account")),
-                    failover: false,
                 },
             );
             let setup = Setup {
@@ -122,6 +121,7 @@ impl Daemon {
                     TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
                 }),
                 worktrees: Worktrees::new(dir.join("worktrees")),
+                attachments: dir.join("attachments"),
             };
             let shutdown = CancellationToken::new();
             let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -315,8 +315,9 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
                 project_id: None,
                 branch: None,
                 account_id: Some(account()),
+                provider: None,
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },
@@ -332,6 +333,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let prompt = |text: &str| CommandBody::SendPrompt {
         session_id: session_id.clone(),
         text: text.into(),
+        images: Vec::new(),
     };
     let sent = client.send(host.clone(), prompt("First.")).await.unwrap();
     assert_eq!(sent, CommandResult::Applied);
@@ -416,8 +418,9 @@ async fn synced_waits_for_the_lists_and_the_replay() {
                 project_id: None,
                 branch: None,
                 account_id: Some(account()),
+                provider: None,
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },
@@ -447,7 +450,7 @@ async fn synced_waits_for_the_lists_and_the_replay() {
         (SessionStatus::Idle, &account())
     );
     assert_eq!(machine.failover, failover());
-    assert!(machine.accounts.iter().all(|account| !account.failover));
+    assert_eq!(machine.accounts.len(), 1);
     let update = sub.next().await.unwrap();
     assert!(matches!(
         update.events.first().map(|event| &event.body),
@@ -554,6 +557,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
             CommandBody::SendPrompt {
                 session_id: SessionId::new("nope"),
                 text: "Hi.".into(),
+                images: Vec::new(),
             },
         )
         .await
@@ -687,8 +691,9 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
                 project_id: None,
                 branch: None,
                 account_id: Some(account()),
+                provider: None,
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },
@@ -1011,8 +1016,9 @@ async fn create_session(client: &Client, host: &HostId, repo: String) -> Session
                 project_id: None,
                 branch: None,
                 account_id: Some(account()),
+                provider: None,
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },
@@ -1073,6 +1079,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
     let prompt = CommandBody::SendPrompt {
         session_id: session_id.clone(),
         text: "First.".into(),
+        images: Vec::new(),
     };
     assert_eq!(
         phone.send(host.clone(), prompt).await.unwrap(),
@@ -1195,6 +1202,7 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
     let prompt = |text: &str| CommandBody::SendPrompt {
         session_id: session_id.clone(),
         text: text.into(),
+        images: Vec::new(),
     };
     client.send(host.clone(), prompt("First.")).await.unwrap();
     let mut before = View::default();

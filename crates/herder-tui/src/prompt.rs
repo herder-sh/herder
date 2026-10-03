@@ -39,6 +39,7 @@ pub const COMMANDS: &[Command] = &[
     command("switch", "", "switch account, provider or model"),
     command("stop", "", "interrupt the running turn"),
     command("archive", "", "archive the session (archive! forces)"),
+    command("unarchive", "", "bring an archived session back"),
     command("pr", "<n|url>", "link a pull request"),
     command("unpr", "[n]", "unlink a pull request"),
     command("term", "", "terminals (owners)"),
@@ -229,7 +230,7 @@ impl App {
         if let Some(session) = self.open_session() {
             for entry in session.entries.iter().rev() {
                 if let Entry::Item(item) = entry
-                    && let herder_protocol::ItemBody::UserMessage { text } = &item.body
+                    && let herder_protocol::ItemBody::UserMessage { text, .. } = &item.body
                 {
                     add(text);
                 }
@@ -390,7 +391,7 @@ impl App {
                 Ok(vec![send(key, command)])
             }
             ("stop", []) => self.session_command(session()?, "interrupt", &[]),
-            ("model" | "mode" | "archive" | "archive!" | "down", args) => {
+            ("model" | "mode" | "archive" | "archive!" | "unarchive" | "down", args) => {
                 self.session_command(session()?, name, args)
             }
             _ => match COMMANDS.iter().find(|command| command.name == name) {
@@ -539,6 +540,7 @@ mod tests {
                 command: CommandBody::SendPrompt {
                     session_id: SessionId::new("s2"),
                     text: "/etc is fine".into(),
+                    images: Vec::new(),
                 },
                 origin: Origin::Prompt(key("h1", "s2"), "/etc is fine".into()),
             }]

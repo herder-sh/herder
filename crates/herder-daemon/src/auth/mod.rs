@@ -325,7 +325,8 @@ impl Auth {
 }
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// and bringing down containers are for owners only.
+/// bringing down containers, browsing the host's folders and changing projects are for owners
+/// only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -342,6 +343,17 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     if matches!(command, CommandBody::ComposeDown { .. }) && identity.role != Role::Owner {
         return Err(forbidden(
             "bringing down containers is for the daemon's owners only",
+        ));
+    }
+    let host = matches!(
+        command,
+        CommandBody::ListDirectory { .. }
+            | CommandBody::AddProject { .. }
+            | CommandBody::SetProjectSettings { .. }
+    );
+    if host && identity.role != Role::Owner {
+        return Err(forbidden(
+            "browsing folders and changing projects are for the daemon's owners only",
         ));
     }
     Ok(())

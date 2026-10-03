@@ -8,7 +8,8 @@
 //! - `{"emit": <event>}`: send this [`AdapterEvent`]. Emitting `exited` ends the session.
 //! - `{"sleep_ms": <n>}`: wait `n` milliseconds.
 //!
-//! Commands and events use their serde form, tagged on `"type"`. After the last step the fake
+//! Commands and events use their serde form, tagged on `"type"`; a prompt's images are part of
+//! its `send_prompt`, so a script expects them too. After the last step the fake
 //! waits for `shutdown` (or every sender dropped) and emits `exited` with no error.
 //!
 //! Any other command, at any point, is a script mismatch: the fake emits `exited` with a
@@ -37,6 +38,8 @@ pub struct FakeAdapter {
     pub script: PathBuf,
     /// Capabilities every session reports.
     pub capabilities: Capabilities,
+    /// Whether prompts may carry images.
+    pub images: bool,
 }
 
 impl FakeAdapter {
@@ -50,11 +53,16 @@ impl FakeAdapter {
                 reports_usage: true,
                 native_resume: true,
             },
+            images: true,
         }
     }
 }
 
 impl Adapter for FakeAdapter {
+    fn accepts_images(&self) -> bool {
+        self.images
+    }
+
     fn start(&self, _request: StartRequest) -> StartFuture {
         let script = load(&self.script);
         let capabilities = self.capabilities;

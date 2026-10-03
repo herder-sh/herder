@@ -7,9 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, CiStatus, CommandId, CommandResult, Event, EventBody, Item, ItemBody, ItemId,
-    JournalRecord, Mergeable, PermissionMode, PrState, Provider, PullRequest, ReviewStatus,
-    SessionId, SessionStatus, Timestamp, TurnId, UserId,
+    AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, Event, EventBody,
+    Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, Provider,
+    PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TurnId, UserId,
 };
 use herder_store::{
     COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
@@ -87,7 +87,10 @@ fn message(text: String) -> EventBody {
         item: Item {
             id: ItemId::new("item"),
             turn_id: TurnId::new("turn"),
-            body: ItemBody::UserMessage { text },
+            body: ItemBody::UserMessage {
+                text,
+                attachments: Vec::new(),
+            },
         },
     }
 }
@@ -539,11 +542,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 6);
+    assert_eq!(version(&path), 7);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 6);
+    assert_eq!(version(&path), 7);
     store
         .append(new_event(
             &s,
@@ -561,11 +564,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
-             PRAGMA user_version = 4;",
+             ALTER TABLE queued_prompts DROP COLUMN attachments; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 6);
+    assert_eq!(version(&path), 7);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -595,7 +598,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 6);
+    assert_eq!(version(&path), 7);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -619,7 +622,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 6);
+    assert_eq!(version(&path), 7);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -632,13 +635,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 7)
+        .pragma_update(None, "user_version", 8)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 7,
-            supported: 6
+            found: 8,
+            supported: 7
         })
     ));
 }
@@ -867,11 +870,21 @@ fn queued_prompts_survive_a_reopen_in_order() {
     let prompt = |by: Option<&str>, text: &str, retry| QueuedPrompt {
         by: by.map(UserId::new),
         text: text.into(),
+        attachments: Vec::new(),
         retry,
+    };
+    let with_image = QueuedPrompt {
+        attachments: vec![Attachment {
+            attachment_id: AttachmentId::new("a1"),
+            media_type: "image/png".into(),
+            size: 8,
+        }],
+        ..prompt(Some("bob"), "Like this.", false)
     };
     let queue = vec![
         prompt(Some("alice"), "First.", true),
         prompt(None, "From the primary.", false),
+        with_image,
     ];
     {
         let mut store = Store::open(&path).unwrap();

@@ -183,6 +183,7 @@ fn the_wheel_scrolls_the_view_under_the_pointer() {
                     &format!("i{at}"),
                     ItemBody::UserMessage {
                         text: format!("message {at}"),
+                        attachments: Vec::new(),
                     },
                 )
             })

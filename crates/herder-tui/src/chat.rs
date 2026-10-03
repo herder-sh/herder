@@ -162,7 +162,7 @@ impl App {
             }
         }
         match &found?.body {
-            ItemBody::UserMessage { text }
+            ItemBody::UserMessage { text, .. }
             | ItemBody::AssistantMessage { text }
             | ItemBody::Reasoning { text } => Some(text.clone()),
             ItemBody::ToolCall { name, input } => {

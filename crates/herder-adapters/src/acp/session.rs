@@ -204,7 +204,7 @@ fn render_seed(seed: &[Item]) -> Option<String> {
     let entries: Vec<String> = seed
         .iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text } => Some(format!("[user]\n{text}")),
+            ItemBody::UserMessage { text, .. } => Some(format!("[user]\n{text}")),
             ItemBody::AssistantMessage { text } => Some(format!("[assistant]\n{text}")),
             ItemBody::ToolCall { name, input } => Some(format!("[tool call: {name}]\n{input}")),
             ItemBody::ToolResult { output, .. } => Some(format!("[tool result]\n{output}")),
@@ -397,7 +397,7 @@ impl Session {
 
     async fn command(&mut self, command: AdapterCommand) {
         match command {
-            AdapterCommand::SendPrompt { turn_id, text } => self.prompt(turn_id, text).await,
+            AdapterCommand::SendPrompt { turn_id, text, .. } => self.prompt(turn_id, text).await,
             AdapterCommand::Interrupt => self.interrupt().await,
             AdapterCommand::SetModel { model } => self.set_model(model).await,
             AdapterCommand::SetPermissionMode { mode } => {
@@ -853,7 +853,13 @@ mod tests {
             body,
         };
         let seed = [
-            item("1", ItemBody::UserMessage { text: "hi".into() }),
+            item(
+                "1",
+                ItemBody::UserMessage {
+                    text: "hi".into(),
+                    attachments: Vec::new(),
+                },
+            ),
             item("2", ItemBody::Reasoning { text: "hmm".into() }),
             item(
                 "3",

@@ -16,8 +16,8 @@ use herder_adapters::fixture::Fixture;
 use herder_adapters::transport::Transport;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
-    Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
-    QuestionId, Timestamp, TurnError, TurnId, UsageWindow,
+    Answer, ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId,
+    PermissionMode, QuestionId, Timestamp, TurnError, TurnId, UsageWindow,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -133,6 +133,7 @@ fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
         turn_id: turn(),
         text: text.into(),
+        images: Vec::new(),
     }
 }
 
@@ -574,6 +575,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
             turn_id: TurnId::new("old"),
             body: ItemBody::UserMessage {
                 text: "My favourite colour is teal.".into(),
+                attachments: Vec::new(),
             },
         },
         Item {
@@ -686,6 +688,54 @@ async fn a_subagent_approval_first_shows_its_tool_call() {
         .unwrap();
     assert_eq!(until(&mut session, is_turn_end).await, [completed()]);
     shutdown(session).await;
+}
+
+#[tokio::test]
+async fn a_prompt_with_images_sends_them_as_base64_blocks_before_its_text() {
+    let fixture = Fixture::parse(
+        "inline",
+        r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+{"dir":"in","line":"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"iVBORw0KGgo=\"}},{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/jpeg\",\"data\":\"/9j/\"}},{\"type\":\"text\",\"text\":\"Match these.\"}]},\"parent_tool_use_id\":null,\"session_id\":\"\",\"origin\":{\"kind\":\"human\"}}"}
+{"dir":"out","line":"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    let image = |media_type: &str, data: &[u8]| Image {
+        media_type: media_type.into(),
+        data: Bytes(data.to_vec()),
+    };
+    session
+        .commands
+        .send(AdapterCommand::SendPrompt {
+            turn_id: turn(),
+            text: "Match these.".into(),
+            images: vec![
+                image("image/png", b"\x89PNG\r\n\x1a\n"),
+                image("image/jpeg", b"\xff\xd8\xff"),
+            ],
+        })
+        .unwrap();
+    assert_eq!(
+        until(&mut session, is_turn_end).await,
+        [started(), completed()]
+    );
+    shutdown(session).await;
+}
+
+#[test]
+fn claude_takes_images_and_the_others_do_not() {
+    use herder_adapters::Adapter;
+    use herder_adapters::acp::{AcpAdapter, AgentProfile};
+    use herder_adapters::claude::ClaudeAdapter;
+    use herder_adapters::codex::CodexAdapter;
+
+    assert!(ClaudeAdapter::default().accepts_images());
+    assert!(!CodexAdapter::default().accepts_images());
+    assert!(!AcpAdapter::new(AgentProfile::cursor()).accepts_images());
 }
 
 #[tokio::test]

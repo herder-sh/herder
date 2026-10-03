@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
-    QuestionId, TurnError, TurnId,
+    Answer, ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId,
+    PermissionMode, QuestionId, TurnError, TurnId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -106,7 +106,7 @@ pub(super) async fn start(
                 kind: "user",
                 message: wire::UserMessage {
                     role: "user",
-                    content: &seed,
+                    content: wire::Content::Text(&seed),
                 },
                 parent_tool_use_id: None,
                 session_id: "",
@@ -264,7 +264,11 @@ impl Session {
 
     async fn command(&mut self, command: AdapterCommand) {
         match command {
-            AdapterCommand::SendPrompt { turn_id, text } => {
+            AdapterCommand::SendPrompt {
+                turn_id,
+                text,
+                images,
+            } => {
                 self.turn = Some(OpenTurn {
                     id: turn_id.clone(),
                     interrupted: false,
@@ -274,7 +278,7 @@ impl Session {
                     kind: "user",
                     message: wire::UserMessage {
                         role: "user",
-                        content: &text,
+                        content: content(&text, &images),
                     },
                     parent_tool_use_id: None,
                     session_id: "",
@@ -831,6 +835,21 @@ pub(super) async fn gone(exit: &mut oneshot::Receiver<Exit>) -> String {
     }
 }
 
+/// What a prompt sends: its text alone, or its images then its text as content blocks.
+fn content<'a>(text: &'a str, images: &'a [Image]) -> wire::Content<'a> {
+    if images.is_empty() {
+        return wire::Content::Text(text);
+    }
+    let images = images.iter().map(|image| wire::UserBlock::Image {
+        source: wire::ImageSource {
+            kind: "base64",
+            media_type: &image.media_type,
+            data: &image.data,
+        },
+    });
+    wire::Content::Blocks(images.chain([wire::UserBlock::Text { text }]).collect())
+}
+
 fn streamed_body(reasoning: bool, text: String) -> ItemBody {
     if reasoning {
         ItemBody::Reasoning { text }
@@ -909,7 +928,7 @@ fn seed_text(seed: &[Item]) -> Option<String> {
     let entries: Vec<String> = seed
         .iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text } => Some(format!("User: {text}")),
+            ItemBody::UserMessage { text, .. } => Some(format!("User: {text}")),
             ItemBody::AssistantMessage { text } => Some(format!("Assistant: {text}")),
             ItemBody::ToolCall { name, input } => {
                 Some(format!("[Assistant called tool {name} with {input}]"))
@@ -1027,6 +1046,7 @@ mod tests {
         let seed = [
             item(ItemBody::UserMessage {
                 text: "Fix it".into(),
+                attachments: Vec::new(),
             }),
             item(ItemBody::ToolCall {
                 name: "Bash".into(),

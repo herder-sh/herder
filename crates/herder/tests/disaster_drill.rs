@@ -71,7 +71,7 @@ impl Adapter for Agent {
             .seed
             .iter()
             .filter_map(|item| match &item.body {
-                ItemBody::UserMessage { text } | ItemBody::AssistantMessage { text } => {
+                ItemBody::UserMessage { text, .. } | ItemBody::AssistantMessage { text } => {
                     Some(text.clone())
                 }
                 _ => None,
@@ -89,7 +89,7 @@ impl Adapter for Agent {
             let (events, event_rx) = mpsc::channel(64);
             tokio::spawn(async move {
                 while let Some(command) = command_rx.recv().await {
-                    let AdapterCommand::SendPrompt { turn_id, text } = command else {
+                    let AdapterCommand::SendPrompt { turn_id, text, .. } = command else {
                         if command == AdapterCommand::Shutdown {
                             break;
                         }
@@ -166,7 +166,6 @@ fn drill_host() {
             provider: fake(),
             label: host.to_owned(),
             config_dir: Some(dir.join("account")),
-            failover: false,
         },
     )]);
     tokio::runtime::Runtime::new()
@@ -490,6 +489,7 @@ impl Client {
         self.command(CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
+            images: Vec::new(),
         })
         .await
         .map(drop)
@@ -581,8 +581,9 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
             project_id: Some(ProjectId::new(PROJECT)),
             branch: None,
             account_id: Some(AccountId::new("a-account")),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         })

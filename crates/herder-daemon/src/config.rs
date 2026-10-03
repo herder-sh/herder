@@ -10,7 +10,6 @@
 //! provider = "claude"           # claude, codex, cursor, grok or opencode
 //! label = "Main"                # shown to clients; the id when absent
 //! config_dir = "~/.claude-main" # the CLI's own default location when absent
-//! failover = false              # whether sessions may fail over to it on a limit; opt-in
 //!
 //! [providers.claude]
 //! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
@@ -18,9 +17,9 @@
 //!
 //! # Failover
 //!
-//! A session whose turn hits its account's usage limit moves to another account of its own
-//! provider that opted in with `failover = true` and retries the turn there on the same model.
-//! A failover never changes the provider or the model:
+//! A session whose turn hits its account's usage limit rotates to the available account of its
+//! own provider with the most room left, and retries the turn there on the same model. Every
+//! account takes part; a failover never changes the provider or the model:
 //!
 //! ```toml
 //! [failover]
@@ -72,8 +71,13 @@
 //! paths = ["~/src/herder-old"]     # clones of it whatever their remote; without `remotes`,
 //!                                  # this declares the project by path
 //! default_account = "claude-main"  # an `[[accounts]]` id
+//! default_permission_mode = "ask"  # read_only, ask, auto_edit or full_access
 //! setup_command = "make bootstrap" # run in each new worktree
 //! ```
+//!
+//! Owners add `[[project]]` entries and change their `default_permission_mode`,
+//! `default_account` and `setup_command` from a client too ([`add_project`],
+//! [`set_project_settings`]); the rest of the file is kept as written.
 //!
 //! An entry needs `remotes` or `paths`. No remote or path may appear in two entries.
 //!
@@ -101,7 +105,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use herder_protocol::{AccountId, ProjectId, Provider};
+use herder_protocol::{AccountId, PermissionMode, ProjectId, Provider};
 use serde::Deserialize;
 
 use crate::accounts;
@@ -249,6 +253,7 @@ struct ProjectFile {
     #[serde(default)]
     paths: Vec<PathBuf>,
     default_account: Option<String>,
+    default_permission_mode: Option<PermissionMode>,
     setup_command: Option<String>,
 }
 
@@ -260,8 +265,6 @@ struct AccountFile {
     provider: String,
     label: Option<String>,
     config_dir: Option<PathBuf>,
-    #[serde(default)]
-    failover: bool,
 }
 
 /// One `[providers.<name>]` table as written.
@@ -401,6 +404,7 @@ fn resolve_projects(
                 remotes,
                 paths,
                 default_account,
+                default_permission_mode: entry.default_permission_mode,
                 setup_command: entry.setup_command,
             })
         })
@@ -443,9 +447,6 @@ fn append_account_with_env(
             .with_context(|| format!("config dir {} is not UTF-8", dir.display()))?;
         entry.push_str(&format!("config_dir = {}\n", quote(dir)));
     }
-    if account.failover {
-        entry.push_str("failover = true\n");
-    }
     let mut text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
@@ -470,6 +471,141 @@ fn append_account_with_env(
     );
     write_atomically(path, text.as_bytes())
         .with_context(|| format!("writing config file {}", path.display()))
+}
+
+/// The `[projects]` table and `[[project]]` entries of the config file at `path`, resolved as
+/// [`Config::load`] resolves them; the defaults when the file does not exist.
+pub fn read_projects(path: &Path) -> Result<ProjectsConfig> {
+    let env = |key: &str| std::env::var_os(key);
+    let file = read(path)?.unwrap_or_default();
+    let accounts = resolve_accounts(file.accounts, &env)?;
+    resolve_projects(file.projects, file.project, &accounts, &env)
+}
+
+/// Adds `clone` to the paths of the `[[project]]` entry `entry` of the config file at `path`,
+/// counted in file order, or declares it in a new entry when `None`; returns the projects as
+/// the file now resolves them. See [`edit_project`].
+pub fn add_project(path: &Path, entry: Option<usize>, clone: &Path) -> Result<ProjectsConfig> {
+    let clone = clone
+        .to_str()
+        .with_context(|| format!("{} is not UTF-8", clone.display()))?
+        .to_owned();
+    edit_project(path, entry, |table| {
+        let paths = table
+            .entry("paths")
+            .or_insert_with(|| toml_edit::value(toml_edit::Array::new()))
+            .as_array_mut()
+            .context("its paths are not an array")?;
+        paths.push(clone);
+        Ok(())
+    })
+}
+
+/// A project's settings as a client sets them; `None` leaves a setting out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectSettings {
+    /// Permission mode new sessions start in when none is given.
+    pub default_permission_mode: Option<PermissionMode>,
+    /// Account new sessions use when none is given.
+    pub default_account: Option<AccountId>,
+    /// Shell command run in each new worktree.
+    pub setup_command: Option<String>,
+}
+
+/// Replaces the settings of the `[[project]]` entry `entry` of the config file at `path`,
+/// counted in file order, or adds an entry declaring `clone` with them when `None`; returns
+/// the projects as the file now resolves them. See [`edit_project`].
+pub fn set_project_settings(
+    path: &Path,
+    entry: Option<usize>,
+    clone: &Path,
+    settings: &ProjectSettings,
+) -> Result<ProjectsConfig> {
+    let clone = clone
+        .to_str()
+        .with_context(|| format!("{} is not UTF-8", clone.display()))?
+        .to_owned();
+    edit_project(path, entry, |table| {
+        if entry.is_none() {
+            table.insert(
+                "paths",
+                toml_edit::value(toml_edit::Array::from_iter([clone])),
+            );
+        }
+        let mode = settings.default_permission_mode.map(|mode| match mode {
+            PermissionMode::ReadOnly => "read_only",
+            PermissionMode::Ask => "ask",
+            PermissionMode::AutoEdit => "auto_edit",
+            PermissionMode::FullAccess => "full_access",
+        });
+        let account = settings.default_account.as_ref().map(AccountId::as_str);
+        for (key, value) in [
+            ("default_permission_mode", mode),
+            ("default_account", account),
+            ("setup_command", settings.setup_command.as_deref()),
+        ] {
+            match value {
+                Some(value) => {
+                    table.insert(key, toml_edit::value(value));
+                }
+                None => {
+                    table.remove(key);
+                }
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Rewrites the config file at `path` with `edit` applied to its `[[project]]` entry `entry`,
+/// counted in file order, or to a new entry appended when `None`, keeping the rest of the file
+/// as written; creates the file when it does not exist. The file is replaced atomically, and
+/// only if it still loads: an edit that breaks it, such as a path another entry has, fails and
+/// changes nothing. Returns the projects as the new file resolves them.
+fn edit_project(
+    path: &Path,
+    entry: Option<usize>,
+    edit: impl FnOnce(&mut toml_edit::Table) -> Result<()>,
+) -> Result<ProjectsConfig> {
+    let env = |key: &str| std::env::var_os(key);
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| format!("reading config file {}", path.display()));
+        }
+    };
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parsing config file {}", path.display()))?;
+    let entries = doc
+        .entry("project")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ))
+        .as_array_of_tables_mut()
+        .with_context(|| format!("project in {} is not an array of tables", path.display()))?;
+    let table = match entry {
+        Some(index) => entries
+            .get_mut(index)
+            .with_context(|| format!("{} has no project entry {}", path.display(), index + 1))?,
+        None => {
+            entries.push(toml_edit::Table::new());
+            let last = entries.len() - 1;
+            entries
+                .get_mut(last)
+                .context("the new project entry is gone")?
+        }
+    };
+    edit(table)?;
+    let text = doc.to_string();
+    let file: ConfigFile =
+        toml::from_str(&text).with_context(|| format!("changing {}", path.display()))?;
+    let accounts = resolve_accounts(file.accounts, &env)?;
+    let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
+    write_atomically(path, text.as_bytes())
+        .with_context(|| format!("writing config file {}", path.display()))?;
+    Ok(projects)
 }
 
 /// Replaces `path` with `data` through a temporary file in its directory, which is created if
@@ -560,7 +696,6 @@ fn resolve_accounts(
             provider,
             label: entry.label.unwrap_or_else(|| id.clone()),
             config_dir,
-            failover: entry.failover,
         };
         accounts.insert(AccountId::new(id), account);
     }
@@ -918,7 +1053,6 @@ mod tests {
             id = "claude-work"
             provider = "claude"
             config_dir = "~/.claude-work"
-            failover = true
 
             [[accounts]]
             id = "codex"
@@ -936,7 +1070,6 @@ mod tests {
                         provider: Provider::Claude,
                         label: "Main".into(),
                         config_dir: None,
-                        failover: false,
                     }
                 ),
                 (
@@ -945,7 +1078,6 @@ mod tests {
                         provider: Provider::Claude,
                         label: "claude-work".into(),
                         config_dir: Some(home.path().join(".claude-work")),
-                        failover: true,
                     }
                 ),
                 (
@@ -954,7 +1086,6 @@ mod tests {
                         provider: Provider::Codex,
                         label: "codex".into(),
                         config_dir: Some(PathBuf::from("/srv/codex")),
-                        failover: false,
                     }
                 ),
             ])
@@ -1029,6 +1160,8 @@ mod tests {
             ),
             (account(&["id = \"a\""]), "missing field `provider`"),
             (claude("a", "token = \"x\""), "unknown field `token`"),
+            // Every account takes part in rotation: there is nothing to opt in to.
+            (claude("a", "failover = true"), "unknown field `failover`"),
             (
                 "[providers.nope]\nbinary = \"x\"\n".to_owned(),
                 "herder cannot run nope",
@@ -1077,6 +1210,7 @@ mod tests {
             remotes = ["git@github.com:herder-sh/herder.git", "https://gitlab.com/mirror/herder/"]
             paths = ["~/old/herder"]
             default_account = "claude-main"
+            default_permission_mode = "auto_edit"
             setup_command = "make bootstrap"
 
             [[project]]
@@ -1098,6 +1232,7 @@ mod tests {
                         ],
                         paths: vec![home.path().join("old/herder")],
                         default_account: Some(AccountId::new("claude-main")),
+                        default_permission_mode: Some(PermissionMode::AutoEdit),
                         setup_command: Some("make bootstrap".to_owned()),
                     },
                     ProjectEntry {
@@ -1155,12 +1290,98 @@ mod tests {
         }
     }
 
+    #[test]
+    fn projects_are_added_and_set_keeping_the_rest_of_the_file() {
+        let home = tempfile::tempdir().unwrap();
+        let original = "# my daemon\n[[accounts]]\nid = \"main\" # the default login\n\
+                        provider = \"claude\"\n\n[[project]]\nname = \"herder\" # renamed\n\
+                        remotes = [\"git@github.com:herder-sh/herder.git\"]\n";
+        let path = write(home.path(), original);
+
+        let projects = add_project(&path, None, Path::new("/src/app")).unwrap();
+        assert_eq!(projects.entries.len(), 2);
+        assert_eq!(projects.entries[1].paths, [PathBuf::from("/src/app")]);
+        let projects = add_project(&path, Some(0), Path::new("/src/herder")).unwrap();
+        assert_eq!(projects.entries[0].paths, [PathBuf::from("/src/herder")]);
+
+        let settings = ProjectSettings {
+            default_permission_mode: Some(PermissionMode::FullAccess),
+            default_account: Some(AccountId::new("main")),
+            setup_command: Some("make \"setup\"".into()),
+        };
+        set_project_settings(&path, Some(1), Path::new("/src/app"), &settings).unwrap();
+        let projects = set_project_settings(&path, None, Path::new("/src/new"), &settings).unwrap();
+        for entry in &projects.entries[1..] {
+            assert_eq!(
+                (
+                    entry.default_permission_mode,
+                    entry.default_account.clone(),
+                    entry.setup_command.as_deref()
+                ),
+                (
+                    Some(PermissionMode::FullAccess),
+                    Some(AccountId::new("main")),
+                    Some("make \"setup\"")
+                )
+            );
+        }
+        assert_eq!(projects.entries[2].paths, [PathBuf::from("/src/new")]);
+        // Absent settings are cleared.
+        let projects =
+            set_project_settings(&path, Some(1), Path::new("/src/app"), &Default::default())
+                .unwrap();
+        assert_eq!(
+            (
+                projects.entries[1].default_permission_mode,
+                &projects.entries[1].default_account,
+                &projects.entries[1].setup_command
+            ),
+            (None, &None, &None)
+        );
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with(
+                "# my daemon\n[[accounts]]\nid = \"main\" # the default login\n\
+                 provider = \"claude\"\n\n[[project]]\nname = \"herder\" # renamed\n"
+            ),
+            "{text}"
+        );
+        let home = home.path().to_str().unwrap();
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", home)])).unwrap();
+        assert_eq!(config.projects, projects);
+        assert_eq!(read_projects(&path).unwrap(), projects);
+    }
+
+    #[test]
+    fn a_project_edit_that_does_not_fit_leaves_the_file_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let original = "[[project]]\npaths = [\"/src/app\"]\n";
+        let path = write(home.path(), original);
+        let err = add_project(&path, None, Path::new("/src/app")).unwrap_err();
+        assert!(format!("{err:#}").contains("in another entry"), "{err:#}");
+        let settings = ProjectSettings {
+            default_account: Some(AccountId::new("nobody")),
+            ..ProjectSettings::default()
+        };
+        let err =
+            set_project_settings(&path, Some(0), Path::new("/src/app"), &settings).unwrap_err();
+        assert!(format!("{err:#}").contains("is not an account"), "{err:#}");
+        assert!(set_project_settings(&path, Some(3), Path::new("/x"), &settings).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // A missing file is created.
+        let path = home.path().join("new/daemon.toml");
+        let projects = add_project(&path, None, Path::new("/src/app")).unwrap();
+        assert_eq!(projects.entries[0].paths, [PathBuf::from("/src/app")]);
+        assert_eq!(read_projects(&path).unwrap(), projects);
+    }
+
     fn added(provider: Provider, dir: &Path) -> AccountConfig {
         AccountConfig {
             provider,
             label: "Work \"2\"".into(),
             config_dir: Some(dir.to_owned()),
-            failover: false,
         }
     }
 

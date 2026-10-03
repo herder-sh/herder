@@ -395,7 +395,7 @@ impl Session {
 
     async fn command(&mut self, command: AdapterCommand) {
         match command {
-            AdapterCommand::SendPrompt { turn_id, text } => {
+            AdapterCommand::SendPrompt { turn_id, text, .. } => {
                 self.turn = Some(OpenTurn {
                     id: turn_id,
                     codex_id: None,
@@ -1050,7 +1050,7 @@ fn seed_items(seed: &[Item]) -> Vec<Value> {
     let message = |role: &str, kind: &str, text: &str| json!({"type": "message", "role": role, "content": [{"type": kind, "text": text}]});
     seed.iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text } => Some(message("user", "input_text", text)),
+            ItemBody::UserMessage { text, .. } => Some(message("user", "input_text", text)),
             ItemBody::AssistantMessage { text } => Some(message("assistant", "output_text", text)),
             ItemBody::ToolCall { name, input } => Some(message(
                 "assistant",
@@ -1121,7 +1121,10 @@ mod tests {
             body,
         };
         let seed = [
-            item(ItemBody::UserMessage { text: "hi".into() }),
+            item(ItemBody::UserMessage {
+                text: "hi".into(),
+                attachments: Vec::new(),
+            }),
             item(ItemBody::Reasoning { text: "hmm".into() }),
             item(ItemBody::AssistantMessage {
                 text: "hello".into(),

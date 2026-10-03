@@ -20,6 +20,7 @@ fn turn(n: usize, output_chars: usize) -> Vec<Item> {
             n,
             ItemBody::UserMessage {
                 text: format!("Request {n}"),
+                attachments: Vec::new(),
             },
         ),
         item(
@@ -98,10 +99,17 @@ fn a_200_turn_session_fits_keeping_the_opening_request_and_the_newest_turns() {
     assert_eq!(
         seed[0].body,
         ItemBody::UserMessage {
-            text: "Request 1".into()
+            text: "Request 1".into(),
+            attachments: Vec::new(),
         }
     );
-    assert_eq!(seed[1].body, ItemBody::UserMessage { text: NOTE.into() });
+    assert_eq!(
+        seed[1].body,
+        ItemBody::UserMessage {
+            text: NOTE.into(),
+            attachments: Vec::new()
+        }
+    );
     assert_eq!(
         ids(&seed[seed.len() - 4..]),
         ["200-user", "200-call", "200-result", "200-reply"]
@@ -174,6 +182,7 @@ fn a_newest_turn_too_big_alone_loses_its_oldest_items_in_whole_tool_pairs() {
         2,
         ItemBody::UserMessage {
             text: "Request 2".into(),
+            attachments: Vec::new(),
         },
     )];
     for n in 0..50 {

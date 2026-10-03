@@ -167,6 +167,7 @@ fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
         turn_id: turn(),
         text: text.into(),
+        images: Vec::new(),
     }
 }
 
@@ -492,6 +493,7 @@ async fn seed_transcript_is_context_for_the_first_turn() {
             "seed-1",
             ItemBody::UserMessage {
                 text: "My favourite colour is teal.".into(),
+                attachments: Vec::new(),
             },
         ),
         item("seed-2", assistant("Noted.")),

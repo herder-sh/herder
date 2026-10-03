@@ -1,0 +1,5 @@
+# A prompt carrying an image, which reaches the agent with its text.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Like this.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpwbmc="}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Done."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}

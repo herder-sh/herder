@@ -215,7 +215,9 @@ impl Backend for Fleet {
 fn target(command: &CommandBody) -> Option<&SessionId> {
     match command {
         CommandBody::ArchiveSession { session_id, .. }
+        | CommandBody::UnarchiveSession { session_id }
         | CommandBody::SendPrompt { session_id, .. }
+        | CommandBody::GetAttachment { session_id, .. }
         | CommandBody::Interrupt { session_id }
         | CommandBody::SetModel { session_id, .. }
         | CommandBody::SetPermissionMode { session_id, .. }
@@ -228,6 +230,9 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ComposeDown { session_id, .. }
         | CommandBody::OpenTerminal { session_id, .. } => Some(session_id),
         CommandBody::CreateSession { .. }
+        | CommandBody::ListDirectory { .. }
+        | CommandBody::AddProject { .. }
+        | CommandBody::SetProjectSettings { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

@@ -38,8 +38,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, ApprovalId, Item, ItemId, PermissionMode, QuestionId, TurnError,
-    TurnId, UsageWindow,
+    Answer, ApprovalDecision, ApprovalId, Image, Item, ItemId, PermissionMode, QuestionId,
+    TurnError, TurnId, UsageWindow,
 };
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -64,6 +64,13 @@ pub trait Adapter: Send + Sync {
     /// Resolves once the CLI accepts prompts. A failure to get there, such as a missing login,
     /// is classified like a turn failure, since starting is part of running the next turn.
     fn start(&self, request: StartRequest) -> StartFuture;
+
+    /// Whether the CLI takes images with a prompt ([`AdapterCommand::SendPrompt`]'s `images`).
+    /// Known before any start, so the daemon refuses a prompt with images up front; an adapter
+    /// that says no is never sent any.
+    fn accepts_images(&self) -> bool {
+        false
+    }
 }
 
 /// What [`Adapter::start`] returns: owns everything it needs, so the daemon can spawn it.
@@ -162,6 +169,10 @@ pub enum AdapterCommand {
         turn_id: TurnId,
         /// Prompt text.
         text: String,
+        /// Images for the agent to see with the text, already validated by the daemon; only
+        /// sent to an adapter that [`Adapter::accepts_images`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
     },
     /// Stop the running turn; answered by `TurnInterrupted`, voiding any pending approval.
     Interrupt,

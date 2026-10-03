@@ -293,7 +293,7 @@ impl Session {
                 Some(notice(text, Tone::Info))
             }
             EventBody::ItemAdded { item } => {
-                if let ItemBody::UserMessage { text } = &item.body
+                if let ItemBody::UserMessage { text, .. } = &item.body
                     && let Some(at) = self.queued.iter().position(|queued| queued == text)
                 {
                     self.queued.remove(at);
