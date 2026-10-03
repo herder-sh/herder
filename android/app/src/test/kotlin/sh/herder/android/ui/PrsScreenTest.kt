@@ -151,7 +151,7 @@ class PrsScreenTest {
         compose.onNodeWithText("open").assertIsDisplayed()
         compose.onNodeWithText("✓ ci").assertIsDisplayed()
         compose.onNodeWithText("… review").assertIsDisplayed()
-        compose.onNodeWithText("✓ merge").assertIsDisplayed()
+        compose.onAllNodesWithText("✓ merge").onFirst().assertIsDisplayed()
         compose.onAllNodesWithText("herder/api").onFirst().assertIsDisplayed()
         compose.onAllNodesWithText("Document the health endpoint").onFirst().assertIsDisplayed()
         compose.onNodeWithText("draft").assertIsDisplayed()

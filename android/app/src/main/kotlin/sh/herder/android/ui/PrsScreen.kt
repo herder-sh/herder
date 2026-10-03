@@ -246,6 +246,7 @@ private fun SessionPrs(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpen)
+                .semantics { contentDescription = "Open the session" }
                 .heightIn(min = 48.dp)
                 .padding(start = 16.dp, end = 4.dp, top = 8.dp),
         ) {
@@ -261,9 +262,6 @@ private fun SessionPrs(
                 val place = row.place ?: machine?.name
                 val meta = listOfNotNull(row.status.label(), place).joinToString(" · ")
                 Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            TextButton(onClick = onOpen, modifier = Modifier.semantics { contentDescription = "Open the session" }) {
-                Text("Open")
             }
         }
         for (pr in row.prs) {
