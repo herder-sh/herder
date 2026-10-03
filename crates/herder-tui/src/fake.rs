@@ -215,6 +215,29 @@ pub fn vault() -> App {
     app
 }
 
+/// `s2` of [`vault`] after `devbox` recovered it and `laptop` came back: the vault lists it
+/// on `devbox`, and `laptop`, paired too, lists its own copy `moved`. Both hosts are online.
+pub fn recovered() -> App {
+    let mut app = vault();
+    let mut vault = app.machines[0].clone();
+    for host in &mut vault.hosts {
+        host.online = true;
+    }
+    vault.sessions = vec![SessionHead {
+        host_id: Some(HostId::new("devbox")),
+        ..head("s2", Some("github.com/org/app"))
+    }];
+    let mut laptop = machine("laptop", "laptop", &["s2"]);
+    laptop.sessions[0].status = SessionStatus::Moved;
+    app.update(Msg::Machines(vec![vault, laptop]));
+    let moved = vec![
+        created("herder/docs", None, None),
+        status(SessionStatus::Moved),
+    ];
+    feed(&mut app, "laptop", "s2", update("s2", 1, moved, Vec::new()));
+    app
+}
+
 pub fn started(turn: &str) -> EventBody {
     EventBody::TurnStarted {
         turn_id: TurnId::new(turn),

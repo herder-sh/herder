@@ -24,7 +24,14 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
     let mut height = prompt(session, width, "").map_or(0, |(lines, _)| lines.len() + 2);
-    if session.status != SessionStatus::Archived {
+    if app
+        .open
+        .as_ref()
+        .and_then(|key| app.read_only(key))
+        .is_some()
+    {
+        height += 3;
+    } else if session.status != SessionStatus::Archived {
         height += composer_lines(app, width) + 2;
     }
     // The transcript keeps at least half the pane.
@@ -84,6 +91,22 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
                 hits.click(Rect::new(x, y, width, 1), tap.click);
             }
         }
+    }
+    if let Some((text, recover)) = app.open.as_ref().and_then(|key| app.read_only(key)) {
+        let block = Block::bordered().border_style(super::dim());
+        let style = if recover {
+            Style::new().fg(Color::Red)
+        } else {
+            super::dim()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::styled(format!(" {text}"), style)).block(block),
+            composer_area,
+        );
+        if recover {
+            hits.click(composer_area, Click::Act(Action::OpenRecover));
+        }
+        return;
     }
     if archived {
         return;

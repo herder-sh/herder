@@ -60,6 +60,8 @@ pub enum List {
     Machines,
     /// The switch dialog's accounts; a second tap switches.
     Switch,
+    /// The recover dialog's hosts.
+    Recover,
 }
 
 /// What a wheel step over a spot scrolls.
@@ -315,6 +317,11 @@ impl App {
                     panel.chosen = Some(host_id);
                 }
             }
+            List::Recover => {
+                if let Some(dialog) = &mut self.recover {
+                    dialog.selected = at;
+                }
+            }
             List::Switch => {
                 if let Some(dialog) = &mut self.switch {
                     if dialog.selected == at && !dialog.editing {
@@ -334,6 +341,7 @@ impl App {
             || self.machine_panel.is_some()
             || self.account_screen.is_some()
             || self.switch.is_some()
+            || self.recover.is_some()
             || self.terminals.is_some()
             || self.compose.dialog.is_some()
             || self.compose.palette.is_some()

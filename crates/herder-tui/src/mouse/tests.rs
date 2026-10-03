@@ -410,6 +410,25 @@ fn the_switch_dialog_picks_an_account_by_tap_and_switches_on_a_second() {
 }
 
 #[test]
+fn recover_opens_by_a_tap_on_the_open_offline_session() {
+    for size in SIZES {
+        let mut app = fake::vault();
+        tap_last(&mut app, size, "docs");
+        assert_eq!(app.open, Some(key("v", "s2")), "{size:?}");
+        tap(&mut app, size, "R recover");
+        assert!(app.recover.is_some(), "{size:?}");
+        tap_last(&mut app, size, "devbox");
+        assert_eq!(app.recover.as_ref().map(|r| r.selected), Some(0));
+        if size.0 < crate::views::NARROW {
+            tap(&mut app, size, "esc close");
+        } else {
+            press(&mut app, KeyCode::Esc);
+        }
+        assert!(app.recover.is_none(), "{size:?}");
+    }
+}
+
+#[test]
 fn the_terminal_picker_attaches_on_a_second_tap() {
     for size in SIZES {
         let mut app = crate::terminal::app_tests::with_terminals();

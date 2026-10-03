@@ -133,6 +133,45 @@ fn a_vault_groups_sessions_by_host_and_marks_offline_ones() {
 }
 
 #[test]
+fn an_offline_hosts_session_is_read_only_and_offers_recover() {
+    for (width, height) in [(120, 24), (45, 30)] {
+        let mut app = fake::vault();
+        app.choose_row(crate::app::Row::Session {
+            key: fake::key("v", "s2"),
+            depth: 0,
+        });
+        if width < super::NARROW {
+            // The list says since when the host is offline, and its bar offers to recover the
+            // selected session.
+            let screen = render(&mut app, width, height).backend().to_string();
+            assert!(screen.contains("offline · 2h 5m ago"), "{screen}");
+            assert!(screen.contains("R recover"), "{screen}");
+        }
+        press(&mut app, KeyCode::Enter);
+        insta::assert_snapshot!(
+            format!("offline_session_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+        press(&mut app, KeyCode::Char('R'));
+        insta::assert_snapshot!(
+            format!("recover_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+    }
+}
+
+#[test]
+fn a_moved_session_says_where_it_went_and_is_read_only() {
+    let mut app = fake::recovered();
+    app.choose_row(crate::app::Row::Session {
+        key: fake::key("laptop", "s2"),
+        depth: 0,
+    });
+    press(&mut app, KeyCode::Enter);
+    insta::assert_snapshot!(render(&mut app, 120, 12).backend());
+}
+
+#[test]
 fn help_lists_the_keys() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));

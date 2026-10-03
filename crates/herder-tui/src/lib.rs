@@ -24,6 +24,7 @@ mod machines;
 mod mouse;
 mod projects;
 mod prs;
+mod recover;
 mod session;
 mod switch;
 mod terminal;
