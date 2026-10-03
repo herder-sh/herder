@@ -32,6 +32,7 @@ mod add_machine;
 mod backup;
 mod composer;
 mod details;
+mod fork;
 mod help;
 mod inbox;
 mod machines;
@@ -42,7 +43,6 @@ mod palette;
 mod phone;
 mod projects;
 mod prs;
-mod recover;
 mod resources;
 mod sessions;
 mod status;
@@ -177,7 +177,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         accounts::draw(frame, main, app, screen, &mut hits);
     }
     switch::draw(frame, body, app, &mut hits);
-    recover::draw(frame, body, app, &mut hits);
+    fork::draw(frame, body, app, &mut hits);
     if let Some(panel) = &app.machine_panel {
         machines::draw(frame, main, app, panel, &mut hits);
     }

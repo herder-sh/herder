@@ -99,7 +99,7 @@ pub(super) enum Request {
         command: String,
         timeout: Duration,
     },
-    /// The session was recovered on another host: stop it and make it read-only here.
+    /// Another host took the session over: stop it and make it read-only here.
     MovedAway,
 }
 
@@ -423,7 +423,7 @@ impl Actor {
             }
             return Err(error(
                 ErrorCode::Conflict,
-                "the session was recovered on another host and is read-only here",
+                "another host took the session over; it is read-only here",
             ));
         }
         match request {
@@ -1008,7 +1008,7 @@ impl Actor {
             SessionStatus::Moved => {
                 return Err(error(
                     ErrorCode::Conflict,
-                    "the session was recovered on another host and is read-only here",
+                    "another host took the session over; it is read-only here",
                 ));
             }
             _ => return Err(error(ErrorCode::Conflict, "the session is not archived")),
@@ -1041,7 +1041,7 @@ impl Actor {
         Ok(())
     }
 
-    /// The session was recovered on another host, which goes on with it: stops the CLI, the
+    /// Another host took the session over and goes on with it: stops the CLI, the
     /// setup command and whatever the session left running, fails the open turn and makes the
     /// session read-only here. The worktree stays as the session left it.
     async fn moved_away(&mut self) {
@@ -1057,7 +1057,7 @@ impl Actor {
         if let Some(turn_id) = open {
             let error = TurnError {
                 class: ErrorClass::Fatal,
-                message: "the session was recovered on another host".to_owned(),
+                message: "another host took the session over".to_owned(),
             };
             self.log(EventBody::TurnFailed { turn_id, error }).await;
         }

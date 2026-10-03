@@ -363,7 +363,7 @@ fn a_vault_groups_sessions_by_host_and_marks_offline_ones() {
 }
 
 #[test]
-fn an_offline_hosts_session_is_read_only_and_offers_recover() {
+fn an_offline_hosts_session_is_read_only_and_offers_the_fork() {
     for (width, height) in [(120, 24), (45, 30)] {
         let mut app = fake::vault();
         app.choose_row(crate::app::Row::Session {
@@ -371,12 +371,12 @@ fn an_offline_hosts_session_is_read_only_and_offers_recover() {
             depth: 0,
         });
         if width < super::NARROW {
-            // The list says since when the host is offline, and its bar offers to recover the
+            // The list says since when the host is offline, and its bar offers to fork the
             // selected session.
             let screen = render(&mut app, width, height).backend().to_string();
             // In ASCII, as on a phone.
             assert!(screen.contains("offline - 2h 5m ago"), "{screen}");
-            assert!(screen.contains("R recover"), "{screen}");
+            assert!(screen.contains("F fork"), "{screen}");
         }
         press(&mut app, KeyCode::Enter);
         insta::assert_snapshot!(
@@ -387,15 +387,20 @@ fn an_offline_hosts_session_is_read_only_and_offers_recover() {
 }
 
 #[test]
-fn the_recover_dialog_at_three_widths() {
+fn the_fork_dialog_at_three_widths() {
     let mut app = fake::vault();
     app.choose_row(crate::app::Row::Session {
         key: fake::key("v", "s2"),
         depth: 0,
     });
     press(&mut app, KeyCode::Enter);
-    press(&mut app, KeyCode::Char('R'));
-    at_three_widths("recover", &mut app);
+    press(&mut app, KeyCode::Char('F'));
+    at_three_widths("fork", &mut app);
+    // Paired with devbox as an owner: enter forks it there.
+    let mut machines = app.machines.clone();
+    machines.push(fake::machine("devbox", "devbox", &[]));
+    app.update(Msg::Machines(machines));
+    insta::assert_snapshot!("fork_paired", render(&mut app, 100, 24).backend());
 }
 
 #[test]
@@ -431,7 +436,7 @@ fn the_accounts_and_fleet_views_show_their_keys_in_the_mode_bar() {
 
 #[test]
 fn a_moved_session_says_where_it_went_and_is_read_only() {
-    let mut app = fake::recovered();
+    let mut app = fake::moved();
     app.choose_row(crate::app::Row::Session {
         key: fake::key("laptop", "s2"),
         depth: 0,
@@ -1155,6 +1160,49 @@ fn host_resources_in_the_machines_panel_on_narrow_and_wide_screens() {
     fake::with_resources(&mut app, fake::host_resources(4), false);
     press(&mut app, KeyCode::Char('m'));
     at_three_widths("machine_resources", &mut app);
+}
+
+#[test]
+fn a_vaults_status_shows_in_the_machines_panel() {
+    use herder_protocol::{HostId, HostReplication, VaultStatus};
+    let mut app = fake::vault();
+    let mut vault = app.machines[0].clone();
+    vault.vault = Some(VaultStatus {
+        sessions: 3,
+        events: 1250,
+        storage_bytes: 3 << 20,
+        hosts: vec![
+            HostReplication {
+                host_id: HostId::new("devbox"),
+                sessions: 2,
+                events: 1000,
+                last_event_at: Some(herder_protocol::Timestamp::now()),
+                lag_ms: Some(40),
+            },
+            HostReplication {
+                host_id: HostId::new("laptop"),
+                sessions: 1,
+                events: 250,
+                last_event_at: None,
+                lag_ms: None,
+            },
+        ],
+    });
+    app.update(Msg::Machines(vec![vault]));
+    press(&mut app, KeyCode::Char('m'));
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    assert!(
+        screen.contains("vault         3 sessions · 1250 events · 3 MiB"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("devbox        2 sessions · 1000 events · last event 0m ago · lag 40 ms"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("laptop        1 session · 250 events"),
+        "{screen}"
+    );
 }
 
 #[test]

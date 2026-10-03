@@ -10,7 +10,7 @@
 //! the batch; otherwise none does.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, Attachment, AttachmentData, Batch, Cursor, Event, EventBody, HostHello, HostMessage,
     Item, ItemBody, ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason,
-    Seq, SessionHead, SessionId, SessionSummary, VaultMessage,
+    Seq, SessionHead, SessionId, SessionStatus, SessionSummary, VaultMessage,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -29,8 +29,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use super::BUILD;
 use super::client::{self, Ws};
-use super::{BUILD, recover};
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
@@ -102,8 +102,6 @@ pub struct Replicator {
     pub sessions: SessionManager,
     /// Notified when the journal grows; see [`WakeOnEvent`].
     pub changed: Arc<Notify>,
-    /// The data dir, which keeps where recovered sessions came from ([`recover`]).
-    pub data_dir: PathBuf,
 }
 
 impl Replicator {
@@ -175,9 +173,9 @@ impl Replicator {
             .map_err(|_| anyhow!("no answer in {CONNECT_TIMEOUT:?}"))??;
         *connected = true;
         info!(vault = %self.vault.address, sessions = acked.len(), "replicating to the vault");
-        // Sessions recovered elsewhere while this host was gone stop here before they
+        // Sessions another host took over while this host was gone stop here before they
         // replicate again, retried on every keepalive until it worked; the vault drops this
-        // connection when one is recovered later.
+        // connection when one is taken over later.
         let mut released = self.release_recovered().await;
         let mut link = Link::new(acked);
         let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
@@ -207,20 +205,14 @@ impl Replicator {
         }
     }
 
-    /// Makes this host's sessions that another host recovered read-only ([`recover`]);
-    /// returns whether that worked.
+    /// Makes this host's sessions that another host took over read-only; returns whether
+    /// that worked.
     async fn release_recovered(&self) -> bool {
-        let released = recover::release_recovered(
-            &self.vault,
-            &self.device,
-            &self.host,
-            &self.sessions,
-            &self.data_dir,
-        );
+        let released = release_recovered(&self.vault, &self.device, &self.host, &self.sessions);
         match released.await {
             Ok(()) => true,
             Err(err) => {
-                warn!("cannot check for sessions recovered on other hosts: {err:#}");
+                warn!("cannot check for sessions other hosts took over: {err:#}");
                 false
             }
         }
@@ -421,6 +413,41 @@ fn backoff(attempt: u32) -> Duration {
     BACKOFF_BASE
         .saturating_mul(2u32.saturating_pow(attempt))
         .min(BACKOFF_CAP)
+}
+
+/// Makes every session of this host read-only that the vault now shows on another host,
+/// which took it over under the same id while this one was gone.
+async fn release_recovered(
+    vault: &VaultConfig,
+    device: &DeviceKey,
+    host: &Host,
+    sessions: &SessionManager,
+) -> Result<()> {
+    let view = client::read(vault, device, None).await?;
+    let local: HashMap<SessionId, SessionStatus> = sessions
+        .sessions()
+        .await?
+        .into_iter()
+        .map(|head| (head.session_id, head.status))
+        .collect();
+    for head in view.sessions {
+        let (Some(holder), Some(status)) = (&head.host_id, local.get(&head.session_id)) else {
+            continue;
+        };
+        if *holder == host.id || *status == SessionStatus::Moved {
+            continue;
+        }
+        info!(
+            session_id = %head.session_id,
+            to_host = %holder,
+            "another host took the session over; it is read-only here now"
+        );
+        sessions
+            .moved_away(head.session_id.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

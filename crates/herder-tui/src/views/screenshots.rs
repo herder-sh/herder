@@ -280,14 +280,14 @@ const SCENES: [Scene; 46] = [
         fake::with_resources(&mut app, fake::host_resources(2), true);
         app_buffer(app, theme, width, height)
     }),
-    ("recover", |theme, _, width, height| {
+    ("fork", |theme, _, width, height| {
         let mut app = fake::vault();
         app.choose_row(crate::app::Row::Session {
             key: fake::key("v", "s2"),
             depth: 0,
         });
         press(&mut app, KeyCode::Enter);
-        press(&mut app, KeyCode::Char('R'));
+        press(&mut app, KeyCode::Char('F'));
         app_buffer(app, theme, width, height)
     }),
     ("terminals", |theme, _, width, height| {

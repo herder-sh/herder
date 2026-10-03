@@ -216,7 +216,6 @@ impl HostDaemon {
                     },
                     sessions: sessions.clone(),
                     changed,
-                    data_dir: dir.clone(),
                 };
                 tokio::spawn(replicator.run(shutdown));
                 sessions
@@ -656,6 +655,51 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_of_the_vault_sees_what_it_holds_of_each_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client.pair(vault.pairing_link("alice")).await.unwrap();
+    let machine = machine_when(&client, |m| m.vault.as_ref().is_some_and(|v| v.events == 8)).await;
+    let status = machine.vault.unwrap();
+    assert_eq!((status.sessions, status.events), (2, 8));
+    assert!(status.storage_bytes > 0);
+    assert_eq!(status.hosts.len(), 1);
+    let devbox = &status.hosts[0];
+    assert_eq!(devbox.host_id, host_id());
+    assert_eq!((devbox.sessions, devbox.events), (2, 8));
+    let newest = journal(&host_dir)
+        .values()
+        .flat_map(|records| records.iter().map(|record| record.at))
+        .max();
+    assert_eq!(devbox.last_event_at, newest);
+    assert!(devbox.lag_ms.is_some());
+
+    // It follows what the host replicates live.
+    host.switch_model("s1", "live").await;
+    let machine = machine_when(&client, |m| m.vault.as_ref().is_some_and(|v| v.events == 9)).await;
+    let status = machine.vault.unwrap();
+    assert_eq!(status.hosts[0].events, 9);
+    let lag = status.hosts[0].lag_ms.unwrap();
+    assert!(lag < TIMEOUT.as_millis() as u64, "{lag}");
+
+    // A disconnected vault's status is dropped: it is live only.
+    vault.runtime.kill().await;
+    machine_when(&client, |m| m.vault.is_none()).await;
+    host.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_silent_host_is_offline_after_the_liveness_timeout() {
     let tmp = tempfile::tempdir().unwrap();
     let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
@@ -769,7 +813,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     assert_eq!(devices[0].0.role, DeviceRole::Host);
     host.runtime.kill().await;
 
-    // Its key, stolen, speaks the client protocol, as `herder recover` reads the vault too:
+    // Its key, stolen, speaks the client protocol, as `herder fork` reads the vault too:
     // every read is refused at the hello, before the vault sends a host list, a session list
     // or a journal.
     let mut ws = dial(&vault, &host_dir).await;

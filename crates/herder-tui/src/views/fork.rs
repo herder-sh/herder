@@ -1,16 +1,15 @@
-//! The recover dialog, over the main screen: the offline host, the online hosts that can take
-//! the session over, and the command to run on the chosen one.
+//! The fork dialog, over the main screen: where the session runs, the hosts it can be forked
+//! onto, and on enter the fork; without such a host, the command to run on one.
 //!
 //! ```text
-//! ┌─ recover · app · docs ─────────────────── esc ─┐
+//! ┌─ fork · app · docs ────────────────────── esc ─┐
 //! │                                                │
-//! │  ✗ laptop is offline · last seen 2h 5m ago     │
+//! │  ✗ on laptop · offline, last seen 2h 5m ago    │
 //! │                                                │
-//! │  take it over on                               │
+//! │  fork onto                                     │
 //! │▶ ● devbox                                      │
 //! │                                                │
-//! │  run on devbox                                 │
-//! │  $ herder recover s2                           │
+//! │  enter forks it onto devbox                    │
 //! └────────────────────────────────────────────────┘
 //! ```
 
@@ -21,26 +20,23 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::app::App;
+use crate::fork;
 use crate::mouse::{Click, Hits, List as Rows};
-use crate::recover;
 use crate::ui::dialog::{Dialog, PAD_X, Size};
 use crate::ui::fit;
 use crate::ui::hints::Hint;
 use crate::ui::list::{ListView, Row};
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
-    let Some(dialog) = &app.recover else {
+    let Some(dialog) = &app.fork else {
         return;
     };
-    let (Some(session), Some(dead)) = (
-        app.sessions.get(&dialog.session),
-        app.fleet_host(&dialog.session),
-    ) else {
+    let Some(session) = app.sessions.get(&dialog.session) else {
         return;
     };
     let ui = app.ui();
     let theme = ui.theme;
-    let targets = app.recover_targets(&dialog.session);
+    let targets = app.fork_targets();
     let cursor = dialog.selected.min(targets.len().saturating_sub(1));
     let chosen = targets.get(cursor);
     let width = usize::from(
@@ -59,31 +55,38 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
             .map(|line| Line::styled(line.into_owned(), style))
             .collect()
     };
-    let mut top = vec![Line::from(vec![
-        Span::styled(
-            format!("{} ", ui.glyphs.disconnected),
-            Style::new().fg(theme.error),
-        ),
-        Span::styled(dead.host_name.clone(), ui.strong()),
-        Span::styled(" is offline", ui.text()),
-        Span::styled(
+    let host = app
+        .host_name(&dialog.session)
+        .unwrap_or_else(|| dialog.session.host_id.to_string());
+    let mut source = vec![
+        Span::styled("on ", ui.muted()),
+        Span::styled(host, ui.strong()),
+    ];
+    if let Some(dead) = app.fleet_host(&dialog.session).filter(|host| !host.online) {
+        source.insert(
+            0,
+            Span::styled(
+                format!("{} ", ui.glyphs.disconnected),
+                Style::new().fg(theme.error),
+            ),
+        );
+        source.push(Span::styled(
             format!(
-                "{}last seen {} ago",
+                "{}offline, last seen {} ago",
                 ui.glyphs.separator,
                 super::sessions::ago(dead)
             ),
             ui.muted(),
-        ),
-    ])];
-    top.push(Line::default());
+        ));
+    }
+    let mut top = vec![Line::from(source), Line::default()];
     if targets.is_empty() {
         top.extend(wrapped(
-            "No host of this vault is online. Start herder on another host paired with it, then \
-             run there:",
+            "No host is paired here with you as its owner. Run on the host to fork it onto:",
             ui.text(),
         ));
     } else {
-        top.push(Line::styled("take it over on", ui.muted()));
+        top.push(Line::styled("fork onto", ui.muted()));
     }
     let rows: Vec<Row> = targets
         .iter()
@@ -91,34 +94,47 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
             Row::item(Line::from(vec![
                 Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
                 Span::raw(" "),
-                Span::styled(target.host_name.clone(), ui.text()),
+                Span::styled(target.name.clone(), ui.text()),
             ]))
         })
         .collect();
     let mut bottom = vec![Line::default()];
-    if let Some(chosen) = chosen {
-        bottom.push(Line::styled(
-            format!("run on {}", chosen.host_name),
+    let here = chosen.is_some();
+    match chosen {
+        Some(chosen) if dialog.sending => bottom.push(Line::styled(
+            format!("forking onto {}{}", chosen.name, ui.glyphs.ellipsis),
             ui.muted(),
-        ));
+        )),
+        Some(chosen) => bottom.push(Line::from(vec![
+            Span::styled("enter", ui.accent()),
+            Span::styled(format!(" forks it onto {}", chosen.name), ui.text()),
+        ])),
+        None => bottom.push(Line::from(vec![
+            Span::styled("$ ", ui.muted()),
+            Span::styled(fork::command(&session.id), ui.strong()),
+        ])),
     }
-    bottom.push(Line::from(vec![
-        Span::styled("$ ", ui.muted()),
-        Span::styled(recover::command(&session.id), ui.strong()),
-    ]));
+    if let Some(error) = &dialog.error {
+        bottom.extend(wrapped(error, Style::new().fg(theme.error)));
+    }
     bottom.push(Line::default());
     bottom.extend(wrapped(
-        &format!(
-            "It keeps its id and continues there from its last checkpoint. If {} comes back, \
-             its copy turns read-only.",
-            dead.host_name
-        ),
+        "The fork is a new session with this one's history, in a new worktree from its last \
+         checkpoint. This one stays as it is.",
         ui.muted(),
     ));
 
-    let hints = [Hint::new("j/k", "host"), Hint::new("esc", "close")];
+    let hints = if here {
+        vec![
+            Hint::new("j/k", "host"),
+            Hint::new("enter", "fork"),
+            Hint::new("esc", "close"),
+        ]
+    } else {
+        vec![Hint::new("j/k", "host"), Hint::new("esc", "close")]
+    };
     let narrow = area.width < super::NARROW;
-    let title = Line::from(ui.joined([Span::raw("recover"), Span::raw(session.short_title())]));
+    let title = Line::from(ui.joined([Span::raw("fork"), Span::raw(session.short_title())]));
     let height = u16::try_from(top.len() + rows.len() + bottom.len()).unwrap_or(u16::MAX);
     let areas = Dialog::new(ui, title, Size::Medium)
         // On a phone the button bar has them.
@@ -153,7 +169,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
         .focused(true)
         .render(list, buf, &mut offset);
     for (at, rect) in placed {
-        hits.click(rect, Click::Row(Rows::Recover, at));
+        hits.click(rect, Click::Row(Rows::Fork, at));
     }
     y += list.height;
     text(bottom, &mut y, buf);

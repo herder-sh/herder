@@ -45,8 +45,8 @@ pub use replication::{
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
-    HostUsage, LinkedVault, Role, ServerHello, ServerMessage, SessionHead, Terminal,
-    TerminalPurpose, UsageWindow, VaultVolume,
+    HostReplication, HostUsage, LinkedVault, Role, ServerHello, ServerMessage, SessionHead,
+    Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 

@@ -336,7 +336,7 @@ impl PrTracker {
         if session.status == SessionStatus::Moved {
             return Err(error(
                 ErrorCode::Conflict,
-                "the session was recovered on another host and is read-only here",
+                "another host took the session over; it is read-only here",
             ));
         }
         Ok(session)
@@ -413,7 +413,7 @@ impl PrTracker {
             .iter()
             .filter(open)
             .any(|pr| pr.ci == CiStatus::Pending || pr.mergeable == Mergeable::Unknown);
-        // The host that recovered it tracks its pull requests now.
+        // The host that took it over tracks its pull requests now.
         if session.status == SessionStatus::Moved {
             return None;
         }

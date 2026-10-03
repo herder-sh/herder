@@ -26,7 +26,7 @@ pub enum State {
     Idle,
     /// Put away; read-only.
     Archived,
-    /// Recovered onto another host.
+    /// Taken over by another host.
     Moved,
     /// Not loaded, or a status newer than this build.
     Unknown,

@@ -81,10 +81,10 @@ pub enum Action {
     Group,
     /// Show or hide archived sessions in the session list.
     ToggleArchived,
-    /// Open the recover dialog of the open or selected session.
-    OpenRecover,
-    /// Input to the recover dialog.
-    Recover(crate::recover::Input),
+    /// Open the fork dialog of the open or selected session.
+    OpenFork,
+    /// Input to the fork dialog.
+    Fork(crate::fork::Input),
     /// Arm the leader: the next key is a NAVIGATE key, from any mode.
     Leader,
     /// Go to another session: the sidebar, or on a phone the switcher.
@@ -141,8 +141,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     if let Some(switch) = &app.switch {
         return crate::switch::for_key(key, switch);
     }
-    if app.recover.is_some() {
-        return crate::recover::for_key(key);
+    if app.fork.is_some() {
+        return crate::fork::for_key(key);
     }
     if app.terminals.is_some() {
         let action = match key.code {
@@ -244,8 +244,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         }
         KeyCode::Char('v') => Action::Group,
         KeyCode::Char('H') => Action::ToggleArchived,
-        KeyCode::Char('R') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
-            Action::OpenRecover
+        KeyCode::Char('F') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
+            Action::OpenFork
         }
         _ => return None,
     };
@@ -270,7 +270,7 @@ pub fn for_leader(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('n') => Action::Compose(Act::NewSession),
         KeyCode::Char('s') => Action::OpenSwitch,
         KeyCode::Char('t') => Action::Terminals,
-        KeyCode::Char('R') => Action::OpenRecover,
+        KeyCode::Char('F') => Action::OpenFork,
         KeyCode::Char('I') => Action::Inbox(InboxAction::Toggle),
         KeyCode::Char('P') => Action::Pr(PrAction::ToggleAll),
         KeyCode::Char('p') => Action::Pr(PrAction::FocusStrip),
@@ -354,7 +354,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("z", "fold or unfold the selected task's children"),
     ("v", "group sessions by project or by machine"),
     ("H", "show or hide archived sessions"),
-    ("R", "recover a session whose host is offline"),
+    ("F", "fork a session onto a host"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (
         "Enter / l",

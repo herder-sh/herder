@@ -177,8 +177,8 @@ async fn serve(
 }
 
 /// Handles the host's messages once it is connected, keeping at most `cap` bytes of its
-/// images, until another host recovers one of its sessions: then the connection is dropped,
-/// so the host reconnects and stops that session.
+/// images, until another host takes over one of its sessions: then the connection is
+/// dropped, so the host reconnects and stops that session.
 async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) -> Result<()> {
     let mut superseded = shared.superseded.subscribe();
     loop {
@@ -186,7 +186,7 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
             frame = tokio::time::timeout(shared.liveness, ws.next()) => frame,
             other = superseded.recv() => match other {
                 Ok(other) if other != *host => continue,
-                _ => bail!("another host recovered one of this host's sessions"),
+                _ => bail!("another host took over one of this host's sessions"),
             },
         };
         let frame = match frame {
@@ -231,7 +231,10 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
                 match stored {
                     Ok((Outcome::Acked(after_seq), batch, superseded, current)) => {
                         shared.supersede(superseded);
-                        // A recovered copy is kept but never shown: its session goes on
+                        if let Some(newest) = batch.events.last() {
+                            shared.fleet.presence().stored(host, newest.at);
+                        }
+                        // A copy another host took over is kept but never shown: its session goes on
                         // elsewhere at the same seqs.
                         if current {
                             shared.fleet.publish(&batch);

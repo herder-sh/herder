@@ -45,8 +45,8 @@
 //! # Resources
 //!
 //! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
-//! pushed, at most every two seconds each; they are live only while connected, so they are
-//! cleared when the connection is not up.
+//! pushed, at most every two seconds each, and a vault's [`Machine::vault`] its latest status;
+//! they are live only while connected, so they are cleared when the connection is not up.
 //!
 //! # Sessions
 //!
@@ -102,6 +102,7 @@ use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
     Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
     Provider, Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId, Timestamp,
+    VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -115,7 +116,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 3;
+pub const CLIENT_API_VERSION: u32 = 4;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,6 +208,9 @@ pub struct Machine {
     /// What each session with processes or containers uses, as last sent; empty while not
     /// connected.
     pub session_usage: HashMap<SessionId, SessionUsage>,
+    /// What a vault holds and how far each host's replication got, as last sent; `None` for a
+    /// daemon, and while not connected.
+    pub vault: Option<VaultStatus>,
 }
 
 /// Where a machine's connection stands.

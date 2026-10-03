@@ -55,13 +55,13 @@ every session's journal from then on, and catches up after either side was offli
 
 A host paired with `--host` may only replicate its own sessions. It reads nothing on the
 vault: no hosts, sessions, transcripts, PRs, attachments or devices, so a shared machine, or
-a stolen copy of its device key, sees nothing of the others. It cannot `herder recover`
-either, since that reads the vault.
+a stolen copy of its device key, sees nothing of the others. It cannot `herder fork`
+another host's session either, since that reads the vault.
 
 ## Pair a client
 
 `herder pair` without `--host` mints a client code, as on any daemon: the device reads every
-host's sessions, read-only. A host that should be able to `herder recover` sessions of dead
+host's sessions, read-only. A host that should be able to `herder fork` sessions of other
 hosts is paired with a client code instead (`/herder pair --user devbox`); it replicates as
 well.
 
@@ -73,7 +73,7 @@ well.
 
 Devices paired before host codes existed could both replicate and read. The first time a
 vault with host codes starts, every device that has replicated as a host becomes host-only;
-the rest stay clients. To let such a host keep recovering, revoke it and pair it again
+the rest stay clients. To let such a host fork other hosts' sessions, revoke it and pair it again
 with a client code.
 
 ## Storage

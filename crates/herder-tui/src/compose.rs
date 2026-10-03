@@ -83,6 +83,8 @@ pub enum Origin {
         name: String,
         open: bool,
     },
+    /// The fork dialog's fork of a session onto this host.
+    Fork(HostId),
 }
 
 /// The composer and overlays, and what the daemon last said about each session.
@@ -490,6 +492,13 @@ impl App {
                 self.session_result(key, result.err());
             }
             Origin::Backup(sent) => return self.backup_sent(sent, result),
+            Origin::Fork(host_id) => {
+                let forked = result.and_then(|result| match result {
+                    CommandResult::SessionForked { session_id, .. } => Ok(session_id),
+                    other => Err(format!("unexpected answer {other:?}")),
+                });
+                self.forked(host_id, forked);
+            }
             Origin::NewSession(host_id) => match result {
                 Ok(CommandResult::SessionCreated { session_id }) => {
                     self.compose.dialog = None;

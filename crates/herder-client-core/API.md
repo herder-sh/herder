@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 3`
+`CLIENT_API_VERSION = 4`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -25,7 +25,9 @@ says what exists, why, and how it maps to foreign languages.
   `CreateSession` takes a `provider` and an optional `permission_mode`, and there are new
   commands and results for images, folders, projects and unarchiving. P0.12 added the
   `RemoveProject` command, a compatible addition that keeps both versions. P0.14 added
-  `Project.icon` and the `GetProjectIcon` command, compatible too.
+  `Project.icon` and the `GetProjectIcon` command, compatible too. P0.13 added, also
+  compatibly, the `ForkSession` command with its `SessionForked` result, and a
+  vault's `VaultStatus` message (`VaultStatus`, `HostReplication`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -77,7 +79,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
 | Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
-| Fleet     | `Machine::hosts` (a vault), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`                                     |
+| Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, `send` `ForkSession` to that host's machine (owners only) → `CommandResult::SessionForked`; the new session joins that machine's list, the original is left as it is |
 
 ## Reference
 
@@ -121,7 +123,8 @@ everything stops once the last clone is dropped.
 
 - `Machine` — `host_id`, `name`, `addresses`, `fingerprint`, `connection`, `quality`, `role`,
   `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
-  `session_usage`.
+  `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
+  `None` for a daemon and while not connected).
 - `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
   was established; `None` while not connected), `reconnects: u32` (connections established
   after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
@@ -177,6 +180,12 @@ ends. A ping still unanswered when the next is due counts in `missed_pongs`; the
 `wake()` sends counts its round trip too. `connected_since` and `reconnects` say how stable
 the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
 connected machine.
+
+## Changes in version 4
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Machine::vault: Option<VaultStatus>` | Apps show what a vault holds and how far behind each host's replication is. A new field breaks code that builds a `Machine`. |
 
 ## Changes in version 3
 

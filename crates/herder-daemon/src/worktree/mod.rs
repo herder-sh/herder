@@ -95,10 +95,10 @@ impl Worktrees {
         self.add(repo, slug, branch, None).await
     }
 
-    /// Adds a worktree of `repo` for the session `slug`, recovered from another host, on a new
+    /// Adds a worktree of `repo` for the session `slug`, forked from another session, on a new
     /// branch `branch`: at the parent of the commit `checkpoint` (see [`checkpoint`]), with the
-    /// checkpoint's files on disk as uncommitted changes, so the worktree is as the session
-    /// left it. Without a checkpoint it starts at the default base, as [`Self::create`] does.
+    /// checkpoint's files on disk as uncommitted changes, so the worktree is as the other
+    /// session left it. Without a checkpoint it starts at the default base, as [`Self::create`] does.
     pub async fn restore(
         &self,
         repo: &Path,
