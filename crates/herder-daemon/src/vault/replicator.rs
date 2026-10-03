@@ -5,7 +5,8 @@
 //! session's summary and the events after its cursor, then follows the journal as it grows.
 //! It reads the journal on its own and learns of new events through [`WakeOnEvent`], which
 //! only wakes it, so a slow or unreachable vault never holds up a session. When the vault is
-//! unreachable it retries with a backoff of up to [`BACKOFF_CAP`].
+//! unreachable it retries with a backoff of up to [`BACKOFF_CAP`]. Every image a batch's
+//! prompts carried goes just ahead of the batch.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -16,8 +17,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    Account, Batch, Cursor, Event, HostHello, HostMessage, Item, ItemId, MAX_BATCH_EVENTS,
-    REPLICATION_VERSION, RejectReason, Seq, SessionHead, SessionId, SessionSummary, VaultMessage,
+    Account, Attachment, AttachmentData, Batch, Cursor, Event, EventBody, HostHello, HostMessage,
+    Item, ItemBody, ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason,
+    Seq, SessionHead, SessionId, SessionSummary, VaultMessage,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -277,6 +279,26 @@ impl Replicator {
                 let Some(last) = events.last().map(|event| event.seq) else {
                     break;
                 };
+                for attachment in attachments(&events) {
+                    match self.sessions.image(&session_id, &attachment).await {
+                        Ok(image) => {
+                            let image = AttachmentData {
+                                session_id: session_id.clone(),
+                                attachment,
+                                data: image.data,
+                            };
+                            send(ws, HostMessage::Attachment(image)).await?;
+                        }
+                        // The vault never gets an image this host lost; its journal still
+                        // names it.
+                        Err(error) => warn!(
+                            %session_id,
+                            attachment_id = %attachment.attachment_id,
+                            "an image is not replicated: {}",
+                            error.message
+                        ),
+                    }
+                }
                 let batch = Batch {
                     session_id: session_id.clone(),
                     events,
@@ -346,6 +368,25 @@ impl Link {
         }
         Ok(())
     }
+}
+
+/// Every image the prompts among `records` carried, in order.
+fn attachments(records: &[JournalRecord]) -> Vec<Attachment> {
+    records
+        .iter()
+        // Only a `user_message` item names images; skip decoding everything else.
+        .filter(|record| record.body.event_type() == "item_added")
+        .flat_map(|record| match record.body.decode() {
+            EventBody::ItemAdded {
+                item:
+                    Item {
+                        body: ItemBody::UserMessage { attachments, .. },
+                        ..
+                    },
+            } => attachments,
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 async fn send(ws: &mut Ws, message: HostMessage) -> Result<()> {

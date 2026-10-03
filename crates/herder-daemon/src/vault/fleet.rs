@@ -3,16 +3,17 @@
 //! Clients pair with the vault and connect to it as to a daemon, on the port hosts replicate
 //! to. They get the session list, and replay and follow each session's journal as its host
 //! replicates it, and the host list with each host's liveness, which the vault tells from its
-//! replication connection ([`Presence`]). Every command on a session is refused as
-//! `read_only`: a session is driven on its host, which the error names.
+//! replication connection ([`Presence`]). `get_attachment` answers from the images hosts
+//! replicated; every other command on a session is refused as `read_only`: a session is
+//! driven on its host, which the error names.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use herder_protocol::{
-    Account, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo, Event, EventBody,
-    FleetHost, HostId, Seq, SessionHead, SessionId, Timestamp,
+    Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
+    Event, EventBody, FleetHost, HostId, Seq, SessionHead, SessionId, Timestamp,
 };
 use tracing::warn;
 
@@ -107,6 +108,42 @@ impl Fleet {
         self.hub.hosts_changed(hosts);
     }
 
+    /// The bytes of the image `attachment_id` of `session_id`, from the copy of the host that
+    /// has the session now.
+    async fn attachment(
+        &self,
+        session_id: SessionId,
+        attachment_id: AttachmentId,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let found = {
+            let (session_id, attachment_id) = (session_id.clone(), attachment_id.clone());
+            blocking(&self.store, move |store| {
+                let Some(host) = store.host_of(&session_id)? else {
+                    return Ok(None);
+                };
+                store.attachment(&host, &session_id, &attachment_id)
+            })
+            .await
+        };
+        match found {
+            Ok(Some(image)) => Ok(CommandResult::Attachment {
+                media_type: image.media_type,
+                data: image.data,
+            }),
+            Ok(None) => Err(error(
+                ErrorCode::NotFound,
+                format!("the vault holds no image {attachment_id} of session {session_id}"),
+            )),
+            Err(err) => {
+                warn!("cannot read an image: {err:#}");
+                Err(error(
+                    ErrorCode::Internal,
+                    "cannot read the vault database".into(),
+                ))
+            }
+        }
+    }
+
     async fn heads(&self) -> anyhow::Result<Vec<SessionHead>> {
         blocking(&self.store, |store| store.fleet()).await
     }
@@ -197,6 +234,13 @@ impl Backend for Fleet {
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        if let CommandBody::GetAttachment {
+            session_id,
+            attachment_id,
+        } = command
+        {
+            return self.attachment(session_id, attachment_id).await;
+        }
         match target(&command) {
             Some(session_id) => Err(self.read_only(session_id).await),
             None => Err(error(

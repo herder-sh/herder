@@ -1,5 +1,5 @@
 //! Recovering a session from a dead host: host A runs a session and dies mid-turn, host B
-//! recovers it from the vault and goes on with it, and A, back again, keeps its copy
+//! recovers it from the vault, images included, and goes on with it, and A, back again, keeps its copy
 //! read-only. Hosts and vault run in process over TLS on localhost, each on its own runtime so
 //! killing one drops every task at once, as a killed process would.
 
@@ -18,8 +18,9 @@ use herder_daemon::vault::recover::{Recovery, Request};
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, ItemBody,
-    PermissionMode, Project, ProjectId, Provider, SessionId, SessionStatus, TurnId, UserId,
+    AccountId, Bytes, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, Image,
+    ItemBody, PermissionMode, Project, ProjectId, Provider, SessionId, SessionStatus, TurnId,
+    UserId,
 };
 use herder_store::Store;
 use tokio::net::TcpListener;
@@ -131,6 +132,10 @@ struct Seeds {
 }
 
 impl Adapter for Seeds {
+    fn accepts_images(&self) -> bool {
+        true
+    }
+
     fn start(&self, request: StartRequest) -> StartFuture {
         let texts = request
             .seed
@@ -279,12 +284,47 @@ impl HostDaemon {
         session_id: &SessionId,
         text: &str,
     ) -> Result<CommandResult, herder_protocol::ErrorInfo> {
+        self.prompt_with(session_id, text, Vec::new()).await
+    }
+
+    async fn prompt_with(
+        &self,
+        session_id: &SessionId,
+        text: &str,
+        images: Vec<Image>,
+    ) -> Result<CommandResult, herder_protocol::ErrorInfo> {
         self.handle(CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
-            images: Vec::new(),
+            images,
         })
         .await
+    }
+
+    /// The bytes of every image `journal` names, as this host answers `get_attachment`.
+    async fn images(&self, session_id: &SessionId, journal: &[Event]) -> Vec<Image> {
+        let mut images = Vec::new();
+        for event in journal {
+            let EventBody::ItemAdded { item } = &event.body else {
+                continue;
+            };
+            let ItemBody::UserMessage { attachments, .. } = &item.body else {
+                continue;
+            };
+            for attachment in attachments {
+                let fetched = self
+                    .handle(CommandBody::GetAttachment {
+                        session_id: session_id.clone(),
+                        attachment_id: attachment.attachment_id.clone(),
+                    })
+                    .await;
+                let Ok(CommandResult::Attachment { media_type, data }) = fetched else {
+                    panic!("expected an image, got {fetched:?}");
+                };
+                images.push(Image { media_type, data });
+            }
+        }
+        images
     }
 
     async fn recover(
@@ -418,7 +458,13 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
     let a_worktree = a.sessions.worktree(&session_id).await.unwrap();
     std::fs::write(a_worktree.join("notes.txt"), "half done\n").unwrap();
     std::fs::write(a_worktree.join(".env"), "TOKEN=secret\n").unwrap();
-    a.prompt(&session_id, "First.").await.unwrap();
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\nscreenshot".to_vec()),
+    };
+    a.prompt_with(&session_id, "First.", vec![image.clone()])
+        .await
+        .unwrap();
     a.journal_until(&session_id, |body| {
         matches!(
             body,
@@ -539,6 +585,11 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
         matches!(tail[1], EventBody::TurnFailed { turn_id, .. } if turn_id.as_str() == "turn-2")
     );
     assert_eq!(status(&b_journal), Some(SessionStatus::NeedsYou));
+    // B answers for the image A's prompt carried.
+    assert_eq!(
+        b.images(&session_id, &b_journal).await,
+        std::slice::from_ref(&image)
+    );
 
     // It goes on on B, its CLI seeded with the transcript.
     b.prompt(&session_id, "Third.").await.unwrap();

@@ -1,7 +1,8 @@
 //! One connection to the vault: TLS with the peer's device certificate, the WebSocket upgrade
 //! and the first message, which tells a host from a client. A client is served by the
-//! daemon's client server over the fleet view; a host gets the hellos, then its batches are
-//! handled one at a time, each acknowledged once durable.
+//! daemon's client server over the fleet view; a host gets the hellos, then its messages are
+//! handled one at a time: an image is durable before the next is read, and a batch is
+//! acknowledged once durable.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -245,6 +246,20 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
                             reason,
                         }
                     }
+                    Err(err) => match err.downcast::<store::BadBatch>() {
+                        Ok(bad_batch) => return fail(ws, bad(&bad_batch.to_string())).await,
+                        Err(err) => return Err(err),
+                    },
+                }
+            }
+            Ok(HostMessage::Attachment(image)) => {
+                let host = host.clone();
+                let stored = blocking(&shared.store, move |store| {
+                    store.put_attachment(&host, &image)
+                })
+                .await;
+                match stored {
+                    Ok(()) => continue,
                     Err(err) => match err.downcast::<store::BadBatch>() {
                         Ok(bad_batch) => return fail(ws, bad(&bad_batch.to_string())).await,
                         Err(err) => return Err(err),

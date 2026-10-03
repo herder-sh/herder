@@ -1,5 +1,5 @@
 //! A host daemon replicating to a vault daemon, both in process over TLS on localhost: sessions
-//! appear in the vault, a vault restarted mid-stream gets the rest, a host that was offline
+//! appear in the vault, a vault restarted mid-stream gets the rest, images included, a host that was offline
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
 //! read-only, and the hosts with their liveness.
 
@@ -21,9 +21,10 @@ use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, Wak
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
-    AccountId, CommandBody, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
-    JournalRecord, PermissionMode, Provider, REPLICATION_VERSION, SessionId, SessionStatus,
-    SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
+    AccountId, Attachment, AttachmentId, CommandBody, ErrorCode, Event, EventBody, HostHello,
+    HostId, HostMessage, Item, ItemBody, ItemId, JournalRecord, PermissionMode, Provider,
+    REPLICATION_VERSION, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId, UserId,
+    VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -258,6 +259,65 @@ fn seed(dir: &Path, sessions: usize, events: usize) {
     }
 }
 
+/// Appends `prompts` prompts to each of the host's `sessions` sessions, each carrying one PNG
+/// kept where the session manager keeps images.
+fn seed_images(dir: &Path, sessions: usize, prompts: usize) {
+    let mut store = Store::open(dir.join("herder.db")).unwrap();
+    for s in 1..=sessions {
+        let session_id = SessionId::new(format!("s{s}"));
+        let images = dir.join("attachments").join(session_id.as_str());
+        std::fs::create_dir_all(&images).unwrap();
+        for p in 0..prompts {
+            let id = format!("img{s}x{p}");
+            let data = [PNG, id.as_bytes()].concat();
+            std::fs::write(images.join(format!("{id}.png")), &data).unwrap();
+            let item = Item {
+                id: ItemId::new(format!("item-{id}")),
+                turn_id: TurnId::new("turn"),
+                body: ItemBody::UserMessage {
+                    text: "Look.".into(),
+                    attachments: vec![Attachment {
+                        attachment_id: AttachmentId::new(id),
+                        media_type: "image/png".into(),
+                        size: data.len() as u64,
+                    }],
+                },
+            };
+            append(&mut store, &session_id, EventBody::ItemAdded { item });
+        }
+    }
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// Every image the events the vault holds name: the image the vault holds, if any, and the one
+/// the host keeps.
+fn images(host_dir: &Path, vault_dir: &Path) -> Vec<(Option<Vec<u8>>, Vec<u8>)> {
+    let store = VaultStore::open(vault_dir.join("vault.db")).unwrap();
+    let mut images = Vec::new();
+    for (session_id, records) in Vault::held(vault_dir) {
+        for record in records {
+            let EventBody::ItemAdded { item } = record.body.decode() else {
+                continue;
+            };
+            let ItemBody::UserMessage { attachments, .. } = item.body else {
+                continue;
+            };
+            for attachment in attachments {
+                let held = store
+                    .attachment(&host_id(), &session_id, &attachment.attachment_id)
+                    .unwrap();
+                let kept = host_dir
+                    .join("attachments")
+                    .join(session_id.as_str())
+                    .join(format!("{}.png", attachment.attachment_id));
+                images.push((held.map(|image| image.data.0), std::fs::read(kept).unwrap()));
+            }
+        }
+    }
+    images
+}
+
 fn append(store: &mut Store, session_id: &SessionId, body: EventBody) {
     store
         .append(NewEvent {
@@ -360,8 +420,12 @@ async fn a_vault_restarted_mid_stream_gets_the_rest() {
     let tmp = tempfile::tempdir().unwrap();
     let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
     std::fs::create_dir_all(&host_dir).unwrap();
-    // More than the replicator's window of unacknowledged events, so the kill comes mid-stream.
-    seed(&host_dir, 2, 1000);
+    // More than the replicator's window of unacknowledged events, so the kill comes mid-stream,
+    // with images all along.
+    for _ in 0..10 {
+        seed(&host_dir, 2, 100);
+        seed_images(&host_dir, 2, 5);
+    }
     let vault = Vault::start(&vault_dir, 0).await;
     let addr = vault.addr;
     let host = HostDaemon::start(&host_dir, vault.config()).await;
@@ -371,6 +435,10 @@ async fn a_vault_restarted_mid_stream_gets_the_rest() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     vault.runtime.kill().await;
+    // Every image an event the vault holds names was durable before that event.
+    for (held, kept) in images(&host_dir, &vault_dir) {
+        assert_eq!(held, Some(kept));
+    }
     // The host keeps working while the vault is down.
     host.switch_model("s1", "while-down").await;
     assert_gap_free(&vault_dir);
@@ -378,6 +446,11 @@ async fn a_vault_restarted_mid_stream_gets_the_rest() {
     let vault = Vault::start(&vault_dir, addr.port()).await;
     caught_up(&host_dir, &vault_dir).await;
     assert_gap_free(&vault_dir);
+    let images = images(&host_dir, &vault_dir);
+    assert_eq!(images.len(), 2 * 10 * 5);
+    for (held, kept) in images {
+        assert_eq!(held, Some(kept));
+    }
     host.runtime.kill().await;
     vault.runtime.kill().await;
 }

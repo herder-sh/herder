@@ -60,10 +60,31 @@ pub(super) async fn save(
     session_id: &SessionId,
     images: Vec<Image>,
 ) -> Result<Vec<Attachment>, ErrorInfo> {
+    let images: Vec<_> = images
+        .into_iter()
+        .map(|image| (AttachmentId::new(ulid::Ulid::new().to_string()), image))
+        .collect();
+    let attachments = images
+        .iter()
+        .map(|(attachment_id, image)| Attachment {
+            attachment_id: attachment_id.clone(),
+            media_type: image.media_type.clone(),
+            size: image.data.0.len() as u64,
+        })
+        .collect();
+    keep(dir, session_id, images).await?;
+    Ok(attachments)
+}
+
+/// Keeps `images` under `dir` for `session_id`, each under its id: a new prompt's, or those
+/// of a session recovered from another host.
+pub(super) async fn keep(
+    dir: &Path,
+    session_id: &SessionId,
+    images: Vec<(AttachmentId, Image)>,
+) -> Result<(), ErrorInfo> {
     let dir = dir.join(session_id.as_str());
-    let mut attachments = Vec::with_capacity(images.len());
-    for image in images {
-        let attachment_id = AttachmentId::new(ulid::Ulid::new().to_string());
+    for (attachment_id, image) in images {
         let path = file(&dir, &attachment_id, &image.media_type).ok_or_else(|| {
             error(
                 ErrorCode::BadRequest,
@@ -80,13 +101,8 @@ pub(super) async fn save(
                 format!("cannot keep an image at {}: {err}", path.display()),
             )
         })?;
-        attachments.push(Attachment {
-            attachment_id,
-            media_type: image.media_type,
-            size: image.data.0.len() as u64,
-        });
     }
-    Ok(attachments)
+    Ok(())
 }
 
 /// The image `attachment` of `session_id`, as kept under `dir`.

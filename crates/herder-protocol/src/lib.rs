@@ -37,9 +37,9 @@ pub use ids::{
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{
-    Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION,
-    RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode, SessionSummary, VaultHello,
-    VaultMessage,
+    AttachmentData, Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS,
+    REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode,
+    SessionSummary, VaultHello, VaultMessage,
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
