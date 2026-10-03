@@ -7,6 +7,7 @@
 //!   what each session's subscription said.
 //! - `session`: one session's transcript and state, folded from its subscription.
 //! - `window`: the main window, drawing the machines and those lists.
+//! - `prs`: pull requests, in the session view and in the window's list of all of them.
 //! - `session_view`, `transcript`, `tools`, `markdown`: the open session, its transcript and
 //!   composer.
 //! - `theme`: the colour tokens and the rules that use them.
@@ -15,6 +16,7 @@
 mod e2e;
 mod lists;
 mod markdown;
+mod prs;
 #[cfg(test)]
 mod screenshots;
 mod session;

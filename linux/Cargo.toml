@@ -17,7 +17,7 @@ unsafe_code = "forbid"
 all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
-adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
 herder-adapters = { path = "../crates/herder-adapters" }
 herder-client-core = { path = "../crates/herder-client-core" }

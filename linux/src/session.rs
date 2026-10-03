@@ -2,6 +2,8 @@
 //! the session view draws, the requests waiting on someone, and what the composer's controls
 //! show. The same fold as the TUI's, in the same words.
 
+use std::collections::HashMap;
+
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, ErrorClass, EscalationReason, Event,
@@ -47,6 +49,8 @@ pub struct Session {
     pub tool_approvals: Vec<(ItemId, ToolApproval)>,
     /// Pull requests linked to the session now, in the order they were linked.
     pub prs: Vec<PullRequest>,
+    /// When each item was added, for how long a tool call took.
+    added: HashMap<ItemId, Timestamp>,
 }
 
 /// An approval request waiting for an answer.
@@ -142,6 +146,7 @@ impl Default for Session {
             questions: Vec::new(),
             tool_approvals: Vec::new(),
             prs: Vec::new(),
+            added: HashMap::new(),
         }
     }
 }
@@ -195,6 +200,19 @@ impl Session {
             }) if call_id == id => Some((output.as_str(), *is_error)),
             _ => None,
         })
+    }
+
+    /// Seconds from the tool call `id` to its result, once the result came.
+    pub fn took(&self, id: &ItemId) -> Option<i64> {
+        let result = self.entries.iter().find_map(|entry| match entry {
+            Entry::Item(Item {
+                id: result,
+                body: ItemBody::ToolResult { call_id, .. },
+                ..
+            }) if call_id == id => Some(result),
+            _ => None,
+        })?;
+        Some(self.added.get(result)?.as_second() - self.added.get(id)?.as_second())
     }
 
     /// The tool call item `id`: its name and input.
@@ -252,7 +270,10 @@ impl Session {
                 self.branch.clone_from(branch);
                 Some(notice(format!("checked out {branch}")))
             }
-            EventBody::ItemAdded { item } => Some(Entry::Item(item.clone())),
+            EventBody::ItemAdded { item } => {
+                self.added.insert(item.id.clone(), at);
+                Some(Entry::Item(item.clone()))
+            }
             EventBody::TurnStarted { turn_id } => {
                 self.turn = Some(turn_id.clone());
                 self.turn_started = Some(at);
@@ -623,6 +644,7 @@ pub mod tests {
                     "i1",
                     ItemBody::UserMessage {
                         text: "Run the tests.".into(),
+                        attachments: Vec::new(),
                     },
                 ),
             ),
@@ -692,6 +714,8 @@ pub mod tests {
         assert!(!session.running());
         assert!(session.approvals.is_empty());
         assert_eq!(session.result(&ItemId::new("i2")), Some(("ok", false)));
+        // Called at 1003, its result came at 1071.
+        assert_eq!(session.took(&ItemId::new("i2")), Some(68));
         assert_eq!(
             session.tool_approval(&ItemId::new("i2")),
             Some(ToolApproval::Allowed)

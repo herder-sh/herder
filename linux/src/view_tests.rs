@@ -5,6 +5,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use adw::prelude::*;
+
 use herder_protocol::{
     AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, EventBody, HostId,
     PermissionMode, QuestionId, SessionId, SessionStatus, Timestamp,
@@ -56,7 +58,8 @@ fn the_transcript_draws_items_tools_and_the_reply_footer() {
         "\"Router::new\" in src (3 matches)",
         "+6",
         "Run the tests",
-        "… 5 more lines",
+        "cargo test --workspace",
+        "20s",
         "Todos",
         "write the tests",
         "claude-main · claude-opus-4 · 1m 32s",
@@ -66,6 +69,16 @@ fn the_transcript_draws_items_tools_and_the_reply_footer() {
     ] {
         assert!(has(&texts, wanted), "{wanted} in {texts:?}");
     }
+    // Tool calls are one row each until expanded.
+    assert!(!has(&texts, "running 12 tests"), "{texts:?}");
+    assert!(!has(&texts, "… 5 more lines"), "{texts:?}");
+    view.toggle_tool("Run the tests");
+    let texts = view.transcript_texts();
+    assert!(has(&texts, "running 12 tests"), "{texts:?}");
+    assert!(has(&texts, "… 5 more lines"), "{texts:?}");
+    assert!(!has(&texts, "test result: ok. 12 passed; 0 failed"));
+    view.toggle_tool("Run the tests");
+    assert!(!has(&view.transcript_texts(), "running 12 tests"));
     // Inline Markdown is drawn, not shown.
     assert!(
         has(&texts, "I added GET /health; it returns 200"),
@@ -88,7 +101,8 @@ fn a_tool_call_is_redrawn_when_its_result_comes() {
     let mut update = crate::session::tests::events(vec![(None, call)]);
     update.events[0].seq = 100;
     window.apply(&api(), &update);
-    assert!(has(&view.transcript_texts(), "~"), "running, it shows `~`");
+    let done = |texts: Vec<String>| texts.iter().filter(|text| *text == "✓").count();
+    let before = done(view.transcript_texts());
     let result = crate::session::tests::item(
         "late-r",
         herder_protocol::ItemBody::ToolResult {
@@ -101,7 +115,7 @@ fn a_tool_call_is_redrawn_when_its_result_comes() {
     update.events[0].seq = 101;
     window.apply(&api(), &update);
     let texts = view.transcript_texts();
-    assert!(!texts.iter().any(|text| text == "~"), "{texts:?}");
+    assert_eq!(done(texts.clone()), before + 1, "{texts:?}");
     assert!(has(&texts, "README.md"));
 }
 
@@ -114,7 +128,8 @@ fn an_approval_replaces_the_composer_and_its_buttons_answer_it() {
     for wanted in [
         "△ approval",
         "Bash",
-        "asked 12s ago",
+        // Asked 12 s before the fixture was built; a second may have passed since.
+        "asked 1",
         "$ rm -rf target/",
         "Allow",
         "Deny",
@@ -192,6 +207,7 @@ fn the_composer_sends_prompts_which_wait_marked_until_they_join() {
         [CommandBody::SendPrompt {
             session_id: SessionId::new("s-api"),
             text: "Also add a changelog entry.".to_owned(),
+            images: Vec::new(),
         }]
     );
     // A turn runs: the prompt waits, queued.
@@ -201,6 +217,7 @@ fn the_composer_sends_prompts_which_wait_marked_until_they_join() {
         "u3",
         herder_protocol::ItemBody::UserMessage {
             text: "Also add a changelog entry.".to_owned(),
+            attachments: Vec::new(),
         },
     );
     let mut update = crate::session::tests::events(vec![(Some("dev"), message)]);
@@ -287,4 +304,107 @@ fn an_archived_session_or_a_vaults_has_no_composer() {
         .retain(|head| head.session_id.as_str() != "s-api");
     window.show_machines(&fleet);
     assert_eq!(view.key(), None);
+}
+
+#[gtk::test]
+fn the_sessions_prs_list_over_the_transcript_open_link_and_unlink() {
+    let (window, sent) = open("chat");
+    let view = window.session_view();
+    let texts = view.pr_texts();
+    for wanted in [
+        "#9",
+        "Document the health endpoint",
+        "draft",
+        "… ci",
+        "#12",
+        "Add a health endpoint",
+        "open",
+        "✓ ci",
+        "… review",
+        "✓ merge",
+        "herder/api",
+    ] {
+        assert!(
+            texts.iter().any(|text| text == wanted),
+            "{wanted} in {texts:?}"
+        );
+    }
+    // Live first, in the order they were linked.
+    let rows = view.pr_rows();
+    assert_eq!(rows.len(), 2);
+
+    // A row opens its PR in the browser.
+    rows[0].emit_by_name::<()>("activate", &[]);
+    crate::prs::OPENED.with(|opened| {
+        assert_eq!(
+            opened.borrow().last().map(String::as_str),
+            Some("https://github.com/org/app/pull/12")
+        );
+    });
+
+    // Its menu unlinks it, once confirmed.
+    rows[0]
+        .activate_action("pr.unlink", None)
+        .expect("the row unlinks");
+    let dialog = window
+        .root()
+        .visible_dialog()
+        .and_downcast::<adw::AlertDialog>()
+        .expect("the confirmation");
+    assert_eq!(dialog.heading().as_deref(), Some("Unlink #12?"));
+    dialog.emit_by_name::<()>("response", &[&"unlink"]);
+    dialog.force_close();
+
+    // The session's menu links another by its link.
+    view.link_pr_for_test();
+    let dialog = window
+        .root()
+        .visible_dialog()
+        .and_downcast::<adw::AlertDialog>()
+        .expect("the link dialog");
+    assert!(!dialog.is_response_enabled("link"));
+    let entry = dialog
+        .extra_child()
+        .and_downcast::<gtk::Entry>()
+        .expect("its entry");
+    entry.set_text("https://github.com/org/app/pull/41");
+    assert!(dialog.is_response_enabled("link"));
+    dialog.emit_by_name::<()>("response", &[&"link"]);
+    dialog.force_close();
+    settle(Duration::from_millis(50));
+    assert_eq!(
+        *sent.borrow(),
+        [
+            CommandBody::UnlinkPr {
+                session_id: SessionId::new("s-api"),
+                number: 12,
+            },
+            CommandBody::LinkPr {
+                session_id: SessionId::new("s-api"),
+                number: 41,
+            },
+        ]
+    );
+
+    // Read-only, it can neither link nor unlink.
+    window.show_machines(&machines(SessionStatus::Archived));
+    assert!(!view.can_link_pr());
+    let rows = view.pr_rows();
+    assert!(rows[0].activate_action("pr.unlink", None).is_err());
+}
+
+#[gtk::test]
+fn the_list_goes_once_every_pr_is_unlinked() {
+    let (window, _) = open("chat");
+    let view = window.session_view();
+    let mut update = crate::session::tests::events(vec![
+        (None, EventBody::PrUnlinked { number: 12 }),
+        (None, EventBody::PrUnlinked { number: 9 }),
+    ]);
+    for (event, seq) in update.events.iter_mut().zip(100..) {
+        event.seq = seq;
+    }
+    window.apply(&api(), &update);
+    assert!(view.pr_texts().is_empty());
+    assert!(has(&view.transcript_texts(), "pull request #12 unlinked"));
 }

@@ -1,6 +1,6 @@
 //! A demo fleet and session for the screenshots in the PR and docs, rendered from the real
 //! window: `cargo test screenshots -- --ignored` with a display (broadway or a headless X
-//! server) writes them to `docs/screenshots/p8-3/`.
+//! server) writes them to `docs/screenshots/p8-4/`.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -9,9 +9,9 @@ use adw::prelude::*;
 use gtk::{glib, graphene};
 use herder_client_core::{Machine, SessionUpdate};
 use herder_protocol::{
-    Account, AccountId, ApprovalId, CiStatus, Event, EventBody, Item, ItemBody, ItemId,
-    PermissionMode, PrState, Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus,
-    Timestamp, TurnId, UsageWindow, UserId,
+    Account, AccountId, ApprovalId, CiStatus, Event, EventBody, Item, ItemBody, ItemId, Mergeable,
+    PermissionMode, PrState, Provider, PullRequest, QuestionId, ReviewStatus, Route, SessionHead,
+    SessionId, SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
 };
 use serde_json::json;
 
@@ -43,7 +43,6 @@ fn account(id: &str, provider: Provider, label: &str, usage: Vec<UsageWindow>) -
         provider,
         label: label.to_owned(),
         usage,
-        failover: true,
     }
 }
 
@@ -146,6 +145,7 @@ fn first_turn() -> Vec<(i64, Option<&'static str>, EventBody)> {
         (290, None, EventBody::TurnStarted { turn_id: TurnId::new("t1") }),
         (290, Some("dev"), item("u1", "t1", ItemBody::UserMessage {
             text: "Add a health endpoint and test it.".to_owned(),
+            attachments: Vec::new(),
         })),
         (288, None, item("r1", "t1", ItemBody::Reasoning {
             text: "Where the router lives: src/api.rs builds it with Router::new.\nA GET /health returning the build version is enough for the load balancer.".to_owned(),
@@ -193,12 +193,46 @@ fn first_turn() -> Vec<(i64, Option<&'static str>, EventBody)> {
         })),
         (198, None, EventBody::TurnCompleted { turn_id: TurnId::new("t1") }),
         (150, None, EventBody::PrLinked {
-            pr: herder_protocol::PullRequest {
+            pr: PullRequest {
                 title: "Add a health endpoint".to_owned(),
+                head_branch: Some("herder/api".to_owned()),
+                review: ReviewStatus::Required,
                 ..pr(12, PrState::Open, CiStatus::Passing)
             },
         }),
+        (120, None, EventBody::PrLinked {
+            pr: PullRequest {
+                title: "Document the health endpoint".to_owned(),
+                head_branch: Some("herder/api-docs".to_owned()),
+                mergeable: Mergeable::Unknown,
+                ..pr(9, PrState::Draft, CiStatus::Pending)
+            },
+        }),
     ]
+}
+
+/// The PRs of the demo's other sessions, for the list of every PR.
+fn other_prs(session: &str) -> Vec<EventBody> {
+    match session {
+        "s-login" => vec![EventBody::PrLinked {
+            pr: PullRequest {
+                title: "Fix the login redirect".to_owned(),
+                head_branch: Some("herder/fix-login".to_owned()),
+                review: ReviewStatus::Approved,
+                ..pr(7, PrState::Merged, CiStatus::Passing)
+            },
+        }],
+        "s-docs" => vec![EventBody::PrLinked {
+            pr: PullRequest {
+                title: "Rewrite the getting started guide".to_owned(),
+                head_branch: Some("herder/docs".to_owned()),
+                review: ReviewStatus::ChangesRequested,
+                mergeable: Mergeable::Conflicting,
+                ..pr(31, PrState::Open, CiStatus::Failing)
+            },
+        }],
+        _ => Vec::new(),
+    }
 }
 
 /// The api session at one of the moments the screenshots show.
@@ -222,6 +256,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Good. Now document the endpoint in the README.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
@@ -250,6 +285,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Good. Now remove the old target directory.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
@@ -287,6 +323,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Document the endpoint too.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
@@ -371,7 +408,7 @@ pub fn capture(widget: &impl IsA<gtk::Widget>, path: &Path) {
 }
 
 fn out_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/screenshots/p8-3");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/screenshots/p8-4");
     std::fs::create_dir_all(&dir).expect("the screenshot dir");
     dir
 }
@@ -393,8 +430,8 @@ fn screenshots() {
         style.set_color_scheme(scheme);
         for (width, size) in [(1000, "wide"), (400, "narrow")] {
             window.set_size(width, 760);
-            for shot in ["chat", "approval", "question", "switched", "list"] {
-                let (status, update) = moment(shot);
+            for shot in ["chat", "tools", "prs", "list"] {
+                let (status, update) = moment(if shot == "tools" { "chat" } else { shot });
                 window.show_machines(&[]);
                 let machines = machines(status);
                 window.show_machines(&machines);
@@ -418,32 +455,43 @@ fn screenshots() {
                         "s-docs" => "herder/docs",
                         _ => "herder/api-tests",
                     };
+                    let mut events = vec![created(repo, branch)];
+                    events.extend(other_prs(head.session_id.as_str()));
                     window.apply(
                         &key,
-                        &crate::lists::tests::update(
-                            head.session_id.as_str(),
-                            vec![created(repo, branch)],
-                        ),
+                        &crate::lists::tests::update(head.session_id.as_str(), events),
                     );
                 }
-                if shot != "list" {
-                    window.open(&key);
+                match shot {
+                    "list" => {}
+                    "prs" => window.pick(1),
+                    _ => window.open(&key),
                 }
-                settle(Duration::from_millis(600));
-                window.scroll_to_end();
+                if shot == "tools" {
+                    window.session_view().toggle_tool("Run the tests");
+                    window.session_view().toggle_tool("Edit");
+                }
+                // The composer's editor sizes itself once its lines are laid out, later.
+                settle(Duration::from_millis(1200));
+                if shot == "tools" {
+                    window.session_view().scroll_to_tool("Edit");
+                } else {
+                    window.scroll_to_end();
+                }
                 settle(Duration::from_millis(300));
                 assert_eq!(window.root().width(), width, "the window takes its size");
                 capture(
                     &window.root(),
                     &dir.join(format!("{shot}-{size}-{name}.png")),
                 );
-                if shot == "switched" && size == "wide" {
-                    for picker in ["account", "model", "mode"] {
-                        let popover = window.open_picker(picker);
-                        settle(Duration::from_millis(400));
-                        capture(&popover, &dir.join(format!("picker-{picker}-{name}.png")));
-                        popover.popdown();
+                if shot == "chat" {
+                    window.session_view().link_pr_for_test();
+                    settle(Duration::from_millis(600));
+                    capture(&window.root(), &dir.join(format!("link-{size}-{name}.png")));
+                    if let Some(dialog) = window.root().visible_dialog() {
+                        dialog.force_close();
                     }
+                    settle(Duration::from_millis(600));
                 }
             }
         }

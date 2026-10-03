@@ -8,7 +8,8 @@
 
 use gtk::gdk;
 
-/// A token's dark and light values, from docs/tui-design.md §6.2.
+/// A token's dark and light values, from docs/tui-design.md §6.2; a PR state's is the
+/// colour its TUI token names (`prMerged` is the palette's `accent`).
 const TOKENS: &[(&str, &str, &str)] = &[
     ("primary", "#7aa2f7", "#2f5bb7"),
     ("secondary", "#6c8ebf", "#4a6fa5"),
@@ -18,6 +19,10 @@ const TOKENS: &[(&str, &str, &str)] = &[
     ("success", "#9ece6a", "#3f7d1f"),
     ("info", "#7dcfff", "#00739e"),
     ("text_muted", "#7f8492", "#6b6f7a"),
+    ("pr_open", "#9ece6a", "#3f7d1f"),
+    ("pr_draft", "#7f8492", "#6b6f7a"),
+    ("pr_merged", "#bb9af7", "#7847bd"),
+    ("pr_closed", "#f7768e", "#c4334b"),
     ("diff_added_bg", "#1d2f24", "#dcf2e1"),
     ("diff_removed_bg", "#3a1f26", "#f8dde1"),
 ];
