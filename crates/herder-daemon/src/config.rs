@@ -18,14 +18,13 @@
 //!
 //! # Failover
 //!
-//! A session whose turn hits its account's usage limit moves to another account that opted in
-//! with `failover = true` and retries the turn there: first an account of its own provider,
-//! then one of each provider the `[failover]` table lists, in order:
+//! A session whose turn hits its account's usage limit moves to another account of its own
+//! provider that opted in with `failover = true` and retries the turn there on the same model.
+//! A failover never changes the provider or the model:
 //!
 //! ```toml
 //! [failover]
-//! providers = ["codex", "cursor"] # after the session's own provider; none by default
-//! pin = false                     # true keeps every session on its account
+//! pin = false # true keeps every session on its account
 //! ```
 //!
 //! # Resources
@@ -302,9 +301,6 @@ impl Config {
             None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
         };
         file.resources.validate()?;
-        for provider in &file.failover.providers {
-            supported(provider.as_str().to_owned()).context("failover.providers")?;
-        }
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
         if let Some(vault) = &file.vault {
@@ -747,7 +743,6 @@ mod tests {
             [tasks]
             max_children = 2
             [failover]
-            providers = ["codex", "cursor"]
             pin = true
             [resources]
             memory_max_percent = 25
@@ -775,10 +770,7 @@ mod tests {
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
                 tasks: TaskLimits { max_children: 2 },
-                failover: FailoverConfig {
-                    providers: vec![Provider::Codex, Provider::Cursor],
-                    pin: true,
-                },
+                failover: FailoverConfig { pin: true },
                 resources: ResourcesConfig {
                     memory_max_percent: 25,
                     memory_high_percent: 90,
@@ -1042,9 +1034,10 @@ mod tests {
                 "herder cannot run nope",
             ),
             ("[providers.claude]\n".to_owned(), "missing field `binary`"),
+            // Failover stays on the session's provider: there is nothing to fall back to.
             (
-                "[failover]\nproviders = [\"nope\"]\n".to_owned(),
-                "herder cannot run nope",
+                "[failover]\nproviders = [\"codex\"]\n".to_owned(),
+                "unknown field `providers`",
             ),
         ];
         for (text, expected) in cases {

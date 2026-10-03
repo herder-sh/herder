@@ -1622,14 +1622,9 @@ impl Actor {
         self.record_branches().await;
         self.checkpoint(&turn_id).await;
         self.turn = None;
-        let to = if self.inner.account(&account_id).map(|a| a.provider)
-            == Some(self.session.provider.clone())
-        {
-            Switch::Account
-        } else {
-            Switch::Provider { model: None }
-        };
-        if let Err(err) = self.switch(None, account_id.clone(), to).await {
+        // An account switch keeps the provider and the model: the retry starts the next
+        // account's CLI on the session's current model.
+        if let Err(err) = self.switch(None, account_id.clone(), Switch::Account).await {
             warn!(
                 session_id = %self.session.session_id,
                 "cannot fail over to {account_id}: {}", err.message

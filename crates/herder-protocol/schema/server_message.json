@@ -1365,7 +1365,7 @@
           ]
         },
         {
-          "description": "The session moved to another provider by transcript replay; `by` is absent for a failover.",
+          "description": "The session moved to another provider by transcript replay, at a user's request; a\nfailover never changes the provider.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1475,18 +1475,10 @@
         "pin": {
           "description": "Whether sessions stay on their account by default; a session created with\n`failover_pin` overrides it.",
           "type": "boolean"
-        },
-        "providers": {
-          "description": "Providers to fail over to, in order, once no account of the session's own provider is\neligible; empty keeps sessions on their provider.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/Provider"
-          }
         }
       },
       "required": [
-        "pin",
-        "providers"
+        "pin"
       ]
     },
     "FleetHost": {

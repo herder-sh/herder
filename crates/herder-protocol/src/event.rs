@@ -203,7 +203,8 @@ pub enum EventBody {
         /// New account.
         account_id: AccountId,
     },
-    /// The session moved to another provider by transcript replay; `by` is absent for a failover.
+    /// The session moved to another provider by transcript replay, at a user's request; a
+    /// failover never changes the provider.
     ProviderSwitched {
         /// New provider.
         provider: Provider,

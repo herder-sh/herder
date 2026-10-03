@@ -579,10 +579,7 @@ fn with_accounts() -> App {
     let mut work = fake::account("claude-work", "Work");
     work.failover = true;
     machines[0].accounts = vec![main, work, codex];
-    machines[0].failover = herder_protocol::FailoverSettings {
-        pin: true,
-        providers: vec![Provider::Codex],
-    };
+    machines[0].failover = herder_protocol::FailoverSettings { pin: true };
     let mut laptop = fake::machine("h2", "laptop", &[]);
     laptop.connection = ConnectionState::Disconnected {
         error: "connection refused".into(),
