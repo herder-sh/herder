@@ -134,8 +134,7 @@ struct Lists {
                         UsageWindowSummary(
                             label: usageLabel(window.window), percent: window.usedPercent,
                             resets: Timestamp.until(window.resetsAt.flatMap(Timestamp.date), now: now))
-                    },
-                    failover: account.failover)
+                    })
             },
             hosts: machine.hosts.map { host in
                 FleetHostSummary(

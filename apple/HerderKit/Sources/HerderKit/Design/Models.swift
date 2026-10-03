@@ -70,7 +70,6 @@ struct AccountSummary: Hashable, Identifiable {
     let provider: String
     let sessions: Int
     let usage: [UsageWindowSummary]
-    let failover: Bool
 }
 
 struct FleetHostSummary: Hashable, Identifiable {

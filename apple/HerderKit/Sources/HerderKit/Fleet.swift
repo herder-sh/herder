@@ -119,14 +119,14 @@ public final class Fleet {
         let result = try await client.send(
             hostId: hostId,
             command: .createSession(
-                repo: repo, projectId: projectId, branch: nil, accountId: accountId,
+                repo: repo, projectId: projectId, branch: nil, accountId: accountId, provider: nil,
                 model: model.isEmpty ? nil : model, permissionMode: mode, maxChildren: nil, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = result else {
             throw HerderError.Local(detail: "the machine did not create a session")
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
         if !prompt.isEmpty {
-            await send(.sendPrompt(sessionId: sessionId, text: prompt), about: key)
+            await send(.sendPrompt(sessionId: sessionId, text: prompt, images: []), about: key)
         }
         return key
     }
@@ -142,7 +142,7 @@ public final class Fleet {
         }
         let outgoing = Outgoing(text: text)
         sessions[key]?.outbox.append(outgoing)
-        await send(.sendPrompt(sessionId: key.sessionId, text: text), about: key)
+        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: []), about: key)
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
             sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }

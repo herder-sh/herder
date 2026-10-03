@@ -218,7 +218,6 @@ private struct AccountUsage: View {
             HStack(spacing: 6) {
                 Text(account.label).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                 Text(account.provider).font(.caption).foregroundStyle(Theme.secondary)
-                if account.failover { Chip(text: "failover") }
                 Spacer()
                 Text(account.sessions == 1 ? "1 session" : "\(account.sessions) sessions")
                     .font(.caption)

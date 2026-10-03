@@ -12,7 +12,7 @@ struct TranscriptTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            item("u", .userMessage(text: "Fix it")),
+            item("u", .userMessage(text: "Fix it", attachments: [])),
             item("c1", .toolCall(name: "Bash", input: #"{"command":"cargo test"}"#)),
             item("r1", .toolResult(callId: "c1", output: "running 3 tests\nok\n", isError: false)),
             item("c2", .toolCall(name: "Edit", input: #"{"file_path":"a.rs","old_string":"x","new_string":"y\nz"}"#)),
@@ -60,7 +60,7 @@ struct TranscriptTests {
         // Idle: the message, then the wait for the agent to take it.
         model.apply(script.event(.turnCompleted(turnId: "t1")))
         #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
-        model.apply(script.event(item("u2", .userMessage(text: "next"), turn: "t2")))
+        model.apply(script.event(item("u2", .userMessage(text: "next", attachments: []), turn: "t2")))
         #expect(model.outbox.isEmpty)
     }
 
@@ -81,8 +81,7 @@ struct TranscriptTests {
 @MainActor
 struct DefaultAccountTests {
     private func account(_ id: String, _ provider: String, used: Double) -> Account {
-        Account(accountId: id, provider: provider, label: id, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)],
-                failover: false)
+        Account(accountId: id, provider: provider, label: id, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)])
     }
 
     @Test func theProjectsAccountWinsElseTheLeastUsed() throws {
@@ -91,7 +90,7 @@ struct DefaultAccountTests {
             return
         }
         var host = machine("h", name: "h", sessions: [],
-                           projects: [Project(projectId: "p", name: "p", paths: [], defaultAccount: "busy", setupCommand: nil)])
+                           projects: [Project(projectId: "p", name: "p", paths: [], defaultPermissionMode: nil, defaultAccount: "busy", setupCommand: nil)])
         host.accounts = [account("busy", "claude", used: 90), account("idle", "claude", used: 10), account("gpt", "codex", used: 0)]
         fleet.setMachinesForTesting([host])
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "claude")?.accountId == "busy")
