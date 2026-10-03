@@ -141,6 +141,8 @@ pub struct GlyphSet {
     pub pr: &'static str,
     /// A Markdown list item.
     pub bullet: &'static str,
+    /// Around a form's choice: the previous and next values.
+    pub choice: [&'static str; 2],
 }
 
 /// The Unicode set: one column wide on desktop terminals.
@@ -175,25 +177,28 @@ pub const UNICODE: GlyphSet = GlyphSet {
     collapse: "«",
     expand: "»",
     separator: " · ",
-    tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "⚙"],
+    // `›` for other tools: `⚙` draws as a two-column emoji in many fonts.
+    tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "›"],
     approval: "△",
     question: "?",
     reply: "▣",
     pr: "⎇",
     bullet: "•",
+    choice: ["‹", "›"],
 };
 
-/// The ASCII set: what any terminal draws one column wide. Box drawing stays.
+/// The ASCII set: what any terminal draws one column wide. No box drawing: it is East Asian
+/// Ambiguous, two columns on some phone fonts (P2.15).
 pub const ASCII: GlyphSet = GlyphSet {
     states: ["!", "x", "v", "*", "~", "o", "_", ">", "."],
-    branch: "├",
-    last: "└",
-    pipe: "│",
+    branch: "|",
+    last: "`",
+    pipe: "|",
     folded: "+",
     unfolded: "-",
-    bar: "│",
-    cap_end: "└",
-    cap_fill: "─",
+    bar: "|",
+    cap_end: "`",
+    cap_fill: "-",
     cursor: "|",
     pointer: ">",
     collapsed: ">",
@@ -221,6 +226,7 @@ pub const ASCII: GlyphSet = GlyphSet {
     reply: "=",
     pr: "pr",
     bullet: "-",
+    choice: ["<", ">"],
 };
 
 impl GlyphSet {
@@ -284,21 +290,30 @@ fn ascii(c: char) -> Option<char> {
         '●' | '•' | '◉' | '★' => '*',
         '○' | '◌' | '◯' | '◦' => 'o',
         '◆' | '◇' => '+',
+        '✱' => '*',
+        '◈' => '@',
+        '☐' => '#',
         '▪' | '■' | '□' => '_',
         '✗' | '✘' | '×' => 'x',
         '✓' | '✔' => 'v',
         '‹' | '«' | '←' | '⌫' | '◀' | '◂' => '<',
         '›' | '»' | '→' | '⏎' | '▶' | '▸' | '⚙' => '>',
-        '↑' | '▲' | '▴' => '^',
+        '↑' | '▲' | '▴' | '△' => '^',
         '↓' | '▼' | '▾' => 'v',
         '▌' | '▏' | '▎' | '▍' | '¦' => '|',
         '█' | '▓' | '▒' => '#',
-        '⎿' => 'L',
+        '⎿' => '`',
         '‘' | '’' | '‚' | '′' => '\'',
         '“' | '”' | '„' | '″' => '"',
         '\u{a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' => ' ',
-        // Box drawing: one column everywhere.
-        '\u{2500}'..='\u{257f}' => return None,
+        // Box drawing is East Asian Ambiguous: two columns on some phones (P2.15).
+        '─' | '━' | '═' | '╌' | '╍' | '┄' | '┅' | '┈' | '┉' | '╴' | '╶' | '╸' | '╺' => {
+            '-'
+        }
+        '│' | '┃' | '║' | '╎' | '╏' | '┆' | '┇' | '┊' | '┋' | '╵' | '╷' | '╹' | '╻' => {
+            '|'
+        }
+        '\u{2500}'..='\u{257f}' => '+',
         // Latin-1's symbols, punctuation to arrows, shapes, dingbats and technical symbols:
         // wide on some terminals, one column on others.
         '\u{a1}'..='\u{bf}' | '\u{2010}'..='\u{2bff}' => '?',
@@ -312,12 +327,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ascii_leaves_one_column_ascii_and_borders() {
-        let mut buffer = Buffer::with_lines(["┌ a · b … ● ◆ ▪ → ⚙ ✓ ✗ ¿ ą 日 ┐"]);
+    fn ascii_leaves_one_column_ascii_and_folds_borders() {
+        let mut buffer = Buffer::with_lines(["┌ a · b … ● ◆ ▪ → ⚙ ✓ ✗ ¿ ą 日 ┐", "├─│└┃ ✱ ◈"]);
         fold(&mut buffer);
         assert_eq!(
             buffer,
-            Buffer::with_lines(["┌ a - b . * + _ > > v x ? ą 日 ┐"])
+            Buffer::with_lines(["+ a - b . * + _ > > v x ? ą 日 +", "+-|+| * @"])
         );
     }
 
@@ -364,7 +379,7 @@ mod tests {
         assert_eq!(ASCII.state(State::Unknown), ".");
         assert_eq!(UNICODE.tool("Bash"), "$");
         assert_eq!(ASCII.tool("mcp__herder__spawn"), "+");
-        assert_eq!(UNICODE.tool("mcp__github__search"), "⚙");
+        assert_eq!(UNICODE.tool("mcp__github__search"), "›");
         assert_eq!(UNICODE.spinner_frame(0), "⠋");
         assert_eq!(UNICODE.spinner_frame(85), "⠙");
         assert_eq!(ASCII.spinner_frame(120 * 5), "/");
