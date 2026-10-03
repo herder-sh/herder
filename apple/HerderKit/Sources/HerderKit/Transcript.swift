@@ -29,12 +29,14 @@ enum TranscriptBlock: Hashable, Identifiable {
     case reasoning(id: String, text: String, streaming: Bool)
     case tools(id: String, calls: [ToolCall])
     case children(id: String, [ChildRef])
+    case agents(id: String, [NativeAgent])
     case notice(Notice)
 
     var id: String {
         switch self {
         case .user(let id, _, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
+        case .agents(let id, _): id
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
         }
@@ -51,12 +53,15 @@ struct ChildRef: Hashable {
 enum Transcript {
     /// The session's transcript: completed entries, streaming content, and pending or failed sends.
     /// Consecutive tool calls and their results group into one block.
-    static func blocks(_ model: SessionModel) -> [TranscriptBlock] {
+    static func blocks(_ model: SessionModel) -> [TranscriptBlock] { blocks(model, parent: nil) }
+
+    static func blocks(_ model: SessionModel, parent: NativeAgent.ID?) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
         var calls: [ToolCall] = []
         var callsTurn = ""
         var completedGroups: [TurnId: [ItemId: Int]] = [:]
         var children: [ChildRef] = []
+        var agents: [NativeAgent] = []
 
         func flushCalls() {
             if let first = calls.first {
@@ -69,15 +74,46 @@ enum Transcript {
             if let first = children.first { blocks.append(.children(id: "children-\(first.sessionId)", children)) }
             children = []
         }
+        func flushAgents() {
+            if let first = agents.first {
+                blocks.append(.agents(id: "agents-\(first.id.turnId)-\(first.id.callId)", agents))
+            }
+            agents = []
+        }
+        let items = model.log.compactMap { entry -> Item? in
+            if case .item(let item) = entry { item } else { nil }
+        } + model.streaming
+        func belongs(_ item: Item) -> Bool {
+            if let parent { return item.turnId == parent.turnId && item.parentCallId == parent.callId }
+            return item.parentCallId == nil
+        }
         func add(_ item: Item, streaming: Bool) {
+            guard belongs(item) else { return }
             // Adapters number items per turn, so an item id alone repeats across turns.
             let id = "\(item.turnId)/\(item.id)"
             switch item.body {
             case .toolCall(let name, let input):
                 flushChildren()
-                if callsTurn != item.turnId { flushCalls() }
-                if calls.isEmpty { callsTurn = item.turnId }
-                calls.append(toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId))
+                if NativeAgent.isAgent(name) || items.contains(where: {
+                    $0.turnId == item.turnId && $0.parentCallId == item.id
+                }) {
+                    flushCalls()
+                    agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming))
+                } else {
+                    flushAgents()
+                    if callsTurn != item.turnId { flushCalls() }
+                    if calls.isEmpty { callsTurn = item.turnId }
+                    var call = toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId)
+                    // Results can arrive after intervening prose or another agent's output.
+                    if let result = items.last(where: { result in
+                        guard result.turnId == item.turnId, result.parentCallId == item.parentCallId,
+                              case .toolResult(let callId, _, _) = result.body else { return false }
+                        return callId == item.id
+                    }), case .toolResult(_, let output, let isError) = result.body {
+                        call.attach(output: output, isError: isError, streaming: model.streaming.contains(result))
+                    }
+                    calls.append(call)
+                }
             case .toolResult(let callId, let output, let isError):
                 if callsTurn == item.turnId, let index = calls.lastIndex(where: { $0.id == callId }) {
                     calls[index].attach(output: output, isError: isError, streaming: streaming)
@@ -89,13 +125,13 @@ enum Transcript {
                     blocks[blockIndex] = .tools(id: id, calls: group)
                 }
             case .userMessage(let text, let attachments):
-                flushCalls(); flushChildren()
+                flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.user(id: id, text: text, attachments: attachments, outgoing: nil))
             case .assistantMessage(let text):
-                flushCalls(); flushChildren()
+                flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.assistant(id: id, text: text, streaming: streaming))
             case .reasoning(let text):
-                flushCalls(); flushChildren()
+                flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.reasoning(id: id, text: text, streaming: streaming))
             case .unknown:
                 break
@@ -106,19 +142,23 @@ enum Transcript {
             switch entry {
             case .item(let item): add(item, streaming: false)
             case .notice(let notice):
-                flushCalls(); flushChildren()
+                guard parent == nil else { continue }
+                flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.notice(notice))
             case .child(let sessionId, let task):
-                flushCalls()
+                guard parent == nil else { continue }
+                flushCalls(); flushAgents()
                 children.append(ChildRef(sessionId: sessionId, task: task))
             }
         }
         for item in model.streaming { add(item, streaming: true) }
         flushCalls()
         flushChildren()
+        flushAgents()
+        if parent != nil { return blocks }
         // The turn running now, then what waits behind it; or, idle, what was sent and the wait
         // for the agent to take it.
-        let streamingVisible = model.streaming.contains { $0.body.text?.isEmpty == false }
+        let streamingVisible = model.streaming.contains { $0.parentCallId == nil && $0.body.text?.isEmpty == false }
         if model.turn != nil && !streamingVisible {
             blocks.append(.working(since: model.turnStartedAt, waiting: false))
         }
