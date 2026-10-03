@@ -3,7 +3,7 @@
 //! [`draw`] lays the screen out and hands each area to its module. Views read the app and
 //! write back only what layout decides, such as how many transcript lines fit.
 //!
-//! Below 80 columns ([`NARROW`]), as on a phone, the screen shows one pane at a time: the session
+//! At 64 columns or fewer ([`NARROW`]), as on a phone, the screen shows one pane at a time: the session
 //! list, or what it opened, full width. Rows and titles there are compact.
 //!
 //! A tappable header tops the screen; on a narrow screen a bar of buttons for what can be done
@@ -43,9 +43,9 @@ use crate::app::{App, Focus};
 use crate::glyphs::{self, Glyphs};
 use crate::mouse::Hits;
 
-/// Screens drawn narrower than this show one pane at a time: below 80 columns, as the last
-/// column stays blank.
-pub const NARROW: u16 = 79;
+/// Screens drawn narrower than this show one pane at a time: 64 columns or fewer, as Herdr's
+/// mobile layout, since the last column stays blank.
+pub const NARROW: u16 = 64;
 
 /// Draws the screen; with `full`, onto a cleared screen with nothing assumed of the last
 /// frame.

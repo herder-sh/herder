@@ -503,3 +503,31 @@ fn mouse_off_saves_the_setting_and_ignores_the_mouse() {
     tap_last(&mut app, size, "fix-login");
     assert_eq!(app.open, Some(key("h1", "s1")));
 }
+
+#[test]
+fn a_finger_dragged_up_scrolls_like_the_wheel_and_is_no_tap() {
+    for size in SIZES {
+        let mut app = fake::with_prs();
+        press(&mut app, KeyCode::Char('P'));
+        let at = spots(&mut app, size, "#7").pop().unwrap();
+        assert_eq!(
+            mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at),
+            []
+        );
+        // Two rows up: two steps down the list.
+        let up = (at.0, at.1 - 2);
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), up);
+        assert_eq!(app.pr_index(), 2, "{size:?}");
+        // Back down a row: a step up.
+        let back = (at.0, at.1 - 1);
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), back);
+        assert_eq!(app.pr_index(), 1, "{size:?}");
+        // Released where it was pressed, it still taps nothing.
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), at);
+        assert_eq!(
+            mouse(&mut app, MouseEventKind::Up(MouseButton::Left), at),
+            []
+        );
+        assert_eq!(app.pr_index(), 0, "{size:?}");
+    }
+}

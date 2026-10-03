@@ -245,6 +245,8 @@ pub struct App {
     pub hits: Hits,
     /// What the press of a tap in progress landed on.
     pub(crate) pressed: Option<Click>,
+    /// Where the press of a drag in progress landed, and the row it last reached.
+    pub(crate) dragged: Option<(u16, u16, u16)>,
 }
 
 impl Default for App {
@@ -274,6 +276,7 @@ impl Default for App {
             glyphs: None,
             hits: Hits::default(),
             pressed: None,
+            dragged: None,
         }
     }
 }

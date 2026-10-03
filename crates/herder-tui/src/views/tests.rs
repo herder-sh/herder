@@ -148,7 +148,8 @@ fn an_offline_hosts_session_is_read_only_and_offers_recover() {
             // The list says since when the host is offline, and its bar offers to recover the
             // selected session.
             let screen = render(&mut app, width, height).backend().to_string();
-            assert!(screen.contains("offline · 2h 5m ago"), "{screen}");
+            // In ASCII, as on a phone.
+            assert!(screen.contains("offline - 2h 5m ago"), "{screen}");
             assert!(screen.contains("R recover"), "{screen}");
         }
         press(&mut app, KeyCode::Enter);
@@ -479,6 +480,16 @@ fn assert_last_column_blank(buffer: &ratatui::buffer::Buffer) {
     let x = buffer.area.right() - 1;
     for y in buffer.area.top()..buffer.area.bottom() {
         assert_eq!(buffer[(x, y)], ratatui::buffer::Cell::default(), "row {y}");
+    }
+}
+
+#[test]
+fn up_to_64_columns_is_a_phone() {
+    let mut app = fake::tree();
+    // One pane: the list, full width, with a bar of buttons over the status line.
+    for (width, phone) in [(64, true), (65, false)] {
+        let screen = render(&mut app, width, 20).backend().to_string();
+        assert_eq!(screen.contains("> open"), phone, "{width}:\n{screen}");
     }
 }
 

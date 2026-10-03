@@ -16,6 +16,7 @@ mod account_screen;
 mod accounts;
 mod action;
 mod app;
+mod backend;
 mod compose;
 #[cfg(test)]
 mod fake;
@@ -75,7 +76,12 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     forward_machines(&client, tx.clone());
     let raw = terminal::RawInput::default();
 
-    let mut terminal = ratatui::init();
+    // Raw mode, the alternate screen and a panic hook that restores both; drawing goes
+    // through the TUI's own backend.
+    drop(ratatui::init());
+    let mut terminal = ratatui::Terminal::new(backend::Anchored(
+        ratatui::backend::CrosstermBackend::new(std::io::stdout()),
+    ))?;
     // ratatui's panic hook restores the screen, but not mouse reporting.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -159,7 +165,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
 
 /// Draws the screen; with `full`, every cell anew, as one synchronized update where the
 /// terminal supports that, so the cleared screen never shows.
-fn paint(terminal: &mut ratatui::DefaultTerminal, app: &mut App, full: bool) -> Result<()> {
+fn paint(terminal: &mut backend::Tui, app: &mut App, full: bool) -> Result<()> {
     use ratatui::crossterm::execute;
     use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
     if full {
@@ -181,8 +187,9 @@ struct Modes {
     mouse: bool,
 }
 
-/// Turns on bracketed paste, so a pasted prompt is one edit and not a key per character;
-/// focus reports, so the screen is repainted when a phone app comes back to the front; where
+/// Turns off line wrap, so a symbol a terminal draws wider than counted cannot push the end
+/// of a row onto the next; turns on bracketed paste, so a pasted prompt is one edit and not a
+/// key per character; focus reports, so the screen is repainted when a phone app comes back to the front; where
 /// the terminal supports it, disambiguated keys, so Shift-Enter is not Enter; and with
 /// `mouse`, mouse reporting, so a phone's taps and swipes reach the TUI.
 fn enable_input_modes(mouse: bool) -> Modes {
@@ -193,7 +200,12 @@ fn enable_input_modes(mouse: bool) -> Modes {
     use ratatui::crossterm::{execute, terminal};
     let mut out = std::io::stdout();
     // All are conveniences: without them typing still works, only less well.
-    let _ = execute!(out, EnableBracketedPaste, EnableFocusChange);
+    let _ = execute!(
+        out,
+        terminal::DisableLineWrap,
+        EnableBracketedPaste,
+        EnableFocusChange
+    );
     let enhanced = terminal::supports_keyboard_enhancement().unwrap_or(false)
         && execute!(
             out,
@@ -233,7 +245,12 @@ fn disable_input_modes(modes: Modes) {
     if modes.enhanced {
         let _ = execute!(out, PopKeyboardEnhancementFlags);
     }
-    let _ = execute!(out, DisableBracketedPaste, DisableFocusChange);
+    let _ = execute!(
+        out,
+        DisableBracketedPaste,
+        DisableFocusChange,
+        ratatui::crossterm::terminal::EnableLineWrap
+    );
 }
 
 /// Sends a command on its own task and feeds the daemon's answer back to the loop.
@@ -330,6 +347,8 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Res
     std::thread::Builder::new()
         .name("herder-tui-input".to_owned())
         .spawn(move || {
+            // The row a drag last reported: a drag within the row, as motion, costs no redraw.
+            let mut drag_row = None;
             loop {
                 if raw.forward(wait) {
                     continue;
@@ -344,17 +363,18 @@ fn forward_input(tx: mpsc::UnboundedSender<Msg>, raw: terminal::RawInput) -> Res
                     Ok(Event::Resize(..)) => Msg::Resize,
                     Ok(Event::FocusGained) => Msg::Focus,
                     Ok(Event::Paste(text)) => Msg::Paste(text),
-                    Ok(Event::Mouse(mouse))
-                        if matches!(
-                            mouse.kind,
-                            MouseEventKind::Down(_)
-                                | MouseEventKind::Up(_)
-                                | MouseEventKind::ScrollUp
-                                | MouseEventKind::ScrollDown
-                        ) =>
-                    {
-                        Msg::Mouse(mouse)
-                    }
+                    Ok(Event::Mouse(mouse)) => match mouse.kind {
+                        MouseEventKind::Down(_) | MouseEventKind::Up(_) => {
+                            drag_row = Some(mouse.row);
+                            Msg::Mouse(mouse)
+                        }
+                        MouseEventKind::Drag(_) if drag_row != Some(mouse.row) => {
+                            drag_row = Some(mouse.row);
+                            Msg::Mouse(mouse)
+                        }
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Msg::Mouse(mouse),
+                        _ => continue,
+                    },
                     Ok(_) => continue,
                     Err(_) => return,
                 };
