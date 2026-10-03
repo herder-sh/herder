@@ -33,7 +33,7 @@ image = { version = "0.25", default-features = false, features = ["gif", "jpeg",
 insta = "1"
 jiff = { version = "0.2", features = ["serde"] }
 jsonschema = { version = "0.58", default-features = false }
-nix = { version = "0.31", features = ["hostname", "net", "poll", "signal"] }
+nix = { version = "0.31", features = ["fs", "hostname", "net", "poll", "signal"] }
 nucleo-matcher = "0.3"
 portable-pty = "0.9"
 prettyplease = "0.2"

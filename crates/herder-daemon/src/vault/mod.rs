@@ -20,6 +20,10 @@
 //!
 //! Another host can recover a session whose host died from the vault ([`recover`]); the vault
 //! then shows the session on that host, and the old host makes its copy read-only.
+//!
+//! The vault keeps a host's images only up to the cap its hello gives, and drops archived
+//! sessions after its retention period; a host and its sessions go only when an owner forgets
+//! it ([`retention`]).
 
 mod client;
 mod conn;
@@ -27,6 +31,7 @@ mod fleet;
 mod link;
 pub mod recover;
 mod replicator;
+mod retention;
 mod store;
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -40,9 +45,11 @@ use tracing::{debug, info, warn};
 
 pub use link::{Link, Setup as LinkSetup};
 pub use replicator::{Replicator, WakeOnEvent};
-pub use store::{HostRecord, Outcome, VaultStore};
+pub use retention::{Admin, Forgot, PRUNE_EVERY};
+pub use store::{HostRecord, Kept, Outcome, VaultStore};
 
 use crate::auth::{self, Auth};
+use crate::config::Retention;
 use crate::hub::Hub;
 use crate::login::Logins;
 use crate::terminal::{self, Terminals};
@@ -71,6 +78,8 @@ struct Shared {
     clients: ws::Server<Fleet>,
     /// Silence after which a host is taken for gone; [`LIVENESS_TIMEOUT`] but in tests.
     liveness: Duration,
+    /// How long archived sessions are kept.
+    retention: Retention,
     /// Hosts whose copy of a session another host just recovered; their connections drop.
     superseded: tokio::sync::broadcast::Sender<HostId>,
 }
@@ -88,15 +97,16 @@ impl Shared {
 }
 
 impl Server {
-    /// A server keeping what hosts send in `store` and showing it to clients as the vault on
-    /// `host`; `auth` decides which devices may connect, and a host silent for `liveness` is
-    /// disconnected.
+    /// A server keeping what hosts send in `store` for as long as `retention` says, and
+    /// showing it to clients as the vault on `host`; `auth` decides which devices may
+    /// connect, and a host silent for `liveness` is disconnected.
     pub fn new(
         tls: Tls,
         auth: Arc<Auth>,
         store: VaultStore,
         host: Host,
         liveness: Duration,
+        retention: Retention,
     ) -> Self {
         let store = Arc::new(Mutex::new(store));
         let hub = Arc::new(Hub::default());
@@ -121,6 +131,7 @@ impl Server {
                 fleet,
                 clients,
                 liveness,
+                retention,
                 superseded: tokio::sync::broadcast::channel(16).0,
             }),
         }
@@ -131,11 +142,22 @@ impl Server {
         Arc::clone(&self.shared.store)
     }
 
-    /// Accepts hosts and clients on `listener` until `shutdown`, which also closes every
-    /// connection.
+    /// What the control socket does on the vault.
+    pub fn admin(&self) -> Admin {
+        Admin {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// Accepts hosts and clients on `listener`, and prunes archived sessions, until
+    /// `shutdown`, which also closes every connection.
     pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
         // Every host is offline until it connects.
         self.shared.fleet.refresh_hosts().await;
+        tokio::spawn(retention::run(
+            Arc::clone(&self.shared),
+            shutdown.child_token(),
+        ));
         let flusher = tokio::spawn({
             let hub = Arc::clone(&self.shared.hub);
             let shutdown = shutdown.clone();
@@ -185,27 +207,35 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
+    let fingerprint = tls.fingerprint().to_owned();
+    let server = Server::new(
+        tls,
+        Arc::clone(&auth),
+        store,
+        host,
+        LIVENESS_TIMEOUT,
+        config.retention,
+    );
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
         Arc::clone(&auth),
         auth::control::Daemon {
-            fingerprint: tls.fingerprint().to_owned(),
+            fingerprint: fingerprint.clone(),
             listen: listener.local_addr()?,
             link: None,
-            vault: true,
+            vault: Some(server.admin()),
         },
         shutdown.clone(),
     ));
     info!(
         data_dir = %data_dir.root().display(),
         listen = %listener.local_addr()?,
-        tls_fingerprint = tls.fingerprint(),
+        tls_fingerprint = fingerprint,
+        archive_retention_days = config.retention.archive_days,
         "herder vault started"
     );
-    Server::new(tls, auth, store, host, LIVENESS_TIMEOUT)
-        .run(listener, shutdown)
-        .await;
+    server.run(listener, shutdown).await;
     info!("herder vault stopped");
     Ok(())
 }
@@ -250,6 +280,7 @@ mod tests {
             projects: Default::default(),
             mode: crate::config::Mode::Vault,
             vault: None,
+            retention: Default::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

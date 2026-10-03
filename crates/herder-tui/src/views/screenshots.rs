@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 43] = [
+const SCENES: [Scene; 46] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -142,32 +142,10 @@ const SCENES: [Scene; 43] = [
         app_buffer(app, theme, width, height)
     }),
     ("attach-transcript", |theme, _, width, height| {
-        let mut app = fake::chat();
-        let key = fake::key("h1", "s2");
-        let session = app.sessions.get_mut(&key).unwrap();
-        let mut first = None;
-        for entry in &mut session.entries {
-            if let crate::session::Entry::Item(item) = entry
-                && let herder_protocol::ItemBody::UserMessage { attachments, .. } = &mut item.body
-            {
-                *attachments = [
-                    ("01J9A", "image/png", 348_160),
-                    ("01J9B", "image/jpeg", 1_258_291),
-                ]
-                .map(|(id, media_type, size)| herder_protocol::Attachment {
-                    attachment_id: herder_protocol::AttachmentId::new(id),
-                    media_type: media_type.into(),
-                    size,
-                })
-                .to_vec();
-                first = Some(item.id.clone());
-                break;
-            }
-        }
-        app.focus = crate::app::Focus::Transcript;
-        app.chat.cursor = first;
-        app.chat.reveal = true;
-        app_buffer(app, theme, width, height)
+        app_buffer(attach_transcript(false), theme, width, height)
+    }),
+    ("image-not-backed-up", |theme, _, width, height| {
+        app_buffer(attach_transcript(true), theme, width, height)
     }),
     ("help", |theme, _, width, height| {
         let mut app = fake::tree();
@@ -267,6 +245,12 @@ const SCENES: [Scene; 43] = [
         press(&mut app, KeyCode::Char('j'));
         app_buffer(app, theme, width, height)
     }),
+    ("vault-storage", |theme, _, width, height| {
+        app_buffer(fake::vault_storage(212.4), theme, width, height)
+    }),
+    ("vault-full", |theme, _, width, height| {
+        app_buffer(fake::vault_storage(412.8), theme, width, height)
+    }),
     ("backup-pick", |theme, _, width, height| {
         app_buffer(backup(0, &[]), theme, width, height)
     }),
@@ -347,6 +331,43 @@ fn attached(app: &mut App, bytes: Result<usize, &str>) {
 }
 
 /// Presses `code`.
+/// [`fake::chat`] with two images on its prompt, the cursor on it; with `missing`, the second
+/// was found not backed up when opened, as in a session recovered from the vault.
+fn attach_transcript(missing: bool) -> App {
+    let mut app = fake::chat();
+    let key = fake::key("h1", "s2");
+    let session = app.sessions.get_mut(&key).unwrap();
+    let mut first = None;
+    for entry in &mut session.entries {
+        if let crate::session::Entry::Item(item) = entry
+            && let herder_protocol::ItemBody::UserMessage { attachments, .. } = &mut item.body
+        {
+            *attachments = [
+                ("01J9A", "image/png", 348_160),
+                ("01J9B", "image/jpeg", 1_258_291),
+            ]
+            .map(|(id, media_type, size)| herder_protocol::Attachment {
+                attachment_id: herder_protocol::AttachmentId::new(id),
+                media_type: media_type.into(),
+                size,
+            })
+            .to_vec();
+            first = Some(item.id.clone());
+            break;
+        }
+    }
+    if missing {
+        session
+            .not_backed_up
+            .insert(herder_protocol::AttachmentId::new("01J9B"));
+        app.notice = Some(herder_protocol::IMAGE_NOT_BACKED_UP.to_owned());
+    }
+    app.focus = crate::app::Focus::Transcript;
+    app.chat.cursor = first;
+    app.chat.reveal = true;
+    app
+}
+
 /// [`fake::backups`] with the backup dialog open on machine `at`, then `keys` pressed.
 fn backup(at: usize, keys: &[KeyCode]) -> App {
     let mut app = fake::backups();
@@ -669,4 +690,34 @@ fn limit_reset_frames() {
     );
     let buffer = app_buffer_ref(&mut app, &theme, 100, 30);
     std::fs::write(out.join("limit-2.ansi"), ansi(&buffer, &theme)).unwrap();
+}
+
+/// ANSI frames replayed by vhs for the vault storage PR's short recording: down the fleet to
+/// the vault, whose disk then fills past the warning.
+#[test]
+#[ignore = "run for the vault storage PR with HERDER_FRAMES"]
+fn vault_storage_frames() {
+    let out = std::env::var_os("HERDER_FRAMES").expect("set HERDER_FRAMES");
+    let out = Path::new(&out);
+    std::fs::create_dir_all(out).unwrap();
+    let theme = Theme::herder(Mode::Dark);
+    let mut app = fake::vault_storage(212.4);
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('k'));
+    let mut frames = Vec::new();
+    for key in [None, Some('j'), Some('j')] {
+        if let Some(key) = key {
+            press(&mut app, KeyCode::Char(key));
+        }
+        frames.push(app_buffer_ref(&mut app, &theme, 100, 30));
+    }
+    let mut full = fake::vault_storage(412.8);
+    frames.push(app_buffer_ref(&mut full, &theme, 100, 30));
+    for (index, buffer) in frames.iter().enumerate() {
+        std::fs::write(
+            out.join(format!("vault-{index}.ansi")),
+            ansi(buffer, &theme),
+        )
+        .unwrap();
+    }
 }

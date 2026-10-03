@@ -12,7 +12,7 @@ use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::config::VaultConfig;
+use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::vault::recover::{Recovery, Request};
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
@@ -87,15 +87,22 @@ impl Vault {
                     id: HostId::new("vault"),
                     name: "vault".into(),
                 };
-                let server = Server::new(tls, Arc::clone(&auth), store, host, LIVENESS_TIMEOUT);
+                let server = Server::new(
+                    tls,
+                    Arc::clone(&auth),
+                    store,
+                    host,
+                    LIVENESS_TIMEOUT,
+                    Retention::default(),
+                );
                 tokio::spawn(server.run(listener, CancellationToken::new()));
                 (addr, fingerprint, auth)
             })
             .await;
+        // Images are backed up, so a recovered session has them.
         let config = VaultConfig {
-            address: addr.to_string(),
-            fingerprint,
-            pairing_code: None,
+            attachments: true,
+            ..VaultConfig::new(addr.to_string(), fingerprint, None)
         };
         Self {
             _runtime: runtime,

@@ -16,9 +16,19 @@
 //!  latency      12 ms · avg 14 ms · 9–31 ms
 //!  cpu          23% of 8 cores
 //! ```
+//!
+//! A vault shows how full its disk is, as it said when the fleet view opened, in place of
+//! accounts and load, warning above [`VaultVolume::WARN_RATIO`], and what each host it
+//! backs up takes there:
+//!
+//! ```text
+//!  disk         412.8 / 480.0 GiB, 86% · nearly full
+//!  hosts        devbox  12 sessions · images 340 MiB of 1.0 GiB
+//!               laptop   3 sessions · images off
+//! ```
 
 use herder_client_core::{ConnectionState, Machine};
-use herder_protocol::Role;
+use herder_protocol::{FleetHost, Role, VaultVolume};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -101,7 +111,7 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
     let rows: Vec<Row> = app
         .machines
         .iter()
-        .map(|machine| row(ui, app, machine, compact))
+        .map(|machine| row(ui, app, panel, machine, compact))
         .collect();
     let total = u16::try_from(rows.iter().map(Row::height).sum::<usize>()).unwrap_or(u16::MAX);
     // The list first; the details take what is left.
@@ -156,7 +166,7 @@ pub(super) fn connection(ui: Ui, machine: &Machine) -> (&'static str, Style, Str
 /// A machine's row: its connection, name, role and address, its load at the right; under it
 /// its fingerprint, accounts and sessions, or why it is not connected. `compact` on a phone,
 /// where the address and the load's pressure and turns go.
-fn row<'a>(ui: Ui, app: &App, machine: &Machine, compact: bool) -> Row<'a> {
+fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: bool) -> Row<'a> {
     let (mark, style, state) = connection(ui, machine);
     let mut left = vec![
         Span::styled(mark, style),
@@ -183,11 +193,22 @@ fn row<'a>(ui: Ui, app: &App, machine: &Machine, compact: bool) -> Row<'a> {
     };
     let mut facts = vec![Span::styled(short(ui, &machine.fingerprint), ui.muted())];
     if matches!(machine.connection, ConnectionState::Connected) {
-        facts.push(Span::styled(
-            count(machine.accounts.len(), "account"),
-            ui.muted(),
-        ));
-        facts.push(Span::styled(count(sessions, "session"), ui.muted()));
+        if is_vault(panel, machine) {
+            facts.push(Span::styled(count(machine.hosts.len(), "host"), ui.muted()));
+        } else {
+            facts.push(Span::styled(
+                count(machine.accounts.len(), "account"),
+                ui.muted(),
+            ));
+        }
+        // A phone has room for a vault's hosts or its sessions, not both.
+        if !(compact && is_vault(panel, machine)) {
+            facts.push(Span::styled(count(sessions, "session"), ui.muted()));
+        }
+        if let Some(volume) = panel.volumes.get(&machine.host_id) {
+            let percent = format!("disk {}", percent(volume));
+            facts.push(Span::styled(percent, disk_style(ui, volume)));
+        }
         if let Some(rtt) = machine.quality.last_rtt_ms {
             facts.push(Span::styled(format!("{rtt} ms"), ui.muted()));
         }
@@ -197,6 +218,154 @@ fn row<'a>(ui: Ui, app: &App, machine: &Machine, compact: bool) -> Row<'a> {
     Row::item(Line::from(left))
         .right(right)
         .body(vec![Line::from(ui.joined(facts))])
+}
+
+/// Whether `machine` is a vault: it lists the hosts it backs up, or said it is one.
+fn is_vault(panel: &MachinePanel, machine: &Machine) -> bool {
+    !machine.hosts.is_empty() || panel.links.get(&machine.host_id) == Some(&Known::Vault)
+}
+
+/// How much of the vault's disk is in use, as `86%`.
+fn percent(volume: &VaultVolume) -> String {
+    format!("{:.0}%", volume.used_ratio() * 100.0)
+}
+
+/// The warning colour once the vault's disk is nearly full, else muted.
+fn disk_style(ui: Ui, volume: &VaultVolume) -> Style {
+    if volume.nearly_full() {
+        Style::new().fg(ui.theme.warning)
+    } else {
+        ui.muted()
+    }
+}
+
+/// The vault's disk and what each host takes on it, as details rows `width` wide.
+fn vault_facts(
+    ui: Ui,
+    panel: &MachinePanel,
+    machine: &Machine,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    match panel.volumes.get(&machine.host_id) {
+        Some(volume) => {
+            let mut disk = format!(
+                "{} / {} GiB, {}",
+                super::resources::gib(volume.used_bytes),
+                super::resources::gib(volume.total_bytes),
+                percent(volume)
+            );
+            let style = if volume.nearly_full() {
+                disk.push_str(&format!("{}nearly full", ui.glyphs.separator));
+                Style::new().fg(ui.theme.warning)
+            } else {
+                ui.text()
+            };
+            lines.extend(field(ui, "disk", &disk, style, width));
+        }
+        None => lines.extend(field(ui, "disk", "not known", ui.muted(), width)),
+    }
+    if machine.hosts.is_empty() {
+        lines.extend(field(
+            ui,
+            "hosts",
+            "none backs up here yet",
+            ui.muted(),
+            width,
+        ));
+        return lines;
+    }
+    let name_width = machine
+        .hosts
+        .iter()
+        .map(|host| host.host_name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let sessions_width = machine
+        .hosts
+        .iter()
+        .filter_map(|host| host.usage.as_ref())
+        .map(|usage| usage.sessions.to_string().len())
+        .max()
+        .unwrap_or(1);
+    for (at, host) in machine.hosts.iter().enumerate() {
+        let label = if at == 0 { "hosts" } else { "" };
+        lines.extend(host_usage(
+            ui,
+            label,
+            host,
+            name_width,
+            sessions_width,
+            width,
+        ));
+    }
+    lines
+}
+
+/// One host's row under `hosts`: its name, then its sessions and images against its cap,
+/// in columns `name_width` and `sessions_width` wide; where the row has no room for that,
+/// the images go on a line of their own under the name.
+fn host_usage(
+    ui: Ui,
+    label: &str,
+    host: &FleetHost,
+    name_width: usize,
+    sessions_width: usize,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let separator = ui.glyphs.separator;
+    let usage = host.usage.as_ref().map(|usage| {
+        let sessions = match usage.sessions {
+            1 => "session",
+            _ => "sessions",
+        };
+        let images = match usage.attachments_cap {
+            Some(cap) => format!(
+                "images {} of {}",
+                super::resources::bytes(usage.attachment_bytes),
+                super::resources::bytes(cap)
+            ),
+            None if usage.attachment_bytes > 0 => format!(
+                "images off, {} kept",
+                super::resources::bytes(usage.attachment_bytes)
+            ),
+            None => "images off".to_owned(),
+        };
+        (
+            format!("{:>sessions_width$} {sessions:<8}", usage.sessions),
+            images,
+        )
+    });
+    let Some((sessions, images)) = usage else {
+        return field(ui, label, &host.host_name, ui.text(), width);
+    };
+    let fits = name_width
+        + 2
+        + sessions.chars().count()
+        + separator.chars().count()
+        + images.chars().count()
+        <= width;
+    if !fits {
+        let sessions = sessions.split_whitespace().collect::<Vec<_>>().join(" ");
+        let name = format!("{}{separator}{sessions}", host.host_name);
+        let mut lines = field(ui, label, &name, ui.text(), width);
+        if images.chars().count() + 2 <= width {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(LABEL + 2)),
+                Span::styled(images, ui.muted()),
+            ]));
+        } else {
+            lines.extend(field(ui, "", &images, ui.muted(), width));
+        }
+        return lines;
+    }
+    vec![Line::from(vec![
+        Span::styled(format!("{label:<LABEL$}"), ui.muted()),
+        Span::styled(format!("{:<name_width$}  ", host.host_name), ui.text()),
+        Span::styled(sessions, ui.text()),
+        Span::styled(separator.to_owned(), ui.muted()),
+        Span::styled(images, ui.muted()),
+    ])]
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -249,20 +418,10 @@ fn details(
         let backup = backup::describe(known, vault);
         lines.extend(field(ui, "backup", &backup, style, width));
     }
-    let accounts = machine
-        .accounts
-        .iter()
-        .map(|account| format!("{} ({})", account.account_id, account.provider.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let accounts = if accounts.is_empty() {
-        "none".to_owned()
+    if is_vault(panel, machine) {
+        lines.extend(vault_facts(ui, panel, machine, width));
     } else {
-        accounts
-    };
-    lines.extend(field(ui, "accounts", &accounts, ui.text(), width));
-    for (label, value, style) in super::resources::facts(ui, machine) {
-        lines.extend(field(ui, label, &value, style, width));
+        lines.extend(machine_facts(ui, machine, width));
     }
     lines.extend(field(
         ui,
@@ -280,6 +439,27 @@ fn details(
         ui.text(),
         width,
     ));
+    lines
+}
+
+/// A daemon's accounts and load, as details rows `width` wide.
+fn machine_facts(ui: Ui, machine: &Machine, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let accounts = machine
+        .accounts
+        .iter()
+        .map(|account| format!("{} ({})", account.account_id, account.provider.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let accounts = if accounts.is_empty() {
+        "none".to_owned()
+    } else {
+        accounts
+    };
+    lines.extend(field(ui, "accounts", &accounts, ui.text(), width));
+    for (label, value, style) in super::resources::facts(ui, machine) {
+        lines.extend(field(ui, label, &value, style, width));
+    }
     lines
 }
 

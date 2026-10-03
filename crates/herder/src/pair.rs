@@ -73,7 +73,9 @@ pub fn run(args: Args) -> Result<()> {
             Ok(())
         }
         Response::Error { message } => bail!("{message}"),
-        Response::Recovered(_) => bail!("the daemon sent an unexpected answer"),
+        Response::Recovered(_) | Response::ForgotHost(_) => {
+            bail!("the daemon sent an unexpected answer")
+        }
     }
 }
 

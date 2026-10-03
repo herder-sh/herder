@@ -118,6 +118,20 @@
 //! address = "vault.example.com:7447"
 //! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
 //! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
+//! attachments = true           # back up prompt images too; off by default
+//! attachments_cap = 1073741824 # most bytes of images the vault keeps; 1 GiB by default
+//! ```
+//!
+//! With `attachments`, the vault keeps this host's images up to `attachments_cap` bytes,
+//! evicting the oldest first; without it the host sends none.
+//!
+//! A vault's own `[vault]` table sets how long it keeps archived sessions:
+//!
+//! ```toml
+//! mode = "vault"
+//!
+//! [vault]
+//! archive_retention_days = 90 # archived sessions of online hosts are dropped after this
 //! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -167,6 +181,24 @@ pub struct Config {
     pub mode: Mode,
     /// The vault a host replicates its sessions to, if any.
     pub vault: Option<VaultConfig>,
+    /// What a vault keeps, and for how long; read in vault mode only.
+    pub retention: Retention,
+}
+
+/// Bytes of images a vault keeps per host unless the host's `[vault]` table says otherwise.
+pub const DEFAULT_ATTACHMENTS_CAP: u64 = 1 << 30;
+
+/// What a vault keeps: its `[vault]` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retention {
+    /// Days an archived session of an online host stays on the vault after its latest event.
+    pub archive_days: u32,
+}
+
+impl Default for Retention {
+    fn default() -> Self {
+        Self { archive_days: 90 }
+    }
 }
 
 /// What a daemon runs as.
@@ -180,17 +212,49 @@ pub enum Mode {
     Vault,
 }
 
-/// The `[vault]` table: where a host replicates to.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The `[vault]` table of a host: where it replicates to.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultConfig {
     /// The vault's address, as `host:port`.
     pub address: String,
     /// SHA-256 of the vault's TLS certificate, lowercase hex.
     pub fingerprint: String,
     /// One-time code from `herder pair` on the vault, for the first connection.
-    #[serde(default)]
     pub pairing_code: Option<String>,
+    /// Whether prompt images are backed up too.
+    pub attachments: bool,
+    /// Most bytes of this host's images the vault keeps, when `attachments` is on.
+    pub attachments_cap: u64,
+}
+
+impl VaultConfig {
+    /// Backs up to the vault at `address`, pinned to `fingerprint`, images off.
+    pub fn new(address: String, fingerprint: String, pairing_code: Option<String>) -> Self {
+        Self {
+            address,
+            fingerprint,
+            pairing_code,
+            attachments: false,
+            attachments_cap: DEFAULT_ATTACHMENTS_CAP,
+        }
+    }
+
+    /// The cap the host's hello gives the vault: `None` when images are not backed up.
+    pub fn images_cap(&self) -> Option<u64> {
+        self.attachments.then_some(self.attachments_cap)
+    }
+}
+
+/// The `[vault]` table as written: a host's or a vault's keys.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VaultFile {
+    address: Option<String>,
+    fingerprint: Option<String>,
+    pairing_code: Option<String>,
+    attachments: Option<bool>,
+    attachments_cap: Option<u64>,
+    archive_retention_days: Option<u32>,
 }
 
 /// Logging settings: the `[log]` table.
@@ -238,7 +302,7 @@ struct ConfigFile {
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
     mode: Mode,
-    vault: Option<VaultConfig>,
+    vault: Option<VaultFile>,
 }
 
 impl Default for ConfigFile {
@@ -356,17 +420,7 @@ impl Config {
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
         let titles = resolve_titles(file.titles, &accounts)?;
-        if let Some(vault) = &file.vault {
-            ensure!(
-                file.mode == Mode::Host,
-                "a vault does not replicate to another vault; remove the [vault] table"
-            );
-            ensure!(
-                vault.fingerprint.len() == 64
-                    && vault.fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
-                "vault.fingerprint must be the 64 hex digits `herder pair` prints"
-            );
-        }
+        let (vault, retention) = resolve_vault(file.mode, file.vault)?;
         Ok(Self {
             path,
             listen: file.listen,
@@ -380,12 +434,56 @@ impl Config {
             resources: file.resources,
             projects,
             mode: file.mode,
-            vault: file.vault.map(|vault| VaultConfig {
-                fingerprint: vault.fingerprint.to_ascii_lowercase(),
-                ..vault
-            }),
+            vault,
+            retention,
         })
     }
+}
+
+/// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
+/// keeps.
+fn resolve_vault(mode: Mode, table: Option<VaultFile>) -> Result<(Option<VaultConfig>, Retention)> {
+    let Some(table) = table else {
+        return Ok((None, Retention::default()));
+    };
+    if mode == Mode::Vault {
+        ensure!(
+            table.address.is_none()
+                && table.fingerprint.is_none()
+                && table.pairing_code.is_none()
+                && table.attachments.is_none()
+                && table.attachments_cap.is_none(),
+            "a vault does not replicate to another vault; its [vault] table takes \
+             archive_retention_days only"
+        );
+        let mut retention = Retention::default();
+        if let Some(days) = table.archive_retention_days {
+            ensure!(days > 0, "vault.archive_retention_days must be at least 1");
+            retention.archive_days = days;
+        }
+        return Ok((None, retention));
+    }
+    ensure!(
+        table.archive_retention_days.is_none(),
+        "vault.archive_retention_days is set on the vault, not on a host"
+    );
+    let (Some(address), Some(fingerprint)) = (table.address, table.fingerprint) else {
+        bail!("the [vault] table needs the vault's address and fingerprint");
+    };
+    ensure!(
+        fingerprint.len() == 64 && fingerprint.chars().all(|c| c.is_ascii_hexdigit()),
+        "vault.fingerprint must be the 64 hex digits `herder pair` prints"
+    );
+    let vault = VaultConfig {
+        attachments: table.attachments.unwrap_or(false),
+        attachments_cap: table.attachments_cap.unwrap_or(DEFAULT_ATTACHMENTS_CAP),
+        ..VaultConfig::new(
+            address,
+            fingerprint.to_ascii_lowercase(),
+            table.pairing_code,
+        )
+    };
+    Ok((Some(vault), Retention::default()))
 }
 
 /// Validates the `[titles]` table.
@@ -762,6 +860,13 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
                 let mut table = toml_edit::Table::new();
                 table.insert("address", toml_edit::value(vault.address.as_str()));
                 table.insert("fingerprint", toml_edit::value(vault.fingerprint.as_str()));
+                if vault.attachments {
+                    table.insert("attachments", toml_edit::value(true));
+                }
+                if vault.attachments_cap != DEFAULT_ATTACHMENTS_CAP {
+                    let cap = i64::try_from(vault.attachments_cap).unwrap_or(i64::MAX);
+                    table.insert("attachments_cap", toml_edit::value(cap));
+                }
                 doc.insert("vault", toml_edit::Item::Table(table));
             }
             None => {
@@ -1145,6 +1250,7 @@ mod tests {
                 projects: ProjectsConfig::default(),
                 mode: Mode::Host,
                 vault: None,
+                retention: Retention::default(),
             }
         );
     }
@@ -1156,11 +1262,11 @@ mod tests {
         let original = "# my daemon\nlisten = \"127.0.0.1:7447\"  # loopback only\n\n\
                         [log]\nlevel = \"debug\"\n";
         std::fs::write(&path, original).unwrap();
-        let vault = VaultConfig {
-            address: "vault.lan:7447".into(),
-            fingerprint: "ab".repeat(32),
-            pairing_code: Some("ABCDE-FGHJK".into()),
-        };
+        let vault = VaultConfig::new(
+            "vault.lan:7447".into(),
+            "ab".repeat(32),
+            Some("ABCDE-FGHJK".into()),
+        );
         set_vault(&path, Some(&vault)).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with(original), "{text}");
@@ -1214,12 +1320,14 @@ mod tests {
         assert_eq!(config.mode, Mode::Host);
         assert_eq!(
             config.vault,
-            Some(VaultConfig {
-                address: "vault:7447".into(),
-                fingerprint: "ab".repeat(32),
-                pairing_code: Some("ABCDE-FGHJK".into()),
-            })
+            Some(VaultConfig::new(
+                "vault:7447".into(),
+                "ab".repeat(32),
+                Some("ABCDE-FGHJK".into())
+            ))
         );
+        // Images are not backed up unless the host says so.
+        assert_eq!(config.vault.unwrap().images_cap(), None);
 
         std::fs::write(
             &path,
@@ -1237,6 +1345,60 @@ mod tests {
         )
         .unwrap();
         assert!(Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).is_err());
+    }
+
+    #[test]
+    fn images_and_retention_in_the_vault_table() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let load = |text: String| {
+            std::fs::write(&path, text).unwrap();
+            Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")]))
+        };
+        let host = format!(
+            "[vault]\naddress = \"vault:7447\"\nfingerprint = \"{}\"\n",
+            "ab".repeat(32)
+        );
+        let vault = load(format!("{host}attachments = true\n"))
+            .unwrap()
+            .vault
+            .unwrap();
+        assert_eq!(vault.images_cap(), Some(DEFAULT_ATTACHMENTS_CAP));
+        let vault = load(format!(
+            "{host}attachments = true\nattachments_cap = 5000\n"
+        ))
+        .unwrap()
+        .vault
+        .unwrap();
+        assert_eq!(vault.images_cap(), Some(5000));
+        let vault = load(format!("{host}attachments_cap = 5000\n"))
+            .unwrap()
+            .vault
+            .unwrap();
+        assert_eq!(vault.images_cap(), None);
+        let err = load(format!("{host}archive_retention_days = 3\n")).unwrap_err();
+        assert!(format!("{err:#}").contains("on the vault"), "{err:#}");
+
+        // Written back as set, and only what differs from the defaults.
+        let both = VaultConfig {
+            attachments: true,
+            attachments_cap: 5000,
+            ..vault.clone()
+        };
+        set_vault(&path, Some(&both)).unwrap();
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(config.vault, Some(both));
+        let plain = VaultConfig::new(vault.address.clone(), vault.fingerprint.clone(), None);
+        set_vault(&path, Some(&plain)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("attachments"), "{text}");
+
+        let config = load("mode = \"vault\"\n".into()).unwrap();
+        assert_eq!(config.retention.archive_days, 90);
+        let config = load("mode = \"vault\"\n[vault]\narchive_retention_days = 30\n".into());
+        assert_eq!(config.unwrap().retention.archive_days, 30);
+        assert!(load("mode = \"vault\"\n[vault]\narchive_retention_days = 0\n".into()).is_err());
+        assert!(load("mode = \"vault\"\n[vault]\nattachments = true\n".into()).is_err());
     }
 
     #[test]

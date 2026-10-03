@@ -197,12 +197,14 @@ pub fn vault() -> App {
             host_name: "devbox".into(),
             online: true,
             last_seen: Timestamp::now(),
+            usage: None,
         },
         FleetHost {
             host_id: HostId::new("laptop"),
             host_name: "laptop".into(),
             online: false,
             last_seen: seen,
+            usage: None,
         },
     ];
     vault.sessions = [("s1", "devbox"), ("s2", "laptop"), ("s3", "devbox")]
@@ -1168,6 +1170,67 @@ pub fn live() -> App {
     app
 }
 
+/// The fleet view of [`backups`] with the vault selected: it backs up `devbox` (images on,
+/// a third of its cap), `laptop` (images off) and `old-box`, gone, and its disk is `used`
+/// GiB of 480.
+pub fn vault_storage(used: f64) -> App {
+    use herder_protocol::{HostUsage, VaultVolume};
+    let mut app = backups();
+    let mut machines = app.machines.clone();
+    let seen = Timestamp::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+    let host = |name: &str, online: bool, sessions: u32, bytes: u64, cap: Option<u64>| FleetHost {
+        host_id: HostId::new(name),
+        host_name: name.into(),
+        online,
+        last_seen: if online { Timestamp::now() } else { seen },
+        usage: Some(HostUsage {
+            sessions,
+            attachment_bytes: bytes,
+            attachments_cap: cap,
+        }),
+    };
+    const MIB: u64 = 1 << 20;
+    if let Some(vault) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
+        vault.hosts = vec![
+            host("devbox", true, 4, 340 * MIB, Some(1024 * MIB)),
+            host("laptop", true, 1, 0, None),
+            host("old-box", false, 12, 980 * MIB, Some(1024 * MIB)),
+        ];
+        vault.sessions = (1..=17)
+            .map(|n| SessionHead {
+                host_id: Some(HostId::new(match n {
+                    ..=4 => "devbox",
+                    5 => "laptop",
+                    _ => "old-box",
+                })),
+                ..head(&format!("v{n}"), Some("github.com/org/app"))
+            })
+            .collect();
+    }
+    app.update(Msg::Machines(machines));
+    // The vault answers the fleet view's question with how full its disk is.
+    let volume = VaultVolume {
+        total_bytes: 480 << 30,
+        // Rounded up, so the tenths shown are those given.
+        used_bytes: ((used * 10.0).round() as u64 * (1 << 30)).div_ceil(10),
+    };
+    app.update(Msg::Sent {
+        origin: crate::compose::Origin::Backup(crate::backup::Sent::Ask(HostId::new("v"))),
+        result: Ok(herder_protocol::CommandResult::VaultLink {
+            is_vault: true,
+            vault: None,
+            volume: Some(volume),
+        }),
+    });
+    for _ in 0..2 {
+        app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char('j'),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )));
+    }
+    app
+}
+
 /// The fleet view of three machines this client owns, each saying where it backs up: `devbox`
 /// nowhere, `laptop` to `vault`, and `vault` is the vault. `devbox` is selected.
 pub fn backups() -> App {
@@ -1208,7 +1271,11 @@ pub fn backups() -> App {
             "laptop" => (false, Some(linked.clone())),
             _ => (false, None),
         };
-        let result = Ok(herder_protocol::CommandResult::VaultLink { is_vault, vault });
+        let result = Ok(herder_protocol::CommandResult::VaultLink {
+            is_vault,
+            vault,
+            volume: None,
+        });
         app.update(Msg::Sent { origin, result });
     }
     app
