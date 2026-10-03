@@ -61,6 +61,8 @@ pub enum Action {
     AddMachine,
     /// Input to the machines panel or its add dialog.
     Machines(crate::machines::Input),
+    /// Input to the machines panel's backup dialog.
+    Backup(crate::backup::Input),
     /// Open the selected session's terminal picker, or close it.
     Terminals,
     /// Something in the inbox.

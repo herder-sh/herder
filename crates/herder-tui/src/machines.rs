@@ -17,6 +17,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::accounts::{self, AddAccount};
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
+use crate::backup::{self, Backup, Links};
 use crate::terminal::{self, Target};
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it; added
@@ -34,6 +35,10 @@ pub struct MachinePanel {
     pub account: Option<AddAccount>,
     /// A rename or forget of the selected machine, in the panel.
     pub edit: Option<PanelEdit>,
+    /// The backup dialog, over the panel.
+    pub backup: Option<Backup>,
+    /// Where each machine this client owns backs up, as it last said.
+    pub links: Links,
 }
 
 /// What the panel does to the selected machine.
@@ -205,6 +210,8 @@ pub enum Input {
     Rename,
     /// Ask before forgetting the selected machine.
     Forget,
+    /// Back the selected machine up to a vault, or stop.
+    Backup,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -226,6 +233,9 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if panel.account.is_some() {
         return accounts::input_for_key(key).map(Action::Machines);
+    }
+    if let Some(backup) = &panel.backup {
+        return backup::for_key(key, backup);
     }
     let input = match &panel.edit {
         Some(PanelEdit::Rename(_)) => match key.code {
@@ -289,6 +299,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('n') => Input::AddAccount,
             KeyCode::Char('e') => Input::Rename,
             KeyCode::Char('d') => Input::Forget,
+            KeyCode::Char('b') => Input::Backup,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -298,12 +309,14 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
 }
 
 impl App {
-    /// Opens the machines panel, with the add dialog if `add`.
-    pub(crate) fn open_machines(&mut self, add: bool) {
+    /// Opens the machines panel, with the add dialog if `add`, and asks the machines this
+    /// client owns where they back up.
+    pub(crate) fn open_machines(&mut self, add: bool) -> Vec<Effect> {
         let panel = self.machine_panel.get_or_insert_with(MachinePanel::default);
         if add && panel.add.is_none() {
             panel.add = Some(AddMachine::default());
         }
+        self.ask_links()
     }
 
     /// Carries out one input to the machines panel.
@@ -369,6 +382,7 @@ impl App {
                         panel.edit = Some(PanelEdit::Forget);
                     }
                 }
+                Input::Backup => return self.open_backup(),
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
                         return Vec::new();

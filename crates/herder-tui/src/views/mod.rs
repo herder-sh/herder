@@ -29,6 +29,7 @@
 
 mod accounts;
 mod add_machine;
+mod backup;
 mod composer;
 mod details;
 mod help;

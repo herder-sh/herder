@@ -709,6 +709,59 @@
             "media_type",
             "data"
           ]
+        },
+        {
+          "description": "Where the daemon backs its sessions up, answering `get_vault_link`.",
+          "type": "object",
+          "properties": {
+            "is_vault": {
+              "description": "Whether the daemon is a vault, which hosts back up to.",
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "vault_link"
+            },
+            "vault": {
+              "description": "The vault the daemon backs up to; absent when it backs up nowhere, as a vault\nnever does.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LinkedVault"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "is_vault"
+          ]
+        },
+        {
+          "description": "A one-time code that pairs a host with this vault to replicate and only that,\nanswering `pair_vault_host`.",
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The code, for `link_vault`.",
+              "type": "string"
+            },
+            "expires_at": {
+              "description": "When the code stops working.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "type": {
+              "type": "string",
+              "const": "host_pairing"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "expires_at"
+          ]
         }
       ]
     },
@@ -1913,6 +1966,24 @@
     "ItemId": {
       "description": "Identifies an item within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "LinkedVault": {
+      "description": "The vault a host backs up to, as its `[vault]` table names it.",
+      "type": "object",
+      "properties": {
+        "address": {
+          "description": "The vault's address, as `host:port`.",
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "fingerprint"
+      ]
     },
     "Mergeable": {
       "description": "Whether a pull request can merge cleanly.",
