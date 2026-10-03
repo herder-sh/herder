@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 9] = [
+const SCENES: [Scene; 14] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -76,6 +76,35 @@ const SCENES: [Scene; 9] = [
         let mut app = super::tests::herd();
         app.layout.collapsed = true;
         press(&mut app, KeyCode::Esc);
+        app_buffer(app, theme, width, height)
+    }),
+    ("chat", |theme, _, width, height| {
+        let mut app = fake::chat();
+        fake::type_text(
+            &mut app,
+            "write the docs page too, and link it from @README.md",
+        );
+        app_buffer(app, theme, width, height)
+    }),
+    ("approve", |theme, _, width, height| {
+        app_buffer(fake::chat_approval(), theme, width, height)
+    }),
+    ("question", |theme, _, width, height| {
+        app_buffer(fake::chat_question(), theme, width, height)
+    }),
+    ("commands", |theme, _, width, height| {
+        let mut app = fake::chat();
+        fake::type_text(&mut app, "/mo");
+        app_buffer(app, theme, width, height)
+    }),
+    ("navigate", |theme, _, width, height| {
+        let mut app = fake::chat();
+        app.focus = crate::app::Focus::Transcript;
+        for id in ["r1", "c3", "c5"] {
+            app.chat.expanded.insert(herder_protocol::ItemId::new(id));
+        }
+        app.chat.cursor = Some(herder_protocol::ItemId::new("c3"));
+        app.chat.reveal = true;
         app_buffer(app, theme, width, height)
     }),
     ("help", |theme, _, width, height| {

@@ -100,6 +100,29 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
         // A dialog shows its own keys; this is its tap to close.
         None => vec![tap("esc", "close", KeyCode::Esc)],
         Some(Mode::Leader) => vec![tap("esc", "cancel", KeyCode::Esc)],
+        // An approval takes the prompt's place, and its keys.
+        Some(Mode::Prompt) if app.open_session().is_some_and(|s| !s.approvals.is_empty()) => {
+            let mut hints = vec![
+                act(
+                    "y",
+                    "allow",
+                    Action::Compose(Act::Approve(ApprovalDecision::Allow)),
+                ),
+                act(
+                    "n",
+                    "deny",
+                    Action::Compose(Act::Approve(ApprovalDecision::Deny)),
+                ),
+                hint("←/→", "choose"),
+                tap("enter", "confirm", KeyCode::Enter),
+                tap("f", "full", char('f')),
+                tap("esc", "navigate", KeyCode::Esc),
+            ];
+            if running {
+                hints.push(stop);
+            }
+            hints
+        }
         Some(Mode::Prompt) => {
             let mut hints = vec![
                 tap("enter", "send", KeyCode::Enter),
@@ -107,6 +130,8 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     Hint::new("alt+enter", "newline"),
                     Some(Click::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT))),
                 ),
+                hint("/", "commands"),
+                hint("@", "mention"),
                 tap("esc", "navigate", KeyCode::Esc),
             ];
             if running {
@@ -157,6 +182,9 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 let mut hints = vec![
                     tap("i", "write", char('i')),
                     hint("j/k", "scroll"),
+                    hint("[ ]", "items"),
+                    tap("e", "expand", char('e')),
+                    tap("c", "copy", char('c')),
                     tap("esc", "sidebar", KeyCode::Esc),
                 ];
                 if running {

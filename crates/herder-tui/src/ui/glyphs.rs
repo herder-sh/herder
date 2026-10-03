@@ -131,6 +131,16 @@ pub struct GlyphSet {
     pub separator: &'static str,
     /// Tools, by [`GlyphSet::tool`]: shell, read, write, search, web, todo, task, other.
     pub tools: [&'static str; 8],
+    /// An approval request.
+    pub approval: &'static str,
+    /// A question.
+    pub question: &'static str,
+    /// The footer that ends an agent's reply.
+    pub reply: &'static str,
+    /// A pull request.
+    pub pr: &'static str,
+    /// A Markdown list item.
+    pub bullet: &'static str,
 }
 
 /// The Unicode set: one column wide on desktop terminals.
@@ -166,6 +176,11 @@ pub const UNICODE: GlyphSet = GlyphSet {
     expand: "»",
     separator: " · ",
     tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "⚙"],
+    approval: "△",
+    question: "?",
+    reply: "▣",
+    pr: "⎇",
+    bullet: "•",
 };
 
 /// The ASCII set: what any terminal draws one column wide. Box drawing stays.
@@ -201,6 +216,11 @@ pub const ASCII: GlyphSet = GlyphSet {
     expand: ">>",
     separator: " - ",
     tools: ["$", ">", "<", "*", "@", "[]", "+", ">"],
+    approval: "^",
+    question: "?",
+    reply: "=",
+    pr: "pr",
+    bullet: "-",
 };
 
 impl GlyphSet {
@@ -219,6 +239,7 @@ impl GlyphSet {
             "Grep" | "Glob" | "LS" => 3,
             "WebFetch" | "WebSearch" | "web_search" => 4,
             "TodoWrite" | "TodoRead" | "update_plan" => 5,
+            "Task" | "Agent" => 6,
             name if name.starts_with("mcp__herder__") => 6,
             _ => 7,
         };
@@ -316,12 +337,27 @@ mod tests {
                 &set.cap_fill,
                 &set.cursor,
                 &set.connected,
+                &set.approval,
+                &set.reply,
+                &set.bullet,
             ]) {
                 assert_eq!(Span::raw(*mark).width(), 1, "{mark:?}");
             }
         }
         // ASCII needs no fold.
-        for mark in ASCII.states.iter().chain(ASCII.spinner).chain(&ASCII.tools) {
+        for mark in ASCII
+            .states
+            .iter()
+            .chain(ASCII.spinner)
+            .chain(&ASCII.tools)
+            .chain([
+                &ASCII.approval,
+                &ASCII.question,
+                &ASCII.reply,
+                &ASCII.pr,
+                &ASCII.bullet,
+            ])
+        {
             assert!(mark.is_ascii(), "{mark:?}");
         }
         assert_eq!(UNICODE.state(State::NeedsYou), "◉");
