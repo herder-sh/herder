@@ -206,6 +206,15 @@ impl<B: Backend> Shared<B> {
                 )?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
+            CommandBody::SetAccountSettings {
+                account_id,
+                label,
+                config_dir,
+            } => {
+                self.logins
+                    .set_settings(&account_id, &label, config_dir.as_deref())
+                    .await?;
+            }
             CommandBody::AttachTerminal { terminal_id } => {
                 terminals.attach(&terminal_id, outbox)?
             }

@@ -346,6 +346,7 @@ struct Inner {
     adapters: Adapters,
     /// Grows as accounts are added ([`SessionManager::add_account`]); never shrinks.
     accounts: RwLock<Accounts>,
+    account_settings: Mutex<()>,
     turn_ids: TurnIds,
     worktrees: Worktrees,
     /// Where prompts' images are kept ([`attachments`]).
@@ -471,6 +472,7 @@ impl SessionManager {
                 journal,
                 adapters: setup.adapters,
                 accounts: RwLock::new(setup.accounts),
+                account_settings: Mutex::new(()),
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
                 attachments: setup.attachments,
@@ -503,6 +505,12 @@ impl SessionManager {
         by: UserId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
+        // Restoring an archived session must not race a login-directory edit.
+        let _settings = if matches!(&command, CommandBody::UnarchiveSession { .. }) {
+            Some(self.inner.account_settings.lock().await)
+        } else {
+            None
+        };
         let (session_id, request) = match command {
             CommandBody::CreateSession {
                 repo,
@@ -647,6 +655,7 @@ impl SessionManager {
                 },
             ),
             CommandBody::OpenTerminal { .. }
+            | CommandBody::SetAccountSettings { .. }
             | CommandBody::AddAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
@@ -1159,6 +1168,39 @@ impl SessionManager {
         crate::accounts::list(&self.inner.accounts_lock(), &self.inner.usage.all())
     }
 
+    /// Serializes directory edits with new sessions. Existing sessions retain their login;
+    /// directory changes are allowed only when every session on the machine is archived.
+    pub(crate) async fn configure_account(
+        &self,
+        account_id: &AccountId,
+        save: impl FnOnce(&AccountConfig, bool) -> Result<AccountConfig, ErrorInfo>,
+    ) -> Result<(), ErrorInfo> {
+        let inner = &self.inner;
+        let _settings = inner.account_settings.lock().await;
+        let previous = inner
+            .account(account_id)
+            .ok_or_else(|| error(ErrorCode::NotFound, "account does not exist"))?;
+        let may_change_directory = inner
+            .journal
+            .sessions()
+            .await
+            .map_err(internal)?
+            .iter()
+            .all(|session| session.status == herder_protocol::SessionStatus::Archived);
+        let account = save(&previous, may_change_directory)?;
+        if account.config_dir != previous.config_dir {
+            inner.usage.all().remove(account_id);
+        }
+        inner
+            .accounts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(account_id.clone(), account);
+        inner.journal.sink().accounts_changed(&self.accounts());
+        inner.refresh_usage.notify_one();
+        Ok(())
+    }
+
     /// Lets sessions run on a newly added account, announces the new account list and asks for
     /// its usage; `false`, changing nothing, when the id is taken.
     pub fn add_account(&self, account_id: AccountId, account: AccountConfig) -> bool {
@@ -1382,6 +1424,7 @@ impl SessionManager {
         request: CreateRequest,
     ) -> Result<(SessionId, String), ErrorInfo> {
         let inner = &self.inner;
+        let _settings = inner.account_settings.lock().await;
         let account = inner.account(&request.account_id).ok_or_else(|| {
             error(
                 ErrorCode::NotFound,

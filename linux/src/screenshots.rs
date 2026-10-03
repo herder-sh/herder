@@ -49,6 +49,7 @@ fn account(id: &str, provider: Provider, label: &str, usage: Vec<UsageWindow>) -
         account_id: AccountId::new(id),
         provider,
         label: label.to_owned(),
+        config_dir: None,
         usage,
     }
 }

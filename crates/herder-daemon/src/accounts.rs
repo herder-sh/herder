@@ -118,6 +118,10 @@ pub(crate) fn list(accounts: &Accounts, usage: &Windows) -> Vec<Account> {
     accounts
         .iter()
         .map(|(id, account)| Account {
+            config_dir: account
+                .config_dir
+                .as_ref()
+                .map(|dir| dir.to_string_lossy().into_owned()),
             account_id: id.clone(),
             provider: account.provider.clone(),
             label: account.label.clone(),
@@ -263,12 +267,14 @@ mod tests {
             list(&accounts, &usage),
             [
                 Account {
+                    config_dir: Some("/secret/dir".into()),
                     account_id: AccountId::new("claude-main"),
                     provider: Provider::Claude,
                     label: "Label".into(),
                     usage: vec![window],
                 },
                 Account {
+                    config_dir: None,
                     account_id: AccountId::new("codex"),
                     provider: Provider::Codex,
                     label: "Label".into(),
