@@ -42,7 +42,7 @@ struct SessionRow: View {
                     if showsProject && !session.project.isEmpty {
                         Text(session.project).foregroundStyle(Theme.secondary)
                     }
-                    if session.branch != session.title {
+                    if !session.branch.isEmpty && session.branch != session.title {
                         if showsProject && !session.project.isEmpty {
                             Text("·").foregroundStyle(Theme.tertiary)
                         }
