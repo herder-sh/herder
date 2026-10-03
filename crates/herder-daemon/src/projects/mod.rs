@@ -16,7 +16,11 @@
 //! wherever it finds them, until `add_project` declares one again. Each rewrites the daemon's
 //! config file and takes effect at once ([`Overrides`]); discovery then rescans and publishes
 //! the list. Removing never touches the repositories themselves.
+//!
+//! Each project's `icon` is an image file found in its first clone ([`icon`]); discovery
+//! reads it on every full scan, and `get_project_icon` reads it again when asked.
 
+pub mod icon;
 pub mod scan;
 #[cfg(test)]
 mod tests;
@@ -84,6 +88,8 @@ pub struct ProjectEntry {
     pub default_permission_mode: Option<PermissionMode>,
     /// Shell command run in each new worktree of the project.
     pub setup_command: Option<String>,
+    /// The project's icon, relative to each clone; tried before the files [`icon`] looks for.
+    pub icon: Option<PathBuf>,
 }
 
 /// The `[projects]` table and `[[project]]` entries as they are now: what the daemon started
@@ -160,15 +166,7 @@ impl Overrides {
             .paths
             .first()
             .with_context(|| format!("project {} has no clone here", project.project_id))?;
-        let entry = current.entries.iter().position(|entry| {
-            entry.remotes.first() == Some(&project.project_id)
-                || entry.paths.iter().any(|path| {
-                    project
-                        .paths
-                        .iter()
-                        .any(|clone| Path::new(clone) == path.as_path())
-                })
-        });
+        let entry = entry_of(&current.entries, project);
         let config =
             crate::config::set_project_settings(&self.file, entry, Path::new(clone), settings)?;
         self.replace(config);
@@ -189,6 +187,33 @@ impl Overrides {
         *self.config.write().unwrap_or_else(PoisonError::into_inner) = config;
         self.changed.notify_one();
     }
+}
+
+/// The index of the entry in `entries` that shapes `project`, as discovery listed it: the one
+/// whose first remote is its id, else the first that lists one of its clones.
+fn entry_of(entries: &[ProjectEntry], project: &Project) -> Option<usize> {
+    entries.iter().position(|entry| {
+        entry.remotes.first() == Some(&project.project_id)
+            || entry.paths.iter().any(|path| {
+                project
+                    .paths
+                    .iter()
+                    .any(|clone| Path::new(clone) == path.as_path())
+            })
+    })
+}
+
+/// The icon of `project`, as discovery listed it, in its first clone that exists, trying first
+/// the `icon` of the entry in `entries` that shapes it ([`icon::find`]). Blocks on the file
+/// system.
+pub fn icon(project: &Project, entries: &[ProjectEntry]) -> Option<icon::Icon> {
+    let explicit = entry_of(entries, project).and_then(|index| entries[index].icon.as_deref());
+    let clone = project
+        .paths
+        .iter()
+        .map(Path::new)
+        .find(|path| path.is_dir())?;
+    icon::find(clone, explicit)
 }
 
 /// A repository on this host and its `origin` remote URL.
@@ -266,6 +291,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                 default_account: entry.and_then(|e| e.default_account.clone()),
                 default_permission_mode: entry.and_then(|e| e.default_permission_mode),
                 setup_command: entry.and_then(|e| e.setup_command.clone()),
+                icon: None,
                 project_id,
             }
         })
@@ -400,7 +426,7 @@ impl Discovery {
                     origin: origin.clone(),
                 })
                 .collect();
-            let projects = resolve(&self.host, &list, &config.entries);
+            let projects = with_icons(resolve(&self.host, &list, &config.entries), config).await;
             if published.as_ref() != Some(&projects) {
                 debug!(projects = projects.len(), "project list changed");
                 self.hub.projects_changed(projects.clone());
@@ -409,6 +435,26 @@ impl Discovery {
             }
         }
     }
+}
+
+/// `projects` with the hash of each one's icon under `config`.
+async fn with_icons(mut projects: Vec<Project>, config: ProjectsConfig) -> Vec<Project> {
+    let listed = projects.clone();
+    let icons = tokio::task::spawn_blocking(move || {
+        listed
+            .iter()
+            .map(|project| icon(project, &config.entries).map(|icon| icon.hash))
+            .collect()
+    })
+    .await
+    .unwrap_or_else(|err| {
+        warn!("looking for project icons panicked: {err}");
+        Vec::new()
+    });
+    for (project, icon) in projects.iter_mut().zip(icons) {
+        project.icon = icon;
+    }
+    projects
 }
 
 /// Every repository to resolve: those `scanned`, the session repos still there and the paths

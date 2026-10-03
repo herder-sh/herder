@@ -35,7 +35,7 @@ pub use ids::{
     AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, QuestionId,
     SessionId, TerminalId, TurnId, UserId,
 };
-pub use project::{Project, ProjectId};
+pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
 pub use replication::{
     Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION,
     RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode, SessionSummary, VaultHello,

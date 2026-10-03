@@ -502,6 +502,9 @@ pub enum CommandBody {
     RemoveProject {
         project_id: ProjectId,
     },
+    GetProjectIcon {
+        project_id: ProjectId,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -552,6 +555,11 @@ pub enum CommandResult {
     },
     ProjectAdded {
         project_id: ProjectId,
+    },
+    ProjectIcon {
+        icon: String,
+        media_type: String,
+        data: Bytes,
     },
 }
 
@@ -648,6 +656,9 @@ pub struct Project {
     pub default_permission_mode: Option<PermissionMode>,
     pub default_account: Option<AccountId>,
     pub setup_command: Option<String>,
+    // Defaults to nil so Swift and Kotlin code building a `Project` need not name it.
+    #[uniffi(default)]
+    pub icon: Option<String>,
 }
 
 // Resources

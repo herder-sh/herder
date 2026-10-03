@@ -21,6 +21,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         default_permission_mode: None,
         default_account: None,
         setup_command: None,
+        icon: None,
     }
 }
 
@@ -702,6 +703,136 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
             .exclude
             .is_empty()
     );
+
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Projects");
+    let (app, lib) = (root.join("app"), root.join("lib"));
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    git_repo(
+        &lib,
+        "[remote \"origin\"]\n\turl = git@github.com:org/lib.git\n",
+    );
+    fs::create_dir_all(app.join("public")).unwrap();
+    fs::write(app.join("public/favicon.svg"), b"<svg/>").unwrap();
+    fs::write(app.join("logo.png"), b"png").unwrap();
+    let file = tmp.path().join("daemon.toml");
+    fs::write(
+        &file,
+        format!(
+            "[projects]\nroots = [\"{}\"]\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            root.display(),
+        ),
+    )
+    .unwrap();
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Member);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::new(),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    let overrides = Arc::new(Overrides::new(
+        file.clone(),
+        crate::config::read_projects(&file).unwrap(),
+    ));
+    sessions
+        .manage_projects(host(), Arc::clone(&overrides))
+        .unwrap();
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: overrides,
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed: Arc::new(Notify::new()),
+        }
+        .run(shutdown.clone()),
+    );
+    let sha = |data: &[u8]| -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(data)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
+
+    // The entry's `icon` wins over the candidates; lib has none.
+    let projects = next_projects(&outbox).await;
+    let icons: Vec<_> = projects.iter().map(|p| p.icon.clone()).collect();
+    assert_eq!(icons, [Some(sha(b"png")), None]);
+
+    let member = herder_protocol::UserId::new("bob");
+    let fetch = |id: &str| {
+        sessions.handle(
+            member.clone(),
+            herder_protocol::CommandBody::GetProjectIcon {
+                project_id: ProjectId::new(id),
+            },
+        )
+    };
+    assert_eq!(
+        fetch("github.com/org/app").await,
+        Ok(herder_protocol::CommandResult::ProjectIcon {
+            icon: sha(b"png"),
+            media_type: "image/png".into(),
+            data: herder_protocol::Bytes(b"png".to_vec()),
+        })
+    );
+    let error = fetch("github.com/org/lib").await.unwrap_err();
+    assert_eq!(
+        (error.code, error.message.as_str()),
+        (
+            herder_protocol::ErrorCode::NotFound,
+            "project github.com/org/lib has no icon"
+        )
+    );
+    let error = fetch("github.com/org/other").await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+
+    // Changed on disk, the icon is read afresh, and the next full scan lists its new hash.
+    fs::remove_file(app.join("logo.png")).unwrap();
+    let Ok(herder_protocol::CommandResult::ProjectIcon {
+        icon, media_type, ..
+    }) = fetch("github.com/org/app").await
+    else {
+        panic!("expected the favicon");
+    };
+    assert_eq!(
+        (icon, media_type.as_str()),
+        (sha(b"<svg/>"), "image/svg+xml")
+    );
+    let set = herder_protocol::CommandBody::SetProjectSettings {
+        project_id: ProjectId::new("github.com/org/lib"),
+        default_permission_mode: None,
+        default_account: None,
+        setup_command: Some("true".into()),
+    };
+    assert_eq!(
+        sessions.handle(member.clone(), set).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    let projects = next_projects(&outbox).await;
+    assert_eq!(projects[0].icon, Some(sha(b"<svg/>")));
 
     shutdown.cancel();
     task.await.unwrap();

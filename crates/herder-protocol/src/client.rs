@@ -281,6 +281,13 @@ pub enum CommandBody {
         /// The project, one of this daemon's.
         project_id: ProjectId,
     },
+    /// Fetch a project's icon, the file its `icon` names; owners and members alike. Answered
+    /// with `project_icon`, or refused with `not_found` when the project has none. It changes
+    /// nothing, so a resend is answered afresh.
+    GetProjectIcon {
+        /// The project, one of this daemon's.
+        project_id: ProjectId,
+    },
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {
         /// Target terminal.

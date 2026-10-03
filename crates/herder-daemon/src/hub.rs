@@ -1060,6 +1060,7 @@ mod tests {
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
+            icon: None,
         }];
         hub.projects_changed(projects.clone());
         let message = ServerMessage::Projects { projects };

@@ -24,7 +24,8 @@ says what exists, why, and how it maps to foreign languages.
   version 4 (P0.10) changed them without changing this API: `Account.failover` is gone,
   `CreateSession` takes a `provider` and an optional `permission_mode`, and there are new
   commands and results for images, folders, projects and unarchiving. P0.12 added the
-  `RemoveProject` command, a compatible addition that keeps both versions.
+  `RemoveProject` command, a compatible addition that keeps both versions. P0.14 added
+  `Project.icon` and the `GetProjectIcon` command, compatible too.
 
 ## Shape, and how it maps to UniFFI
 
@@ -71,7 +72,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
-| Projects  | `Machine::projects`                                                  | owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
+| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
