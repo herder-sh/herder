@@ -10,10 +10,12 @@
 //! - `prs`: pull requests, in the session view and in the window's list of all of them.
 //! - `session_view`, `transcript`, `tools`, `markdown`: the open session, its transcript and
 //!   composer.
+//! - `images`: images attached to prompts, their thumbnails and the full-size viewer.
 //! - `theme`: the colour tokens and the rules that use them.
 
 #[cfg(test)]
 mod e2e;
+mod images;
 mod lists;
 mod markdown;
 mod prs;
@@ -110,7 +112,6 @@ fn wire(window: &MainWindow, client: &Client) {
             client
                 .send(host_id, command)
                 .await
-                .map(|_| ())
                 .map_err(|err| err.to_string())
         })
     }));

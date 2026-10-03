@@ -428,3 +428,80 @@ spinner.tool-status {
 .pr-heading {
   margin-top: 6px;
 }
+
+/* Images: thumbnails of a prompt's, cropped to fill, and what the composer will send. */
+thumb {
+  border-radius: 8px;
+}
+
+thumb.loading {
+  background-color: alpha(currentColor, 0.06);
+}
+
+button.thumb-button {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 8px;
+  background: none;
+}
+
+button.thumb-button:hover thumb {
+  filter: brightness(1.06);
+}
+
+.image-missing {
+  border-radius: 8px;
+  border: 1px dashed alpha(currentColor, 0.18);
+  color: @herder_text_muted;
+  padding: 6px;
+}
+
+.image-missing image {
+  -gtk-icon-size: 20px;
+  opacity: 0.7;
+}
+
+.user-message .images {
+  margin-bottom: 3px;
+}
+
+.user-message .images > flowboxchild {
+  padding: 0;
+}
+
+.composer .attached {
+  padding: 6px 6px 0 6px;
+}
+
+.composer .attached > viewport > box {
+  padding-bottom: 6px;
+}
+
+button.remove-image {
+  margin: 4px;
+  padding: 0;
+  min-width: 20px;
+  min-height: 20px;
+  -gtk-icon-size: 12px;
+  color: @window_fg_color;
+  background-color: alpha(@window_bg_color, 0.9);
+  box-shadow: 0 0 0 1px alpha(@window_fg_color, 0.15);
+}
+
+button.remove-image:hover {
+  background-color: @window_bg_color;
+}
+
+.composer.dropping {
+  border: 1px dashed @herder_primary;
+  background-color: alpha(@herder_primary, 0.06);
+}
+
+.viewer-page {
+  background-color: @dialog_bg_color;
+}
+
+.viewer {
+  padding: 0 12px 12px 12px;
+}
