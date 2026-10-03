@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::Client;
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
@@ -141,7 +141,11 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             clone(&tmp.path().join("laptop/work/app")),
         ),
     ];
-    let client = Client::open(tmp.path().join("client"), "herder-tui/test".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-tui/test".into(),
+    )
+    .unwrap();
     for (id, name, repo) in &machines {
         let link = daemon(&tmp.path().join(name), id, name, &shutdown).await;
         client.pair(link).await.unwrap();
@@ -155,7 +159,7 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             max_children: None,
             failover_pin: None,
         };
-        client.send(&HostId::new(*id), command).await.unwrap();
+        client.send(HostId::new(*id), command).await.unwrap();
     }
 
     // Each daemon lists its session with the project its clone's remote names.
@@ -165,7 +169,7 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
         |heads: &[SessionHead]| heads.len() == 1 && heads[0].project_id.as_ref() == Some(&app_id);
     tokio::time::timeout(TIMEOUT, async {
         while !client.machines().iter().all(|m| resolved(&m.sessions)) {
-            changes.next().await.unwrap();
+            assert!(changes.next().await);
         }
     })
     .await

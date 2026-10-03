@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_client_core::{
     Client, ConnectionState, Error, NewAccount, SessionSubscription, SessionUpdate, TerminalEvent,
     TerminalStream,
@@ -266,7 +266,7 @@ async fn wait_connection(client: &Client, wanted: impl Fn(&ConnectionState) -> b
             .iter()
             .any(|machine| wanted(&machine.connection))
         {
-            changes.next().await.unwrap();
+            assert!(changes.next().await);
         }
     })
     .await
@@ -298,7 +298,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let turns = Arc::new(AtomicU64::new(0));
     let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
 
-    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     let machine = client.pair(daemon.pairing_link()).await.unwrap();
     let host = machine.host_id;
     assert_eq!(host, HostId::new("host-1"));
@@ -311,7 +311,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
 
     let created = client
         .send(
-            &host,
+            host.clone(),
             CommandBody::CreateSession {
                 repo: Some(repo),
                 project_id: None,
@@ -328,12 +328,14 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let CommandResult::SessionCreated { session_id } = created else {
         panic!("expected a session, got {created:?}");
     };
-    let sub = client.subscribe_session(&host, &session_id).unwrap();
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
     let prompt = |text: &str| CommandBody::SendPrompt {
         session_id: session_id.clone(),
         text: text.into(),
     };
-    let sent = client.send(&host, prompt("First.")).await.unwrap();
+    let sent = client.send(host.clone(), prompt("First.")).await.unwrap();
     assert_eq!(sent, CommandResult::Applied);
 
     // Mid-turn: one item done, another streaming.
@@ -352,7 +354,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let daemon = Daemon::start(&data, port, "after_restart.jsonl", turns).await;
     view.read_until(&sub, turn_ended("turn-1")).await;
     assert!(view.latest.streaming.is_empty(), "{:?}", view.latest);
-    let sent = client.send(&host, prompt("Second.")).await.unwrap();
+    let sent = client.send(host.clone(), prompt("Second.")).await.unwrap();
     assert_eq!(sent, CommandResult::Applied);
     // The session goes idle last, once the turn has ended.
     view.read_until(&sub, |view| {
@@ -369,9 +371,11 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     // A new client on the same profile connects without pairing and replays the session.
     drop(sub);
     drop(client);
-    let client = Client::open(config, "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     wait_connection(&client, connected).await;
-    let sub = client.subscribe_session(&host, &session_id).unwrap();
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
     let mut replayed = View::default();
     let last = view.events.last().unwrap().seq;
     replayed
@@ -404,11 +408,11 @@ async fn synced_waits_for_the_lists_and_the_replay() {
         Arc::default(),
     )
     .await;
-    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
     let created = client
         .send(
-            &host,
+            host.clone(),
             CommandBody::CreateSession {
                 repo: Some(repo),
                 project_id: None,
@@ -428,9 +432,11 @@ async fn synced_waits_for_the_lists_and_the_replay() {
     drop(client);
 
     // A fresh client has nothing cached; once synced, its lists and the replay are in.
-    let client = Client::open(config, "herder-test/0".into()).unwrap();
-    let sub = client.subscribe_session(&host, &session_id).unwrap();
-    tokio::time::timeout(TIMEOUT, client.synced(&host))
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
+    let sub = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    tokio::time::timeout(TIMEOUT, client.synced(host.clone()))
         .await
         .unwrap()
         .unwrap();
@@ -466,32 +472,37 @@ async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
         Arc::default(),
     )
     .await;
-    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
-    client.rename(&host, "build box".into()).unwrap();
+    client.rename(host.clone(), "build box".into()).unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     // Pairing again keeps the name.
     client.pair(daemon.pairing_link()).await.unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     drop(client);
 
-    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     let unknown = HostId::new("host-2");
     assert_eq!(
-        client.rename(&unknown, "x".into()),
-        Err(Error::UnknownMachine(unknown.clone()))
+        client.rename(unknown.clone(), "x".into()),
+        Err(Error::UnknownMachine {
+            host_id: unknown.clone()
+        })
     );
-    assert_eq!(client.forget(&unknown), Err(Error::UnknownMachine(unknown)));
+    assert_eq!(
+        client.forget(unknown.clone()),
+        Err(Error::UnknownMachine { host_id: unknown })
+    );
     let sub = client
-        .subscribe_session(&host, &SessionId::new("s"))
+        .subscribe_session(host.clone(), SessionId::new("s"))
         .unwrap();
-    client.forget(&host).unwrap();
+    client.forget(host.clone()).unwrap();
     assert!(client.machines().is_empty());
     assert!(sub.next().await.is_none());
     drop(client);
 
-    let client = Client::open(config, "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
     assert!(client.machines().is_empty());
 }
 
@@ -506,7 +517,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     )
     .await;
     let config = tmp.path().join("client");
-    let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
 
     let link: PairingUri = daemon.pairing_link().parse().unwrap();
     let wrong_code = PairingUri {
@@ -515,7 +526,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     };
     let err = client.pair(wrong_code.to_string()).await.unwrap_err();
     assert!(
-        matches!(&err, Error::Pairing(message) if message.contains("pairing code")),
+        matches!(&err, Error::Pairing { message } if message.contains("pairing code")),
         "{err}"
     );
     let wrong_fingerprint = PairingUri {
@@ -527,12 +538,12 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, Error::Pairing(message) if message.contains("fingerprint")),
+        matches!(&err, Error::Pairing { message } if message.contains("fingerprint")),
         "{err}"
     );
     assert!(matches!(
         client.pair("https://example.com".into()).await,
-        Err(Error::InvalidLink(_))
+        Err(Error::InvalidLink { .. })
     ));
     assert!(client.machines().is_empty());
     assert!(!config.join("machines.json").exists());
@@ -541,7 +552,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     let host = client.pair(link.to_string()).await.unwrap().host_id;
     let refused = client
         .send(
-            &host,
+            host.clone(),
             CommandBody::SendPrompt {
                 session_id: SessionId::new("nope"),
                 text: "Hi.".into(),
@@ -549,16 +560,16 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(refused, Error::Rejected(info) if info.code == ErrorCode::NotFound));
+    assert!(matches!(refused, Error::Rejected { info } if info.code == ErrorCode::NotFound));
     let unknown = client
         .send(
-            &HostId::new("other"),
+            HostId::new("other"),
             CommandBody::Interrupt {
                 session_id: SessionId::new("nope"),
             },
         )
         .await;
-    assert!(matches!(unknown, Err(Error::UnknownMachine(_))));
+    assert!(matches!(unknown, Err(Error::UnknownMachine { .. })));
 }
 
 /// A TCP relay to the daemon whose connections can be cut, as a network drop would, while the
@@ -610,7 +621,7 @@ impl Screen {
                 .await
                 .unwrap_or_else(|_| panic!("no {wanted:?} in time; got {:?}", self.text))
                 .expect("the stream ended");
-            if let TerminalEvent::Output(data) = &event {
+            if let TerminalEvent::Output { data } = &event {
                 self.text.push_str(&String::from_utf8_lossy(data));
             }
             self.events.push(event);
@@ -636,7 +647,11 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     )
     .await;
     let relay = Relay::start(daemon.addr).await;
-    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     let host = client
         .pair(daemon.pairing_link_via("alice", relay.addr))
         .await
@@ -644,7 +659,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         .host_id;
     let created = client
         .send(
-            &host,
+            host.clone(),
             CommandBody::CreateSession {
                 repo: Some(repo),
                 project_id: None,
@@ -663,7 +678,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     };
 
     let stream = client
-        .open_terminal(&host, &session_id, 80, 24)
+        .open_terminal(host.clone(), session_id.clone(), 80, 24)
         .await
         .unwrap();
     let terminal_id = stream.terminal_id();
@@ -673,14 +688,28 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     assert!(!screen.events.contains(&TerminalEvent::Reattached));
 
     // Another owner client attaches and gets the scrollback; a member gets nothing.
-    let other = Client::open(tmp.path().join("other"), "herder-test/0".into()).unwrap();
+    let other = Client::open(
+        tmp.path().join("other").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     other.pair(daemon.pairing_link()).await.unwrap();
-    let watcher = other.attach_terminal(&host, &terminal_id).await.unwrap();
+    let watcher = other
+        .attach_terminal(host.clone(), terminal_id.clone())
+        .await
+        .unwrap();
     Screen::default().read_until(&watcher, "hello").await;
-    let err = other.attach_terminal(&host, &terminal_id).await.err();
-    assert!(matches!(err, Some(Error::Local(_))), "{err:?}");
+    let err = other
+        .attach_terminal(host.clone(), terminal_id.clone())
+        .await
+        .err();
+    assert!(matches!(err, Some(Error::Local { .. })), "{err:?}");
     drop(watcher);
-    let member = Client::open(tmp.path().join("member"), "herder-test/0".into()).unwrap();
+    let member = Client::open(
+        tmp.path().join("member").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     member
         .pair(daemon.pairing_link_via("bob", daemon.addr))
         .await
@@ -688,11 +717,17 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     wait_connection(&member, connected).await;
     assert_eq!(member.machines()[0].role, Some(Role::Member));
     for refused in [
-        member.attach_terminal(&host, &terminal_id).await.err(),
-        member.open_terminal(&host, &session_id, 80, 24).await.err(),
+        member
+            .attach_terminal(host.clone(), terminal_id.clone())
+            .await
+            .err(),
+        member
+            .open_terminal(host.clone(), session_id.clone(), 80, 24)
+            .await
+            .err(),
     ] {
         assert!(
-            matches!(&refused, Some(Error::Rejected(info)) if info.code == ErrorCode::Forbidden),
+            matches!(&refused, Some(Error::Rejected { info }) if info.code == ErrorCode::Forbidden),
             "{refused:?}"
         );
     }
@@ -715,7 +750,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
     stream.input(b"exit 7\n".to_vec());
     loop {
         match next_event(&stream).await {
-            Some(TerminalEvent::Output(_)) => {}
+            Some(TerminalEvent::Output { .. }) => {}
             Some(event) => {
                 assert_eq!(event, TerminalEvent::Closed { exit_code: Some(7) });
                 break;
@@ -731,7 +766,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
 async fn login_exit(stream: &TerminalStream, screen: &mut Screen) -> Option<i32> {
     loop {
         match next_event(stream).await {
-            Some(TerminalEvent::Output(data)) => {
+            Some(TerminalEvent::Output { data }) => {
                 screen.text.push_str(&String::from_utf8_lossy(&data))
             }
             Some(TerminalEvent::Closed { exit_code }) => return exit_code,
@@ -746,7 +781,11 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     let tmp = tempfile::tempdir().unwrap();
     let daemon_dir = tmp.path().join("daemon");
     let daemon = Daemon::start(&daemon_dir, 0, "mid_turn.jsonl", Arc::default()).await;
-    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
     let config_dir = tmp.path().join("codex-2");
     let new_account = |account_id: &str| NewAccount {
@@ -757,32 +796,36 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     };
 
     // Members never see a login.
-    let member = Client::open(tmp.path().join("member"), "herder-test/0".into()).unwrap();
+    let member = Client::open(
+        tmp.path().join("member").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     member
         .pair(daemon.pairing_link_via("bob", daemon.addr))
         .await
         .unwrap();
     let refused = member
-        .add_account(&host, new_account("codex-2"), 80, 24)
+        .add_account(host.clone(), new_account("codex-2"), 80, 24)
         .await
         .err();
     assert!(
-        matches!(&refused, Some(Error::Rejected(info)) if info.code == ErrorCode::Forbidden),
+        matches!(&refused, Some(Error::Rejected { info }) if info.code == ErrorCode::Forbidden),
         "{refused:?}"
     );
     // Nor does an id already taken.
     let taken = client
-        .add_account(&host, new_account(account().as_str()), 80, 24)
+        .add_account(host.clone(), new_account(account().as_str()), 80, 24)
         .await
         .err();
     assert!(
-        matches!(&taken, Some(Error::Rejected(info)) if info.code == ErrorCode::Conflict),
+        matches!(&taken, Some(Error::Rejected { info }) if info.code == ErrorCode::Conflict),
         "{taken:?}"
     );
 
     // A failed login adds nothing.
     let stream = client
-        .add_account(&host, new_account("codex-2"), 80, 24)
+        .add_account(host.clone(), new_account("codex-2"), 80, 24)
         .await
         .unwrap();
     let mut screen = Screen::default();
@@ -798,7 +841,7 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     drop(stream);
 
     let stream = client
-        .add_account(&host, new_account("codex-2"), 80, 24)
+        .add_account(host.clone(), new_account("codex-2"), 80, 24)
         .await
         .unwrap();
     let mut screen = Screen::default();
@@ -872,7 +915,7 @@ async fn wait_machine(client: &Client, wanted: impl Fn(&herder_client_core::Mach
     let changes = client.changes();
     tokio::time::timeout(TIMEOUT, async {
         while !client.machines().first().is_some_and(&wanted) {
-            changes.next().await.unwrap();
+            assert!(changes.next().await);
         }
     })
     .await
@@ -891,7 +934,11 @@ async fn host_and_session_resources_stay_current_while_connected() {
     .await;
     // Figures from before the client connects reach it after hello.
     daemon.hub.host_resources(host_resources(3));
-    let client = Client::open(tmp.path().join("client"), "herder-test/0".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
     client.pair(daemon.pairing_link()).await.unwrap();
     wait_machine(&client, |m| m.resources == Some(host_resources(3))).await;
 

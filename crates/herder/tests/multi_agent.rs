@@ -21,7 +21,8 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, McpServer, StartFuture,
     StartRequest,
 };
-use herder_client_core::auth::{DeviceKey, PairingUri, client_config};
+use herder_client_core::PairingUri;
+use herder_client_core::auth::{DeviceKey, client_config};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, ClientHello,

@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use herder_client_core::auth::{PairingUri, client_config};
+use herder_client_core::PairingUri;
+use herder_client_core::auth::client_config;
 use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
@@ -446,8 +447,8 @@ async fn refusal(client: &Client, vault: &HostId, session: &str) -> herder_proto
         session_id: SessionId::new(session),
         text: "hi".into(),
     };
-    match client.send(vault, command).await {
-        Err(Error::Rejected(error)) => error,
+    match client.send(vault.clone(), command).await {
+        Err(Error::Rejected { info: error }) => error,
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
@@ -462,7 +463,11 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
     let host = HostDaemon::start(&host_dir, vault.config()).await;
     caught_up(&host_dir, &vault_dir).await;
 
-    let client = Client::open(tmp.path().join("client"), "test".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
     let paired = client.pair(vault.pairing_link("alice")).await.unwrap();
     let vault_id = paired.host_id;
     assert_eq!(vault_id.as_str(), "vault");
@@ -490,7 +495,7 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
 
     // The transcript replays, then follows the host live.
     let sub = client
-        .subscribe_session(&vault_id, &SessionId::new("s1"))
+        .subscribe_session(vault_id.clone(), SessionId::new("s1"))
         .unwrap();
     assert_eq!(seqs(&sub, 4).await, [1, 2, 3, 4]);
     host.switch_model("s1", "live").await;
@@ -522,8 +527,8 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         force: true,
     };
     assert!(matches!(
-        client.send(&vault_id, archive).await,
-        Err(Error::Rejected(error)) if error.code == ErrorCode::ReadOnly
+        client.send(vault_id.clone(), archive).await,
+        Err(Error::Rejected { info: error }) if error.code == ErrorCode::ReadOnly
     ));
     let missing = refusal(&client, &vault_id, "nope").await;
     assert_eq!(missing.code, ErrorCode::NotFound);
@@ -549,7 +554,7 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
     }
     assert_eq!(client.machines()[0].sessions.len(), 2);
     let sub = client
-        .subscribe_session(&vault_id, &SessionId::new("s2"))
+        .subscribe_session(vault_id.clone(), SessionId::new("s2"))
         .unwrap();
     assert_eq!(seqs(&sub, 4).await, [1, 2, 3, 4]);
     vault.runtime.kill().await;
@@ -567,7 +572,11 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
     let host = HostDaemon::start(&host_dir, vault.config()).await;
     caught_up(&host_dir, &vault_dir).await;
     host.runtime.kill().await;
-    let client = Client::open(tmp.path().join("client"), "test".into()).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
     let vault_id = client
         .pair(vault.pairing_link("alice"))
         .await

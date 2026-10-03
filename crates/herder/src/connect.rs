@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use herder_client_core::Client;
 
 pub fn run(link: &str) -> Result<()> {
-    let config_dir = herder_tui::config_dir()?;
+    let config_dir = herder_tui::config_dir()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("the config dir is not valid UTF-8"))?;
     let runtime = tokio::runtime::Runtime::new().context("starting the tokio runtime")?;
     let machine = runtime.block_on(async {
         let client = Client::open(

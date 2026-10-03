@@ -12,7 +12,10 @@ use crate::supervisor::Supervisor;
 pub enum TerminalEvent {
     /// Bytes the terminal wrote, to show as they are. The first output after attaching is the
     /// daemon's scrollback.
-    Output(Vec<u8>),
+    Output {
+        /// The bytes, raw: not necessarily valid UTF-8, nor split at character boundaries.
+        data: Vec<u8>,
+    },
     /// The connection was lost and the terminal re-attached on a new one: the daemon now
     /// replays its whole scrollback, so whatever was drawn from earlier output is to be
     /// discarded (for a local terminal: reset it) before the next output.

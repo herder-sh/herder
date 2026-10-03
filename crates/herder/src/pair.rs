@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_daemon::auth::control::{self, DeviceInfo, PairingInfo, Request, Response};
 use herder_protocol::{DeviceId, Role, Timestamp};
 use qrcode::QrCode;

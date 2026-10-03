@@ -157,7 +157,10 @@ pub fn run(args: Args) -> Result<ExitCode> {
         },
         _ => None,
     };
-    let config_dir = herder_tui::config_dir()?;
+    let config_dir = herder_tui::config_dir()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("the config dir is not valid UTF-8"))?;
     let runtime = tokio::runtime::Runtime::new().context("starting the tokio runtime")?;
     runtime.block_on(async {
         let client = Client::open(
@@ -316,7 +319,7 @@ impl Cli {
     /// Waits until the client holds everything the daemon had to say when it was asked: the
     /// session and account lists, and every session subscribed to so far.
     async fn sync(&self) -> Result<()> {
-        let synced = self.client.synced(&self.machine.host_id);
+        let synced = self.client.synced(self.machine.host_id.clone());
         match tokio::time::timeout(CONNECT_TIMEOUT, synced).await {
             Ok(result) => Ok(result?),
             Err(_) => match self.current().map(|m| m.connection) {
@@ -364,14 +367,17 @@ impl Cli {
     }
 
     async fn send(&self, command: CommandBody) -> Result<CommandResult> {
-        Ok(self.client.send(&self.machine.host_id, command).await?)
+        Ok(self
+            .client
+            .send(self.machine.host_id.clone(), command)
+            .await?)
     }
 
     /// Subscribes to a session and folds everything the daemon holds of it.
     async fn load(&self, session_id: &SessionId) -> Result<(SessionSubscription, View)> {
         let subscription = self
             .client
-            .subscribe_session(&self.machine.host_id, session_id)?;
+            .subscribe_session(self.machine.host_id.clone(), session_id.clone())?;
         self.sync().await?;
         let mut view = View::new(session_id.clone());
         if let Some(update) = subscription.next().await {
@@ -457,7 +463,7 @@ impl Cli {
             .iter()
             .map(|head| {
                 self.client
-                    .subscribe_session(&self.machine.host_id, &head.session_id)
+                    .subscribe_session(self.machine.host_id.clone(), head.session_id.clone())
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.sync().await?;
