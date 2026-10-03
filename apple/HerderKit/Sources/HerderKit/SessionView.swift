@@ -125,6 +125,9 @@ struct SessionView: View {
                 .keyboardShortcut("\\", modifiers: .command)
                 .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
             #endif
+            if fleet.archiving.contains(key) {
+                ArchivingLabel()
+            }
             if let model, model.state != .archived {
                 Menu {
                     if model.turn != nil {
@@ -134,6 +137,7 @@ struct SessionView: View {
                     Button("Link Pull Request…", systemImage: "link") { linking = true }
                     Divider()
                     Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
+                        .disabled(fleet.archiving.contains(key))
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.callout.weight(.semibold))

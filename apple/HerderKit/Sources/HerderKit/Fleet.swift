@@ -12,6 +12,12 @@ public final class Fleet {
     private(set) var sessions: [SessionKey: SessionModel] = [:]
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
+    /// Sessions whose archive the machine is working on.
+    private(set) var archiving: Set<SessionKey> = []
+    /// An archive the machine refused, for the user to decide on.
+    var archiveRefusal: ArchiveRefusal?
+    /// A short note about something that just finished, shown briefly.
+    var toast: Toast?
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
@@ -284,8 +290,32 @@ public final class Fleet {
         }
     }
 
-    func archive(_ key: SessionKey) async {
-        await send(.archiveSession(sessionId: key.sessionId, force: false), about: key)
+    /// Archives a session, showing it as archiving until the machine is done. A refusal, such
+    /// as uncommitted changes in the worktree, goes to `archiveRefusal` to decide on.
+    func archive(_ key: SessionKey, force: Bool = false) async {
+        guard !archiving.contains(key) else { return }
+        let title = sessions[key]?.title ?? "Session"
+        archiving.insert(key)
+        defer { archiving.remove(key) }
+        do {
+            _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId, force: force))
+            refusals[key] = nil
+            toast = Toast(text: "Archived “\(title)”", undo: key)
+        } catch {
+            var canForce = false
+            if case .Rejected(let info)? = error as? HerderError, info.code == .conflict, !force { canForce = true }
+            archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error), canForce: canForce)
+        }
+    }
+
+    /// Brings an archived session back, from a toast's Undo.
+    func unarchive(_ key: SessionKey) async {
+        toast = nil
+        do {
+            _ = try await client.send(hostId: key.hostId, command: .unarchiveSession(sessionId: key.sessionId))
+        } catch {
+            toast = Toast(text: describe(error))
+        }
     }
 
     /// Pairs with the daemon a `herder://pair` link names.
@@ -368,6 +398,23 @@ extension Fleet {
         log.append(RoundTrip(at: .now, milliseconds: rtt))
         roundTrips[machine.hostId] = Array(log.suffix(240))
     }
+}
+
+/// An archive the machine refused: why, and whether forcing it could go ahead.
+struct ArchiveRefusal: Identifiable {
+    let key: SessionKey
+    let title: String
+    let reason: String
+    /// A conflict, such as uncommitted changes, that archiving anyway overrides.
+    let canForce: Bool
+    var id: SessionKey { key }
+}
+
+/// A brief note, with Undo when the session it is about can be brought back.
+struct Toast: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    var undo: SessionKey?
 }
 
 struct ConnectionChange: Hashable {
