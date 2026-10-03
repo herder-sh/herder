@@ -96,6 +96,8 @@ struct HomeView: View {
     @Binding var sheet: AppSheet?
     /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
+    /// Keeps the sessions that match.
+    var query = ""
 
     var body: some View {
         let lists = fleet.lists
@@ -107,14 +109,16 @@ struct HomeView: View {
                 if lists.machines.isEmpty {
                     EmptyFleet { sheet = .pair }
                 }
-                if !lists.requests.isEmpty {
+                if !lists.requests.isEmpty && query.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionHeading(title: "Needs you", count: lists.requests.count, tint: Theme.accent)
                         ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet) }
                     }
                 }
-                SessionGroup(title: "Active", sessions: lists.active, fleet: fleet, selection: selection)
-                SessionGroup(title: "Recent", sessions: Array(lists.recent.prefix(20)), fleet: fleet, selection: selection)
+                SessionGroup(title: "Active", sessions: lists.active.filter { $0.matches(query) }, fleet: fleet,
+                             selection: selection)
+                SessionGroup(title: "Recent", sessions: Array(lists.recent.filter { $0.matches(query) }.prefix(20)),
+                             fleet: fleet, selection: selection)
             }
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)

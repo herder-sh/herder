@@ -192,7 +192,7 @@ struct Lists {
             return SessionSummary(
                 key: key, title: model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
-                branch: model.branch ?? "", machine: machineName,
+                branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
                 machineOffline: host.map { !$0.online } ?? false,
                 state: model.state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), prs: model.prs,
@@ -215,5 +215,17 @@ extension EscalationReason {
         case .exceedsAuthority: "Beyond what the primary session may decide"
         case .timeout: "The primary session did not answer in time"
         }
+    }
+}
+
+extension SessionSummary {
+    /// Whether the session matches a search: its name, branch, worktree, project, machine, or
+    /// a pull request's number or title.
+    func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return true }
+        let number = query.hasPrefix("#") ? String(query.dropFirst()) : query
+        return [title, branch, worktree, project, machine].contains { $0.lowercased().contains(query) }
+            || prs.contains { String($0.number) == number || $0.title.lowercased().contains(query) }
     }
 }

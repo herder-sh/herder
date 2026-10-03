@@ -197,10 +197,14 @@ struct PRStrip: View {
 struct PullRequestsView: View {
     let fleet: Fleet
     @Binding var selection: SessionKey?
+    var query = ""
     @AppStorage("prsOpenOnly") private var openOnly = true
 
     var body: some View {
-        let groups = fleet.lists.pullRequests(openOnly: openOnly)
+        let groups = fleet.lists.pullRequests(openOnly: openOnly).compactMap { group -> PRGroup? in
+            let sessions = group.sessions.filter { $0.session.matches(query) }
+            return sessions.isEmpty ? nil : PRGroup(project: group.project, sessions: sessions)
+        }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 Picker("Show", selection: $openOnly) {

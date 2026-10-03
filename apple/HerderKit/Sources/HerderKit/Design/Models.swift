@@ -26,6 +26,7 @@ struct SessionSummary: Hashable, Identifiable {
     let title: String
     let project: String
     let branch: String
+    var worktree = ""
     /// The machine it runs on: the machine's name, or for a vault the host's.
     let machine: String
     var machineOffline = false

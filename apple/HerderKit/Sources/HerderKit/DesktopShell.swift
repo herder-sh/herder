@@ -11,7 +11,8 @@ struct DesktopShell: View {
     @Binding var session: SessionKey?
     @Binding var draft: Draft?
     let opened: (SessionKey) -> Void
-    @AppStorage("sidebarCollapsed") private var sidebarCollapsed = false
+    @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
+    @State private var query = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -40,8 +41,8 @@ struct DesktopShell: View {
         switch item {
         case .home:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
-                Pane(title: "Home", subtitle: subtitle(lists)) {
-                    HomeView(fleet: fleet, sheet: $sheet, selection: $session)
+                Pane(title: "Home", subtitle: subtitle(lists), switcher: switcher, query: $query) {
+                    HomeView(fleet: fleet, sheet: $sheet, selection: $session, query: query)
                 } actions: {
                     PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
                 }
@@ -49,11 +50,12 @@ struct DesktopShell: View {
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
-                Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "") {
+                Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
+                     switcher: switcher, query: $query) {
                     ScrollView {
                         if let project {
-                            SessionGroup(title: "Sessions", sessions: project.sessions, fleet: fleet,
-                                         selection: $session, showsProject: false)
+                            ProjectSessions(fleet: fleet, sessions: project.sessions.filter { $0.matches(query) },
+                                            selection: $session)
                                 .padding(16)
                         }
                     }
@@ -64,20 +66,22 @@ struct DesktopShell: View {
             }
         case .pullRequests:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
-                Pane(title: "Pull Requests", subtitle: "Linked to sessions") {
-                    PullRequestsView(fleet: fleet, selection: $session)
+                Pane(title: "Pull Requests", subtitle: "Linked to sessions", switcher: switcher, query: $query) {
+                    PullRequestsView(fleet: fleet, selection: $session, query: query)
                 } actions: {
                     EmptyView()
                 }
             }
         case .machines:
-            Pane(title: "Machines", subtitle: subtitle(lists)) {
+            Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 PaneButton(title: "Add Machine", symbol: "plus") { sheet = .pair }
             }
         }
     }
+
+    private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session) }
 
     private func subtitle(_ lists: Lists) -> String {
         let connected = lists.machines.filter(\.connected).count
@@ -106,17 +110,6 @@ private struct ListAndSession<List: View>: View {
                         Rectangle().fill(Theme.stroke).frame(width: 1)
                     }
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .overlay(alignment: .topTrailing) {
-                            if session != nil || draft != nil {
-                                IconButton(symbol: listHidden ? "sidebar.squares.left" : "arrow.up.left.and.arrow.down.right",
-                                           help: listHidden ? "Show the session list" : "Hide the session list") {
-                                    listHidden.toggle()
-                                }
-                                .keyboardShortcut("\\", modifiers: .command)
-                                .padding(.top, 14)
-                                .padding(.trailing, 64)
-                            }
-                        }
                 }
             } else if session != nil || draft != nil {
                 VStack(alignment: .leading, spacing: 0) {
@@ -156,6 +149,10 @@ private struct ListAndSession<List: View>: View {
 struct Pane<Content: View, Actions: View>: View {
     let title: String
     var subtitle = ""
+    /// Makes the title a menu of the app's sections and projects.
+    var switcher: Switcher?
+    /// Shows a search field under the header.
+    var query: Binding<String>?
     @ViewBuilder var content: Content
     @ViewBuilder var actions: Actions
 
@@ -163,7 +160,21 @@ struct Pane<Content: View, Actions: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
+                    if let switcher {
+                        Menu {
+                            switcher.items
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
+                                Image(systemName: "chevron.down").font(.footnote.weight(.bold)).foregroundStyle(Theme.secondary)
+                            }
+                            .contentShape(.rect)
+                        }
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                        .help("Switch section or project")
+                    } else {
+                        Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
+                    }
                     if !subtitle.isEmpty {
                         Text(subtitle).font(.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
                     }
@@ -174,9 +185,51 @@ struct Pane<Content: View, Actions: View>: View {
             .padding(.horizontal, 20)
             .padding(.top, 22)
             .padding(.bottom, 10)
+            if let query {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
+                    TextField("Search sessions, branches, PRs", text: query)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Theme.text)
+                    if !query.wrappedValue.isEmpty {
+                        Button { query.wrappedValue = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .font(.subheadline)
+                .padding(.horizontal, 12)
+                .frame(height: 34)
+                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// The sections and projects, for a pane title's menu, so the sidebar can stay collapsed.
+struct Switcher {
+    let fleet: Fleet
+    let item: Binding<SidebarItem>
+    let session: Binding<SessionKey?>
+
+    @MainActor @ViewBuilder var items: some View {
+        Button("Home", systemImage: "tray.full") { go(.home) }
+        Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
+        Button("Machines", systemImage: "server.rack") { go(.machines) }
+        Divider()
+        ForEach(fleet.lists.projects) { project in
+            Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
+        }
+    }
+
+    @MainActor private func go(_ next: SidebarItem) {
+        if item.wrappedValue != next { session.wrappedValue = nil }
+        item.wrappedValue = next
     }
 }
 
@@ -411,5 +464,38 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// A project's sessions: the live ones, then a few archived ones with the rest a click away.
+private struct ProjectSessions: View {
+    let fleet: Fleet
+    let sessions: [SessionSummary]
+    @Binding var selection: SessionKey?
+    @State private var allArchived = false
+
+    var body: some View {
+        let live = sessions.filter { $0.state != .archived }
+        let archived = sessions.filter { $0.state == .archived }
+        VStack(alignment: .leading, spacing: 26) {
+            SessionGroup(title: "Sessions", sessions: live, fleet: fleet, selection: $selection, showsProject: false)
+            if !archived.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    SessionGroup(title: "Archived", sessions: allArchived ? archived : Array(archived.prefix(5)),
+                                 fleet: fleet, selection: $selection, showsProject: false)
+                        .opacity(0.75)
+                    if archived.count > 5 {
+                        Button(allArchived ? "Show fewer" : "Show \(archived.count - 5) more archived") { allArchived.toggle() }
+                            .buttonStyle(.plain)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .padding(.leading, 6)
+                    }
+                }
+            }
+            if sessions.isEmpty {
+                Text("No sessions match.").foregroundStyle(Theme.tertiary)
+            }
+        }
     }
 }

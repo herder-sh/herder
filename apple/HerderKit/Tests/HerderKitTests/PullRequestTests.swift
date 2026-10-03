@@ -31,3 +31,64 @@ struct PullRequestTests {
         #expect(lists.pullRequests(openOnly: true)[0].sessions[0].prs.map(\.number) == [2])
     }
 }
+
+struct FollowUpTests {
+    @Test func aSearchMatchesNameBranchWorktreeAndPullRequests() {
+        let pr = PullRequest(number: 103, url: "", title: "Session view", headBranch: nil, state: .open, ci: .none,
+                             review: .none, mergeable: .unknown)
+        let session = SessionSummary(key: SessionKey(hostId: "h", sessionId: "s"), title: "p7-3-follow-up",
+                                     project: "herder", branch: "herder/abc", worktree: "/wt/herder-abc",
+                                     machine: "trash-can-01", state: .idle, activity: "", age: "", prs: [pr])
+        #expect(session.matches(""))
+        #expect(session.matches("FOLLOW"))
+        #expect(session.matches("herder/abc"))
+        #expect(session.matches("/wt/"))
+        #expect(session.matches("#103"))
+        #expect(session.matches("session view"))
+        #expect(!session.matches("nothing like it"))
+    }
+
+    @Test func connectionHealthCountsReconnectsAndDowntime() {
+        let start = Date(timeIntervalSince1970: 0)
+        let log = [
+            ConnectionChange(at: start, state: .connecting),
+            ConnectionChange(at: start + 1, state: .connected),
+            ConnectionChange(at: start + 61, state: .disconnected(error: "gone")),
+            ConnectionChange(at: start + 91, state: .connected),
+        ]
+        let health = ConnectionHealth(log: log, now: start + 151)
+        #expect(health.reconnects == 1)
+        #expect(health.down == 30)
+        #expect(health.currentUp == 60)
+    }
+
+    @Test func theTimelineAndStatsFollowTheEvents() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            .itemAdded(item: Item(id: "c", turnId: "t1", body: .toolCall(name: "Bash", input: "{}"))),
+            .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "Bash: ls", routedTo: .user, reason: nil),
+            .approvalResolved(approvalId: "a", decision: .allow, answeredBy: .user),
+            .turnCompleted(turnId: "t1"),
+        ])
+        #expect(model.timeline.map(\.text).last == "Turn completed")
+        #expect(model.stats.turns == 1)
+        #expect(model.stats.completed == 1)
+        #expect(model.stats.tools == ["Bash": 1])
+        #expect((model.stats.approvals, model.stats.allowed) == (1, 1))
+        #expect(model.stats.busy == 4)
+    }
+
+    @Test func newSessionsStartOnClaudeWhenTheMachineHasIt() async throws {
+        await MainActor.run {
+            guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else { return }
+            var host = machine("h", name: "h", sessions: [])
+            host.accounts = [
+                Account(accountId: "gpt", provider: "codex", label: "gpt", usage: []),
+                Account(accountId: "main", provider: "claude", label: "main", usage: []),
+            ]
+            fleet.setMachinesForTesting([host])
+            #expect(fleet.defaultProvider(on: "h", projectId: nil) == "claude")
+        }
+    }
+}

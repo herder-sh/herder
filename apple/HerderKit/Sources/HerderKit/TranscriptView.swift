@@ -14,19 +14,39 @@ struct TranscriptBlockView: View {
         switch block {
         case .user(_, let text, let outgoing):
             VStack(alignment: .trailing, spacing: 6) {
-                Text(text)
-                    .font(.body)
-                    .foregroundStyle(Theme.onBubble)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.55), in: .rect(cornerRadius: 18))
-                if let outgoing {
-                    DeliveryLine(outgoing: outgoing, running: fleet.sessions[key]?.turn != nil) {
-                        Task { await fleet.sendNow(key) }
-                    } retry: {
-                        fleet.discard(outgoing, from: key)
-                        Task { await fleet.submit(outgoing.text, to: key) }
+                if let outgoing, case .delivered = outgoing.state, fleet.sessions[key]?.turn != nil {
+                    // Queued behind the running turn: a dashed bubble with its actions beside it.
+                    HStack(alignment: .center, spacing: 8) {
+                        Button { Task { await fleet.sendNow(key) } } label: {
+                            Label("Send now", systemImage: "arrow.up.circle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Theme.text)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop the running turn so this message runs now")
+                        Text(text)
+                            .font(.body)
+                            .foregroundStyle(Theme.text)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Theme.raised, in: .rect(cornerRadius: 18))
+                            .overlay(RoundedRectangle(cornerRadius: 18)
+                                .strokeBorder(Theme.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    }
+                    Label("Queued", systemImage: "clock").font(.caption).foregroundStyle(Theme.tertiary)
+                } else {
+                    Text(text)
+                        .font(.body)
+                        .foregroundStyle(Theme.onBubble)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.7), in: .rect(cornerRadius: 18))
+                    if let outgoing {
+                        DeliveryLine(outgoing: outgoing) {
+                            fleet.discard(outgoing, from: key)
+                            Task { await fleet.submit(outgoing.text, to: key) }
+                        }
                     }
                 }
             }
@@ -257,31 +277,17 @@ private struct ChildrenCard: View {
     }
 }
 
-/// Where a message from this device is: on its way, with the daemon (queued behind a running
-/// turn, which "Send now" interrupts), or refused.
+/// Where a message from this device is: on its way, with the daemon, or refused.
 private struct DeliveryLine: View {
     let outgoing: Outgoing
-    let running: Bool
-    let sendNow: () -> Void
     let retry: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             switch outgoing.state {
             case .sending:
                 ProgressView().controlSize(.mini).tint(Theme.tertiary)
                 Text("Sending…")
-            case .delivered where running:
-                Image(systemName: "clock")
-                Text("Queued behind the turn")
-                Button("Send now", action: sendNow)
-                    .buttonStyle(.plain)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Theme.raised, in: .capsule)
-                    .help("Stop the running turn so this message runs now")
             case .delivered:
                 Image(systemName: "checkmark")
                 Text("Delivered")
@@ -319,13 +325,14 @@ private struct WorkingLine: View {
                 }
                 Spacer()
                 if !waiting {
-                    Button("Stop", action: stop)
-                        .buttonStyle(.plain)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.text)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Theme.raised, in: .capsule)
+                    Button(action: stop) {
+                        Image(systemName: "stop.fill").font(.caption2)
+                            .foregroundStyle(Theme.text)
+                            .frame(width: 24, height: 24)
+                            .background(Theme.raised, in: .circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop the turn")
                 }
             }
             .font(.footnote)

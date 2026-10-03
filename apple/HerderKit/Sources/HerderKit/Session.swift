@@ -34,6 +34,7 @@ struct SessionModel {
     /// Whether the first update, with every cached event, has arrived.
     var loaded = false
     var repo: String?
+    var worktree: String?
     var branch: String?
     var provider: Provider?
     var model: String?
@@ -59,6 +60,9 @@ struct SessionModel {
     var outbox: [Outgoing] = []
     /// When the running turn started.
     var turnStartedAt: Date?
+    /// Every event, worded, oldest first.
+    var timeline: [TimelineEntry] = []
+    var stats = SessionStats()
 
     init(key: SessionKey) {
         self.key = key
@@ -73,10 +77,13 @@ struct SessionModel {
     mutating func apply(_ event: Event) {
         record(event)
         let at = Timestamp.date(event.at) ?? updatedAt ?? .now
+        count(event, at: at)
+        timeline.append(TimelineEntry(seq: event.seq, at: at, text: Self.describe(event.body), by: event.by))
         updatedAt = at
         switch event.body {
-        case .sessionCreated(let repo, _, let branch, let provider, let accountId, let model, let mode, let parent, let task, _, _):
+        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, let task, _, _):
             self.repo = repo
+            self.worktree = worktree
             self.branch = branch
             self.provider = provider
             self.accountId = accountId
@@ -209,6 +216,71 @@ struct SessionModel {
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
         case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated, .unknown:
             break
+        }
+    }
+
+    /// Keeps the session's statistics.
+    private mutating func count(_ event: Event, at: Date) {
+        switch event.body {
+        case .sessionCreated: stats.createdAt = at
+        case .turnStarted: stats.turns += 1
+        case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
+            if turn == turnId, let started = turnStartedAt { stats.busy += at.timeIntervalSince(started) }
+            if case .turnCompleted = event.body { stats.completed += 1 }
+            if case .turnInterrupted = event.body { stats.interrupted += 1 }
+            if case .turnFailed = event.body { stats.failed += 1 }
+        case .itemAdded(let item):
+            switch item.body {
+            case .userMessage: stats.prompts += 1
+            case .assistantMessage: stats.replies += 1
+            case .toolCall(let name, _): stats.tools[name, default: 0] += 1
+            default: break
+            }
+        case .approvalRequested: stats.approvals += 1
+        case .approvalResolved(_, let decision, _):
+            if decision == .allow { stats.allowed += 1 } else { stats.denied += 1 }
+        case .questionAsked: stats.questions += 1
+        case .modelSwitched, .accountSwitched, .providerSwitched: stats.switches += 1
+        default: break
+        }
+    }
+
+    /// An event as one line of the session's history.
+    static func describe(_ body: EventBody) -> String {
+        switch body {
+        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _):
+            return "Created on \(branch) · \(provider) \(model) · \(accountId)"
+        case .branchCheckedOut(let branch): return "Checked out \(branch)"
+        case .sessionStatusChanged(let status): return "Status: \(status)"
+        case .turnStarted: return "Turn started"
+        case .turnCompleted: return "Turn completed"
+        case .turnInterrupted: return "Turn interrupted"
+        case .turnFailed(_, let error): return "Turn failed: \(firstLine(error.message))"
+        case .itemAdded(let item):
+            switch item.body {
+            case .userMessage(let text, _): return "Prompt: \(firstLine(text))"
+            case .assistantMessage(let text): return "Reply: \(firstLine(text))"
+            case .reasoning: return "Thinking"
+            case .toolCall(let name, let input): return "Tool: \(toolSummary(name: name, input: input))"
+            case .toolResult(_, _, let isError): return isError ? "Tool failed" : "Tool finished"
+            case .unknown: return "Item"
+            }
+        case .approvalRequested(_, _, _, let summary, _, _): return "Approval asked: \(summary)"
+        case .approvalEscalated: return "Approval escalated to you"
+        case .approvalResolved(_, let decision, _): return "Approval \(decision)"
+        case .questionAsked(_, _, let text, _, _, _): return "Question: \(firstLine(text))"
+        case .questionEscalated: return "Question escalated to you"
+        case .questionAnswered: return "Question answered"
+        case .childSpawned(_, let task): return "Spawned child: \(task)"
+        case .childReported(_, _, let summary): return "Child reported: \(firstLine(summary))"
+        case .modelSwitched(let model): return "Model: \(model)"
+        case .accountSwitched(let accountId): return "Account: \(accountId)"
+        case .providerSwitched(let provider, let accountId, let model): return "Provider: \(provider) \(model) · \(accountId)"
+        case .permissionModeChanged(let mode): return "Permissions: \(mode.label)"
+        case .prLinked(let pr): return "PR #\(pr.number) linked"
+        case .prUpdated(let pr): return "PR #\(pr.number) \(pr.state.word.lowercased()), CI \(pr.ci)"
+        case .prUnlinked(let number): return "PR #\(number) unlinked"
+        case .unknown: return "Event"
         }
     }
 
@@ -380,4 +452,33 @@ struct Outgoing: Hashable, Identifiable {
     let id = UUID()
     let text: String
     var state: State = .sending
+}
+
+/// One event of a session's history.
+struct TimelineEntry: Hashable, Identifiable {
+    var id: UInt64 { seq }
+    let seq: UInt64
+    let at: Date
+    let text: String
+    /// Who caused it, when someone did.
+    let by: UserId?
+}
+
+/// Counts over a session's life.
+struct SessionStats: Hashable {
+    var createdAt: Date?
+    var turns = 0
+    var completed = 0
+    var failed = 0
+    var interrupted = 0
+    /// Time spent in turns.
+    var busy: TimeInterval = 0
+    var prompts = 0
+    var replies = 0
+    var tools: [String: Int] = [:]
+    var approvals = 0
+    var allowed = 0
+    var denied = 0
+    var questions = 0
+    var switches = 0
 }
