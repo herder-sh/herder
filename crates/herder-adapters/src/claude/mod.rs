@@ -82,8 +82,9 @@
 //! first non-empty delta, so thinking that the API only summarises as empty is never shown.
 //! A `tool_use` block becomes a completed `tool_call` item, and the `tool_result` block in the
 //! following `user` line its `tool_result` item. Lines from subagents (`parent_tool_use_id`
-//! set) are skipped; a permission request from one first emits its tool call so the approval
-//! has an item to name. The user's own prompt is not echoed. Items still streaming when a turn
+//! set) emit completed items with `parent_call_id` pointing to the spawning tool call.
+//! Nested streaming deltas are skipped; completed child blocks never change the parent stream.
+//! A permission request whose tool call was omitted first emits its call so the approval has an item to name. The user's own prompt is not echoed. Items still streaming when a turn
 //! ends, as on interrupt, are completed with the text received so far.
 //!
 //! # Questions
