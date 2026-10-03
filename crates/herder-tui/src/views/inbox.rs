@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, List, ListItem, ListState};
+use ratatui::widgets::{List, ListItem, ListState};
 
 use crate::app::{App, Focus};
 use crate::inbox::{Waiting, What};
@@ -33,7 +33,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         (false, false) => " y allow · n deny · 1-9 pick · Enter answer · l session · Esc back ",
         (false, true) => " y/n · 1-9 · Enter answer · l open · ⌫ back ",
     };
-    let block = Block::bordered()
+    let block = super::pane(app)
         .title(Line::from(vec![
             Span::styled(" inbox ", super::bold()),
             Span::styled(format!("· {} waiting on you ", waiting.len()), super::dim()),
@@ -73,10 +73,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         &heights,
         |at| Some(Click::Row(Rows::Inbox, at)),
     );
+    let answer_block = super::raised(app);
     if let (Some(area), Some(answer)) = (answer_area, &mut app.inbox.answer) {
         answer.set_cursor_style(Style::new().add_modifier(Modifier::REVERSED));
         answer.set_block(
-            Block::bordered()
+            answer_block
                 .border_style(Style::new().fg(Color::Cyan))
                 .title(Line::styled(format!(" answer · {task} "), attention())),
         );

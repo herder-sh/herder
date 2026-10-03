@@ -633,6 +633,7 @@ impl App {
                         host_id: machine.host_id.clone(),
                         session_id: head.session_id.clone(),
                     })
+                    .filter(|key| !self.shadowed(key))
                     .collect()
             };
             if machine.hosts.is_empty() {

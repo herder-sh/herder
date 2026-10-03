@@ -226,6 +226,11 @@ pub(super) fn herd() -> App {
 fn the_shell_reproduces_the_mockups_at_phone_laptop_and_wide_widths() {
     for (width, height) in [(45, 30), (100, 30), (160, 34)] {
         let mut app = herd();
+        if width < super::NARROW {
+            // A phone gets ASCII only: no symbol a phone font may draw two columns wide.
+            let screen = render(&mut app, width, height).backend().to_string();
+            assert!(screen.is_ascii(), "{screen}");
+        }
         insta::assert_snapshot!(
             format!("shell_{width}x{height}"),
             render(&mut app, width, height).backend()

@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, width, height).backend()"
 ---
-" herder        inbox 1 « │  chat   tasks 2   prs 1   term                            claude-main · claude-opus · ask │ ● api  running                           "
+" herder        inbox 1 « │  chat   tasks 2   prs 1   term                                                            │ ● api  running                           "
 "                         │                                                                                           │ herder/api · box · ~/src/app             "
 " projects     by project │     ⎇ #12 Add health endpoint · open · ci ✓                                               │ claude-main · claude-opus · ask          "
 "  ◉ app                1 │                                                                                           │                                          "
@@ -29,7 +29,7 @@ expression: "render(&mut app, width, height).backend()"
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
-"                         │  ┃ Write a prompt…                                                                        │                                          "
+"                         │  ┃  Write a prompt…                                                                       │                                          "
 "                         │  ┃                                                                                        │                                          "
 "                         │  ┃ claude-main · claude-opus · ask                                                        │                                          "
 " ─────────────────────── │  ┃                                                                                        │                                          "

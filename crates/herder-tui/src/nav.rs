@@ -15,7 +15,8 @@
 
 use std::time::{Duration, Instant};
 
-use herder_protocol::SessionStatus;
+use herder_client_core::ConnectionState;
+use herder_protocol::{HostId, SessionStatus};
 
 use crate::app::{App, Focus, Row};
 use crate::session::SessionKey;
@@ -216,6 +217,55 @@ impl App {
         keys
     }
 
+    /// Whether another listed copy of `key`'s session stands for it, so this one is not
+    /// listed or counted. A session a vault replicates is listed once: from its own host while
+    /// that host is paired here and connected; else from the vault, read-only.
+    pub fn shadowed(&self, key: &SessionKey) -> bool {
+        let Some(machine) = self.machines.iter().find(|m| m.host_id == key.host_id) else {
+            return false;
+        };
+        let lists = |machine: &herder_client_core::Machine, host: Option<&HostId>| {
+            machine
+                .sessions
+                .iter()
+                .any(|head| head.session_id == key.session_id && head.host_id.as_ref() == host)
+        };
+        let connected = |machine: &herder_client_core::Machine| {
+            matches!(machine.connection, ConnectionState::Connected)
+        };
+        let origin = machine
+            .sessions
+            .iter()
+            .find(|head| head.session_id == key.session_id)
+            .and_then(|head| head.host_id.as_ref())
+            .filter(|host| **host != key.host_id);
+        match origin {
+            // A vault's copy, while its host is reachable directly.
+            Some(origin) => self
+                .machines
+                .iter()
+                .any(|m| m.host_id == *origin && connected(m) && lists(m, None)),
+            // The host's own copy, while it is not connected and a vault lists the session.
+            None => {
+                !connected(machine)
+                    && self.machines.iter().any(|vault| {
+                        vault.host_id != key.host_id && lists(vault, Some(&key.host_id))
+                    })
+            }
+        }
+    }
+
+    /// Whether `key` is a vault's read-only copy standing in for a session whose host is
+    /// paired here but not reachable now.
+    pub fn vault_copy(&self, key: &SessionKey) -> bool {
+        let Some(host) = self.fleet_host(key) else {
+            return false;
+        };
+        !self.shadowed(key)
+            && host.host_id != key.host_id
+            && self.machines.iter().any(|m| m.host_id == host.host_id)
+    }
+
     /// The sessions a sidebar row stands for: a project's, a machine's or a host's; a
     /// session's subtree.
     pub fn row_sessions(&self, row: &Row) -> Vec<SessionKey> {
@@ -228,6 +278,7 @@ impl App {
                 (key, head.host_id.as_ref())
             })
         });
+        let listed = listed.filter(|(key, _)| !self.shadowed(key));
         match row {
             Row::Session { key, .. } => self.subtree(key),
             Row::Project(project) => listed
@@ -287,7 +338,12 @@ impl App {
     /// How many sessions are in each state worth a word, the most pressing first: the phone
     /// header's summary.
     pub fn summary(&self) -> Vec<(State, usize)> {
-        let states: Vec<State> = self.sessions.keys().map(|key| self.state(key)).collect();
+        let states: Vec<State> = self
+            .sessions
+            .keys()
+            .filter(|key| !self.shadowed(key))
+            .map(|key| self.state(key))
+            .collect();
         [
             State::NeedsYou,
             State::Error,
@@ -410,6 +466,7 @@ mod tests {
     use super::*;
     use crate::app::{Effect, Msg};
     use crate::fake::{self, key, status, update};
+    use crate::session::SessionKey;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
@@ -631,6 +688,100 @@ mod tests {
         // `/` goes to the sidebar from anywhere in NAVIGATE.
         press(&mut app, KeyCode::Char('/'));
         assert_eq!(app.focus, Focus::Sessions);
+    }
+
+    /// `devbox` paired directly, running `s1` (asking for an approval) and `s2`, and a
+    /// vault that replicates it, listing both on `devbox` and `s3`, from a host not paired
+    /// here. Grouped by project.
+    fn host_and_vault() -> App {
+        use herder_client_core::ConnectionState;
+        use herder_protocol::{FleetHost, SessionHead, Timestamp};
+        let mut vault = fake::machine("v", "vault", &[]);
+        vault.hosts = ["devbox", "laptop"]
+            .into_iter()
+            .map(|host| FleetHost {
+                host_id: HostId::new(host),
+                host_name: host.into(),
+                online: true,
+                last_seen: Timestamp::now(),
+            })
+            .collect();
+        vault.sessions = [("s1", "devbox"), ("s2", "devbox"), ("s3", "laptop")]
+            .into_iter()
+            .map(|(id, host)| SessionHead {
+                host_id: Some(HostId::new(host)),
+                ..fake::head(id, Some("github.com/org/app"))
+            })
+            .collect();
+        let mut devbox = fake::machine("devbox", "devbox", &[]);
+        devbox.sessions = ["s1", "s2"]
+            .into_iter()
+            .map(|id| fake::head(id, Some("github.com/org/app")))
+            .collect();
+        devbox.connection = ConnectionState::Connected;
+        let mut app = App::default();
+        app.update(Msg::Machines(vec![devbox, vault]));
+        for host in ["devbox", "v"] {
+            for id in ["s1", "s2", "s3"] {
+                let mut bodies = vec![fake::created(id, None, None), status(SessionStatus::Idle)];
+                if id == "s1" {
+                    bodies.push(fake::approval("a1", "Bash: ls"));
+                }
+                fake::feed(&mut app, host, id, update(id, 1, bodies, vec![]));
+            }
+        }
+        app
+    }
+
+    fn listed(app: &App) -> Vec<SessionKey> {
+        app.rows()
+            .into_iter()
+            .filter_map(|row| row.session().cloned())
+            .collect()
+    }
+
+    #[test]
+    fn a_session_a_vault_replicates_is_listed_once_from_its_live_host() {
+        use herder_client_core::ConnectionState;
+        let mut app = host_and_vault();
+        // The live copies, and the vault's copy of what only the vault reaches: by project
+        // newest first, by machine each machine's.
+        assert_eq!(
+            listed(&app),
+            [key("v", "s3"), key("devbox", "s2"), key("devbox", "s1")]
+        );
+        app.grouping = crate::projects::Grouping::Machines;
+        assert_eq!(
+            listed(&app),
+            [key("devbox", "s2"), key("devbox", "s1"), key("v", "s3")]
+        );
+        app.grouping = crate::projects::Grouping::Projects;
+        // Counted once: the project's sessions, the inbox, the summary, the position.
+        let project = Row::Project(app.project_of(&key("devbox", "s1")));
+        assert_eq!(app.row_sessions(&project).len(), 3);
+        assert_eq!(app.row_needing(&project), 1);
+        assert_eq!(app.waiting().len(), 1);
+        assert_eq!(app.summary(), [(State::NeedsYou, 1)]);
+        app.open_key(key("devbox", "s1"));
+        assert_eq!(app.position(), Some((3, 3)));
+        // A copy of a host not paired here is simply the session, unmarked.
+        assert!(!app.vault_copy(&key("devbox", "s1")));
+        assert!(!app.vault_copy(&key("v", "s3")));
+
+        // devbox drops: the vault's read-only copies stand in for its sessions.
+        let mut machines = app.machines.clone();
+        machines[0].connection = ConnectionState::Disconnected {
+            error: "connection refused".into(),
+        };
+        app.update(Msg::Machines(machines));
+        let mut rows = listed(&app);
+        rows.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        let vault = [key("v", "s1"), key("v", "s2"), key("v", "s3")];
+        assert_eq!(rows, vault);
+        assert!(app.vault_copy(&key("v", "s1")));
+        assert!(!app.vault_copy(&key("v", "s3")));
+        assert_eq!(app.waiting().len(), 1);
+        assert_eq!(app.row_sessions(&project).len(), 3);
     }
 
     #[test]

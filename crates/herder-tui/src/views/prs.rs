@@ -32,7 +32,7 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool, hit
         .iter()
         .map(|(_, pr)| ListItem::new(row(pr, number_width, compact)))
         .collect();
-    let mut block = Block::bordered()
+    let mut block = super::pane(app)
         .title(Line::from(vec![
             Span::styled(" pull requests ", super::bold()),
             Span::styled(format!("({}) ", prs.len()), super::dim()),
@@ -79,7 +79,7 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool, hits:
     } else {
         " pull requests · every session "
     };
-    let block = Block::bordered()
+    let block = super::pane(app)
         .title(Line::styled(title, super::bold()))
         .title_bottom(Line::styled(hint, super::dim()).right_aligned())
         .border_style(super::border(app, Focus::AllPrs));

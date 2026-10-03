@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " ! api - app - box             1/4  | switch "
 " ! 1 need you  x 1  * 1             |    !   "
-"-------------------------------------------- "
+"                                             "
 " | Add a health endpoint and test it.        "
 "                                             "
 "    + Thought: The router lives in src/a...  "
@@ -36,7 +36,7 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-" | Write a prompt.                           "
+" | Write a prompt...                         "
 " |                                           "
 " | claude-main - claude-opus - ask           "
 " `-----------------------------------------  "

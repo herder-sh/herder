@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " herder                              < back  "
 " ! 1 need you  x 1 error  * 1 running        "
-"-------------------------------------------- "
+"                                             "
 "                                             "
 "                                             "
 "                                             "
@@ -36,7 +36,7 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-" | Write a prompt.                           "
+" |  Write a prompt...                        "
 " |                                           "
 " | claude-main - claude-opus - ask           "
 " `-----------------------------------------  "

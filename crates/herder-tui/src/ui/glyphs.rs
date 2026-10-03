@@ -9,8 +9,9 @@
 //! form (`▪`, `⚙`) they disagree: mosh and ratatui count one column where a phone SSH app may
 //! draw two, which shifts the rest of the row right and leaves stale cells behind. With
 //! [`Glyphs::Ascii`] the finished frame swaps each such symbol for an ASCII one before it is
-//! written, wherever it came from: the TUI's own marks or a transcript's text. Box-drawing
-//! borders stay; every terminal draws them one column wide.
+//! written, wherever it came from: the TUI's own marks or a transcript's text. Box drawing
+//! is folded too (`+ - |`), as it is East Asian Ambiguous as well; views draw panels without
+//! lines in the ASCII set where they can.
 //!
 //! Unless `:glyphs` chose, narrow screens, as on a phone, get ASCII.
 

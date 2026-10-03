@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 100, 30).backend()"
 ---
-" herder        inbox 1 « │  chat   tasks 2   prs 1   term          claude-main · claude-opus · ask  "
+" herder        inbox 1 « │  chat   tasks 2   prs 1   term                                           "
 "                         │                                                                          "
 " projects     by project │ ┌ resources ──────────────────────────────────────────────────────────┐  "
 "  ◉ app                1 │ │ cpu 12% · mem 768 MiB · 3 processes                                 │  "
