@@ -19,7 +19,9 @@ struct DesktopShell: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.background)
+        #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)
+        #endif
         .onChange(of: item) { session = nil }
     }
 
@@ -60,25 +62,47 @@ struct DesktopShell: View {
     }
 }
 
-/// A list pane beside the open session.
+/// A list pane beside the open session; where that is too narrow, the open session takes
+/// the list's place, with a way back.
 private struct ListAndSession<List: View>: View {
     let fleet: Fleet
     @Binding var session: SessionKey?
     @ViewBuilder var list: List
 
     var body: some View {
-        HStack(spacing: 0) {
-            list.frame(width: 440)
-            Rectangle().fill(Theme.stroke).frame(width: 1)
-            Group {
-                if let session {
-                    SessionPlaceholder(fleet: fleet, key: session)
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
-                        Text("Select a session").font(.headline).foregroundStyle(Theme.secondary)
-                    }
+        GeometryReader { geometry in
+            if geometry.size.width >= 820 {
+                HStack(spacing: 0) {
+                    list.frame(width: 440)
+                    Rectangle().fill(Theme.stroke).frame(width: 1)
+                    detail.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+            } else if session != nil {
+                VStack(alignment: .leading, spacing: 0) {
+                    Button { session = nil } label: {
+                        Label("Back", systemImage: "chevron.left")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(Theme.text)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16)
+                    detail
+                }
+            } else {
+                list
+            }
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let session {
+            SessionPlaceholder(fleet: fleet, key: session)
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
+                Text("Select a session").font(.headline).foregroundStyle(Theme.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -110,6 +134,11 @@ struct Pane<Content: View>: View {
 
 /// The sidebar: sections, projects, and the machines' status at the bottom.
 private struct Sidebar: View {
+    #if os(macOS)
+    static let topBar: CGFloat = 52
+    #else
+    static let topBar: CGFloat = 44
+    #endif
     let fleet: Fleet
     @Binding var item: SidebarItem
     @Binding var pairing: Bool
@@ -124,7 +153,7 @@ private struct Sidebar: View {
                 IconButton(symbol: "plus", help: "Add Machine") { pairing = true }
             }
             // Room for the window's traffic lights on the Mac.
-            .frame(height: 52)
+            .frame(height: Self.topBar)
             .padding(.horizontal, 10)
 
             SidebarRow(title: "Home", symbol: "tray.full", badge: lists.requests.count, attention: true,
