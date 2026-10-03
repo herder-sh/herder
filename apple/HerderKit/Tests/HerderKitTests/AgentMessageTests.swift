@@ -17,7 +17,7 @@ struct AgentMessageTests {
         let live = script.model(events)
         var replayScript = Script()
         let replay = replayScript.model(events)
-        let expected = TranscriptBlock.user(id: "incoming", text: "Review the account change", outgoing: nil, agentMessage: sender)
+        let expected = TranscriptBlock.user(id: "t1/incoming", text: "Review the account change", outgoing: nil, agentMessage: sender)
         #expect(Transcript.blocks(live).contains(expected))
         #expect(Transcript.blocks(replay).contains(expected))
         #expect(replay.timeline.last?.text == "From agent source-session: Review the account change")
@@ -30,7 +30,7 @@ struct AgentMessageTests {
         model.outbox = [outgoing]
         model.apply(script.event(agentPrompt("agent", text: outgoing.text, origin: sender)))
         #expect(model.outbox == [outgoing])
-        #expect(Transcript.blocks(model).contains(.user(id: "agent", text: outgoing.text, outgoing: nil, agentMessage: sender)))
+        #expect(Transcript.blocks(model).contains(.user(id: "t1/agent", text: outgoing.text, outgoing: nil, agentMessage: sender)))
         model.apply(script.event(agentPrompt("human", text: outgoing.text, origin: nil)))
         #expect(model.outbox.isEmpty)
     }
@@ -39,7 +39,7 @@ struct AgentMessageTests {
         var script = Script()
         let text = "Sent by another agent: please review"
         let model = script.model([created(), agentPrompt("human", text: text, origin: nil)])
-        #expect(Transcript.blocks(model).contains(.user(id: "human", text: text, outgoing: nil)))
+        #expect(Transcript.blocks(model).contains(.user(id: "t1/human", text: text, outgoing: nil)))
         #expect(model.timeline.last?.text == "Prompt: \(text)")
     }
 }
