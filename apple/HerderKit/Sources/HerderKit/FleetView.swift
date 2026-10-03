@@ -145,6 +145,9 @@ private struct EmptyFleet: View {
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
                 ActionButton(title: "Add Machine", style: .primary) { pairing = true }
+                    #if os(macOS)
+                    .frame(maxWidth: 220)
+                    #endif
             }
         }
     }
