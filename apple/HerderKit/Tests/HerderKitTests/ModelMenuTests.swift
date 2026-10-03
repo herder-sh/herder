@@ -91,8 +91,8 @@ struct DraftModelTests {
                            projects: [Project(projectId: "p", name: "p", paths: [], defaultPermissionMode: nil,
                                               defaultAccount: "main", setupCommand: nil)])
         host.accounts = [
-            Account(accountId: "main", provider: "claude", label: "main", usage: []),
-            Account(accountId: "gpt", provider: "codex", label: "gpt", usage: []),
+            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
+            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
         ]
         let fleet = try #require(makeFleet([host]))
         #expect(fleet.draftChoice(on: "h", projectId: "p") == .init(provider: "claude", model: "claude-opus-5-5"))
@@ -108,11 +108,11 @@ struct DraftModelTests {
     @Test func movingToAMachineWithoutTheProviderFallsBackToItsDefault() throws {
         var both = machine("a", name: "a", sessions: [])
         both.accounts = [
-            Account(accountId: "main", provider: "claude", label: "main", usage: []),
-            Account(accountId: "gpt", provider: "codex", label: "gpt", usage: []),
+            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
+            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
         ]
         var claudeOnly = machine("b", name: "b", sessions: [])
-        claudeOnly.accounts = [Account(accountId: "other", provider: "claude", label: "other", usage: [])]
+        claudeOnly.accounts = [Account(accountId: "other", provider: "claude", label: "other", configDir: nil, usage: [])]
         let fleet = try #require(makeFleet([both, claudeOnly]))
         let codex = ModelCatalog.Choice(provider: "codex", model: "gpt-6-luna")
         #expect(fleet.draftChoice(codex, movedTo: "a", projectId: nil) == codex)

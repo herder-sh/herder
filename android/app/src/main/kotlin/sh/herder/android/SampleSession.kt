@@ -186,7 +186,7 @@ internal fun sampleSession(stage: Stage): Session {
 
 /** An account, its busiest window [percent] used. */
 internal fun account(id: String, provider: String, label: String, window: String, percent: Double) =
-    Account(id, provider, label, listOf(UsageWindow(window, percent, null)))
+    Account(id, provider, label, null, listOf(UsageWindow(window, percent, null)))
 
 /** `box`, with the sample session and three accounts of two providers. */
 internal fun sampleMachine(status: SessionStatus = SessionStatus.RUNNING): Machine = machine(
