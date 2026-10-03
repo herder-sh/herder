@@ -20,6 +20,8 @@ row that expands on a tap; an approval or a question replaces the composer with 
 with large Allow / Deny buttons or a swipe (right allows, left denies), a choice or typed text.
 The composer sends prompts (queued while a turn runs), stops the turn, and switches the
 session's account (another provider's replays the transcript), model and permission mode.
+Photos, the camera and a paste attach images; thumbnails show on the user's turn and open
+full size.
 Its pull requests sit over the transcript (number, title, branch, state, CI, review,
 mergeable); a tap opens the PR in the browser, and the session menu links another. The
 machines list's Pull requests screen lists every session's the same way. Archived and moved

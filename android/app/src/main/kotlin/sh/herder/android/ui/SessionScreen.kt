@@ -1,5 +1,11 @@
 package sh.herder.android.ui
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.withInfiniteAnimationFrameMillis
 import androidx.compose.foundation.background
@@ -71,6 +77,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -87,12 +94,15 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import java.io.File
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import sh.herder.android.DiffKind
 import sh.herder.android.Entry
+import sh.herder.android.ImageRefused
 import sh.herder.android.PendingApproval
 import sh.herder.android.PendingQuestion
 import sh.herder.android.R
@@ -108,10 +118,13 @@ import sh.herder.android.driveable
 import sh.herder.android.duration
 import sh.herder.android.editLines
 import sh.herder.android.firstLine
+import sh.herder.android.fitsPrompt
 import sh.herder.android.glyph
+import sh.herder.android.imagesOn
 import sh.herder.android.inWorktree
 import sh.herder.android.label
 import sh.herder.android.parseInput
+import sh.herder.android.readImage
 import sh.herder.android.sampleMachine
 import sh.herder.android.sampleSession
 import sh.herder.android.text
@@ -123,9 +136,11 @@ import sh.herder.android.windowLabel
 import sh.herder.ffi.Account
 import sh.herder.ffi.Answer
 import sh.herder.ffi.ApprovalDecision
+import sh.herder.ffi.Attachment
 import sh.herder.ffi.CommandBody
 import sh.herder.ffi.EscalationReason
 import sh.herder.ffi.HostId
+import sh.herder.ffi.Image
 import sh.herder.ffi.Item
 import sh.herder.ffi.ItemBody
 import sh.herder.ffi.Machine
@@ -166,7 +181,8 @@ private val SwipeDistance = 120.dp
  * picker offers; [send] sends the session's commands; [onOpen] opens a child session and
  * [onBack], when there is somewhere to go back to, leaves. [clock] is what time is counted from.
  * [compact] is a phone: the PR strip is one line. [onOpenUrl] opens a PR; the default uses
- * the browser.
+ * the browser. [fetchAttachment] loads a user message's image bytes; [pickImages] stands in
+ * for the system photo picker in tests. [initialImages] seed the composer (screenshots).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -181,21 +197,34 @@ fun SessionScreen(
     clock: () -> Instant = Instant::now,
     compact: Boolean = false,
     onOpenUrl: ((String) -> Unit)? = null,
+    fetchAttachment: (suspend (String) -> ByteArray?)? = null,
+    pickImages: (() -> List<Image>)? = null,
+    initialImages: List<Image> = emptyList(),
 ) {
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
     val openUrl = rememberOpenUrl(onOpenUrl)
     var menu by remember { mutableStateOf(false) }
     var linking by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<ByteArray?>(null) }
     // Prompts sent from here that are not in the transcript yet.
-    val pending = remember(key) { mutableStateListOf<String>() }
+    val pending = remember(key) { mutableStateListOf<PendingPrompt>() }
     var seen by remember(key) { mutableIntStateOf(session.entries.size) }
     LaunchedEffect(key, session.entries.size) {
         for (entry in session.entries.drop(seen)) {
             val body = (entry as? Entry.Added)?.item?.body
-            if (body is ItemBody.UserMessage) pending.remove(body.text)
+            if (body is ItemBody.UserMessage) pending.removeAll { it.text == body.text }
         }
         seen = session.entries.size
+    }
+    val fetched = remember(key) { mutableStateMapOf<String, ByteArray?>() }
+    val wanted = session.entries.flatMap { (it as? Entry.Added)?.item?.body.attachments() }
+    LaunchedEffect(key, wanted.map { it.attachmentId }) {
+        for (attachment in wanted) {
+            val id = attachment.attachmentId
+            if (id in fetched) continue
+            fetched[id] = fetchAttachment?.invoke(id)
+        }
     }
     // Items the user expanded, by id.
     val expanded = remember(key) { mutableStateMapOf<String, Boolean>() }
@@ -215,7 +244,7 @@ fun SessionScreen(
         scope.launch {
             val error = send(key.hostId, body)
             if (error != null) {
-                prompt?.let { pending.remove(it) }
+                prompt?.let { text -> pending.removeAll { it.text == text } }
                 snackbars.showSnackbar(error)
             }
             done(error == null)
@@ -292,9 +321,11 @@ fun SessionScreen(
             Transcript(
                 session = session,
                 pending = pending,
+                fetched = fetched,
                 expanded = expanded,
                 onToggle = { id -> expanded[id] = expanded[id] != true },
                 onOpen = { onOpen(SessionKey(key.hostId, it)) },
+                onOpenImage = { viewing = it },
                 modifier = Modifier.weight(1f).widthIn(max = 840.dp).fillMaxWidth(),
             )
             Surface(
@@ -332,9 +363,12 @@ fun SessionScreen(
                                 accounts = machine?.accounts.orEmpty(),
                                 recent = recent,
                                 now = now,
-                                onPrompt = { text ->
-                                    pending += text
-                                    command(CommandBody.SendPrompt(key.sessionId, text, emptyList()), prompt = text)
+                                pickImages = pickImages,
+                                initialImages = initialImages,
+                                onImageError = { scope.launch { snackbars.showSnackbar(it) } },
+                                onPrompt = { text, images ->
+                                    pending += PendingPrompt(text, images.map { it.data })
+                                    command(CommandBody.SendPrompt(key.sessionId, text, images), prompt = text)
                                 },
                                 onStop = { command(CommandBody.Interrupt(key.sessionId)) },
                                 onAccount = { account ->
@@ -376,7 +410,14 @@ fun SessionScreen(
             },
         )
     }
+    viewing?.let { data -> ImageViewer(data) { viewing = null } }
 }
+
+/** A prompt sent from here that the transcript has not yet taken. */
+private data class PendingPrompt(val text: String, val images: List<ByteArray> = emptyList())
+
+/** The attachments a user message carries, if it is one. */
+private fun ItemBody?.attachments(): List<Attachment> = (this as? ItemBody.UserMessage)?.attachments.orEmpty()
 
 /** The time in epoch seconds, ticking each second while [ticking]. */
 @Composable
@@ -401,7 +442,7 @@ private sealed interface TranscriptRow {
 
     data class Streaming(val item: Item) : TranscriptRow
 
-    data class Queued(val text: String) : TranscriptRow
+    data class Queued(val prompt: PendingPrompt) : TranscriptRow
 }
 
 /** Whether an entry draws a row: a tool's result is drawn with its call. */
@@ -414,10 +455,12 @@ private fun Entry.shown(): Boolean {
 @Composable
 private fun Transcript(
     session: Session,
-    pending: List<String>,
+    pending: List<PendingPrompt>,
+    fetched: Map<String, ByteArray?>,
     expanded: Map<String, Boolean>,
     onToggle: (String) -> Unit,
     onOpen: (String) -> Unit,
+    onOpenImage: (ByteArray) -> Unit,
     modifier: Modifier,
 ) {
     val rows = buildList {
@@ -445,9 +488,14 @@ private fun Transcript(
     ) {
         items(rows.asReversed()) { row ->
             when (row) {
-                is TranscriptRow.Done -> EntryRow(row.entry, session, expanded, onToggle, onOpen)
-                is TranscriptRow.Streaming -> ItemRow(row.item, session, streaming = true, expanded, onToggle)
-                is TranscriptRow.Queued -> UserMessage(row.text, queued = true)
+                is TranscriptRow.Done -> EntryRow(row.entry, session, fetched, expanded, onToggle, onOpen, onOpenImage)
+                is TranscriptRow.Streaming -> ItemRow(row.item, session, streaming = true, fetched, expanded, onToggle, onOpenImage)
+                is TranscriptRow.Queued -> UserMessage(
+                    row.prompt.text,
+                    queued = true,
+                    images = row.prompt.images.map { ShownImage.Ready(it) },
+                    onOpenImage = onOpenImage,
+                )
             }
         }
     }
@@ -457,13 +505,15 @@ private fun Transcript(
 private fun EntryRow(
     entry: Entry,
     session: Session,
+    fetched: Map<String, ByteArray?>,
     expanded: Map<String, Boolean>,
     onToggle: (String) -> Unit,
     onOpen: (String) -> Unit,
+    onOpenImage: (ByteArray) -> Unit,
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     when (entry) {
-        is Entry.Added -> ItemRow(entry.item, session, streaming = false, expanded, onToggle)
+        is Entry.Added -> ItemRow(entry.item, session, streaming = false, fetched, expanded, onToggle, onOpenImage)
         is Entry.Notice -> Line(
             entry.text,
             if (entry.attention) MaterialTheme.colorScheme.primary else muted,
@@ -551,11 +601,20 @@ private fun ItemRow(
     item: Item,
     session: Session,
     streaming: Boolean,
+    fetched: Map<String, ByteArray?>,
     expanded: Map<String, Boolean>,
     onToggle: (String) -> Unit,
+    onOpenImage: (ByteArray) -> Unit,
 ) {
     when (val body = item.body) {
-        is ItemBody.UserMessage -> UserMessage(body.text, queued = false, attachments = body.attachments.size)
+        is ItemBody.UserMessage -> UserMessage(
+            body.text,
+            queued = false,
+            images = body.attachments.map { attachment ->
+                fetched[attachment.attachmentId]?.let { ShownImage.Ready(it) } ?: ShownImage.Missing
+            },
+            onOpenImage = onOpenImage,
+        )
         is ItemBody.AssistantMessage -> Markdown(body.text, cursor = streaming, modifier = Modifier.padding(vertical = 6.dp))
         is ItemBody.Reasoning -> {
             val open = expanded[item.id] == true
@@ -585,21 +644,21 @@ private fun ItemRow(
 }
 
 /**
- * The user's message: on a card, behind a bar in the accent, with how many images it carries;
+ * The user's message: on a card, behind a bar in the accent, with its images as thumbnails;
  * [queued] while it waits.
  */
 @Composable
-private fun UserMessage(text: String, queued: Boolean, attachments: Int = 0) {
+private fun UserMessage(
+    text: String,
+    queued: Boolean,
+    images: List<ShownImage> = emptyList(),
+    onOpenImage: (ByteArray) -> Unit = {},
+) {
     Barred(MaterialTheme.colorScheme.primary, Modifier.padding(vertical = 6.dp)) {
-        Text(text, style = MaterialTheme.typography.bodyLarge)
-        if (attachments > 0) {
-            Text(
-                if (attachments == 1) "1 image" else "$attachments images",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+        if (text.isNotEmpty()) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
         }
+        MessageImages(images, onOpenImage)
         if (queued) {
             Text(
                 "QUEUED",
@@ -1050,12 +1109,34 @@ private fun QuestionCard(
     }
 }
 
+/** Reads [uri] into the prompt's images, or says why it could not. */
+private fun attachUri(
+    context: Context,
+    uri: Uri,
+    current: List<Image>,
+    onError: (String) -> Unit,
+    set: (List<Image>) -> Unit,
+) {
+    val image = try {
+        readImage(context, uri)
+    } catch (error: ImageRefused) {
+        onError(error.message)
+        return
+    }
+    if (!fitsPrompt(current, image)) {
+        onError("Those images are too large to send together.")
+        return
+    }
+    set(current + image)
+}
+
 /** Which of the composer's pickers is open. */
 private enum class Picker { Account, Model, Mode }
 
 /**
  * The composer: the prompt, sent with its button, and Stop while a turn runs; above it the
- * session's account, model and mode, each a chip that opens its picker.
+ * session's account, model and mode, each a chip that opens its picker. Photos, the camera
+ * and a paste attach images as removable thumbnails over the field.
  */
 @Composable
 private fun Composer(
@@ -1064,19 +1145,47 @@ private fun Composer(
     accounts: List<Account>,
     recent: List<String>,
     now: Long,
-    onPrompt: (String) -> Unit,
+    pickImages: (() -> List<Image>)?,
+    initialImages: List<Image>,
+    onImageError: (String) -> Unit,
+    onPrompt: (String, List<Image>) -> Unit,
     onStop: () -> Unit,
     onAccount: (Account) -> Unit,
     onModel: (String) -> Unit,
     onMode: (PermissionMode) -> Unit,
 ) {
     var text by rememberSaveable(key) { mutableStateOf("") }
+    var images by remember(key) { mutableStateOf(initialImages) }
     var picker by remember { mutableStateOf<Picker?>(null) }
+    val context = LocalContext.current
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { attachUri(context, it, images, onImageError) { images = it } }
+    }
+    var captureUri by remember { mutableStateOf<Uri?>(null) }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = captureUri
+        if (ok && uri != null) attachUri(context, uri, images, onImageError) { images = it }
+    }
     val account = accounts.find { it.accountId == session.accountId }
     // The account's busiest window, as the TUI's status line shows it.
     val usage = account?.usage?.maxByOrNull { it.usedPercent }
         ?.let { "${account.accountId} ${windowLabel(it.window)} ${it.usedPercent.roundToInt()}%" }
+    fun attach(added: List<Image>) {
+        var next = images
+        for (image in added) {
+            if (!fitsPrompt(next, image)) {
+                onImageError("Those images are too large to send together.")
+                break
+            }
+            next = next + image
+        }
+        images = next
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        PendingStrip(images.map { it.data }) { index ->
+            images = images.filterIndexed { n, _ -> n != index }
+        }
         if (session.running || usage != null) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
                 if (session.running) {
@@ -1120,39 +1229,73 @@ private fun Composer(
                     }
                 }
             }
-            null -> Row(verticalAlignment = Alignment.Bottom) {
-            TextField(
-                value = text,
-                onValueChange = { text = it },
-                placeholder = { Text(if (session.running) "Queue a prompt for after this turn" else "Write a prompt") },
-                maxLines = 6,
-                shape = RoundedCornerShape(24.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                ),
-                modifier = Modifier.weight(1f),
-            )
-            if (session.running) {
-                Spacer(Modifier.width(8.dp))
-                FilledTonalIconButton(onClick = onStop, modifier = Modifier.size(56.dp)) {
-                    Icon(painterResource(R.drawable.ic_stop), contentDescription = "Stop")
+            null -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = {
+                            if (pickImages != null) attach(pickImages())
+                            else pickPhoto.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        },
+                    ) {
+                        Icon(painterResource(R.drawable.ic_photo), contentDescription = "Attach photo")
+                    }
+                    IconButton(
+                        onClick = {
+                            val file = File(context.cacheDir, "captures/${System.currentTimeMillis()}.jpg")
+                            file.parentFile?.mkdirs()
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.images", file)
+                            captureUri = uri
+                            takePicture.launch(uri)
+                        },
+                    ) {
+                        Icon(painterResource(R.drawable.ic_camera), contentDescription = "Take photo")
+                    }
+                    IconButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(ClipboardManager::class.java)
+                            val pasted = imagesOn(context, clipboard?.primaryClip)
+                            if (pasted.isEmpty()) onImageError("The clipboard has no image.")
+                            else attach(pasted)
+                        },
+                    ) {
+                        Icon(painterResource(R.drawable.ic_image), contentDescription = "Paste image")
+                    }
+                }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    TextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        placeholder = { Text(if (session.running) "Queue a prompt for after this turn" else "Write a prompt") },
+                        maxLines = 6,
+                        shape = RoundedCornerShape(24.dp),
+                        colors = TextFieldDefaults.colors(
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            disabledIndicatorColor = Color.Transparent,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (session.running) {
+                        Spacer(Modifier.width(8.dp))
+                        FilledTonalIconButton(onClick = onStop, modifier = Modifier.size(56.dp)) {
+                            Icon(painterResource(R.drawable.ic_stop), contentDescription = "Stop")
+                        }
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    FilledIconButton(
+                        onClick = {
+                            val prompt = text.trim()
+                            if (prompt.isNotEmpty() || images.isNotEmpty()) {
+                                onPrompt(prompt, images)
+                                text = ""
+                                images = emptyList()
+                            }
+                        },
+                        enabled = text.isNotBlank() || images.isNotEmpty(),
+                        modifier = Modifier.size(56.dp),
+                    ) { Icon(painterResource(R.drawable.ic_send), contentDescription = "Send") }
                 }
             }
-            Spacer(Modifier.width(8.dp))
-            FilledIconButton(
-                onClick = {
-                    val prompt = text.trim()
-                    if (prompt.isNotEmpty()) {
-                        onPrompt(prompt)
-                        text = ""
-                    }
-                },
-                enabled = text.isNotBlank(),
-                modifier = Modifier.size(56.dp),
-            ) { Icon(painterResource(R.drawable.ic_send), contentDescription = "Send") }
-        }
         }
     }
 }
