@@ -22,7 +22,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-use super::{Auth, PAIRING_TTL};
+use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
 use crate::vault::recover::{self, Recovery};
 
 /// File name of the socket in the data dir.
@@ -47,6 +47,11 @@ pub enum Request {
         user: String,
         /// Role of a new user; the daemon picks when absent.
         role: Option<Role>,
+    },
+    /// Mint a pairing code for a host to replicate to this vault, and only that.
+    PairHost {
+        /// The host's name; the user its device acts as.
+        host: String,
     },
     /// List the paired devices.
     Devices,
@@ -90,6 +95,8 @@ pub struct PairingInfo {
     pub user: String,
     /// That user's role.
     pub role: Role,
+    /// What the device will connect as.
+    pub device_role: DeviceRole,
     /// When the code stops working.
     pub expires_at: Timestamp,
     /// SHA-256 of the daemon's TLS certificate, lowercase hex.
@@ -113,6 +120,8 @@ pub struct DeviceInfo {
     pub user: String,
     /// The user's role.
     pub role: Role,
+    /// What the device may connect as.
+    pub device_role: DeviceRole,
 }
 
 /// What the daemon tells `herder pair` about itself, and how it recovers sessions.
@@ -124,6 +133,8 @@ pub struct Daemon {
     pub listen: SocketAddr,
     /// Recovers sessions from the vault; `None` without a `[vault]`, and on the vault itself.
     pub recovery: Option<Arc<Recovery>>,
+    /// Whether it is a vault, the only daemon hosts pair with.
+    pub vault: bool,
 }
 
 /// Binds the socket in `data_dir`, replacing a stale one; the caller holds the data-dir lock,
@@ -209,14 +220,14 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
     };
     match request {
         Request::Pair { user, role } => match auth.mint(&user, role, PAIRING_TTL) {
-            Ok(pairing) => Response::Paired(PairingInfo {
-                code: pairing.code,
-                user: pairing.user,
-                role: pairing.role,
-                expires_at: pairing.expires_at,
-                fingerprint: daemon.fingerprint.clone(),
-                addresses: addresses(daemon.listen),
-            }),
+            Ok(pairing) => paired(pairing, daemon),
+            Err(err) => failed(err),
+        },
+        Request::PairHost { .. } if !daemon.vault => Response::Error {
+            message: "hosts pair with a vault; `--host` works on the vault only".to_owned(),
+        },
+        Request::PairHost { host } => match auth.mint_host(&host, PAIRING_TTL) {
+            Ok(pairing) => paired(pairing, daemon),
             Err(err) => failed(err),
         },
         Request::Devices => Response::Devices {
@@ -230,6 +241,7 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
                     user_id: user.user_id,
                     user: user.name,
                     role: user.role,
+                    device_role: device.role,
                 })
                 .collect(),
         },
@@ -242,6 +254,18 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
         },
         Request::Recover(request) => recover(request, daemon).await,
     }
+}
+
+fn paired(pairing: Pairing, daemon: &Daemon) -> Response {
+    Response::Paired(PairingInfo {
+        code: pairing.code,
+        user: pairing.user,
+        role: pairing.role,
+        device_role: pairing.device_role,
+        expires_at: pairing.expires_at,
+        fingerprint: daemon.fingerprint.clone(),
+        addresses: addresses(daemon.listen),
+    })
 }
 
 /// Sends `request` to the daemon running on `data_dir` and waits for its answer.
@@ -352,6 +376,7 @@ mod tests {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
             recovery: None,
+            vault: false,
         };
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(serve(listener, auth, daemon, shutdown.clone()));
@@ -381,6 +406,13 @@ mod tests {
                 devices: Vec::new()
             }
         );
+        let host = Request::PairHost {
+            host: "devbox".into(),
+        };
+        let Response::Error { message } = ask(host).await.unwrap() else {
+            panic!("expected a refusal");
+        };
+        assert!(message.contains("vault only"), "{message}");
         let revoke = Request::Revoke {
             device_id: DeviceId::new("nope"),
         };
@@ -396,5 +428,43 @@ mod tests {
         assert!(message.contains("no [vault]"), "{message}");
         shutdown.cancel();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_vault_pairs_hosts_and_lists_device_roles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let auth = Arc::new(Auth::open(tmp.path()).unwrap());
+        let daemon = Daemon {
+            fingerprint: "ab".repeat(32),
+            listen: "127.0.0.1:7447".parse().unwrap(),
+            recovery: None,
+            vault: true,
+        };
+        let pair_host = Request::PairHost {
+            host: "devbox".into(),
+        };
+        let Response::Paired(info) = handle(pair_host, &auth, &daemon).await else {
+            panic!("expected a pairing code");
+        };
+        assert_eq!(
+            (info.user.as_str(), info.device_role),
+            ("devbox", DeviceRole::Host)
+        );
+        auth.authenticate(
+            "fp-h",
+            Some(&info.code),
+            "herder/test",
+            DeviceRole::Host,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let Response::Devices { devices } = handle(Request::Devices, &auth, &daemon).await else {
+            panic!("expected the devices");
+        };
+        assert_eq!(devices.len(), 1);
+        assert_eq!(
+            (devices[0].user.as_str(), devices[0].device_role),
+            ("devbox", DeviceRole::Host)
+        );
     }
 }

@@ -103,10 +103,19 @@ impl Vault {
         }
     }
 
-    /// Where a host replicates to, pairing as `user` with a fresh code.
+    /// Where a host replicates to, pairing as `user` with a fresh client code: recovering
+    /// reads the vault.
     fn config(&self, user: &str) -> VaultConfig {
         VaultConfig {
             pairing_code: Some(self.auth.mint(user, None, PAIRING_TTL).unwrap().code),
+            ..self.config.clone()
+        }
+    }
+
+    /// Where a host replicates to, pairing as the host-only device `host`.
+    fn host_config(&self, host: &str) -> VaultConfig {
+        VaultConfig {
+            pairing_code: Some(self.auth.mint_host(host, PAIRING_TTL).unwrap().code),
             ..self.config.clone()
         }
     }
@@ -385,8 +394,12 @@ fn status(journal: &[Event]) -> Option<SessionStatus> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_first() {
     let tmp = tempfile::tempdir().unwrap();
-    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
-    clones(tmp.path(), &[&a_dir, &b_dir]);
+    let (a_dir, b_dir, c_dir) = (
+        tmp.path().join("a"),
+        tmp.path().join("b"),
+        tmp.path().join("c"),
+    );
+    clones(tmp.path(), &[&a_dir, &b_dir, &c_dir]);
     let vault = Vault::start(&tmp.path().join("vault")).await;
 
     // Host A: a first turn completes and is checkpointed to origin, a second is cut short.
@@ -479,6 +492,25 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
     // A is online: no recovery without force.
     let refused = b.recover(request.clone()).await.unwrap_err().to_string();
     assert!(refused.contains("host-a (host-a) is online"), "{refused}");
+    // Host C, paired host-only, replicates but cannot read the vault to recover anything.
+    let c = HostDaemon::start(
+        &c_dir,
+        "host-c",
+        "c-account",
+        "recover_b.jsonl",
+        vault.host_config("host-c"),
+    )
+    .await;
+    let forced = Request {
+        force: true,
+        ..request.clone()
+    };
+    let refused = c.recover(forced).await.unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("paired as a host"),
+        "{refused:#}"
+    );
+    c.runtime.kill().await;
 
     // A dies mid-turn; B recovers the session once the vault shows A offline.
     a.runtime.kill().await;

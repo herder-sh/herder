@@ -200,6 +200,7 @@ mod tests {
         for args in [
             &["herder", "pair", "--list"][..],
             &["herder", "pair", "--revoke", "01J"],
+            &["herder", "pair", "--host", "devbox"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
         }
@@ -207,6 +208,9 @@ mod tests {
             &["herder", "pair", "--list", "--revoke", "01J"][..],
             &["herder", "pair", "--list", "--user", "bob"],
             &["herder", "pair", "--role", "admin"],
+            &["herder", "pair", "--host", "devbox", "--user", "bob"],
+            &["herder", "pair", "--host", "devbox", "--role", "owner"],
+            &["herder", "pair", "--host", "devbox", "--list"],
         ] {
             assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
         }

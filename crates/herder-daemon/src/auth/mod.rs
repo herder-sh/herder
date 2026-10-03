@@ -11,6 +11,11 @@
 //! its hello. A code names a user and a role, works once and expires after [`PAIRING_TTL`];
 //! codes live in memory only, so a restart voids them.
 //!
+//! A device is a client or a host ([`DeviceRole`]), as its code says. A client connects as a
+//! client and reads everything, and may replicate to a vault too. A host, paired by
+//! `herder pair --host` on a vault, may only replicate: every client connection it opens is
+//! refused, so its key, if stolen, reads nothing.
+//!
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
 pub mod control;
@@ -44,6 +49,27 @@ const CODE_LEN: usize = 10;
 
 const FILE: &str = "auth.json";
 
+/// Version of `auth.json`: 1 gave devices roles ([`Auth::migrate_device_roles`]).
+const VERSION: u32 = 1;
+
+/// What a paired device may connect as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceRole {
+    /// A client, reading everything its user may; it may replicate to a vault as a host too.
+    #[default]
+    Client,
+    /// A host replicating its own sessions to the vault, and nothing else.
+    Host,
+}
+
+impl DeviceRole {
+    /// Whether a device with this role may open a connection as `peer`.
+    fn allows(self, peer: DeviceRole) -> bool {
+        self == DeviceRole::Client || peer == DeviceRole::Host
+    }
+}
+
 /// A named user of this daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
@@ -70,6 +96,9 @@ pub struct Device {
     pub fingerprint: String,
     /// When it paired.
     pub paired_at: Timestamp,
+    /// What it may connect as; devices paired before roles are clients until migrated.
+    #[serde(default)]
+    pub role: DeviceRole,
 }
 
 /// A freshly minted pairing code.
@@ -81,12 +110,17 @@ pub struct Pairing {
     pub user: String,
     /// The user's role.
     pub role: Role,
+    /// What the device will connect as.
+    pub device_role: DeviceRole,
     /// When the code stops working.
     pub expires_at: Timestamp,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Users {
+    /// [`VERSION`] once migrated; files from before versions have none.
+    #[serde(default)]
+    version: u32,
     users: Vec<User>,
     devices: Vec<Device>,
 }
@@ -100,6 +134,7 @@ impl Users {
 struct Pending {
     user: String,
     role: Role,
+    device_role: DeviceRole,
     expires: Instant,
 }
 
@@ -124,7 +159,10 @@ impl Auth {
         let users = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .with_context(|| format!("{} is not a valid users file", path.display()))?,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Users::default(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Users {
+                version: VERSION,
+                ..Users::default()
+            },
             Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
         };
         Ok(Self {
@@ -137,28 +175,49 @@ impl Auth {
         })
     }
 
-    /// Mints a one-time code that pairs a device as `user`, valid for `ttl`.
+    /// Mints a one-time code that pairs a client device as `user`, valid for `ttl`.
     ///
     /// An existing user keeps their role, so `role` must be absent or equal to it. A new user
-    /// defaults to member, except that the first user of a daemon is always its owner.
+    /// defaults to member, except that the first user of a daemon is always its owner: users
+    /// of hosts alone do not count.
     pub fn mint(&self, user: &str, role: Option<Role>, ttl: Duration) -> Result<Pairing> {
-        let user = user.trim();
-        if user.is_empty() || user.chars().count() > 64 || user.chars().any(char::is_control) {
-            bail!("a user name is 1 to 64 printable characters");
-        }
+        let user = user_name(user)?;
         let mut state = self.lock();
+        let ownerless = !state.users.users.iter().any(|u| u.role == Role::Owner);
         let role = match (state.users.user(user), role) {
             (Some(existing), None) => existing.role,
             (Some(existing), Some(role)) if role == existing.role => role,
             (Some(existing), Some(_)) => {
                 bail!("{user} is already {}", describe(existing.role))
             }
-            (None, Some(Role::Member)) if state.users.users.is_empty() => {
+            (None, Some(Role::Member)) if ownerless => {
                 bail!("the first user of a daemon is its owner; pair the owner first")
             }
-            (None, role) if state.users.users.is_empty() => role.unwrap_or(Role::Owner),
+            (None, role) if ownerless => role.unwrap_or(Role::Owner),
             (None, role) => role.unwrap_or(Role::Member),
         };
+        Self::insert_code(&mut state, user, role, DeviceRole::Client, ttl)
+    }
+
+    /// Mints a one-time code that pairs the vault host named `host` as a host-only device,
+    /// valid for `ttl`. The device acts as the user `host`, a member when new.
+    pub fn mint_host(&self, host: &str, ttl: Duration) -> Result<Pairing> {
+        let host = user_name(host)?;
+        let mut state = self.lock();
+        let role = state
+            .users
+            .user(host)
+            .map_or(Role::Member, |user| user.role);
+        Self::insert_code(&mut state, host, role, DeviceRole::Host, ttl)
+    }
+
+    fn insert_code(
+        state: &mut State,
+        user: &str,
+        role: Role,
+        device_role: DeviceRole,
+        ttl: Duration,
+    ) -> Result<Pairing> {
         let code = new_code()?;
         let now = Instant::now();
         state.codes.retain(|_, pending| pending.expires > now);
@@ -167,6 +226,7 @@ impl Auth {
             Pending {
                 user: user.to_owned(),
                 role,
+                device_role,
                 expires: now + ttl,
             },
         );
@@ -177,24 +237,29 @@ impl Auth {
             code,
             user: user.to_owned(),
             role,
+            device_role,
             expires_at,
         })
     }
 
-    /// Decides who a connection from the device with certificate `fingerprint` acts as.
+    /// Decides who a connection from the device with certificate `fingerprint`, opened as
+    /// `peer`, acts as.
     ///
     /// A paired device is its user. An unpaired one pairs with `code`, which is used up; without
-    /// a valid code it is refused. `connection` is cancelled if the device is revoked.
+    /// a valid code it is refused. A host device is refused as a client. `connection` is
+    /// cancelled if the device is revoked.
     pub fn authenticate(
         &self,
         fingerprint: &str,
         code: Option<&str>,
         client: &str,
+        peer: DeviceRole,
         connection: &CancellationToken,
     ) -> Result<Identity, ErrorInfo> {
         let mut state = self.lock();
         let identity = match identity(&state.users, fingerprint) {
-            Some(identity) => identity,
+            Some((identity, role)) if role.allows(peer) => identity,
+            Some(_) => return Err(host_only()),
             None => {
                 let Some(code) = code else {
                     return Err(forbidden(
@@ -202,7 +267,7 @@ impl Auth {
                          daemon's machine and pair with the code it prints",
                     ));
                 };
-                self.pair(&mut state, fingerprint, code, client)?
+                self.pair(&mut state, fingerprint, code, client, peer)?
             }
         };
         let open = state
@@ -220,6 +285,7 @@ impl Auth {
         fingerprint: &str,
         code: &str,
         client: &str,
+        peer: DeviceRole,
     ) -> Result<Identity, ErrorInfo> {
         let key = normalize(code);
         let refused = || forbidden("the pairing code is invalid, expired or already used");
@@ -227,6 +293,10 @@ impl Auth {
         if pending.expires <= Instant::now() {
             state.codes.remove(&key);
             return Err(refused());
+        }
+        // The code stays, for the host's config.
+        if !pending.device_role.allows(peer) {
+            return Err(host_only());
         }
         let now = Timestamp::now();
         let mut users = state.users.clone();
@@ -253,6 +323,7 @@ impl Auth {
             client: client.to_owned(),
             fingerprint: fingerprint.to_owned(),
             paired_at: now,
+            role: pending.device_role,
         };
         users.devices.push(device.clone());
         self.save(&users).map_err(|err| {
@@ -264,7 +335,12 @@ impl Auth {
         })?;
         state.users = users;
         state.codes.remove(&key);
-        info!(user = %user.name, device_id = %device.device_id, "device paired");
+        info!(
+            user = %user.name,
+            device_id = %device.device_id,
+            role = ?device.role,
+            "device paired"
+        );
         Ok(Identity {
             user_id: user.user_id,
             device_id: device.device_id,
@@ -288,6 +364,34 @@ impl Auth {
                 Some((device.clone(), user.clone()))
             })
             .collect()
+    }
+
+    /// Makes the devices in `hosts`, which replicated to this vault as hosts, host-only, once:
+    /// devices paired before roles could connect as hosts and clients alike, and one that
+    /// replicated is taken to be a host's. Returns the devices demoted.
+    ///
+    /// Run on the vault before it accepts connections. Later runs change nothing, so a client
+    /// paired since that also replicates stays a client.
+    pub fn migrate_device_roles(&self, hosts: &[DeviceId]) -> Result<Vec<DeviceId>> {
+        let mut state = self.lock();
+        if state.users.version >= VERSION {
+            return Ok(Vec::new());
+        }
+        let mut users = state.users.clone();
+        let mut demoted = Vec::new();
+        for device in &mut users.devices {
+            if hosts.contains(&device.device_id) && device.role != DeviceRole::Host {
+                device.role = DeviceRole::Host;
+                demoted.push(device.device_id.clone());
+            }
+        }
+        users.version = VERSION;
+        self.save(&users)?;
+        state.users = users;
+        for device_id in &demoted {
+            info!(%device_id, "device made host-only: it replicated as a host");
+        }
+        Ok(demoted)
     }
 
     /// Unpairs a device and closes its open connections; `false` if it was not paired.
@@ -360,7 +464,8 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     Ok(())
 }
 
-fn identity(users: &Users, fingerprint: &str) -> Option<Identity> {
+/// A device's identity, with what it may connect as.
+fn identity(users: &Users, fingerprint: &str) -> Option<(Identity, DeviceRole)> {
     let device = users
         .devices
         .iter()
@@ -369,11 +474,28 @@ fn identity(users: &Users, fingerprint: &str) -> Option<Identity> {
         .users
         .iter()
         .find(|user| user.user_id == device.user_id)?;
-    Some(Identity {
+    let identity = Identity {
         user_id: user.user_id.clone(),
         device_id: device.device_id.clone(),
         role: user.role,
-    })
+    };
+    Some((identity, device.role))
+}
+
+/// A user name as given, trimmed.
+fn user_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        bail!("a user name is 1 to 64 printable characters");
+    }
+    Ok(name)
+}
+
+fn host_only() -> ErrorInfo {
+    forbidden(
+        "this device is paired as a host: it may only replicate its sessions to the vault, \
+         not read it; pair a client with `herder pair` on the vault",
+    )
 }
 
 fn forbidden(message: &str) -> ErrorInfo {
@@ -423,7 +545,13 @@ mod tests {
     }
 
     fn pair(auth: &Auth, fingerprint: &str, code: &str) -> Result<Identity, ErrorInfo> {
-        auth.authenticate(fingerprint, Some(code), "test", &CancellationToken::new())
+        auth.authenticate(
+            fingerprint,
+            Some(code),
+            "test",
+            DeviceRole::Client,
+            &CancellationToken::new(),
+        )
     }
 
     #[test]
@@ -492,7 +620,10 @@ mod tests {
 
         let auth = Auth::open(tmp.path()).unwrap();
         let token = CancellationToken::new();
-        assert_eq!(auth.authenticate("fp-a", None, "test", &token), Ok(alice));
+        assert_eq!(
+            auth.authenticate("fp-a", None, "test", DeviceRole::Client, &token),
+            Ok(alice)
+        );
         assert!(pair(&auth, "fp-b", &pending).is_err());
         assert_eq!(auth.devices().len(), 1);
     }
@@ -503,12 +634,135 @@ mod tests {
         let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
         let connection = CancellationToken::new();
         let alice = auth
-            .authenticate("fp-a", Some(&code), "test", &connection)
+            .authenticate("fp-a", Some(&code), "test", DeviceRole::Client, &connection)
             .unwrap();
         assert!(auth.revoke(&alice.device_id).unwrap());
         assert!(connection.is_cancelled());
         assert!(!auth.revoke(&alice.device_id).unwrap());
-        let refused = auth.authenticate("fp-a", None, "test", &CancellationToken::new());
+        let refused = auth.authenticate(
+            "fp-a",
+            None,
+            "test",
+            DeviceRole::Client,
+            &CancellationToken::new(),
+        );
         assert_eq!(refused.unwrap_err().code, ErrorCode::Forbidden);
+    }
+
+    fn connect(auth: &Auth, fingerprint: &str, peer: DeviceRole) -> Result<Identity, ErrorInfo> {
+        auth.authenticate(fingerprint, None, "test", peer, &CancellationToken::new())
+    }
+
+    #[test]
+    fn a_host_device_replicates_but_never_connects_as_a_client() {
+        let (_tmp, auth) = open();
+        pair(
+            &auth,
+            "fp-a",
+            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+        )
+        .unwrap();
+        let pairing = auth.mint_host("devbox", PAIRING_TTL).unwrap();
+        assert_eq!(
+            (pairing.user.as_str(), pairing.role, pairing.device_role),
+            ("devbox", Role::Member, DeviceRole::Host)
+        );
+
+        // A host code does not pair a client, and is not used up by trying.
+        let refused = pair(&auth, "fp-h", &pairing.code).unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Forbidden);
+        assert!(refused.message.contains("paired as a host"), "{refused:?}");
+        let host = auth
+            .authenticate(
+                "fp-h",
+                Some(&pairing.code),
+                "test",
+                DeviceRole::Host,
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        assert_eq!(connect(&auth, "fp-h", DeviceRole::Host), Ok(host));
+        let stolen = connect(&auth, "fp-h", DeviceRole::Client).unwrap_err();
+        assert_eq!(stolen.code, ErrorCode::Forbidden);
+
+        // A client device connects as either.
+        assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
+        assert!(connect(&auth, "fp-a", DeviceRole::Host).is_ok());
+        let roles: Vec<_> = auth.devices().iter().map(|(d, _)| d.role).collect();
+        assert_eq!(roles, [DeviceRole::Client, DeviceRole::Host]);
+    }
+
+    #[test]
+    fn users_of_hosts_alone_do_not_make_the_first_owner() {
+        let (_tmp, auth) = open();
+        let host = auth.mint_host("devbox", PAIRING_TTL).unwrap().code;
+        auth.authenticate(
+            "fp-h",
+            Some(&host),
+            "test",
+            DeviceRole::Host,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert!(auth.mint("bob", Some(Role::Member), PAIRING_TTL).is_err());
+        assert_eq!(
+            auth.mint("alice", None, PAIRING_TTL).unwrap().role,
+            Role::Owner
+        );
+    }
+
+    #[test]
+    fn migration_makes_devices_that_replicated_host_only_once() {
+        let (tmp, auth) = open();
+        let laptop = pair(
+            &auth,
+            "fp-a",
+            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+        );
+        let devbox = pair(
+            &auth,
+            "fp-h",
+            &auth.mint("devbox", None, PAIRING_TTL).unwrap().code,
+        );
+        let (laptop, devbox) = (laptop.unwrap(), devbox.unwrap());
+        drop(auth);
+        // A file from before roles: no version, no device roles.
+        let path = tmp.path().join(FILE);
+        let mut file: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        file.as_object_mut().unwrap().remove("version");
+        for device in file["devices"].as_array_mut().unwrap() {
+            device.as_object_mut().unwrap().remove("role");
+        }
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert!(connect(&auth, "fp-h", DeviceRole::Client).is_ok());
+        let hosts = [devbox.device_id.clone()];
+        assert_eq!(auth.migrate_device_roles(&hosts).unwrap(), hosts);
+        assert!(connect(&auth, "fp-h", DeviceRole::Client).is_err());
+        assert!(connect(&auth, "fp-h", DeviceRole::Host).is_ok());
+        assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
+        drop(auth);
+
+        // Once only: a client that replicates later stays a client, across restarts.
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert!(connect(&auth, "fp-h", DeviceRole::Client).is_err());
+        let both = [laptop.device_id, devbox.device_id];
+        assert!(auth.migrate_device_roles(&both).unwrap().is_empty());
+        assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
+    }
+
+    #[test]
+    fn a_new_daemon_has_nothing_to_migrate() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let alice = pair(&auth, "fp-a", &code).unwrap();
+        assert!(
+            auth.migrate_device_roles(&[alice.device_id])
+                .unwrap()
+                .is_empty()
+        );
+        assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
     }
 }

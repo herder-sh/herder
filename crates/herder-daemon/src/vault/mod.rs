@@ -2,10 +2,11 @@
 //! session journals, and the host side that streams them there.
 //!
 //! The vault runs no sessions. It listens for hosts and clients on the daemon's port with the
-//! daemon's TLS identity, and pairs both as devices with `herder pair`. The first message
-//! tells them apart: a host says a replication hello, a client the client protocol's. A
-//! device that has paired replicates as the host its first hello names, and only as that
-//! host. Every host's journals and fleet index go into one database, `<data_dir>/db/vault.db`
+//! daemon's TLS identity, and pairs both as devices: hosts with `herder pair --host`, clients
+//! with `herder pair`. The first message tells them apart: a host says a replication hello, a
+//! client the client protocol's. A device that has paired replicates as the host its first
+//! hello names, and only as that host. A host device reads nothing: it is refused as a client
+//! ([`auth::DeviceRole`]), so all it sees is its own replication cursors. Every host's journals and fleet index go into one database, `<data_dir>/db/vault.db`
 //! ([`VaultStore`]). Clients get every replicated session, read-only ([`fleet`]).
 //!
 //! A host is online while its replication connection is open. The host pings an idle
@@ -171,6 +172,13 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let store_path = data_dir.root().join("db/vault.db");
     let store = VaultStore::open(&store_path)
         .with_context(|| format!("opening the vault database {}", store_path.display()))?;
+    let demoted = auth.migrate_device_roles(&store.host_devices()?)?;
+    if !demoted.is_empty() {
+        info!(
+            devices = demoted.len(),
+            "devices that replicated as hosts made host-only"
+        );
+    }
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("listening on {}", config.listen))?;
@@ -182,6 +190,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
             recovery: None,
+            vault: true,
         },
         shutdown.clone(),
     ));

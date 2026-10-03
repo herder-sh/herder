@@ -177,6 +177,7 @@ impl Daemon {
             &owner.fingerprint(),
             Some(&code),
             "test",
+            crate::auth::DeviceRole::Client,
             &CancellationToken::new(),
         )
         .unwrap();

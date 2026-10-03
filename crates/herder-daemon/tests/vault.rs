@@ -1,7 +1,7 @@
 //! A host daemon replicating to a vault daemon, both in process over TLS on localhost: sessions
 //! appear in the vault, a vault restarted mid-stream gets the rest, a host that was offline
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
-//! read-only, and the hosts with their liveness.
+//! read-only, and the hosts with their liveness. A host's device replicates and reads nothing.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -14,20 +14,21 @@ use herder_client_core::PairingUri;
 use herder_client_core::auth::client_config;
 use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::VaultConfig;
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
-    AccountId, CommandBody, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
-    JournalRecord, PermissionMode, Provider, REPLICATION_VERSION, SessionId, SessionStatus,
-    SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
+    AccountId, AttachmentId, ClientHello, ClientMessage, Command, CommandBody, CommandId, Cursor,
+    ErrorCode, Event, EventBody, HostHello, HostId, HostMessage, JournalRecord, PROTOCOL_VERSION,
+    PermissionMode, Provider, REPLICATION_VERSION, ReplicationErrorCode, ServerMessage, SessionId,
+    SessionStatus, SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Message;
@@ -120,12 +121,13 @@ impl Vault {
         }
     }
 
-    /// Where a host replicates to, pairing with a fresh code.
+    /// Where a host replicates to, pairing as a host-only device with a fresh code, as
+    /// `herder pair --host` mints it.
     fn config(&self) -> VaultConfig {
         VaultConfig {
             address: self.addr.to_string(),
             fingerprint: self.fingerprint.clone(),
-            pairing_code: Some(self.auth.mint("host-1", None, PAIRING_TTL).unwrap().code),
+            pairing_code: Some(self.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
         }
     }
 
@@ -588,17 +590,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
 
     // The host's device comes back but falls silent after its hello, as a host whose machine
     // hangs or whose network drops without closing the connection would.
-    let device = Replicator::device_key(&host_dir).unwrap();
-    let config = client_config(&vault.fingerprint, &device).unwrap();
-    let tcp = tokio::net::TcpStream::connect(vault.addr).await.unwrap();
-    let tls = TlsConnector::from(Arc::new(config))
-        .connect(ServerName::try_from("herder").unwrap(), tcp)
-        .await
-        .unwrap();
-    let request = format!("wss://{}/", vault.addr)
-        .into_client_request()
-        .unwrap();
-    let (mut ws, _) = tokio_tungstenite::client_async(request, tls).await.unwrap();
+    let mut ws = dial(&vault, &host_dir).await;
     let hello = HostMessage::Hello(HostHello {
         replication_version: REPLICATION_VERSION,
         host_id: host_id(),
@@ -636,5 +628,146 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     drop(ws);
+    vault.runtime.kill().await;
+}
+
+type Ws = tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
+
+/// A WebSocket to the vault with the device key of the host in `host_dir`.
+async fn dial(vault: &Vault, host_dir: &Path) -> Ws {
+    let device = Replicator::device_key(host_dir).unwrap();
+    let config = client_config(&vault.fingerprint, &device).unwrap();
+    let tcp = TcpStream::connect(vault.addr).await.unwrap();
+    let tls = TlsConnector::from(Arc::new(config))
+        .connect(ServerName::try_from("herder").unwrap(), tcp)
+        .await
+        .unwrap();
+    let request = format!("wss://{}/", vault.addr)
+        .into_client_request()
+        .unwrap();
+    tokio_tungstenite::client_async(request, tls)
+        .await
+        .unwrap()
+        .0
+}
+
+/// Every text message the vault sends on `ws` until it closes the connection.
+async fn until_closed(ws: &mut Ws) -> Vec<String> {
+    let mut texts = Vec::new();
+    loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await {
+            Err(_) => panic!("the vault kept the connection open; sent {texts:?}"),
+            Ok(Some(Ok(Message::Text(text)))) => texts.push(text.as_str().to_owned()),
+            Ok(Some(Ok(Message::Close(_))) | None | Some(Err(_))) => return texts,
+            Ok(Some(Ok(_))) => {}
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let devices = vault.auth.devices();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].0.role, DeviceRole::Host);
+    host.runtime.kill().await;
+
+    // Its key, stolen, speaks the client protocol, as `herder recover` reads the vault too:
+    // every read is refused at the hello, before the vault sends a host list, a session list
+    // or a journal.
+    let mut ws = dial(&vault, &host_dir).await;
+    let hello = ClientMessage::Hello(ClientHello {
+        protocol_version: PROTOCOL_VERSION,
+        client: "thief".into(),
+        resume: vec![Cursor {
+            session_id: SessionId::new("s1"),
+            after_seq: 0,
+        }],
+        pairing_code: None,
+    });
+    let reads = [
+        hello,
+        ClientMessage::Subscribe(Cursor {
+            session_id: SessionId::new("s2"),
+            after_seq: 0,
+        }),
+        ClientMessage::Command(Command {
+            id: CommandId::new("c1"),
+            body: CommandBody::GetAttachment {
+                session_id: SessionId::new("s1"),
+                attachment_id: AttachmentId::new("a1"),
+            },
+        }),
+        ClientMessage::Sync {
+            token: "read".into(),
+        },
+    ];
+    for message in reads {
+        // The vault may close before the last ones arrive.
+        let _ = ws
+            .send(Message::text(serde_json::to_string(&message).unwrap()))
+            .await;
+    }
+    let sent = until_closed(&mut ws).await;
+    let [only] = sent.as_slice() else {
+        panic!("the vault sent more than a refusal: {sent:?}");
+    };
+    let ServerMessage::Error { error } = serde_json::from_str(only).unwrap() else {
+        panic!("expected a refusal: {only}");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert!(
+        error.message.contains("paired as a host"),
+        "{}",
+        error.message
+    );
+
+    // As a host it may still only be itself, and sees only its own cursors.
+    let mut ws = dial(&vault, &host_dir).await;
+    let hello = HostMessage::Hello(HostHello {
+        replication_version: REPLICATION_VERSION,
+        host_id: HostId::new("macbook"),
+        host_name: "macbook".into(),
+        build: "test".into(),
+        pairing_code: None,
+    });
+    ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+    let sent = until_closed(&mut ws).await;
+    assert!(
+        matches!(
+            serde_json::from_str(&sent[0]).unwrap(),
+            VaultMessage::Error { error } if error.code == ReplicationErrorCode::Forbidden
+        ),
+        "{sent:?}"
+    );
+
+    // Its own host resumes from the vault's cursors.
+    seed(&host_dir, 3, 5);
+    let config = VaultConfig {
+        pairing_code: None,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
+    caught_up(&host_dir, &vault_dir).await;
+    assert_gap_free(&vault_dir);
+    host.runtime.kill().await;
+
+    // A client device reads everything, as before.
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client.pair(vault.pairing_link("alice")).await.unwrap();
+    let machine = machine_when(&client, |m| m.sessions.len() == 3).await;
+    assert_eq!(machine.hosts.len(), 1);
     vault.runtime.kill().await;
 }
