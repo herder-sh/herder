@@ -61,7 +61,7 @@ struct TranscriptTests {
             .approvalResolved(approvalId: "a1", decision: .allow, answeredBy: .user),
             item("a", .assistantMessage(text: "Waiting for the command.")),
         ])
-        let result = Item(id: "r1", turnId: "t1", body: .toolResult(callId: "c1", output: "partial", isError: false))
+        let result = Item(parentCallId: nil, id: "r1", turnId: "t1", body: .toolResult(callId: "c1", output: "partial", isError: false))
         model.apply(SessionUpdate(events: [], streaming: [result]))
         guard case .tools(_, let streamingCalls) = Transcript.blocks(model)[0] else {
             Issue.record("missing tool group")
