@@ -13,9 +13,13 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "Herder", path: "../../crates/herder-ffi/swift"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.20.0"),
     ],
     targets: [
-        .target(name: "HerderKit", dependencies: [.product(name: "Herder", package: "Herder")]),
+        .target(name: "HerderKit", dependencies: [
+            .product(name: "Herder", package: "Herder"),
+            .product(name: "SwiftTerm", package: "SwiftTerm"),
+        ]),
         .testTarget(name: "HerderKitTests", dependencies: ["HerderKit"]),
     ]
 )

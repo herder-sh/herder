@@ -107,4 +107,28 @@ struct FleetTests {
         let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
         #expect(blocks.contains { if case .user(_, "Say hello.", nil) = $0 { true } else { false } })
     }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aShellOpensAndEchoes() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(link: daemon.link)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .fullAccess, prompt: "")
+
+        let shell = TerminalConnection(hostId: machine.hostId, terminalId: nil)
+        shell.connect(client: fleet.client, sessionId: key.sessionId, cols: 80, rows: 24)
+        #expect(await eventually { shell.state == .attached })
+        #expect(shell.terminalId != nil)
+        shell.input(Array("echo herder-$((40+2))\n".utf8)[...])
+        #expect(await eventually { String(decoding: shell.pending, as: UTF8.self).contains("herder-42") })
+        shell.detach()
+    }
 }
