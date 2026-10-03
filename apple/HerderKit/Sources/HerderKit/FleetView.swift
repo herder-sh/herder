@@ -12,12 +12,17 @@ struct FleetView: View {
             MachineList(fleet: fleet, selection: $selection, pairing: $pairing)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300)
         } detail: {
-            if let machine = fleet.machines.first(where: { $0.hostId == selection }) {
-                MachineDetail(machine: machine)
-            } else {
-                ContentUnavailableView("Select a machine", systemImage: "server.rack")
+            Group {
+                if let machine = fleet.machines.first(where: { $0.hostId == selection }) {
+                    MachineDetail(machine: machine)
+                } else {
+                    ContentUnavailableView("Select a machine", systemImage: "server.rack")
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.background)
         }
+        .tint(Theme.text)
         .sheet(isPresented: $pairing) {
             PairSheet(fleet: fleet)
         }
@@ -35,7 +40,10 @@ struct MachineList: View {
             NavigationLink(value: machine.hostId) {
                 MachineRow(machine: machine)
             }
+            .listRowBackground(Theme.surface)
         }
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
         .overlay {
             if fleet.machines.isEmpty {
                 ContentUnavailableView {
@@ -44,7 +52,12 @@ struct MachineList: View {
                     Text("Run `herder pair` on a machine, then add it here with the link it prints.")
                 } actions: {
                     Button("Add Machine") { pairing = true }
-                        .buttonStyle(.borderedProminent)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Theme.onPrimary)
+                        .padding(.horizontal, 20)
+                        .frame(minHeight: 44)
+                        .background(Theme.primary, in: .rect(cornerRadius: Theme.corner))
+                        .buttonStyle(.plain)
                 }
             }
         }
@@ -68,9 +81,10 @@ struct MachineRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(machine.name)
                     .font(.headline)
+                    .foregroundStyle(Theme.text)
                 Text(machine.connection.label)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.secondary)
                     .lineLimit(2)
             }
         } icon: {
@@ -80,14 +94,27 @@ struct MachineRow: View {
     }
 }
 
-/// A machine's connection state as a coloured mark.
+/// A machine's connection state as a mark: filled when connected, a dashed ring while
+/// connecting, a crossed circle when the connection failed.
 struct ConnectionMark: View {
     let state: ConnectionState
 
     var body: some View {
-        Image(systemName: state.symbol)
-            .foregroundStyle(state.color)
-            .accessibilityLabel(state.label)
+        Group {
+            switch state {
+            case .connected:
+                Circle().fill(Theme.success).frame(width: 10, height: 10)
+            case .connecting:
+                Circle().strokeBorder(Theme.waiting, style: StrokeStyle(lineWidth: 2, dash: [2, 2]))
+                    .frame(width: 12, height: 12)
+            case .disconnected:
+                Circle().fill(Theme.failure).frame(width: 14, height: 14)
+                    .overlay(Image(systemName: "xmark").font(.system(size: 7, weight: .heavy))
+                        .foregroundStyle(Theme.background))
+            }
+        }
+        .frame(width: 20, height: 20)
+        .accessibilityLabel(state.label)
     }
 }
 
@@ -113,22 +140,6 @@ extension ConnectionState {
         case .connected: "Connected"
         case .connecting: "Connecting…"
         case .disconnected(let error): error
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .connected: "circle.fill"
-        case .connecting: "circle.dotted"
-        case .disconnected: "xmark.circle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .connected: .green
-        case .connecting: .orange
-        case .disconnected: .red
         }
     }
 }
