@@ -4,7 +4,7 @@ import Herder
 import Testing
 
 private func nestedItem(_ id: String, _ body: ItemBody, turn: String = "t1", parent: String? = nil) -> EventBody {
-    .itemAdded(item: Item(parentCallId: parent, id: id, turnId: turn, body: body))
+    .itemAdded(item: Item(agentMessage: nil, parentCallId: parent, id: id, turnId: turn, body: body))
 }
 
 private let agentInput = #"{"description":"Review accounts","prompt":"Check owner permissions","subagent_type":"Explore"}"#
@@ -104,7 +104,7 @@ struct NativeAgentTests {
             created(), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
         ])
-        let result = Item(parentCallId: nil, id: "result", turnId: "t1",
+        let result = Item(agentMessage: nil, parentCallId: nil, id: "result", turnId: "t1",
                           body: .toolResult(callId: "a", output: "Partial", isError: false))
         model.streaming = [result]
         let reference = NativeAgent.ID(turnId: "t1", callId: "a")
