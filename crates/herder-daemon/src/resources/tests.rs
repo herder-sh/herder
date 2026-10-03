@@ -109,6 +109,26 @@ fn each_launch_is_a_new_scope_and_none_while_limits_are_off() {
     assert!(second.starts_with("herder-s1-"));
 }
 
+#[test]
+fn a_launch_aside_is_a_new_scope_of_the_session_that_leaves_its_latest_alone() {
+    let session = SessionId::new("s1");
+    let off = Scopes::new(ResourcesConfig::default(), host(), false);
+    assert!(off.launch_aside(&session, &off.limits(false)).is_empty());
+
+    let scopes = Scopes::new(ResourcesConfig::default(), host(), true);
+    scopes.launch(&session, &scopes.limits(false));
+    let latest = scopes.unit(&session).unwrap();
+    let aside = scopes.launch_aside(&session, &scopes.limits(false));
+    let unit = strings(&aside)
+        .into_iter()
+        .find_map(|arg| arg.strip_prefix("--unit="))
+        .unwrap()
+        .to_owned();
+    assert!(unit.starts_with("herder-s1-"));
+    assert_ne!(unit, latest);
+    assert_eq!(scopes.unit(&session), Some(latest));
+}
+
 /// A cgroup directory as the kernel lays it out.
 fn write_cgroup(dir: &Path, memory: u64, cpu_usec: u64, pids: &[u32]) {
     std::fs::write(dir.join("memory.current"), format!("{memory}\n")).unwrap();

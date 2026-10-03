@@ -29,6 +29,7 @@ use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
 use super::tasks::Tasks;
+use super::titles;
 use super::{AccountConfig, Inner, error};
 use crate::handoff;
 use crate::resources::{Permit, Ticket, processes};
@@ -182,6 +183,8 @@ pub(super) struct Actor {
     saved: Vec<QueuedPrompt>,
     /// Monotonic deadline derived once from the persisted wall-clock reset.
     retry_deadline: Option<Instant>,
+    /// Prompts journaled so far, counted once titles need it.
+    prompts: Option<u64>,
 }
 
 enum Next {
@@ -216,6 +219,7 @@ impl Actor {
             needs_setup: false,
             saved: Vec::new(),
             retry_deadline: None,
+            prompts: None,
         }
     }
 
@@ -1769,6 +1773,9 @@ impl Actor {
             self.set_status(settled).await;
         }
         self.report(turn_id, summary).await;
+        if self.prompts == Some(titles::REFRESH_AFTER) {
+            titles::auto(&self.inner, self.session.session_id.clone());
+        }
         self.start_next().await;
     }
 
@@ -2015,6 +2022,38 @@ impl Actor {
         };
         if let Err(err) = self.record(by, EventBody::ItemAdded { item }).await {
             warn!(session_id = %self.session.session_id, "cannot journal a prompt: {err:#}");
+            return;
+        }
+        if !titles::enabled(&self.inner) {
+            return;
+        }
+        self.prompts = match self.prompts {
+            Some(prompts) => Some(prompts + 1),
+            None => self.count_prompts().await,
+        };
+        if self.prompts == Some(1) {
+            titles::auto(&self.inner, self.session.session_id.clone());
+        }
+    }
+
+    /// The prompts the journal holds; `None` when it cannot be read.
+    async fn count_prompts(&self) -> Option<u64> {
+        let session_id = &self.session.session_id;
+        match self.inner.journal.all(session_id.clone()).await {
+            Ok(events) => {
+                let prompts = events.iter().filter(|event| {
+                    matches!(
+                        &event.body,
+                        EventBody::ItemAdded { item }
+                            if matches!(item.body, ItemBody::UserMessage { .. })
+                    )
+                });
+                u64::try_from(prompts.count()).ok()
+            }
+            Err(err) => {
+                warn!(%session_id, "cannot count the session's prompts: {err:#}");
+                None
+            }
         }
     }
 

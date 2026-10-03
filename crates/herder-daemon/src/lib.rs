@@ -162,6 +162,10 @@ pub async fn serve(
     let scopes = Arc::new(resources::Scopes::detect(config.resources.clone()).await);
     sessions.limit_resources(Arc::clone(&scopes))?;
     sessions.configure_failover(config.failover.clone())?;
+    sessions.generate_titles(
+        config.titles.clone(),
+        accounts::title_clis(&config.binaries),
+    )?;
     let docker = Arc::new(resources::Docker::new("docker"));
     sessions.track_containers(Arc::clone(&docker))?;
     hub.set_failover(config.failover.settings());
@@ -287,6 +291,7 @@ mod tests {
             binaries: Default::default(),
             tasks: session::TaskLimits::default(),
             failover: Default::default(),
+            titles: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
             mode: config::Mode::Host,
