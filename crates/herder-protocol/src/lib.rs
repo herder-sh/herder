@@ -39,7 +39,7 @@ pub use replication::{
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
-    Account, CommandResult, ErrorCode, ErrorInfo, FailoverSettings, Role, ServerHello,
+    Account, CommandResult, ErrorCode, ErrorInfo, FailoverSettings, FleetHost, Role, ServerHello,
     ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow,
 };
 pub use types::{PermissionMode, Provider};

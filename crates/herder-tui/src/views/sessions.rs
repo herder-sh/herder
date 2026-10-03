@@ -1,17 +1,19 @@
 //! The left pane: each project, its sessions with their status and machine, or with `v`
 //! each machine and its sessions ([`crate::projects`]); children under their parent.
 //! A primary shows its child count and, when any child waits on the user, how many; `z`
-//! folds its children away. Compact rows, on a narrow screen, show the status as one glyph,
-//! the branch's last part and one PR.
+//! folds its children away. A vault's sessions come under the host they run on, marked
+//! offline with when the vault last heard from it. Compact rows, on a narrow screen, show the
+//! status as one glyph, the branch's last part and one PR.
 
 use herder_client_core::ConnectionState;
-use herder_protocol::SessionStatus;
+use herder_protocol::{SessionStatus, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem};
 
+use crate::account_screen;
 use crate::app::{App, Focus, Row};
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::projects::Grouping;
@@ -71,6 +73,38 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 Span::styled(format!(" ({}) ", machine.sessions.len()), super::dim()),
             ];
             spans.extend(super::resources::row(machine, true));
+            ListItem::new(Line::from(spans))
+        }
+        Row::Host { vault, host } => {
+            let Some(machine) = app.machines.iter().find(|m| m.host_id == *vault) else {
+                return ListItem::new("");
+            };
+            let Some(host) = machine.hosts.iter().find(|h| h.host_id == *host) else {
+                return ListItem::new("");
+            };
+            let count = machine
+                .sessions
+                .iter()
+                .filter(|head| head.host_id.as_ref() == Some(&host.host_id))
+                .count();
+            let (mark, color) = if host.online {
+                ("●", Color::Green)
+            } else {
+                ("✗", Color::Red)
+            };
+            let mut spans = vec![
+                Span::styled(format!("  {mark}"), Style::new().fg(color)),
+                Span::styled(format!(" {}", host.host_name), super::bold()),
+                Span::styled(format!(" ({count})"), super::dim()),
+            ];
+            if !host.online {
+                spans.push(Span::styled(" offline", Style::new().fg(Color::Red)));
+                if !compact {
+                    let secs = Timestamp::now().duration_since(host.last_seen).as_secs();
+                    let ago = format!(" · {} ago", account_screen::until(secs));
+                    spans.push(Span::styled(ago, super::dim()));
+                }
+            }
             ListItem::new(Line::from(spans))
         }
         Row::Project(project) => super::projects::heading(app, project.as_ref(), width, compact),

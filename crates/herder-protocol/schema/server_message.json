@@ -39,6 +39,27 @@
       ]
     },
     {
+      "description": "Every host whose sessions a vault lists, with its liveness; sent by a vault only, after\nhello and whenever a host connects, disconnects or first replicates. A daemon never\nsends it: its sessions all run on its own host.",
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "description": "The hosts, ordered by host id.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FleetHost"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "hosts"
+        }
+      },
+      "required": [
+        "type",
+        "hosts"
+      ]
+    },
+    {
       "description": "Every project with a clone on this daemon's host; sent after hello and whenever any of\nit changes. Clients merge the lists of all their daemons by `project_id`.",
       "type": "object",
       "properties": {
@@ -728,6 +749,11 @@
           "description": "The provider cannot do it.",
           "type": "string",
           "const": "unsupported"
+        },
+        {
+          "description": "The session is read-only here: a vault's copy of a session that runs on another host,\nwhich the message names.",
+          "type": "string",
+          "const": "read_only"
         },
         {
           "description": "The daemon failed.",
@@ -1463,6 +1489,35 @@
         "providers"
       ]
     },
+    "FleetHost": {
+      "description": "A host that replicates to a vault, as the vault lists it.",
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "description": "The host.",
+          "$ref": "#/$defs/HostId"
+        },
+        "host_name": {
+          "description": "Display name of the host, from its latest replication hello.",
+          "type": "string"
+        },
+        "last_seen": {
+          "description": "When the vault last heard from the host; for an online host, as of when it connected\nor the list was last sent.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "online": {
+          "description": "Whether the host's replication connection is open. A host silent for the vault's\nliveness timeout is offline; its sessions stay listed, read-only as all on a vault are.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host_id",
+        "host_name",
+        "online",
+        "last_seen"
+      ]
+    },
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
@@ -2019,6 +2074,17 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0
+        },
+        "host_id": {
+          "description": "Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault\nonly, as a daemon's sessions all run on its own host.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "parent": {
           "description": "Primary session of the task this session is a child of; absent for a top-level session.",

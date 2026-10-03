@@ -19,6 +19,8 @@
 //!   for every session with something running ([`crate::resources`]).
 //! - the host's resources and turns whenever they change, sent to every client, and the latest
 //!   on connect ([`crate::resources::admission`]).
+//! - on a vault, the host list whenever a host's liveness changes, sent to every client, and
+//!   the latest on connect ([`crate::vault`]).
 //!
 //! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
 //! its attached clients' outboxes with [`Outbox::terminal_output`].
@@ -28,8 +30,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, Event, EventBody, FailoverSettings, HostResources, Item, ItemBody, ItemId, Project,
-    Role, Seq, ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
+    Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
 };
 
 use crate::session::EventSink;
@@ -67,6 +69,8 @@ struct State {
     usage: HashMap<SessionId, SessionUsage>,
     /// The host's latest resources.
     host: Option<HostResources>,
+    /// A vault's latest host list; `None` on a daemon.
+    fleet: Option<Vec<FleetHost>>,
     /// The latest project list; `None` until discovery publishes its first.
     projects: Option<Vec<Project>>,
     /// How sessions fail over, sent with every account list.
@@ -197,6 +201,11 @@ impl Hub {
         if let Some(host) = &state.host {
             inner.push(ServerMessage::HostResources(host.clone()));
         }
+        if let Some(hosts) = &state.fleet {
+            inner.push(ServerMessage::Hosts {
+                hosts: hosts.clone(),
+            });
+        }
         for (session_id, usage) in &state.usage {
             inner.push(ServerMessage::SessionResources {
                 session_id: session_id.clone(),
@@ -232,6 +241,19 @@ impl Hub {
         let mut state = self.lock();
         state.host = Some(resources.clone());
         let message = ServerMessage::HostResources(resources);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends a vault's new host list to every client, and to clients that connect later.
+    pub(crate) fn hosts_changed(&self, hosts: Vec<FleetHost>) {
+        let mut state = self.lock();
+        let message = ServerMessage::Hosts {
+            hosts: hosts.clone(),
+        };
+        state.fleet = Some(hosts);
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();
@@ -899,6 +921,7 @@ mod tests {
         let heads = |seq| {
             vec![SessionHead {
                 session_id: session(),
+                host_id: None,
                 head_seq: seq,
                 status: herder_protocol::SessionStatus::Idle,
                 parent: None,

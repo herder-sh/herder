@@ -21,6 +21,13 @@ pub enum ServerMessage {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
     },
+    /// Every host whose sessions a vault lists, with its liveness; sent by a vault only, after
+    /// hello and whenever a host connects, disconnects or first replicates. A daemon never
+    /// sends it: its sessions all run on its own host.
+    Hosts {
+        /// The hosts, ordered by host id.
+        hosts: Vec<FleetHost>,
+    },
     /// Every project with a clone on this daemon's host; sent after hello and whenever any of
     /// it changes. Clients merge the lists of all their daemons by `project_id`.
     Projects {
@@ -133,6 +140,21 @@ pub struct ServerHello {
     pub role: Role,
 }
 
+/// A host that replicates to a vault, as the vault lists it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FleetHost {
+    /// The host.
+    pub host_id: HostId,
+    /// Display name of the host, from its latest replication hello.
+    pub host_name: String,
+    /// Whether the host's replication connection is open. A host silent for the vault's
+    /// liveness timeout is offline; its sessions stay listed, read-only as all on a vault are.
+    pub online: bool,
+    /// When the vault last heard from the host; for an online host, as of when it connected
+    /// or the list was last sent.
+    pub last_seen: Timestamp,
+}
+
 /// A user's role on a daemon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +170,10 @@ pub enum Role {
 pub struct SessionHead {
     /// The session.
     pub session_id: SessionId,
+    /// Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault
+    /// only, as a daemon's sessions all run on its own host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<HostId>,
     /// Seq of its latest event.
     pub head_seq: Seq,
     /// Where the session stands.
@@ -273,6 +299,9 @@ pub enum ErrorCode {
     Conflict,
     /// The provider cannot do it.
     Unsupported,
+    /// The session is read-only here: a vault's copy of a session that runs on another host,
+    /// which the message names.
+    ReadOnly,
     /// The daemon failed.
     Internal,
 }

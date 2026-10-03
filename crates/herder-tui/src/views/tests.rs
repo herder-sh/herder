@@ -124,6 +124,15 @@ fn the_status_line_shows_each_connection() {
 }
 
 #[test]
+fn a_vault_groups_sessions_by_host_and_marks_offline_ones() {
+    let mut app = fake::vault();
+    insta::assert_snapshot!(render(&mut app, 120, 10).backend());
+    // By project, each session names its host, and an offline one says so.
+    press(&mut app, KeyCode::Char('v'));
+    insta::assert_snapshot!(render(&mut app, 120, 10).backend());
+}
+
+#[test]
 fn help_lists_the_keys() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char('?'));

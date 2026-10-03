@@ -120,6 +120,13 @@ pub enum Focus {
 pub enum Row {
     /// A machine's heading.
     Machine(HostId),
+    /// Under a vault's heading, a host whose sessions the vault lists.
+    Host {
+        /// The vault.
+        vault: HostId,
+        /// The host.
+        host: HostId,
+    },
     /// A project's heading; `None` heads the sessions whose project is not known yet.
     Project(Option<ProjectId>),
     /// A session, `depth` levels into its task tree (0 for a top-level session).
@@ -134,7 +141,7 @@ pub enum Row {
 impl Row {
     pub(crate) fn session(&self) -> Option<&SessionKey> {
         match self {
-            Row::Machine(_) | Row::Project(_) => None,
+            Row::Machine(_) | Row::Host { .. } | Row::Project(_) => None,
             Row::Session { key, .. } => Some(key),
         }
     }
@@ -142,6 +149,7 @@ impl Row {
     fn same(&self, other: &Row) -> bool {
         match (self, other) {
             (Row::Machine(a), Row::Machine(b)) => a == b,
+            (Row::Host { vault: a, host: x }, Row::Host { vault: b, host: y }) => a == b && x == y,
             (Row::Project(a), Row::Project(b)) => a == b,
             (Row::Session { key: a, .. }, Row::Session { key: b, .. }) => a == b,
             _ => false,
@@ -461,7 +469,8 @@ impl App {
     }
 
     /// The session list: each machine, then its sessions, newest first, each followed by its
-    /// children, oldest first, unless it is folded.
+    /// children, oldest first, unless it is folded. Under a vault, each host its sessions run
+    /// on heads them.
     pub fn rows(&self) -> Vec<Row> {
         self.tree(true)
     }
@@ -478,16 +487,30 @@ impl App {
         let mut rows = Vec::new();
         for machine in &self.machines {
             rows.push(Row::Machine(machine.host_id.clone()));
-            let keys: Vec<SessionKey> = machine
-                .sessions
-                .iter()
-                .map(|head| SessionKey {
-                    host_id: machine.host_id.clone(),
-                    session_id: head.session_id.clone(),
-                })
-                .collect();
             // The daemon lists sessions oldest first.
-            rows.extend(self.forest(&keys, fold));
+            let keys = |host: Option<&HostId>| -> Vec<SessionKey> {
+                machine
+                    .sessions
+                    .iter()
+                    .filter(|head| host.is_none() || head.host_id.as_ref() == host)
+                    .map(|head| SessionKey {
+                        host_id: machine.host_id.clone(),
+                        session_id: head.session_id.clone(),
+                    })
+                    .collect()
+            };
+            if machine.hosts.is_empty() {
+                rows.extend(self.forest(&keys(None), fold));
+                continue;
+            }
+            // A vault: each host, then the sessions that run on it.
+            for host in &machine.hosts {
+                rows.push(Row::Host {
+                    vault: machine.host_id.clone(),
+                    host: host.host_id.clone(),
+                });
+                rows.extend(self.forest(&keys(Some(&host.host_id)), fold));
+            }
         }
         rows
     }
@@ -686,6 +709,25 @@ mod tests {
                 session("h1", "s3", 1),
                 session("h1", "s4", 1),
                 session("h1", "s1", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vaults_sessions_come_under_their_host() {
+        let host = |host: &str| Row::Host {
+            vault: HostId::new("v"),
+            host: HostId::new(host),
+        };
+        assert_eq!(
+            fake::vault().rows(),
+            [
+                Row::Machine(HostId::new("v")),
+                host("devbox"),
+                session("v", "s3", 0),
+                session("v", "s1", 0),
+                host("laptop"),
+                session("v", "s2", 0),
             ]
         );
     }

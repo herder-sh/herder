@@ -206,7 +206,7 @@ impl VaultStore {
     /// once its creation is held.
     pub fn fleet(&self) -> Result<Vec<SessionHead>> {
         let mut stmt = self.conn.prepare_cached(&format!(
-            "SELECT s.summary,
+            "SELECT s.summary, s.host_id,
                (SELECT MAX(seq) FROM events e
                 WHERE e.host_id = s.host_id AND e.session_id = s.session_id),
                (SELECT body FROM events e
@@ -221,13 +221,14 @@ impl VaultStore {
                 rusqlite::Error::FromSqlConversionFailure(0, Type::Text, err.into())
             })?;
             let account = row
-                .get::<_, Option<String>>(2)?
+                .get::<_, Option<String>>(3)?
                 .map(|body| serde_json::from_str::<AccountOf>(&body))
                 .transpose()
                 .map_err(|err| {
-                    rusqlite::Error::FromSqlConversionFailure(2, Type::Text, err.into())
+                    rusqlite::Error::FromSqlConversionFailure(3, Type::Text, err.into())
                 })?;
-            Ok((summary, row.get::<_, Option<Seq>>(1)?, account))
+            let host = HostId::new(row.get::<_, String>(1)?);
+            Ok((summary, host, row.get::<_, Option<Seq>>(2)?, account))
         })?;
         let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         let need_you = |id: &SessionId| {
@@ -239,9 +240,10 @@ impl VaultStore {
         };
         Ok(rows
             .iter()
-            .filter_map(|(summary, head, account)| {
+            .filter_map(|(summary, host, head, account)| {
                 Some(SessionHead {
                     session_id: summary.session_id.clone(),
+                    host_id: Some(host.clone()),
                     head_seq: (*head)?,
                     status: summary.status,
                     parent: summary.parent.clone(),
@@ -544,6 +546,7 @@ mod tests {
         let heads = store.fleet().unwrap();
         assert_eq!(heads.len(), 2);
         assert_eq!(heads[0].session_id.as_str(), "s1");
+        assert_eq!(heads[0].host_id, Some(host.clone()));
         assert_eq!(heads[0].head_seq, 3);
         assert_eq!(heads[0].account_id.as_str(), "other");
         assert_eq!(heads[0].children_need_you, 1);

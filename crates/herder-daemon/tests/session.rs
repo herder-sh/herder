@@ -494,6 +494,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
         heads,
         [SessionHead {
             session_id: session.clone(),
+            host_id: None,
             head_seq: 7,
             status: SessionStatus::Idle,
             parent: None,

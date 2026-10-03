@@ -160,10 +160,12 @@ async fn serve(
 
     let presence = shared.fleet.presence();
     presence.connected(&host);
+    shared.fleet.refresh_hosts().await;
     let result = receive(ws, shared, &host).await;
     let seen = presence.disconnected(&host);
     let device = identity.device_id.clone();
     blocking(&shared.store, move |store| store.seen(&device, seen)).await?;
+    shared.fleet.refresh_hosts().await;
     info!(host_id = %host, online = presence.online(&host), "host disconnected");
     result
 }
