@@ -11,8 +11,10 @@ use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::handoff;
 use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
 use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
+use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup, TaskLimits,
+    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup,
+    TaskLimits, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::{Worktrees, checkpoint};
@@ -4386,4 +4388,227 @@ async fn successful_switches_cancel_limit_waits_and_invalid_switches_keep_them()
         assert_eq!(daemon.starts.lock().unwrap().len(), 1);
         daemon.stop().await;
     }
+}
+
+/// A stand-in title CLI writing into `dir`: run `n` saves its arguments, its stdin and its
+/// config dir as `args-<n>`, `stdin-<n>` and `config-<n>`, then runs `answer`, which may use
+/// `$n`.
+fn title_cli(dir: &Path, answer: &str) -> TitleCli {
+    let program = dir.join("title-cli");
+    let script = format!(
+        "#!/bin/sh\nd='{}'\nn=$(( $(cat \"$d/runs\" 2>/dev/null || echo 0) + 1 ))\n\
+         echo $n > \"$d/runs\"\nprintf '%s\\n' \"$@\" > \"$d/args-$n\"\n\
+         cat > \"$d/stdin-$n\"\nprintf '%s' \"$FAKE_CONFIG_DIR\" > \"$d/config-$n\"\n{answer}\n",
+        dir.display()
+    );
+    let staged = dir.join("title-cli.tmp");
+    std::fs::write(&staged, script).unwrap();
+    std::fs::set_permissions(&staged, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // Renamed into place, so no test thread forks while it is still open for writing.
+    std::fs::rename(&staged, &program).unwrap();
+    TitleCli {
+        program,
+        args: vec!["--one-shot".into()],
+        config_dir_env: "FAKE_CONFIG_DIR".into(),
+        model: "fake-small".into(),
+    }
+}
+
+/// How many times the stand-in title CLI in `dir` ran.
+fn title_runs(dir: &Path) -> u32 {
+    std::fs::read_to_string(dir.join("runs")).map_or(0, |runs| runs.trim().parse().unwrap())
+}
+
+/// Opens a daemon on `dir` playing the four turns of `titles.jsonl`, titling sessions with a
+/// stand-in CLI in `dir/cli` that answers with `answer`, as `config` says.
+async fn titling(dir: &Path, config: TitlesConfig, answer: &str) -> Daemon {
+    let daemon = Daemon::open(dir, "titles.jsonl", Default::default()).await;
+    let cli = dir.join("cli");
+    std::fs::create_dir(&cli).unwrap();
+    let clis = TitleClis::from([(fake(), title_cli(&cli, answer))]);
+    daemon.manager.generate_titles(config, clis).unwrap();
+    daemon
+}
+
+/// The session's `title_changed` events.
+async fn titles(daemon: &Daemon, session: &SessionId) -> Vec<Event> {
+    let events = daemon.journal(session).await;
+    events
+        .into_iter()
+        .filter(|event| matches!(event.body, EventBody::TitleChanged { .. }))
+        .collect()
+}
+
+/// Waits until the session's journal holds `count` `title_changed` events.
+async fn until_titles(daemon: &Daemon, session: &SessionId, count: usize) -> Vec<Event> {
+    for _ in 0..200 {
+        let titles = titles(daemon, session).await;
+        if titles.len() >= count {
+            return titles;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "no {count} titles; got {:#?}",
+        titles(daemon, session).await
+    );
+}
+
+/// Prompts `text` and waits until its turn, `turn-<n>`, completed.
+async fn prompt_turn(daemon: &mut Daemon, session: &SessionId, text: &str, n: u32) {
+    daemon.prompt(alice(), session, text).await;
+    let turn = TurnId::new(format!("turn-{n}"));
+    daemon
+        .events_until(
+            |body| matches!(body, EventBody::TurnCompleted { turn_id } if *turn_id == turn),
+        )
+        .await;
+}
+
+/// Gives a title run that should not happen time to show up.
+async fn settle() {
+    tokio::time::sleep(Duration::from_millis(300)).await;
+}
+
+fn titled(title: &str, source: TitleSource) -> EventBody {
+    EventBody::TitleChanged {
+        title: title.into(),
+        source,
+    }
+}
+
+#[tokio::test]
+async fn a_title_follows_the_first_prompt_and_is_refreshed_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = titling(
+        dir.path(),
+        TitlesConfig::default(),
+        "echo \"  \\\"Title $n.\\\"\"; echo 'Because it says so.'",
+    )
+    .await;
+    let session = daemon.create().await;
+
+    daemon.prompt(alice(), &session, "First.").await;
+    let titles = until_titles(&daemon, &session, 1).await;
+    assert_eq!(titles[0].by, None);
+    assert_eq!(titles[0].body, titled("Title 1", TitleSource::Auto));
+    let cli = dir.path().join("cli");
+    let read = |name: &str| std::fs::read_to_string(cli.join(name)).unwrap();
+    assert_eq!(read("args-1"), "--one-shot\n--model\nfake-small\n");
+    assert_eq!(
+        read("config-1"),
+        dir.path().join("account").to_str().unwrap()
+    );
+    assert_eq!(
+        read("stdin-1"),
+        format!("{INSTRUCTION}\n\n<conversation>\nUser: First.\n</conversation>\n")
+    );
+    let Some(head) = daemon.manager.sessions().await.unwrap().pop() else {
+        panic!("no session");
+    };
+    assert_eq!(head.title.as_deref(), Some("Title 1"));
+
+    // The third turn's end titles it again, from the conversation so far.
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    prompt_turn(&mut daemon, &session, "Second.", 2).await;
+    prompt_turn(&mut daemon, &session, "Third.", 3).await;
+    let titles = until_titles(&daemon, &session, 2).await;
+    assert_eq!(titles[1].body, titled("Title 2", TitleSource::Auto));
+    assert!(read("stdin-2").contains(
+        "User: First.\n\nAgent: One.\n\nUser: Second.\n\nAgent: Two.\n\nUser: Third.\n\n\
+         Agent: Three.\n"
+    ));
+
+    // And never again.
+    prompt_turn(&mut daemon, &session, "Fourth.", 4).await;
+    settle().await;
+    assert_eq!(title_runs(&cli), 2);
+    assert_eq!(self::titles(&daemon, &session).await.len(), 2);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn automatic_titles_never_replace_one_a_user_chose() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = titling(dir.path(), TitlesConfig::default(), "echo \"Title $n\"").await;
+    let session = daemon.create().await;
+    let cli = dir.path().join("cli");
+    let rename = CommandBody::RenameSession {
+        session_id: session.clone(),
+        title: "Mine".into(),
+    };
+    daemon.manager.handle(alice(), rename).await.unwrap();
+
+    prompt_turn(&mut daemon, &session, "First.", 1).await;
+    settle().await;
+    assert_eq!(title_runs(&cli), 0);
+
+    // A requested title replaces the user's, from the conversation so far, `by` who asked.
+    let retitle = CommandBody::RetitleSession {
+        session_id: session.clone(),
+    };
+    let result = daemon.manager.handle(bob(), retitle).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    let titles = until_titles(&daemon, &session, 2).await;
+    assert_eq!(titles[1].by, Some(bob()));
+    assert_eq!(titles[1].body, titled("Title 1", TitleSource::AiRequested));
+    let stdin = std::fs::read_to_string(cli.join("stdin-1")).unwrap();
+    assert!(stdin.contains("User: First.\n\nAgent: One.\n"), "{stdin}");
+
+    // The refresh leaves the requested title alone too.
+    prompt_turn(&mut daemon, &session, "Second.", 2).await;
+    prompt_turn(&mut daemon, &session, "Third.", 3).await;
+    settle().await;
+    assert_eq!(title_runs(&cli), 1);
+    assert_eq!(self::titles(&daemon, &session).await.len(), 2);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn disabled_titles_run_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = TitlesConfig {
+        enabled: false,
+        ..TitlesConfig::default()
+    };
+    let mut daemon = titling(dir.path(), config, "echo Title").await;
+    let session = daemon.create().await;
+    prompt_turn(&mut daemon, &session, "First.", 1).await;
+    let retitle = CommandBody::RetitleSession {
+        session_id: session.clone(),
+    };
+    let error = daemon.manager.handle(bob(), retitle).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    settle().await;
+    assert_eq!(title_runs(&dir.path().join("cli")), 0);
+    assert!(titles(&daemon, &session).await.is_empty());
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_failed_title_run_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = titling(dir.path(), TitlesConfig::default(), "echo Title; exit 3").await;
+    let session = daemon.create().await;
+    prompt_turn(&mut daemon, &session, "First.", 1).await;
+    let retitle = CommandBody::RetitleSession {
+        session_id: session.clone(),
+    };
+    let result = daemon.manager.handle(bob(), retitle).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    for _ in 0..200 {
+        if title_runs(&dir.path().join("cli")) == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    settle().await;
+    assert_eq!(title_runs(&dir.path().join("cli")), 2);
+    assert!(titles(&daemon, &session).await.is_empty());
+    let sessions = daemon.manager.sessions().await.unwrap();
+    assert_eq!(sessions[0].status, SessionStatus::Idle);
+    assert_eq!(sessions[0].title, None);
+    daemon.stop().await;
 }

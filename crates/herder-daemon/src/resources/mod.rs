@@ -424,6 +424,21 @@ impl Scopes {
         launcher
     }
 
+    /// The launcher for a short run beside `session`'s CLI, such as its title's, with
+    /// `limits`: a scope of its own, named like the session's so archive stops it too, but not
+    /// tracked as the session's latest; empty when limits are off.
+    pub fn launch_aside(&self, session: &SessionId, limits: &Limits) -> Vec<OsString> {
+        if !self.on {
+            return Vec::new();
+        }
+        let unit = {
+            let mut state = self.lock();
+            state.next += 1;
+            unit_name(session, state.next - 1)
+        };
+        launcher(&unit, limits)
+    }
+
     /// The unit of `session`'s latest scope, while the daemon tracks it.
     pub fn unit(&self, session: &SessionId) -> Option<String> {
         self.lock()
