@@ -184,3 +184,16 @@ struct LinkVerdictTests {
         #expect(LinkVerdict(quality(average: 30, missed: 2))?.summary == "2 pings went unanswered")
     }
 }
+
+struct RemoveProjectTests {
+    @Test func onlySessionsThatAreNotArchivedBlockRemovingAProject() {
+        var host = machine("h", name: "alpha", sessions: ["01A", "01B", "01C"])
+        host.sessions[0].projectId = "github.com/acme/app"
+        host.sessions[1].projectId = "github.com/acme/app"
+        host.sessions[1].status = .archived
+        host.sessions[2].projectId = "github.com/acme/other"
+        #expect(ProjectSettingsForm.liveSessions(of: "github.com/acme/app", on: host) == 1)
+        host.sessions[0].status = .archived
+        #expect(ProjectSettingsForm.liveSessions(of: "github.com/acme/app", on: host) == 0)
+    }
+}
