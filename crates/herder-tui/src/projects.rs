@@ -114,6 +114,9 @@ impl App {
                     host_id: machine.host_id.clone(),
                     session_id: head.session_id.clone(),
                 };
+                if self.shadowed(&key) {
+                    continue;
+                }
                 let project = self.project_of(&key);
                 let order = (
                     project.is_none(),

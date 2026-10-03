@@ -492,6 +492,10 @@ fn session_text(app: &App, key: &SessionKey, prs: bool) -> (Span<'static>, Line<
         style = ui.muted();
     }
     let mut right = Vec::new();
+    // Listed from a vault because its host is not reachable here: a read-only copy.
+    if app.vault_copy(key) && !app.machines.iter().all(|m| m.host_id == key.host_id) {
+        right.push(Span::styled("vault", ui.muted()));
+    }
     if let Some(to) = app.moved_to(key) {
         right.push(Span::styled(
             format!("{} {to}", ui.glyphs.state(State::Moved)),
