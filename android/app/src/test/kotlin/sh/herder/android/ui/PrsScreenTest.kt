@@ -161,12 +161,27 @@ class PrsScreenTest {
         assertEquals(listOf("https://github.com/org/app/pull/12"), recorder.opened)
 
         compose.onNodeWithContentDescription("Session").performClick()
-        compose.onNodeWithText("Link Pull Request…").performClick()
+        compose.onNodeWithText("Link Pull Request…").assertIsDisplayed()
+    }
+
+    @Test
+    fun theLinkDialogSendsAParsedNumber() {
+        // The dialog's field focuses and blinks; Robolectric never goes idle if the clock auto-advances.
+        compose.mainClock.autoAdvance = false
+        var linked: ULong? = null
+        compose.setContent {
+            HerderTheme {
+                LinkPrDialog("api · herder/api", onDismiss = {}, onLink = { linked = it })
+            }
+        }
+        compose.mainClock.advanceTimeBy(1_000)
         compose.onNodeWithText("Link a Pull Request").assertIsDisplayed()
         compose.onNodeWithText("Link").assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performTextInput("https://github.com/org/app/pull/41")
+        compose.mainClock.advanceTimeBy(1_000)
         compose.onNodeWithText("Link").performClick()
-        assertEquals(CommandBody.LinkPr(s2, 41uL), recorder.sent.last())
+        compose.mainClock.advanceTimeBy(1_000)
+        assertEquals(41uL, linked)
     }
 
     @Test

@@ -1,8 +1,6 @@
 package sh.herder.android.ui
 
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -67,11 +65,16 @@ class PrsScreenshotsTest {
             }
         }
         capture("phone-$theme-session")
-        compose.onNodeWithContentDescription("Session").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Link Pull Request…").performClick()
-        compose.waitForIdle()
-        compose.onNodeWithText("Link a Pull Request").assertIsDisplayed()
+    }
+
+    private fun phoneLink(theme: String) {
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            HerderTheme(dark = theme == "dark") {
+                LinkPrDialog("api · herder/api", onDismiss = {}, onLink = {})
+            }
+        }
+        compose.mainClock.advanceTimeBy(1_000)
         capture("phone-$theme-link")
     }
 
@@ -133,6 +136,14 @@ class PrsScreenshotsTest {
     @Test
     @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun phoneDarkSession() = phoneSession("dark")
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun phoneLightLink() = phoneLink("light")
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun phoneDarkLink() = phoneLink("dark")
 
     @Test
     @Config(qualifiers = "w1280dp-h800dp-xhdpi")
