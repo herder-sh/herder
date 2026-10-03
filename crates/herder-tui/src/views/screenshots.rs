@@ -306,37 +306,39 @@ fn frames() {
     let theme = Theme::herder(Mode::Dark);
     let mut app = asking(false);
     super::tests::add_accounts(&mut app);
-    let ctrl_p = Msg::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
-    let mut steps: Vec<Box<dyn Fn(&mut App)>> = vec![
-        Box::new(|_| {}),
-        Box::new(|app| press(app, KeyCode::Right)),
-        Box::new(|app| press(app, KeyCode::Left)),
-        Box::new(move |app| {
-            app.update(ctrl_p.clone());
-        }),
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let mut keys = vec![
+        None,
+        Some(key(KeyCode::Right)),
+        Some(key(KeyCode::Left)),
+        Some(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+        Some(key(KeyCode::Char('s'))),
+        Some(key(KeyCode::Char('w'))),
+        Some(key(KeyCode::Enter)),
+        Some(key(KeyCode::Down)),
+        Some(key(KeyCode::Down)),
+        Some(key(KeyCode::Tab)),
     ];
-    for c in "sw".chars() {
-        steps.push(Box::new(move |app| press(app, KeyCode::Char(c))));
-    }
-    steps.push(Box::new(|app| press(app, KeyCode::Enter)));
-    steps.push(Box::new(|app| press(app, KeyCode::Down)));
-    steps.push(Box::new(|app| press(app, KeyCode::Down)));
-    steps.push(Box::new(|app| press(app, KeyCode::Tab)));
-    for c in "gpt-5".chars() {
-        steps.push(Box::new(move |app| press(app, KeyCode::Char(c))));
-    }
-    steps.push(Box::new(|app| press(app, KeyCode::Esc)));
-    steps.push(Box::new(|app| press(app, KeyCode::Esc)));
-    steps.push(Box::new(|app| press(app, KeyCode::Esc)));
-    steps.push(Box::new(|app| press(app, KeyCode::Char('n'))));
-    steps.push(Box::new(|app| press(app, KeyCode::Enter)));
-    steps.push(Box::new(|app| press(app, KeyCode::Enter)));
-    steps.push(Box::new(|app| press(app, KeyCode::Right)));
-    steps.push(Box::new(|app| press(app, KeyCode::Tab)));
-    steps.push(Box::new(|app| press(app, KeyCode::Tab)));
-    steps.push(Box::new(|app| press(app, KeyCode::Right)));
-    for (at, step) in steps.iter().enumerate() {
-        step(&mut app);
+    keys.extend("gpt-5".chars().map(|c| Some(key(KeyCode::Char(c)))));
+    keys.extend(
+        [
+            KeyCode::Esc,
+            KeyCode::Esc,
+            KeyCode::Esc,
+            KeyCode::Char('n'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Right,
+            KeyCode::Tab,
+            KeyCode::Tab,
+            KeyCode::Right,
+        ]
+        .map(|code| Some(key(code))),
+    );
+    for (at, pressed) in keys.into_iter().enumerate() {
+        if let Some(pressed) = pressed {
+            app.update(Msg::Key(pressed));
+        }
         let buffer = app_buffer_ref(&mut app, &theme, 100, 30);
         let source = out.join(format!("frame-{at:02}.ansi"));
         std::fs::write(&source, ansi(&buffer, &theme)).unwrap();
