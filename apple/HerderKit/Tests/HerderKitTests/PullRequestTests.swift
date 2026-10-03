@@ -148,3 +148,14 @@ struct TypingTests {
         #expect(ListContinuation.newline(after: "- ") == "")
     }
 }
+
+struct DraftTests {
+    @Test func aDraftInAnAddedProjectNamesTheProjectOnly() {
+        let draft = Draft(hostId: "h", projectId: "github.com/acme/homelab", repo: "/home/me/homelab")
+        #expect(draft.createArguments.projectId == "github.com/acme/homelab")
+        #expect(draft.createArguments.repo == nil)
+        let path = Draft(hostId: "h", projectId: nil, repo: "/home/me/other")
+        #expect(path.createArguments.repo == "/home/me/other")
+        #expect(path.createArguments.projectId == nil)
+    }
+}

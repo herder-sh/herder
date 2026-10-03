@@ -441,7 +441,7 @@ struct DraftSessionView: View {
         defer { starting = nil }
         do {
             created(try await fleet.createSession(
-                on: hostId, repo: draft.repo, projectId: draft.projectId, accountId: account.accountId,
+                on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
                 model: model, mode: mode, prompt: prompt, images: images))
         } catch {
             self.error = describe(error)

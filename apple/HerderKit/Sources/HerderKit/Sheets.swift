@@ -123,6 +123,12 @@ struct Draft: Hashable, Identifiable {
     var repo: String?
     var id: String { "\(hostId)/\(projectId ?? repo ?? "")" }
 
+    /// What creating its session names: the project when known, else the path; the daemon
+    /// takes exactly one. A just-added project keeps its path only to show it.
+    var createArguments: (repo: String?, projectId: String?) {
+        projectId == nil ? (repo, nil) : (nil, projectId)
+    }
+
     /// A draft in a project, on the first connected machine that has it.
     @MainActor
     static func inProject(_ projectId: String, fleet: Fleet) -> Draft? {
