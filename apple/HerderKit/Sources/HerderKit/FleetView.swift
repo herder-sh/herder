@@ -290,8 +290,7 @@ struct ProjectsView: View {
                     }
                 } header: {
                     HStack(spacing: 6) {
-                        Image(systemName: project.projectId == nil ? "questionmark.folder" : "shippingbox")
-                            .foregroundStyle(Theme.secondary)
+                        ProjectIcon(projectId: project.projectId, name: project.name, size: 18)
                         Text(project.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         Text(project.machines.joined(separator: ", ")).font(.caption).foregroundStyle(Theme.tertiary)
                         Spacer()

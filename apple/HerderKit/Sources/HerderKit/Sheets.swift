@@ -247,7 +247,9 @@ struct ProjectPicker: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(projects, id: \.id) { project in
                             PickRow(title: project.name, detail: project.machines.map(\.name).joined(separator: ", "),
-                                    symbol: "shippingbox") { pick(project.id, project.machines) }
+                                    symbol: "shippingbox", icon: ProjectIcon(projectId: project.id, name: project.name)) {
+                                pick(project.id, project.machines)
+                            }
                         }
                         PickRow(title: "Other repository…", detail: "", symbol: "folder.badge.plus") { other = true }
                     }
@@ -294,13 +296,18 @@ private struct PickRow: View {
     let title: String
     let detail: String
     let symbol: String
+    /// A project's tile, in the symbol's place.
+    var icon: ProjectIcon?
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: symbol).foregroundStyle(Theme.secondary).frame(width: 18)
+                Group {
+                    if let icon { icon } else { Image(systemName: symbol).foregroundStyle(Theme.secondary) }
+                }
+                .frame(width: 20)
                 Text(title).font(.body.weight(.medium)).foregroundStyle(Theme.text)
                 Spacer()
                 Text(detail).font(.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)

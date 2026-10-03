@@ -51,6 +51,7 @@ struct DesktopShell: View {
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
+                     icon: ProjectIcon(projectId: project?.projectId, name: project?.name, size: 30),
                      switcher: switcher, query: $query) {
                     ScrollView {
                         if let project {
@@ -155,6 +156,8 @@ private struct ListAndSession<List: View>: View {
 struct Pane<Content: View, Actions: View>: View {
     let title: String
     var subtitle = ""
+    /// A project's tile before the title.
+    var icon: ProjectIcon?
     /// Makes the title a menu of the app's sections and projects.
     var switcher: Switcher?
     /// Shows a search field under the header.
@@ -165,6 +168,7 @@ struct Pane<Content: View, Actions: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
+                if let icon { icon.padding(.trailing, 4) }
                 VStack(alignment: .leading, spacing: 2) {
                     if let switcher {
                         Menu {
@@ -324,6 +328,7 @@ struct Sidebar: View {
                     ForEach(lists.projects) { project in
                         SidebarRow(
                             title: project.name, symbol: "shippingbox",
+                            icon: ProjectIcon(projectId: project.projectId, name: project.name),
                             badge: project.sessions.count,
                             selected: item == .project(project.id),
                             settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
@@ -380,7 +385,8 @@ private struct SidebarRail: View {
             rail("server.rack", "Machines", .machines, badge: 0)
             if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in
-                rail("shippingbox", project.name, .project(project.id), badge: 0)
+                rail("shippingbox", project.name, .project(project.id), badge: 0,
+                     icon: ProjectIcon(projectId: project.projectId, name: project.name, size: 22))
             }
             Spacer()
             ForEach(lists.machines) { machine in
@@ -391,12 +397,14 @@ private struct SidebarRail: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private func rail(_ symbol: String, _ title: String, _ target: SidebarItem, badge: Int) -> some View {
+    private func rail(_ symbol: String, _ title: String, _ target: SidebarItem, badge: Int, icon: ProjectIcon? = nil) -> some View {
         Button {
             if item != target { session = nil }
             item = target
         } label: {
-            Image(systemName: symbol)
+            Group {
+                if let icon { icon } else { Image(systemName: symbol) }
+            }
                 .foregroundStyle(item == target ? Theme.text : Theme.secondary)
                 .frame(width: 38, height: 34)
                 .background(item == target ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
@@ -413,6 +421,8 @@ private struct SidebarRail: View {
 private struct SidebarRow: View {
     let title: String
     let symbol: String
+    /// A project's tile, in the symbol's place.
+    var icon: ProjectIcon?
     var badge = 0
     var attention = false
     let selected: Bool
@@ -424,7 +434,9 @@ private struct SidebarRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol)
+                Group {
+                    if let icon { icon } else { Image(systemName: symbol) }
+                }
                     .frame(width: 20)
                     .foregroundStyle(selected ? Theme.text : Theme.secondary)
                 Text(title).foregroundStyle(Theme.text).lineLimit(1)

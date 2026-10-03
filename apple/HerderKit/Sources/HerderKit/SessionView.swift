@@ -227,6 +227,8 @@ private struct Composer: View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
         let accounts = machine?.accounts ?? []
         let account = accounts.first { $0.accountId == model.accountId }
+        // The provider is the session's; the Switch sheet moves it to another.
+        let current = ModelCatalog.Choice(provider: model.provider ?? "", model: model.model ?? "")
         VStack(alignment: .leading, spacing: 6) {
             if model.state == .archived {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
@@ -236,20 +238,14 @@ private struct Composer: View {
                 text: $text,
                 images: $images,
                 placeholder: placeholder,
-                provider: model.provider,
-                model: model.model ?? "",
-                usedModels: fleet.models(on: key.hostId, provider: model.provider),
-                providers: Array(Set(accounts.map(\.provider))).sorted(),
+                models: fleet.modelGroups(on: key.hostId, providers: model.provider.map { [$0] } ?? [],
+                                          current: current, offersDefault: false),
+                current: current,
                 mode: model.mode,
                 running: model.turn != nil,
-                setModel: { name in
+                choose: { choice in
                     guard let account else { return }
-                    Task { await fleet.switchSession(key, to: account, model: name) }
-                },
-                setProvider: { provider in
-                    guard provider != model.provider,
-                          let target = fleet.defaultAccount(on: key.hostId, projectId: nil, provider: provider) else { return }
-                    Task { await fleet.switchSession(key, to: target, model: "") }
+                    Task { await fleet.switchSession(key, to: account, model: choice.model) }
                 },
                 setMode: { mode in Task { await fleet.setMode(mode, of: key) } },
                 send: send,
@@ -343,8 +339,8 @@ struct DraftSessionView: View {
     let draft: Draft
     let created: (SessionKey) -> Void
     @State private var hostId: HostId = ""
-    @State private var provider: Provider = ""
-    @State private var model = ""
+    /// The provider and model it starts on; picking another provider's model switches to it.
+    @State private var choice = ModelCatalog.Choice(provider: "", model: "")
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
     @State private var images: [Herder.Image] = []
@@ -390,21 +386,23 @@ struct DraftSessionView: View {
                 text: $text,
                 images: $images,
                 placeholder: "Ask for changes, or describe what to build",
-                provider: provider,
-                model: model,
-                usedModels: fleet.models(on: hostId, provider: provider),
-                offersDefault: true,
-                providers: Array(Set(machine?.accounts.map(\.provider) ?? [])).sorted(),
+                models: fleet.modelGroups(on: hostId, providers: fleet.providers(on: hostId), current: choice,
+                                          offersDefault: true),
+                current: choice,
                 mode: mode,
                 running: false,
-                setModel: { model = $0 },
-                setProvider: { provider = $0; model = ModelCatalog.defaultModel($0) },
+                choose: { choice = $0 },
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}
             ) {
                 FooterItem(symbol: "desktopcomputer", text: machine?.name ?? "") {
-                    ForEach(machines, id: \.hostId) { other in Button(other.name) { hostId = other.hostId } }
+                    ForEach(machines, id: \.hostId) { other in
+                        Button(other.name) {
+                            hostId = other.hostId
+                            choice = fleet.draftChoice(choice, movedTo: hostId, projectId: draft.projectId)
+                        }
+                    }
                 }
                 Label("New worktree", systemImage: "folder.badge.plus")
                 Spacer()
@@ -422,8 +420,7 @@ struct DraftSessionView: View {
         .background(Theme.background)
         .onAppear {
             hostId = draft.hostId
-            provider = fleet.defaultProvider(on: hostId, projectId: draft.projectId) ?? ""
-            model = ModelCatalog.defaultModel(provider)
+            choice = fleet.draftChoice(on: hostId, projectId: draft.projectId)
             mode = fleet.machines.first { $0.hostId == draft.hostId }?.projects
                 .first { $0.projectId == draft.projectId }?.defaultPermissionMode ?? ModePreference.mode(for: draft)
         }
@@ -432,8 +429,8 @@ struct DraftSessionView: View {
     private func start() async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !images.isEmpty else { return }
-        guard let account = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: provider) else {
-            error = "\(machine?.name ?? "This machine") has no \(provider) account."
+        guard let account = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: choice.provider) else {
+            error = "\(machine?.name ?? "This machine") has no \(ModelCatalog.providerName(choice.provider)) account."
             return
         }
         ModePreference.remember(mode, for: draft)
@@ -442,7 +439,7 @@ struct DraftSessionView: View {
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
-                model: model, mode: mode, prompt: prompt, images: images))
+                model: choice.model, mode: mode, prompt: prompt, images: images))
         } catch {
             self.error = describe(error)
         }
