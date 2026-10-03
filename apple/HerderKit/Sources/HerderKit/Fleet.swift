@@ -19,6 +19,7 @@ public final class Fleet {
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
+    var accountLogins: [HostId: TerminalConnection] = [:]
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.

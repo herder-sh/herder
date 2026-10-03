@@ -15,6 +15,7 @@ final class TerminalConnection {
     }
 
     let hostId: HostId
+    let account: NewAccount?
     private(set) var terminalId: TerminalId?
     private(set) var state: State = .connecting
     @ObservationIgnored private var stream: TerminalStream?
@@ -24,22 +25,28 @@ final class TerminalConnection {
     @ObservationIgnored private var emulator: SwiftTerm.TerminalView?
     @ObservationIgnored private var delegate: EmulatorDelegate?
 
-    init(hostId: HostId, terminalId: TerminalId?) {
+    init(hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil) {
+        self.account = account
         self.hostId = hostId
         self.terminalId = terminalId
     }
 
     /// Opens a new shell in the session's worktree, or attaches to `terminalId`.
-    func connect(client: Client, sessionId: SessionId, cols: Int, rows: Int) {
-        guard stream == nil else { return }
+    func connect(client: Client, sessionId: SessionId?, cols: Int, rows: Int) {
+        guard pump == nil else { return }
         pump = Task {
             do {
-                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId] in
+                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account] in
                     if let terminalId {
                         try await client.attachTerminal(hostId: hostId, terminalId: terminalId)
-                    } else {
+                    } else if let account {
+                        try await client.addAccount(
+                            hostId: hostId, account: account, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+                    } else if let sessionId {
                         try await client.openTerminal(
                             hostId: hostId, sessionId: sessionId, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+                    } else {
+                        throw HerderError.Local(detail: "No session or account selected.")
                     }
                 }
                 self.stream = stream
@@ -77,7 +84,7 @@ final class TerminalConnection {
     }
 
     /// The emulator for this shell, wired to it on first use.
-    func view(client: Client, sessionId: SessionId) -> SwiftTerm.TerminalView {
+    func view(client: Client, sessionId: SessionId?) -> SwiftTerm.TerminalView {
         if let emulator { return emulator }
         let view = SwiftTerm.TerminalView(frame: .zero)
         let delegate = EmulatorDelegate(connection: self, client: client, sessionId: sessionId)
@@ -215,10 +222,10 @@ struct TerminalPane: View {
 }
 
 /// The emulator for one connection, with its state over it while it connects or after it ends.
-private struct TerminalSurface: View {
+struct TerminalSurface: View {
     let connection: TerminalConnection
     let client: Client
-    let sessionId: SessionId
+    let sessionId: SessionId?
 
     var body: some View {
         EmulatorView(connection: connection, client: client, sessionId: sessionId)
@@ -230,11 +237,19 @@ private struct TerminalSurface: View {
                 case .attached:
                     EmptyView()
                 case .exited(let code):
-                    notice(code.map { "The shell exited with \($0)." } ?? "The shell exited.")
+                    notice(accountExitMessage(code))
                 case .failed(let reason):
                     notice(reason)
                 }
             }
+    }
+
+    private func accountExitMessage(_ code: Int32?) -> String {
+        if connection.account != nil {
+            return code == 0 ? "Login finished. Check the account list for confirmation."
+                : "Login did not complete. Check the terminal output."
+        }
+        return code.map { "The shell exited with \($0)." } ?? "The shell exited."
     }
 
     private func notice(_ text: String) -> some View {
@@ -254,9 +269,9 @@ private struct TerminalSurface: View {
 final class EmulatorDelegate: NSObject, @preconcurrency TerminalViewDelegate {
     unowned let connection: TerminalConnection
     let client: Client
-    let sessionId: SessionId
+    let sessionId: SessionId?
 
-    init(connection: TerminalConnection, client: Client, sessionId: SessionId) {
+    init(connection: TerminalConnection, client: Client, sessionId: SessionId?) {
         self.connection = connection
         self.client = client
         self.sessionId = sessionId
@@ -300,7 +315,7 @@ final class EmulatorDelegate: NSObject, @preconcurrency TerminalViewDelegate {
 private struct EmulatorView: NSViewRepresentable {
     let connection: TerminalConnection
     let client: Client
-    let sessionId: SessionId
+    let sessionId: SessionId?
 
     func makeNSView(context: Context) -> NSView {
         // A plain container, so the kept emulator can move into each new one.
@@ -321,7 +336,7 @@ private struct EmulatorView: NSViewRepresentable {
 private struct EmulatorView: UIViewRepresentable {
     let connection: TerminalConnection
     let client: Client
-    let sessionId: SessionId
+    let sessionId: SessionId?
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
