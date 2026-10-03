@@ -1,4 +1,4 @@
-//! The local control socket `herder pair` and `herder recover` talk to, at
+//! The local control socket `herder pair` and `herder fork` talk to, at
 //! `<data_dir>/control.sock`.
 //!
 //! Only this user can reach it: the data dir is private to them. Each connection carries one
@@ -23,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
-use crate::vault::Link;
-use crate::vault::recover;
+use crate::session::SessionManager;
+use crate::session::fork;
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "control.sock";
@@ -35,10 +35,10 @@ const MAX_REQUEST: u64 = 64 * 1024;
 /// Time a request gets to arrive, and to be answered.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Time a recovery gets to be answered: it reads the vault and fetches from `origin`.
-const RECOVER_TIMEOUT: Duration = Duration::from_secs(600);
+/// Time a fork gets to be answered: it may read the vault and fetch from `origin`.
+const FORK_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// What `herder pair` and `herder recover` ask the daemon.
+/// What `herder pair` and `herder fork` ask the daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -61,8 +61,8 @@ pub enum Request {
         /// The device.
         device_id: DeviceId,
     },
-    /// Recover a session from the vault onto this host (`herder recover`).
-    Recover(recover::Request),
+    /// Fork a session onto this host (`herder fork`).
+    Fork(fork::Request),
 }
 
 /// The daemon's answer.
@@ -78,8 +78,8 @@ pub enum Response {
     },
     /// The device was unpaired and disconnected.
     Revoked,
-    /// The session was recovered onto this host.
-    Recovered(recover::Outcome),
+    /// The session was forked onto this host.
+    Forked(fork::Forked),
     /// The request failed.
     Error {
         /// Why.
@@ -125,16 +125,15 @@ pub struct DeviceInfo {
     pub device_role: DeviceRole,
 }
 
-/// What the daemon tells `herder pair` about itself, and how it recovers sessions.
+/// What the daemon tells `herder pair` about itself, and how it forks sessions.
 #[derive(Clone)]
 pub struct Daemon {
     /// SHA-256 of its TLS certificate.
     pub fingerprint: String,
     /// The address its WebSocket server is bound to.
     pub listen: SocketAddr,
-    /// The host's link to its vault, which recovers sessions from it; `None` on the vault
-    /// itself.
-    pub link: Option<Arc<Link>>,
+    /// Where forks go on; `None` on the vault, which runs no sessions.
+    pub sessions: Option<SessionManager>,
     /// Whether it is a vault, the only daemon hosts pair with.
     pub vault: bool,
 }
@@ -202,24 +201,16 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
     Ok(())
 }
 
-async fn recover(request: recover::Request, daemon: &Daemon) -> Response {
-    let recovery = match daemon.link.as_deref().map(Link::recovery).transpose() {
-        Ok(recovery) => recovery.flatten(),
-        Err(err) => {
-            return Response::Error {
-                message: format!("{err:#}"),
-            };
-        }
-    };
-    let Some(recovery) = recovery else {
+async fn fork(request: fork::Request, daemon: &Daemon) -> Response {
+    let Some(sessions) = &daemon.sessions else {
         return Response::Error {
-            message: "this daemon has no [vault] to recover sessions from".to_owned(),
+            message: "the vault runs no sessions; fork on a host".to_owned(),
         };
     };
-    match recovery.recover(request).await {
-        Ok(outcome) => Response::Recovered(outcome),
-        Err(err) => Response::Error {
-            message: format!("{err:#}"),
+    match sessions.fork(request).await {
+        Ok(forked) => Response::Forked(forked),
+        Err(error) => Response::Error {
+            message: error.message,
         },
     }
 }
@@ -262,7 +253,7 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             },
             Err(err) => failed(err),
         },
-        Request::Recover(request) => recover(request, daemon).await,
+        Request::Fork(request) => fork(request, daemon).await,
     }
 }
 
@@ -288,7 +279,7 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
         )
     })?;
     let timeout = match request {
-        Request::Recover(_) => RECOVER_TIMEOUT,
+        Request::Fork(_) => FORK_TIMEOUT,
         _ => TIMEOUT,
     };
     stream.set_read_timeout(Some(timeout))?;
@@ -385,7 +376,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
-            link: None,
+            sessions: None,
             vault: false,
         };
         let shutdown = CancellationToken::new();
@@ -427,15 +418,14 @@ mod tests {
             device_id: DeviceId::new("nope"),
         };
         assert!(matches!(ask(revoke).await.unwrap(), Response::Error { .. }));
-        let recover = Request::Recover(recover::Request {
+        let fork = Request::Fork(fork::Request {
             session_id: herder_protocol::SessionId::new("s1"),
             account_id: None,
-            force: false,
         });
-        let Response::Error { message } = ask(recover).await.unwrap() else {
+        let Response::Error { message } = ask(fork).await.unwrap() else {
             panic!("expected a refusal");
         };
-        assert!(message.contains("no [vault]"), "{message}");
+        assert!(message.contains("fork on a host"), "{message}");
         shutdown.cancel();
         server.await.unwrap();
     }
@@ -447,7 +437,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
-            link: None,
+            sessions: None,
             vault: true,
         };
         let pair_host = Request::PairHost {

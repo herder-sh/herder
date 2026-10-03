@@ -1,7 +1,7 @@
-//! Recovering a session from a dead host: host A runs a session and dies mid-turn, host B
-//! recovers it from the vault, images included, and goes on with it, and A, back again, keeps its copy
-//! read-only. Hosts and vault run in process over TLS on localhost, each on its own runtime so
-//! killing one drops every task at once, as a killed process would.
+//! Forking a session: host A runs a session that is mid-turn, host B forks it from the vault,
+//! images included, and goes on with the fork, while A's session stays as it is; A forks it
+//! too, from its own journal. Hosts and vault run in process over TLS on localhost, each on its
+//! own runtime.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,8 +13,9 @@ use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::config::VaultConfig;
+use herder_daemon::session::fork::Forks;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::recover::{Recovery, Request};
+use herder_daemon::vault::fork::FromVault;
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
@@ -104,8 +105,8 @@ impl Vault {
         }
     }
 
-    /// Where a host replicates to, pairing as `user` with a fresh client code: recovering
-    /// reads the vault.
+    /// Where a host replicates to, pairing as `user` with a fresh client code: forking
+    /// another host's session reads the vault.
     fn config(&self, user: &str) -> VaultConfig {
         VaultConfig {
             pairing_code: Some(self.auth.mint(user, None, PAIRING_TTL).unwrap().code),
@@ -162,11 +163,10 @@ impl Adapter for Seeds {
 }
 
 /// A host daemon: the fake provider on one account, a clone of the project, checkpoints, a
-/// replicator and recovery.
+/// replicator and forks.
 struct HostDaemon {
     runtime: Runtime,
     sessions: SessionManager,
-    recovery: Arc<Recovery>,
     repo: PathBuf,
     seeds: Arc<Mutex<Vec<Vec<String>>>>,
 }
@@ -255,24 +255,24 @@ impl HostDaemon {
                     host: me.clone(),
                     sessions: sessions.clone(),
                     changed,
-                    data_dir: dir.clone(),
                 };
                 tokio::spawn(replicator.run(shutdown));
-                let recovery = Arc::new(Recovery {
-                    vault,
-                    device: Replicator::device_key(&dir).unwrap(),
-                    host: me,
-                    sessions: sessions.clone(),
-                    data_dir: dir,
-                });
-                (sessions, recovery)
+                sessions
+                    .fork_from(Forks {
+                        host: me.id,
+                        vault: Some(FromVault {
+                            vault,
+                            device: Replicator::device_key(&dir).unwrap(),
+                        }),
+                    })
+                    .unwrap();
+                sessions
             })
         };
-        let (sessions, recovery) = started.await;
+        let sessions = started.await;
         Self {
             runtime,
             sessions,
-            recovery,
             repo,
             seeds,
         }
@@ -336,14 +336,26 @@ impl HostDaemon {
         images
     }
 
-    async fn recover(
-        &self,
-        request: Request,
-    ) -> anyhow::Result<herder_daemon::vault::recover::Outcome> {
-        let recovery = Arc::clone(&self.recovery);
-        self.runtime
-            .run(async move { recovery.recover(request).await })
+    /// Forks a session onto this host as a client's `fork_session` does; returns the fork.
+    async fn fork(&self, session_id: &SessionId) -> SessionId {
+        let forked = self
+            .handle(CommandBody::ForkSession {
+                session_id: session_id.clone(),
+                account_id: None,
+            })
             .await
+            .unwrap();
+        let CommandResult::SessionForked {
+            session_id: fork,
+            forked_from,
+            ..
+        } = forked
+        else {
+            panic!("expected a fork, got {forked:?}");
+        };
+        assert_eq!(forked_from, *session_id);
+        assert_ne!(fork, *session_id);
+        fork
     }
 
     async fn journal(&self, session_id: &SessionId) -> Vec<Event> {
@@ -432,7 +444,7 @@ fn status(journal: &[Event]) -> Option<SessionStatus> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_first() {
+async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     let tmp = tempfile::tempdir().unwrap();
     let (a_dir, b_dir, c_dir) = (
         tmp.path().join("a"),
@@ -442,12 +454,12 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
     clones(tmp.path(), &[&a_dir, &b_dir, &c_dir]);
     let vault = Vault::start(&tmp.path().join("vault")).await;
 
-    // Host A: a first turn completes and is checkpointed to origin, a second is cut short.
+    // Host A: a first turn completes and is checkpointed to origin, a second is still running.
     let a = HostDaemon::start(
         &a_dir,
         "host-a",
         "a-account",
-        "recover_a.jsonl",
+        "fork_a.jsonl",
         vault.config("a"),
     )
     .await;
@@ -511,15 +523,10 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
         &b_dir,
         "host-b",
         "b-account",
-        "recover_b.jsonl",
+        "fork_b.jsonl",
         vault.config("b"),
     )
     .await;
-    let request = Request {
-        session_id: session_id.clone(),
-        account_id: None,
-        force: false,
-    };
     let vault_db = tmp.path().join("vault/vault.db");
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
@@ -536,54 +543,54 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // A is online: no recovery without force.
-    let refused = b.recover(request.clone()).await.unwrap_err().to_string();
-    assert!(refused.contains("host-a (host-a) is online"), "{refused}");
-    // Host C, paired host-only, replicates but cannot read the vault to recover anything.
+    // Host C, paired host-only, replicates but cannot read the vault to fork anything.
     let c = HostDaemon::start(
         &c_dir,
         "host-c",
         "c-account",
-        "recover_b.jsonl",
+        "fork_b.jsonl",
         vault.host_config("host-c"),
     )
     .await;
-    let forced = Request {
-        force: true,
-        ..request.clone()
-    };
-    let refused = c.recover(forced).await.unwrap_err();
+    let refused = c
+        .handle(CommandBody::ForkSession {
+            session_id: session_id.clone(),
+            account_id: None,
+        })
+        .await
+        .unwrap_err();
     assert!(
-        format!("{refused:#}").contains("paired as a host"),
-        "{refused:#}"
+        refused.message.contains("paired as a host"),
+        "{}",
+        refused.message
     );
     c.runtime.kill().await;
 
-    // A dies mid-turn; B recovers the session once the vault shows A offline.
-    a.runtime.kill().await;
-    let deadline = tokio::time::Instant::now() + TIMEOUT;
-    let outcome = loop {
-        match b.recover(request.clone()).await {
-            Ok(outcome) => break outcome,
-            Err(err) if err.to_string().contains("is online") => {
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "A never went offline"
-                );
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            Err(err) => panic!("recovery failed: {err:#}"),
-        }
+    // A is up and mid-turn: B forks its session all the same.
+    let forked = b
+        .handle(CommandBody::ForkSession {
+            session_id: session_id.clone(),
+            account_id: None,
+        })
+        .await
+        .unwrap();
+    let CommandResult::SessionForked {
+        session_id: fork,
+        account_id,
+        forked_from,
+        from_host_id,
+    } = forked
+    else {
+        panic!("expected a fork, got {forked:?}");
     };
-    assert_eq!(outcome.session.session_id, session_id);
-    assert_eq!(outcome.origin.host_id, HostId::new("host-a"));
-    assert_eq!(outcome.session.account_id, AccountId::new("b-account"));
+    assert_ne!(fork, session_id);
     assert_eq!(
-        outcome.session.checkpoint.as_deref(),
-        Some(checkpoint.as_str())
+        (account_id.as_str(), &forked_from, from_host_id.as_str()),
+        ("b-account", &session_id, "host-a")
     );
-    // The worktree is as A left it, minus what checkpoints never take.
-    let b_worktree = PathBuf::from(&outcome.session.worktree);
+    // The worktree is as A's checkpoint left it, minus what checkpoints never take, on the
+    // fork's own branch.
+    let b_worktree = b.sessions.worktree(&fork).await.unwrap();
     assert!(b_worktree.starts_with(&b_dir));
     assert_eq!(
         std::fs::read_to_string(b_worktree.join("notes.txt")).unwrap(),
@@ -591,22 +598,33 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
     );
     assert!(!b_worktree.join(".env").exists());
     assert_eq!(git(&b_worktree, &["status", "--porcelain"]), "?? notes.txt");
-    assert_eq!(
-        git(&b_worktree, &["branch", "--show-current"]),
-        outcome.session.branch
-    );
-    // Its journal is A's, at the same seqs, with B's paths, then the switch to B's account
-    // and the turn A left open, failed.
-    let b_journal = b.journal(&session_id).await;
-    let a_held = &b_journal[..a_journal.len()];
-    for (b_event, a_event) in a_held.iter().zip(&a_journal).skip(1) {
-        assert_eq!(b_event, a_event);
+    // Its journal is A's, under the fork's id, with B's paths and branch, then the switch to
+    // B's account and the turn A had open, failed.
+    let b_journal = b.journal(&fork).await;
+    assert!(b_journal.iter().all(|event| event.session_id == fork));
+    let copied = &b_journal[..a_journal.len()];
+    for (b_event, a_event) in copied.iter().zip(&a_journal).skip(1) {
+        assert_eq!((b_event.seq, &b_event.body), (a_event.seq, &a_event.body));
     }
-    let EventBody::SessionCreated { repo, worktree, .. } = &a_held[0].body else {
-        panic!("the journal starts with {:?}", a_held[0].body);
+    let EventBody::SessionCreated {
+        repo,
+        worktree,
+        branch,
+        ..
+    } = &copied[0].body
+    else {
+        panic!("the journal starts with {:?}", copied[0].body);
     };
+    assert_eq!(&git(&b_worktree, &["branch", "--show-current"]), branch);
+    assert_ne!(
+        branch,
+        &git(
+            &a.sessions.worktree(&session_id).await.unwrap(),
+            &["branch", "--show-current"]
+        )
+    );
     assert_eq!(repo, b.repo.to_str().unwrap());
-    assert_eq!(worktree, &outcome.session.worktree);
+    assert_eq!(worktree, b_worktree.to_str().unwrap());
     let tail: Vec<_> = b_journal[a_journal.len()..]
         .iter()
         .map(|e| &e.body)
@@ -620,113 +638,74 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
     assert_eq!(status(&b_journal), Some(SessionStatus::NeedsYou));
     // B answers for the image A's prompt carried.
     assert_eq!(
-        b.images(&session_id, &b_journal).await,
+        b.images(&fork, &b_journal).await,
         std::slice::from_ref(&image)
     );
 
-    // It goes on on B, its CLI seeded with the transcript.
-    b.prompt(&session_id, "Third.").await.unwrap();
-    b.journal_until(&session_id, |body| {
+    // The fork goes on on B, its CLI seeded with the transcript.
+    b.prompt(&fork, "Third.").await.unwrap();
+    b.journal_until(&fork, |body| {
         matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "b-turn-1")
     })
     .await;
-    // Settled once idle: nothing more is journaled.
-    let deadline = tokio::time::Instant::now() + TIMEOUT;
-    let b_journal = loop {
-        let journal = b.journal(&session_id).await;
-        if status(&journal) == Some(SessionStatus::Idle) {
-            break journal;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "B never settled");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
     let seeds = b.seeds.lock().unwrap().clone();
     assert_eq!(seeds.len(), 1);
     assert_eq!(seeds[0][..3], ["First.", "One.", "Second."]);
 
-    // The vault shows it on B, which replicates it on from where A stopped.
+    // A's session is as it was: still its own, still in its turn, and the vault lists both.
+    let a_now = a.journal(&session_id).await;
+    assert_eq!(a_now[..a_journal.len()], a_journal[..]);
+    assert_eq!(status(&a_now), Some(SessionStatus::Running));
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
-        let store = VaultStore::open(&vault_db).unwrap();
-        let fleet = store.fleet().unwrap();
-        let head = fleet.iter().find(|head| head.session_id == session_id);
-        if head.is_some_and(|head| {
-            head.host_id == Some(HostId::new("host-b")) && head.head_seq == b_journal.len() as u64
-        }) {
-            assert_eq!(fleet.len(), 1);
-            assert_eq!(
-                store
-                    .recovered_to(&HostId::new("host-a"), &session_id)
-                    .unwrap(),
-                Some(HostId::new("host-b"))
-            );
+        let fleet = VaultStore::open(&vault_db).unwrap().fleet().unwrap();
+        let hosts: Vec<_> = fleet
+            .iter()
+            .map(|head| (head.session_id.clone(), head.host_id.clone()))
+            .collect();
+        if hosts.len() == 2 {
+            assert!(hosts.contains(&(session_id.clone(), Some(HostId::new("host-a")))));
+            assert!(hosts.contains(&(fork.clone(), Some(HostId::new("host-b")))));
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the vault never showed the session on B: {fleet:?}"
+            "the vault never listed the fork: {hosts:?}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // A comes back: its copy turns read-only, and the session stays B's.
-    let a = HostDaemon::start(
-        &a_dir,
-        "host-a",
-        "a-account",
-        "recover_a.jsonl",
-        vault.config("a"),
-    )
-    .await;
-    let a_journal = a
-        .journal_until(&session_id, |body| {
-            matches!(
-                body,
-                EventBody::SessionStatusChanged {
-                    retry_at: None,
-                    status: SessionStatus::Moved
-                }
-            )
-        })
-        .await;
-    assert_eq!(status(&a_journal), Some(SessionStatus::Moved));
-    let refused = a.prompt(&session_id, "Fourth.").await.unwrap_err();
-    assert_eq!(refused.code, ErrorCode::Conflict);
-    assert!(
-        refused.message.contains("recovered on another host"),
-        "{}",
-        refused.message
+    // A forks its own session from its own journal and checkpoint, then again: each fork is
+    // a session of its own.
+    let local = a.fork(&session_id).await;
+    let again = a.fork(&session_id).await;
+    assert_ne!(local, again);
+    let a_fork = a.sessions.worktree(&local).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(a_fork.join("notes.txt")).unwrap(),
+        "half done\n"
     );
-    assert!(a.sessions.worktree(&session_id).await.is_err());
-    // A's copy reaches the vault but is never shown.
-    let deadline = tokio::time::Instant::now() + TIMEOUT;
-    loop {
-        let store = VaultStore::open(&vault_db).unwrap();
-        let held = store
-            .records(&HostId::new("host-a"), &session_id, 0, usize::MAX)
-            .unwrap();
-        if held.len() == a_journal.len() {
-            let fleet = store.fleet().unwrap();
-            assert_eq!(fleet.len(), 1);
-            assert_eq!(fleet[0].host_id, Some(HostId::new("host-b")));
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "A's copy never reached the vault"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    // There is no move back.
-    let back = a.recover(request.clone()).await.unwrap_err().to_string();
-    assert!(back.contains("is online"), "{back}");
-    let again = a
-        .recover(Request {
-            force: true,
-            ..request
+    let local_journal = a.journal(&local).await;
+    assert_eq!(status(&local_journal), Some(SessionStatus::NeedsYou));
+    assert_eq!(a.images(&local, &local_journal).await, [image]);
+    assert_eq!(
+        status(&a.journal(&session_id).await),
+        Some(SessionStatus::Running)
+    );
+
+    // A is gone: B forks its session from the vault alone.
+    a.runtime.kill().await;
+    let after_death = b.fork(&session_id).await;
+    assert_ne!(after_death, fork);
+    assert!(b.sessions.worktree(&after_death).await.is_ok());
+
+    // A session neither the host nor its vault holds is not found.
+    let missing = b
+        .handle(CommandBody::ForkSession {
+            session_id: SessionId::new("nope"),
+            account_id: None,
         })
         .await
-        .unwrap_err()
-        .to_string();
-    assert!(again.contains("never moves back"), "{again}");
+        .unwrap_err();
+    assert_eq!(missing.code, ErrorCode::NotFound, "{missing:?}");
 }

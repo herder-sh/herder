@@ -43,6 +43,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         terminals: Vec::new(),
         resources: None,
         session_usage: Default::default(),
+        vault: None,
     }
 }
 
@@ -224,9 +225,9 @@ pub fn vault() -> App {
     app
 }
 
-/// `s2` of [`vault`] after `devbox` recovered it and `laptop` came back: the vault lists it
+/// `s2` of [`vault`] after `devbox` took it over and `laptop` came back: the vault lists it
 /// on `devbox`, and `laptop`, paired too, lists its own copy `moved`. Both hosts are online.
-pub fn recovered() -> App {
+pub fn moved() -> App {
     let mut app = vault();
     let mut vault = app.machines[0].clone();
     for host in &mut vault.hosts {

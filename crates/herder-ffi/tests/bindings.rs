@@ -146,6 +146,23 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         "{entries:?}"
     );
 
+    // A daemon is no vault, and one that does not fork refuses to.
+    let machine = client.machines().into_iter().next().unwrap();
+    assert_eq!(machine.vault, None);
+    let refused = block_on(client.send(
+        host.clone(),
+        CommandBody::ForkSession {
+            session_id: herder_protocol::SessionId::new("gone"),
+            account_id: None,
+        },
+    ))
+    .unwrap_err();
+    let HerderError::Rejected { info } = refused else {
+        panic!("expected a refusal, got {refused:?}");
+    };
+    assert_eq!(info.code, herder_protocol::ErrorCode::Unsupported);
+    assert!(info.message.contains("does not fork"), "{}", info.message);
+
     // Backgrounded and back, the client syncs again.
     client.suspend();
     client.wake();

@@ -62,8 +62,8 @@ pub enum List {
     Machines,
     /// The switch dialog's accounts; a second tap switches.
     Switch,
-    /// The recover dialog's hosts.
-    Recover,
+    /// The fork dialog's hosts.
+    Fork,
     /// The sidebar's attention list, by [`App::attention`] index; a tap opens the session.
     Attention,
     /// The open session's tasks tab, by [`App::tasks`] index; a second tap opens the task.
@@ -337,8 +337,8 @@ impl App {
                 self.focus = Focus::Tasks;
                 self.task_cursor = at;
             }
-            List::Recover => {
-                if let Some(dialog) = &mut self.recover {
+            List::Fork => {
+                if let Some(dialog) = &mut self.fork {
                     dialog.selected = at;
                 }
             }
@@ -361,7 +361,7 @@ impl App {
             || self.machine_panel.is_some()
             || self.account_screen.is_some()
             || self.switch.is_some()
-            || self.recover.is_some()
+            || self.fork.is_some()
             || self.terminals.is_some()
             || self.compose.dialog.is_some()
             || self.compose.palette.is_some()

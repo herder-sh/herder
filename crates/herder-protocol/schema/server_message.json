@@ -60,6 +60,20 @@
       ]
     },
     {
+      "description": "What a vault holds and how each host's replication stands; sent by a vault only, after\nhello and whenever it changes, at most once every two seconds.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "vault_status"
+        }
+      },
+      "$ref": "#/$defs/VaultStatus",
+      "required": [
+        "type"
+      ]
+    },
+    {
       "description": "Every project with a clone on this daemon's host; sent after hello and whenever any of\nit changes. Clients merge the lists of all their daemons by `project_id`.",
       "type": "object",
       "properties": {
@@ -662,6 +676,39 @@
             "type",
             "path",
             "entries"
+          ]
+        },
+        {
+          "description": "A session was forked onto this daemon's host, answering `fork_session`; the fork is in\nthe session list.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "The account it runs on.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "forked_from": {
+              "description": "The session it was forked from.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "from_host_id": {
+              "description": "The host that session ran on.",
+              "$ref": "#/$defs/HostId"
+            },
+            "session_id": {
+              "description": "The new session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_forked"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "account_id",
+            "forked_from",
+            "from_host_id"
           ]
         },
         {
@@ -1740,6 +1787,50 @@
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "HostReplication": {
+      "description": "How far one host's replication to a vault got.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "description": "Journal events of the host held.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "host_id": {
+          "description": "The host.",
+          "$ref": "#/$defs/HostId"
+        },
+        "lag_ms": {
+          "description": "How far the vault was behind the host when it last stored a batch from it: the age of\nthat batch's newest event, in milliseconds. Absent until the host sent a batch since\nthe vault started.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "last_event_at": {
+          "description": "When the newest event held of the host happened, by the host's clock; absent until one\nis held.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "sessions": {
+          "description": "Sessions of the host held, without copies another host took over.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "host_id",
+        "sessions",
+        "events"
+      ]
+    },
     "HostResources": {
       "description": "Load and admission state of the daemon's host.",
       "type": "object",
@@ -2615,6 +2706,43 @@
     "UserId": {
       "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "VaultStatus": {
+      "description": "What a vault holds, in total and per host.",
+      "type": "object",
+      "properties": {
+        "events": {
+          "description": "Journal events held, of every copy.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "hosts": {
+          "description": "Each host that replicated here, ordered by host id; the same hosts as\n[`ServerMessage::Hosts`].",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostReplication"
+          }
+        },
+        "sessions": {
+          "description": "Sessions the vault lists: every host's, without copies another host took over.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "storage_bytes": {
+          "description": "Size of the vault's database, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sessions",
+        "events",
+        "storage_bytes",
+        "hosts"
+      ]
     }
   }
 }

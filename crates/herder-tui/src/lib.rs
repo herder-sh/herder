@@ -24,6 +24,7 @@ mod chat;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod fork;
 mod fuzzy;
 mod inbox;
 mod machines;
@@ -35,7 +36,6 @@ mod palette;
 mod projects;
 mod prompt;
 mod prs;
-mod recover;
 mod session;
 mod settings;
 mod switch;

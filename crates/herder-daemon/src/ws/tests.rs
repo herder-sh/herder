@@ -999,6 +999,34 @@ async fn members_fetch_project_icons_afresh_on_every_resend() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forking_a_session_is_for_owners_only() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let fork = || CommandBody::ForkSession {
+        session_id: SessionId::new("s1"),
+        account_id: None,
+    };
+    let ServerMessage::CommandRejected { error, .. } = member.command("c1", fork()).await else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
+    assert!(error.message.contains("owners only"), "{}", error.message);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    // The owner's reaches the backend.
+    let ServerMessage::CommandRejected { error, .. } = owner.command("c2", fork()).await else {
+        panic!("expected the test backend's rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");

@@ -1,4 +1,4 @@
-# The session on the host that dies: a first turn, whose prompt carries an image, completes; the second is cut short when the host dies.
+# The session to fork: a first turn, whose prompt carries an image, completes; the second is still running.
 {"emit": {"type": "model_changed", "model": "fake-model-1"}}
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpzY3JlZW5zaG90"}]}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
