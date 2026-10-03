@@ -9,6 +9,8 @@ struct SessionView: View {
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
     @State private var switching = false
+    @State private var linking = false
+    @State private var typedPR = ""
 
     var body: some View {
         let model = fleet.sessions[key]
@@ -16,6 +18,9 @@ struct SessionView: View {
         let blocks = model.map(Transcript.blocks) ?? []
         VStack(spacing: 0) {
             header(model, summary)
+            if let model, !model.prs.isEmpty {
+                PRStrip(fleet: fleet, key: key, prs: model.prs)
+            }
             Rectangle().fill(Theme.stroke).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -41,6 +46,14 @@ struct SessionView: View {
         }
         .background(Theme.background)
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
+        .alert("Link a pull request", isPresented: $linking) {
+            TextField("123, #123 or a link", text: $typedPR)
+            Button("Link") {
+                if let number = prNumber(in: typedPR) { Task { await fleet.linkPR(number, to: key) } }
+                typedPR = ""
+            }
+            Button("Cancel", role: .cancel) { typedPR = "" }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -75,6 +88,7 @@ struct SessionView: View {
                         Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
                     }
                     Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
+                    Button("Link Pull Request…", systemImage: "link") { linking = true }
                     Divider()
                     Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
                 } label: {

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case home, machines
+    case home, pullRequests, machines
     case project(String)
 }
 

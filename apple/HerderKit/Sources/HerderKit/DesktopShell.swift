@@ -62,6 +62,14 @@ struct DesktopShell: View {
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
+        case .pullRequests:
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+                Pane(title: "Pull Requests", subtitle: "Linked to sessions") {
+                    PullRequestsView(fleet: fleet, selection: $session)
+                } actions: {
+                    EmptyView()
+                }
+            }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists)) {
                 MachinesView(fleet: fleet, sheet: $sheet)
@@ -228,6 +236,9 @@ struct Sidebar: View {
 
             SidebarRow(title: "Home", symbol: "tray.full", badge: lists.requests.count, attention: true,
                        selected: item == .home) { select(.home) }
+            SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
+                       badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
+                       selected: item == .pullRequests) { select(.pullRequests) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
 
@@ -302,6 +313,7 @@ private struct SidebarRail: View {
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("tray.full", "Home", .home, badge: lists.requests.count)
+            rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
             ForEach(lists.projects) { project in
                 rail("shippingbox", project.name, .project(project.id), badge: 0)
