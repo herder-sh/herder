@@ -3,8 +3,7 @@ import SwiftTerm
 import SwiftUI
 
 /// One shell on a machine, attached through the client core's terminal stream: output feeds
-/// the emulator, keystrokes and size changes go back. Releasing it detaches; the shell keeps
-/// running on the machine.
+/// the emulator, keystrokes and size changes go back. The shell keeps running on the machine.
 @MainActor
 @Observable
 final class TerminalConnection {
@@ -20,16 +19,10 @@ final class TerminalConnection {
     private(set) var state: State = .connecting
     @ObservationIgnored private var stream: TerminalStream?
     @ObservationIgnored private var pump: Task<Void, Never>?
-    /// The emulator; output that arrives before it exists waits here.
-    @ObservationIgnored weak var view: SwiftTerm.TerminalView? {
-        didSet {
-            guard let view, !pending.isEmpty else { return }
-            view.feed(byteArray: pending[...])
-            pending = []
-        }
-    }
-    /// Output that arrived before the emulator existed.
-    @ObservationIgnored var pending: [UInt8] = []
+    /// The emulator, made once and kept with the connection, so leaving the pane and coming
+    /// back shows the same screen.
+    @ObservationIgnored private var emulator: SwiftTerm.TerminalView?
+    @ObservationIgnored private var delegate: EmulatorDelegate?
 
     init(hostId: HostId, terminalId: TerminalId?) {
         self.hostId = hostId
@@ -56,7 +49,7 @@ final class TerminalConnection {
                 while let event = await stream.next(), !Task.isCancelled {
                     switch event {
                     case .output(let data): feed(Array(data))
-                    case .reattached: view?.getTerminal().resetToInitialState()
+                    case .reattached: emulator?.getTerminal().resetToInitialState()
                     case .closed(let code):
                         state = .exited(code)
                         return
@@ -83,15 +76,26 @@ final class TerminalConnection {
         stream?.resize(cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
     }
 
-    /// Lets go of the shell; it keeps running on the machine.
-    func detach() {
-        pump?.cancel()
-        pump = nil
-        stream = nil
+    /// The emulator for this shell, wired to it on first use.
+    func view(client: Client, sessionId: SessionId) -> SwiftTerm.TerminalView {
+        if let emulator { return emulator }
+        let view = SwiftTerm.TerminalView(frame: .zero)
+        let delegate = EmulatorDelegate(connection: self, client: client, sessionId: sessionId)
+        view.terminalDelegate = delegate
+        view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        view.nativeBackgroundColor = .black
+        #if os(macOS)
+        view.nativeForegroundColor = NSColor(white: 0.92, alpha: 1)
+        #else
+        view.nativeForegroundColor = UIColor(white: 0.92, alpha: 1)
+        #endif
+        emulator = view
+        self.delegate = delegate
+        return view
     }
 
     private func feed(_ bytes: [UInt8]) {
-        if let view { view.feed(byteArray: bytes[...]) } else { pending += bytes }
+        emulator?.feed(byteArray: bytes[...])
     }
 }
 
@@ -109,13 +113,33 @@ private func withTimeout<T: Sendable>(seconds: Double, _ body: @escaping @Sendab
     }
 }
 
+/// A session's shells and which one is shown. The fleet keeps it for as long as the app runs:
+/// a shell's stream cannot be attached twice, so hiding the pane must not let it go.
+@MainActor
+@Observable
+final class SessionTerminals {
+    var connections: [TerminalConnection] = []
+    var selected = 0
+}
+
+extension Fleet {
+    /// The shells of a session, made the first time its terminal pane opens.
+    func terminals(of key: SessionKey) -> SessionTerminals {
+        if let terminals = sessionTerminals[key] { return terminals }
+        let terminals = SessionTerminals()
+        sessionTerminals[key] = terminals
+        return terminals
+    }
+}
+
 /// A session's shells: one tab per shell the machine has open for it, a new one, and the
 /// emulator for the selected tab. Owners only, as the daemon enforces.
 struct TerminalPane: View {
     let fleet: Fleet
     let key: SessionKey
-    @State private var connections: [TerminalConnection] = []
-    @State private var selected = 0
+
+    private var store: SessionTerminals { fleet.terminals(of: key) }
+    private var connections: [TerminalConnection] { store.connections }
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
@@ -130,39 +154,39 @@ struct TerminalPane: View {
             } else {
                 VStack(spacing: 0) {
                     tabs
-                    if connections.indices.contains(selected) {
-                        TerminalSurface(connection: connections[selected], client: fleet.client, sessionId: key.sessionId)
-                            .id(ObjectIdentifier(connections[selected]))
+                    if connections.indices.contains(store.selected) {
+                        let connection = connections[store.selected]
+                        TerminalSurface(connection: connection, client: fleet.client, sessionId: key.sessionId)
+                            .id(ObjectIdentifier(connection))
                     }
                 }
             }
         }
         .background(Color.black)
         .onAppear(perform: load)
-        .onDisappear { connections.forEach { $0.detach() } }
     }
 
     private var tabs: some View {
         HStack(spacing: 4) {
             ForEach(Array(connections.enumerated()), id: \.offset) { index, connection in
-                Button { selected = index } label: {
+                Button { store.selected = index } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "terminal").imageScale(.small)
                         Text("Shell \(index + 1)")
                         if case .exited = connection.state { Text("exited").foregroundStyle(Theme.tertiary) }
                     }
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(index == selected ? Theme.text : Theme.secondary)
+                    .foregroundStyle(index == store.selected ? Theme.text : Theme.secondary)
                     .padding(.horizontal, 10)
                     .frame(height: 28)
-                    .background(index == selected ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
+                    .background(index == store.selected ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
             Button {
-                connections.append(TerminalConnection(hostId: key.hostId, terminalId: nil))
-                selected = connections.count - 1
+                store.connections.append(TerminalConnection(hostId: key.hostId, terminalId: nil))
+                store.selected = store.connections.count - 1
             } label: {
                 Image(systemName: "plus").font(.caption.weight(.bold)).foregroundStyle(Theme.secondary)
                     .frame(width: 28, height: 28).contentShape(.rect)
@@ -170,7 +194,7 @@ struct TerminalPane: View {
             .buttonStyle(.plain)
             .help("New shell in the session's worktree")
             Spacer()
-            Text("Closing the pane detaches; shells keep running.").font(.caption2).foregroundStyle(Theme.tertiary)
+            Text("Shells keep running on the machine.").font(.caption2).foregroundStyle(Theme.tertiary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -184,9 +208,9 @@ struct TerminalPane: View {
             if case .shell(let sessionId) = terminal.purpose, sessionId == key.sessionId { return terminal.terminalId }
             return nil
         } ?? []
-        connections = shells.map { TerminalConnection(hostId: key.hostId, terminalId: $0) }
-        if connections.isEmpty { connections = [TerminalConnection(hostId: key.hostId, terminalId: nil)] }
-        selected = 0
+        store.connections = shells.map { TerminalConnection(hostId: key.hostId, terminalId: $0) }
+        if store.connections.isEmpty { store.connections = [TerminalConnection(hostId: key.hostId, terminalId: nil)] }
+        store.selected = 0
     }
 }
 
@@ -227,8 +251,8 @@ private struct TerminalSurface: View {
 
 /// SwiftTerm's emulator, wired to a connection: it connects once it knows its size.
 @MainActor
-private final class EmulatorDelegate: NSObject, @preconcurrency TerminalViewDelegate {
-    let connection: TerminalConnection
+final class EmulatorDelegate: NSObject, @preconcurrency TerminalViewDelegate {
+    unowned let connection: TerminalConnection
     let client: Client
     let sessionId: SessionId
 
@@ -278,22 +302,20 @@ private struct EmulatorView: NSViewRepresentable {
     let client: Client
     let sessionId: SessionId
 
-    func makeCoordinator() -> EmulatorDelegate {
-        EmulatorDelegate(connection: connection, client: client, sessionId: sessionId)
-    }
-
-    func makeNSView(context: Context) -> SwiftTerm.TerminalView {
-        let view = SwiftTerm.TerminalView(frame: .zero)
-        view.terminalDelegate = context.coordinator
-        view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        view.nativeBackgroundColor = .black
-        view.nativeForegroundColor = NSColor(white: 0.92, alpha: 1)
-        connection.view = view
+    func makeNSView(context: Context) -> NSView {
+        // A plain container, so the kept emulator can move into each new one.
+        let container = NSView()
+        let view = connection.view(client: client, sessionId: sessionId)
+        view.removeFromSuperview()
+        view.translatesAutoresizingMaskIntoConstraints = true
+        view.autoresizingMask = [.width, .height]
+        view.frame = container.bounds
+        container.addSubview(view)
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
-        return view
+        return container
     }
 
-    func updateNSView(_ view: SwiftTerm.TerminalView, context: Context) {}
+    func updateNSView(_ container: NSView, context: Context) {}
 }
 #else
 private struct EmulatorView: UIViewRepresentable {
@@ -301,21 +323,17 @@ private struct EmulatorView: UIViewRepresentable {
     let client: Client
     let sessionId: SessionId
 
-    func makeCoordinator() -> EmulatorDelegate {
-        EmulatorDelegate(connection: connection, client: client, sessionId: sessionId)
-    }
-
-    func makeUIView(context: Context) -> SwiftTerm.TerminalView {
-        let view = SwiftTerm.TerminalView(frame: .zero)
-        view.terminalDelegate = context.coordinator
-        view.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        view.nativeBackgroundColor = .black
-        view.nativeForegroundColor = UIColor(white: 0.92, alpha: 1)
-        connection.view = view
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        let view = connection.view(client: client, sessionId: sessionId)
+        view.removeFromSuperview()
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.frame = container.bounds
+        container.addSubview(view)
         DispatchQueue.main.async { _ = view.becomeFirstResponder() }
-        return view
+        return container
     }
 
-    func updateUIView(_ view: SwiftTerm.TerminalView, context: Context) {}
+    func updateUIView(_ container: UIView, context: Context) {}
 }
 #endif
