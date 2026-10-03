@@ -196,18 +196,23 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     .await;
 
     // Which machine is a vault, and where the host backs up: nowhere yet.
-    assert_eq!(
-        send(&owner, &vault_id, CommandBody::GetVaultLink).await,
-        CommandResult::VaultLink {
-            is_vault: true,
-            vault: None
-        }
-    );
+    // The vault says how full its disk is, for the fleet view's warning.
+    let linked = send(&owner, &vault_id, CommandBody::GetVaultLink).await;
+    let CommandResult::VaultLink {
+        is_vault: true,
+        vault: None,
+        volume: Some(volume),
+    } = linked
+    else {
+        panic!("expected the vault's answer, got {linked:?}");
+    };
+    assert!(volume.total_bytes > 0 && volume.used_bytes <= volume.total_bytes);
     assert_eq!(
         send(&owner, &host_id, CommandBody::GetVaultLink).await,
         CommandResult::VaultLink {
             is_vault: false,
-            vault: None
+            vault: None,
+            volume: None
         }
     );
 
@@ -302,6 +307,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
                 address: on_vault.addresses[0].clone(),
                 fingerprint: on_vault.fingerprint.clone(),
             }),
+            volume: None,
         }
     );
     // The host paired as a host-only device.

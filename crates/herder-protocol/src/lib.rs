@@ -22,7 +22,8 @@ mod server;
 mod types;
 
 pub use attachment::{
-    Attachment, IMAGE_MEDIA_TYPES, Image, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES,
+    Attachment, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_IMAGE_BYTES,
+    MAX_PROMPT_IMAGE_BYTES,
 };
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
@@ -44,8 +45,8 @@ pub use replication::{
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
-    LinkedVault, Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose,
-    UsageWindow,
+    HostUsage, LinkedVault, Role, ServerHello, ServerMessage, SessionHead, Terminal,
+    TerminalPurpose, UsageWindow, VaultVolume,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 

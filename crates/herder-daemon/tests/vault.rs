@@ -15,9 +15,9 @@ use herder_client_core::auth::client_config;
 use herder_client_core::{Client, Error, Machine, SessionSubscription};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
-use herder_daemon::config::VaultConfig;
+use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
+use herder_daemon::vault::{Admin, LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
@@ -82,6 +82,7 @@ struct Vault {
     addr: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
+    admin: Admin,
 }
 
 impl Vault {
@@ -108,28 +109,39 @@ impl Vault {
                     id: HostId::new("vault"),
                     name: "vault".into(),
                 };
-                let server = Server::new(tls, Arc::clone(&auth), store, host, liveness);
-                started.send((addr, fingerprint, auth)).ok().unwrap();
+                let server = Server::new(
+                    tls,
+                    Arc::clone(&auth),
+                    store,
+                    host,
+                    liveness,
+                    Retention::default(),
+                );
+                started
+                    .send((addr, fingerprint, auth, server.admin()))
+                    .ok()
+                    .unwrap();
                 server.run(listener, CancellationToken::new()).await;
             }
         });
-        let (addr, fingerprint, auth) = ready.await.unwrap();
+        let (addr, fingerprint, auth, admin) = ready.await.unwrap();
         Self {
             runtime,
             addr,
             fingerprint,
             auth,
+            admin,
         }
     }
 
     /// Where a host replicates to, pairing as a host-only device with a fresh code, as
-    /// `herder pair --host` mints it.
+    /// `herder pair --host` mints it; images are not backed up.
     fn config(&self) -> VaultConfig {
-        VaultConfig {
-            address: self.addr.to_string(),
-            fingerprint: self.fingerprint.clone(),
-            pairing_code: Some(self.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
-        }
+        VaultConfig::new(
+            self.addr.to_string(),
+            self.fingerprint.clone(),
+            Some(self.auth.mint_host("devbox", PAIRING_TTL).unwrap().code),
+        )
     }
 
     /// A pairing link for a client of `user`, as `herder pair` on the vault prints it.
@@ -430,7 +442,11 @@ async fn a_vault_restarted_mid_stream_gets_the_rest() {
     }
     let vault = Vault::start(&vault_dir, 0).await;
     let addr = vault.addr;
-    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    let config = VaultConfig {
+        attachments: true,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     while Vault::held(&vault_dir).is_empty() {
         assert!(tokio::time::Instant::now() < deadline, "nothing replicated");
@@ -670,6 +686,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
         host_name: "devbox".into(),
         build: "test".into(),
         pairing_code: None,
+        attachments_cap: None,
     });
     let text = serde_json::to_string(&hello).unwrap();
     ws.send(Message::text(text)).await.unwrap();
@@ -809,6 +826,7 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         host_name: "macbook".into(),
         build: "test".into(),
         pairing_code: None,
+        attachments_cap: None,
     });
     ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
         .await
@@ -842,5 +860,219 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     client.pair(vault.pairing_link("alice")).await.unwrap();
     let machine = machine_when(&client, |m| m.sessions.len() == 3).await;
     assert_eq!(machine.hosts.len(), 1);
+    vault.runtime.kill().await;
+}
+
+/// The image of `session` with bytes `data`, as a host sends it.
+fn image_message(session: &str, id: &str, data: &[u8]) -> HostMessage {
+    HostMessage::Attachment(herder_protocol::AttachmentData {
+        session_id: SessionId::new(session),
+        attachment: Attachment {
+            attachment_id: AttachmentId::new(id),
+            media_type: "image/png".into(),
+            size: data.len() as u64,
+        },
+        data: herder_protocol::Bytes(data.to_vec()),
+    })
+}
+
+/// The next message the vault sends on `ws`.
+async fn next_message(ws: &mut Ws) -> VaultMessage {
+    loop {
+        match tokio::time::timeout(TIMEOUT, ws.next()).await.unwrap() {
+            Some(Ok(Message::Text(text))) => return serde_json::from_str(&text).unwrap(),
+            Some(Ok(Message::Close(_))) | None => panic!("the vault closed the connection"),
+            Some(Ok(_)) => {}
+            Some(Err(err)) => panic!("{err}"),
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn images_are_not_backed_up_unless_the_host_says_so_and_never_fail_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    seed_images(&host_dir, 2, 2);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    // Off by default: the journals name four images, and the vault holds none.
+    let images = images(&host_dir, &vault_dir);
+    assert_eq!(images.len(), 4);
+    assert!(images.iter().all(|(held, _)| held.is_none()));
+    host.runtime.kill().await;
+    // A client asking for one is told it was not backed up.
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    let vault_id = client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .unwrap()
+        .host_id;
+    let fetch = CommandBody::GetAttachment {
+        session_id: SessionId::new("s1"),
+        attachment_id: AttachmentId::new("img1x0"),
+    };
+    let Err(Error::Rejected { info }) = client.send(vault_id, fetch).await else {
+        panic!("expected a refusal");
+    };
+    assert_eq!(info.code, ErrorCode::NotFound);
+    assert!(
+        info.message
+            .starts_with(herder_protocol::IMAGE_NOT_BACKED_UP),
+        "{}",
+        info.message
+    );
+
+    // A host that sends images anyway, or one bigger than its cap, is not failed for it: the
+    // image is dropped, and the batch after it acknowledged.
+    for (cap, size, kept) in [
+        (None, 20, false),
+        (Some(64), 100, false),
+        (Some(64), 20, true),
+    ] {
+        let mut ws = dial(&vault, &host_dir).await;
+        let hello = HostMessage::Hello(HostHello {
+            replication_version: REPLICATION_VERSION,
+            host_id: host_id(),
+            host_name: "devbox".into(),
+            build: "test".into(),
+            pairing_code: None,
+            attachments_cap: cap,
+        });
+        ws.send(Message::text(serde_json::to_string(&hello).unwrap()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            next_message(&mut ws).await,
+            VaultMessage::Hello(_)
+        ));
+        let mut data = PNG.to_vec();
+        data.resize(size, b'x');
+        let image = image_message("s1", &format!("sent{size}"), &data);
+        ws.send(Message::text(serde_json::to_string(&image).unwrap()))
+            .await
+            .unwrap();
+        let next = journal(&host_dir)[&SessionId::new("s1")].clone();
+        let batch = HostMessage::Batch(herder_protocol::Batch {
+            session_id: SessionId::new("s1"),
+            events: next,
+        });
+        ws.send(Message::text(serde_json::to_string(&batch).unwrap()))
+            .await
+            .unwrap();
+        let VaultMessage::Ack(cursor) = next_message(&mut ws).await else {
+            panic!("expected an ack");
+        };
+        assert_eq!(cursor.session_id.as_str(), "s1");
+        let held = VaultStore::open(vault_dir.join("vault.db"))
+            .unwrap()
+            .attachment(
+                &host_id(),
+                &SessionId::new("s1"),
+                &AttachmentId::new(format!("sent{size}")),
+            )
+            .unwrap();
+        assert_eq!(held.is_some(), kept, "cap {cap:?}, {size} bytes");
+    }
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hosts_images_stay_within_its_cap_and_the_hosts_list_shows_usage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 1);
+    // Ten images of 14 bytes each, the oldest first; room for three.
+    seed_images(&host_dir, 2, 5);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let config = VaultConfig {
+        attachments: true,
+        attachments_cap: 3 * 14,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let held: Vec<bool> = images(&host_dir, &vault_dir)
+        .into_iter()
+        .map(|(held, kept)| {
+            assert_eq!(kept.len(), 14);
+            held.is_some()
+        })
+        .collect();
+    let mut newest = vec![false; 7];
+    newest.extend([true; 3]);
+    assert_eq!(held, newest);
+
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client.pair(vault.pairing_link("alice")).await.unwrap();
+    let machine = machine_when(&client, |m| {
+        m.hosts
+            .first()
+            .and_then(|host| host.usage.as_ref())
+            .is_some_and(|usage| usage.attachment_bytes == 3 * 14)
+    })
+    .await;
+    assert_eq!(
+        machine.hosts[0].usage,
+        Some(herder_protocol::HostUsage {
+            sessions: 2,
+            attachment_bytes: 3 * 14,
+            attachments_cap: Some(3 * 14),
+        })
+    );
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forgotten_host_leaves_nothing_on_the_vault() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client.pair(vault.pairing_link("alice")).await.unwrap();
+    machine_when(&client, |m| m.sessions.len() == 2).await;
+
+    // Never while it is online.
+    let refused = vault.admin.forget_host("devbox").await.unwrap_err();
+    assert!(format!("{refused:#}").contains("online"), "{refused:#}");
+    host.runtime.kill().await;
+    machine_when(&client, |m| m.hosts.iter().all(|h| !h.online)).await;
+    let missing = vault.admin.forget_host("laptop").await.unwrap_err();
+    assert!(
+        format!("{missing:#}").contains("no host laptop"),
+        "{missing:#}"
+    );
+
+    let forgot = vault.admin.forget_host("devbox").await.unwrap();
+    assert_eq!(
+        (forgot.host_id, forgot.sessions, forgot.devices),
+        (host_id(), 2, 1)
+    );
+    assert!(Vault::held(&vault_dir).is_empty());
+    // Its device is unpaired; the client's stays.
+    let devices = vault.auth.devices();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].0.role, DeviceRole::Client);
+    machine_when(&client, |m| m.hosts.is_empty() && m.sessions.is_empty()).await;
     vault.runtime.kill().await;
 }

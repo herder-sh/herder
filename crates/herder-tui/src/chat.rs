@@ -184,6 +184,7 @@ impl App {
                 },
                 origin: Origin::Image {
                     key: key.clone(),
+                    attachment_id: image.attachment_id.clone(),
                     name: format!(
                         "herder-{}.{}",
                         image.attachment_id,

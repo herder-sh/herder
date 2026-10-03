@@ -15,6 +15,10 @@ pub const IMAGE_MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif"
 /// Most bytes one image may have.
 pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
+/// How a daemon's error for an image the vault never got, or evicted, begins, so a session
+/// recovered from the vault lacks it; clients show it in place of the image.
+pub const IMAGE_NOT_BACKED_UP: &str = "image not backed up";
+
 /// Most bytes all images of one prompt may have together; keeps a `send_prompt` well within a
 /// WebSocket frame.
 pub const MAX_PROMPT_IMAGE_BYTES: usize = 10 * 1024 * 1024;

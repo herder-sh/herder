@@ -2,7 +2,8 @@
 //! and the first message, which tells a host from a client. A client is served by the
 //! daemon's client server over the fleet view; a host gets the hellos, then its messages are
 //! handled one at a time: an image is durable before the next is read, and a batch is
-//! acknowledged once durable.
+//! acknowledged once durable. An image the host's cap leaves no room for is dropped, never
+//! failing the connection.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::store::{self, Outcome};
+use super::store::{self, Kept, Outcome};
 use super::{BUILD, Shared, blocking};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Ws};
@@ -132,10 +133,11 @@ async fn serve(
         .map(|(device, _)| device.device_id)
         .collect();
     let host = hello.host_id.clone();
+    let cap = hello.attachments_cap;
     let bound = {
         let (device, host, name) = (identity.device_id.clone(), host.clone(), hello.host_name);
         blocking(&shared.store, move |store| {
-            store.bind(&device, &host, &name, &paired)
+            store.bind(&device, &host, &name, cap, &paired)
         })
         .await?
     };
@@ -165,7 +167,7 @@ async fn serve(
     let presence = shared.fleet.presence();
     presence.connected(&host);
     shared.fleet.refresh_hosts().await;
-    let result = receive(ws, shared, &host).await;
+    let result = receive(ws, shared, &host, cap).await;
     let seen = presence.disconnected(&host);
     let device = identity.device_id.clone();
     blocking(&shared.store, move |store| store.seen(&device, seen)).await?;
@@ -174,9 +176,10 @@ async fn serve(
     result
 }
 
-/// Handles the host's messages once it is connected, until another host recovers one of its
-/// sessions: then the connection is dropped, so the host reconnects and stops that session.
-async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
+/// Handles the host's messages once it is connected, keeping at most `cap` bytes of its
+/// images, until another host recovers one of its sessions: then the connection is dropped,
+/// so the host reconnects and stops that session.
+async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) -> Result<()> {
     let mut superseded = shared.superseded.subscribe();
     loop {
         let frame = tokio::select! {
@@ -212,6 +215,7 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
                 .await?;
                 shared.supersede(superseded);
                 shared.fleet.refresh().await;
+                shared.fleet.refresh_hosts().await;
                 continue;
             }
             Ok(HostMessage::Batch(batch)) => {
@@ -256,13 +260,28 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
                 }
             }
             Ok(HostMessage::Attachment(image)) => {
-                let host = host.clone();
+                let (owner, session_id) = (host.clone(), image.session_id.clone());
+                let attachment_id = image.attachment.attachment_id.clone();
                 let stored = blocking(&shared.store, move |store| {
-                    store.put_attachment(&host, &image)
+                    store.put_attachment(&owner, &image, cap)
                 })
                 .await;
                 match stored {
-                    Ok(()) => continue,
+                    Ok(Kept::Stored { evicted }) => {
+                        if evicted > 0 {
+                            debug!(host_id = %host, evicted, "oldest images evicted for a new one");
+                        }
+                        shared.fleet.refresh_hosts().await;
+                        continue;
+                    }
+                    Ok(Kept::Off) => {
+                        debug!(host_id = %host, %session_id, %attachment_id, "image dropped: this host backs up no images");
+                        continue;
+                    }
+                    Ok(Kept::OverCap) => {
+                        warn!(host_id = %host, %session_id, %attachment_id, "image dropped: bigger than this host's cap");
+                        continue;
+                    }
                     Err(err) => match err.downcast::<store::BadBatch>() {
                         Ok(bad_batch) => return fail(ws, bad(&bad_batch.to_string())).await,
                         Err(err) => return Err(err),

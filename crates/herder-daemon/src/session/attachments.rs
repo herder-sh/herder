@@ -8,8 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use herder_protocol::{
-    Attachment, AttachmentId, Bytes, ErrorCode, ErrorInfo, IMAGE_MEDIA_TYPES, Image,
-    MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES, SessionId,
+    Attachment, AttachmentId, Bytes, ErrorCode, ErrorInfo, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP,
+    Image, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES, SessionId,
 };
 
 use super::error;
@@ -157,9 +157,11 @@ pub(super) async fn fetch(
             }
         }
     }
+    // Kept before its prompt is journaled, so one a prompt names is missing only from a
+    // session recovered from a vault that never got it.
     Err(error(
         ErrorCode::NotFound,
-        format!("session {session_id} has no image {attachment_id}"),
+        format!("{IMAGE_NOT_BACKED_UP}: session {session_id} has no image {attachment_id} here"),
     ))
 }
 
@@ -266,7 +268,10 @@ mod tests {
         let missing = async |session: &str, id: &str| {
             let session = SessionId::new(session);
             let fetched = fetch(tmp.path(), &session, &AttachmentId::new(id)).await;
-            fetched.unwrap_err().code
+            let error = fetched.unwrap_err();
+            // As a session recovered without it shows it.
+            assert!(error.message.starts_with(IMAGE_NOT_BACKED_UP), "{error:?}");
+            error.code
         };
         assert_eq!(
             missing("s2", kept[0].attachment_id.as_str()).await,

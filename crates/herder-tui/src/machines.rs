@@ -7,11 +7,12 @@
 //! printed, or type its address, fingerprint and code; check the fingerprint; pair. Pasting a
 //! link anywhere in the TUI opens the dialog at that check.
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 
 use herder_client_core::Machine;
 use herder_client_core::PairingUri;
-use herder_protocol::HostId;
+use herder_protocol::{HostId, VaultVolume};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::accounts::{self, AddAccount};
@@ -39,6 +40,8 @@ pub struct MachinePanel {
     pub backup: Option<Backup>,
     /// Where each machine this client owns backs up, as it last said.
     pub links: Links,
+    /// How full each vault's disk is, as it said with its link when the panel opened.
+    pub volumes: HashMap<HostId, VaultVolume>,
 }
 
 /// What the panel does to the selected machine.

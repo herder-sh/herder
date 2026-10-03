@@ -12,11 +12,11 @@ use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
     ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
-    EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image, Item, ItemBody, ItemId,
-    LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider,
-    PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
-    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
-    UsageWindow, UserId,
+    EventBody, FailoverSettings, FleetHost, HostId, HostResources, HostUsage, Image, Item,
+    ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project,
+    ProjectId, Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead,
+    SessionId, SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -597,6 +597,7 @@ pub enum CommandResult {
     VaultLink {
         is_vault: bool,
         vault: Option<LinkedVault>,
+        volume: Option<VaultVolume>,
     },
     HostPairing {
         code: String,
@@ -642,6 +643,22 @@ pub struct FleetHost {
     pub host_name: String,
     pub online: bool,
     pub last_seen: Timestamp,
+    // Defaults to nil so Swift and Kotlin code building a `FleetHost` need not name it.
+    #[uniffi(default)]
+    pub usage: Option<HostUsage>,
+}
+
+#[uniffi::remote(Record)]
+pub struct HostUsage {
+    pub sessions: u32,
+    pub attachment_bytes: u64,
+    pub attachments_cap: Option<u64>,
+}
+
+#[uniffi::remote(Record)]
+pub struct VaultVolume {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
 }
 
 #[uniffi::remote(Enum)]

@@ -52,6 +52,17 @@
         "type": {
           "type": "string",
           "const": "hosts"
+        },
+        "volume": {
+          "description": "How full the vault's disk is; absent when the vault cannot tell.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VaultVolume"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1727,6 +1738,17 @@
         "online": {
           "description": "Whether the host's replication connection is open. A host silent for the vault's\nliveness timeout is offline; its sessions stay listed, read-only as all on a vault are.",
           "type": "boolean"
+        },
+        "usage": {
+          "description": "What the host's copies take on the vault; absent from a vault that does not say.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostUsage"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1822,6 +1844,37 @@
         "running_turns",
         "max_turns",
         "waiting_turns"
+      ]
+    },
+    "HostUsage": {
+      "description": "What one host's copies take on the vault.",
+      "type": "object",
+      "properties": {
+        "attachment_bytes": {
+          "description": "Bytes of the host's images the vault holds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "attachments_cap": {
+          "description": "Most bytes of images the vault keeps for the host; absent when the host backs up no\nimages.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sessions": {
+          "description": "Sessions of the host the vault holds.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "sessions",
+        "attachment_bytes"
       ]
     },
     "Item": {
@@ -2615,6 +2668,28 @@
     "UserId": {
       "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "VaultVolume": {
+      "description": "The disk the vault keeps its database on.",
+      "type": "object",
+      "properties": {
+        "total_bytes": {
+          "description": "Size of the volume, in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "used_bytes": {
+          "description": "Bytes in use, by the vault or anything else.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_bytes",
+        "used_bytes"
+      ]
     }
   }
 }

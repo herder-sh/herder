@@ -704,6 +704,7 @@ mod tests {
                 host_name: host.into(),
                 online: true,
                 last_seen: Timestamp::now(),
+                usage: None,
             })
             .collect();
         vault.sessions = [("s1", "devbox"), ("s2", "devbox"), ("s3", "laptop")]

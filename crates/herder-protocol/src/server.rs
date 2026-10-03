@@ -154,6 +154,49 @@ pub struct FleetHost {
     /// When the vault last heard from the host; for an online host, as of when it connected
     /// or the list was last sent.
     pub last_seen: Timestamp,
+    /// What the host's copies take on the vault; absent from a vault that does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<HostUsage>,
+}
+
+/// What one host's copies take on the vault.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostUsage {
+    /// Sessions of the host the vault holds.
+    pub sessions: u32,
+    /// Bytes of the host's images the vault holds.
+    pub attachment_bytes: u64,
+    /// Most bytes of images the vault keeps for the host; absent when the host backs up no
+    /// images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments_cap: Option<u64>,
+}
+
+/// The disk the vault keeps its database on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VaultVolume {
+    /// Size of the volume, in bytes.
+    pub total_bytes: u64,
+    /// Bytes in use, by the vault or anything else.
+    pub used_bytes: u64,
+}
+
+impl VaultVolume {
+    /// Share of the volume in use above which clients warn that the vault is filling up.
+    pub const WARN_RATIO: f64 = 0.8;
+
+    /// Share of the volume in use, from 0 to 1.
+    pub fn used_ratio(&self) -> f64 {
+        if self.total_bytes == 0 {
+            return 0.0;
+        }
+        self.used_bytes as f64 / self.total_bytes as f64
+    }
+
+    /// Whether more than [`Self::WARN_RATIO`] of the volume is in use.
+    pub fn nearly_full(&self) -> bool {
+        self.used_ratio() > Self::WARN_RATIO
+    }
 }
 
 /// A user's role on a daemon.
@@ -311,6 +354,10 @@ pub enum CommandResult {
         /// never does.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vault: Option<LinkedVault>,
+        /// How full a vault's disk is, as of the answer; absent from a daemon, and when the
+        /// vault cannot tell.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        volume: Option<VaultVolume>,
     },
     /// A one-time code that pairs a host with this vault to replicate and only that,
     /// answering `pair_vault_host`.
