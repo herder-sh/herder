@@ -25,7 +25,7 @@ struct AgentMessageSource: View {
 
     private var senderLabel: some View {
         HStack(spacing: 4) {
-            Text(fleet.sessions[source]?.title ?? message.senderSessionId)
+            Text(fleet.sessions[source]?.title ?? "Session …\(message.senderSessionId.suffix(6))")
                 .lineLimit(1).truncationMode(.middle)
             Image(systemName: "arrow.up.right")
         }
