@@ -161,6 +161,8 @@ impl App {
         let mut list: Vec<Waiting<'_>> = self
             .sessions
             .iter()
+            // A vault's copy of a session listed live too asks nothing twice.
+            .filter(|(key, _)| !self.shadowed(key))
             .flat_map(|(key, session)| {
                 let approvals = session
                     .approvals
