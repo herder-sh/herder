@@ -159,3 +159,12 @@ struct DraftTests {
         #expect(path.createArguments.projectId == nil)
     }
 }
+
+struct FolderTypingTests {
+    @Test func aTypedPathSplitsIntoTheFolderAndTheNameBeingTyped() {
+        #expect(FolderBrowser.split("~") == ("~", ""))
+        #expect(FolderBrowser.split("~/Proj") == ("~", "Proj"))
+        #expect(FolderBrowser.split("/home/me/Projects/") == ("/home/me/Projects", ""))
+        #expect(FolderBrowser.split("/ho") == ("/", "ho"))
+    }
+}

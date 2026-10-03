@@ -195,6 +195,8 @@ struct ProjectPicker: View {
                             FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
                                 .id(hostId)
                                 .frame(height: 220)
+                                // Another machine's path means nothing here: start at its home.
+                                .onChange(of: hostId) { repo = "" }
                         }
                     }
                     if let addError {
@@ -620,6 +622,8 @@ struct FolderBrowser: View {
     @State private var entries: [DirectoryEntry] = []
     @State private var error: String?
     @State private var loading = false
+    /// The start of a folder name being typed, which the shown folders match.
+    @State private var filter = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -639,7 +643,8 @@ struct FolderBrowser: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(entries.filter(\.isDir), id: \.name) { entry in
+                        ForEach(entries.filter { $0.isDir && (filter.isEmpty || $0.name.lowercased().hasPrefix(filter)) },
+                                id: \.name) { entry in
                             let full = join(path, entry.name)
                             Button {
                                 if entry.isRepo { picked = full } else { open(full) }
@@ -671,14 +676,30 @@ struct FolderBrowser: View {
         }
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-        .task { await load(picked.isEmpty ? path : picked) }
-        // A typed path moves the browser there once the typing pauses.
+        .task { await load(picked.isEmpty ? "~" : picked) }
+        // Typing browses: a path ending in "/" opens that folder; otherwise its folder is
+        // shown, filtered to names starting with what follows the last "/".
         .task(id: picked) {
             let typed = picked.trimmingCharacters(in: .whitespaces)
-            guard typed.hasPrefix("/") || typed.hasPrefix("~"), typed != path, !isEntry(typed) else { return }
-            try? await Task.sleep(for: .milliseconds(400))
-            await load(typed.count > 1 && typed.hasSuffix("/") ? String(typed.dropLast()) : typed, quiet: true)
+            guard typed.hasPrefix("/") || typed.hasPrefix("~"), typed != path, !isEntry(typed) else {
+                filter = ""
+                return
+            }
+            let (folder, start) = FolderBrowser.split(typed)
+            filter = start.lowercased()
+            guard folder != path else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            await load(folder, quiet: true)
         }
+    }
+
+    /// A typed path as the folder to list and the start of a name in it.
+    static func split(_ typed: String) -> (folder: String, start: String) {
+        if typed == "~" { return ("~", "") }
+        if typed.hasSuffix("/") { return (typed.count > 1 ? String(typed.dropLast()) : typed, "") }
+        guard let slash = typed.lastIndex(of: "/") else { return (typed, "") }
+        let folder = slash == typed.startIndex ? "/" : String(typed[..<slash])
+        return (folder, String(typed[typed.index(after: slash)...]))
     }
 
     /// Whether the path is one of the shown folders, picked rather than typed.
