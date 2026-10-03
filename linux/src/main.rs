@@ -5,12 +5,29 @@
 //!   wiring between the client and the window.
 //! - `lists`: the session lists, built from plain [`herder_client_core::Machine`] values and
 //!   what each session's subscription said.
+//! - `session`: one session's transcript and state, folded from its subscription.
 //! - `window`: the main window, drawing the machines and those lists.
+//! - `session_view`, `transcript`, `tools`, `markdown`: the open session, its transcript and
+//!   composer.
+//! - `theme`: the colour tokens and the rules that use them.
 
+#[cfg(test)]
+mod e2e;
 mod lists;
+mod markdown;
+#[cfg(test)]
+mod screenshots;
+mod session;
+mod session_view;
+mod theme;
+mod tools;
+mod transcript;
+#[cfg(test)]
+mod view_tests;
 mod window;
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -42,6 +59,7 @@ fn activate(app: &adw::Application) {
         window.present();
         return;
     }
+    theme::load();
     let window = MainWindow::new(Some(app));
     match open_client() {
         Ok(client) => connect(app, &window, client),
@@ -67,6 +85,33 @@ fn open_client() -> Result<Client, String> {
 /// Shows the client's machines and their sessions as they change, and wires the app actions
 /// to it.
 fn connect(app: &adw::Application, window: &MainWindow, client: Client) {
+    wire(window, &client);
+
+    let reconnect = gio::SimpleAction::new("reconnect", None);
+    let woken = client.clone();
+    reconnect.connect_activate(move |_, _| woken.wake());
+    app.add_action(&reconnect);
+    app.set_accels_for_action("app.reconnect", &["<Control>r"]);
+    app.set_accels_for_action("win.group-by-machine", &["<Control>g"]);
+
+    // A desktop app is not backgrounded; quitting is when the offline cache must be saved.
+    app.connect_shutdown(move |_| client.suspend());
+}
+
+/// Shows the client's machines and their sessions in `window` as they change, and sends the
+/// session view's commands through it.
+fn wire(window: &MainWindow, client: &Client) {
+    let sender = client.clone();
+    window.set_sender(Rc::new(move |host_id, command| {
+        let client = sender.clone();
+        Box::pin(async move {
+            client
+                .send(host_id, command)
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        })
+    }));
     let mut subscriptions = Subscriptions::default();
     let mut refresh = {
         let window = window.clone();
@@ -84,16 +129,6 @@ fn connect(app: &adw::Application, window: &MainWindow, client: Client) {
             refresh();
         }
     });
-
-    let reconnect = gio::SimpleAction::new("reconnect", None);
-    let woken = client.clone();
-    reconnect.connect_activate(move |_, _| woken.wake());
-    app.add_action(&reconnect);
-    app.set_accels_for_action("app.reconnect", &["<Control>r"]);
-    app.set_accels_for_action("win.group-by-machine", &["<Control>g"]);
-
-    // A desktop app is not backgrounded; quitting is when the offline cache must be saved.
-    app.connect_shutdown(move |_| client.suspend());
 }
 
 /// One task per listed session, folding its updates into the window.

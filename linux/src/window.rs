@@ -1,7 +1,8 @@
 //! The main window: the machines in a sidebar, each with its connection state and a vault's
 //! hosts under it, online or offline; and the sessions of the selected one, or of all, grouped
-//! by project or by machine ([`crate::lists`]). Narrow, the sidebar and the list are pages of
-//! one stack and rows show less, as the TUI's compact rows do.
+//! by project or by machine ([`crate::lists`]). Activating a session opens it
+//! ([`crate::session_view`]) over the list. Narrow, the sidebar, the list and the session are
+//! pages of one stack and rows show less, as the TUI's compact rows do.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -13,6 +14,8 @@ use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{CiStatus, Mergeable, PrState, PullRequest, ReviewStatus, SessionStatus};
 
 use crate::lists::{self, Grouping, Lists, Scope, SessionKey, Summary};
+use crate::session::Session;
+use crate::session_view::{Sender, SessionView};
 
 /// Most PRs a row names; the rest are counted.
 const ROW_PRS: usize = 2;
@@ -31,6 +34,10 @@ pub struct MainWindow {
     list: gtk::ListBox,
     error: adw::StatusPage,
     content: adw::NavigationPage,
+    /// The session list, and an open session over it.
+    nav: adw::NavigationView,
+    sessions_page: adw::NavigationPage,
+    session_view: SessionView,
     /// `sessions` or `empty`.
     content_stack: gtk::Stack,
     /// The groups of the session list.
@@ -44,6 +51,8 @@ pub struct MainWindow {
 struct State {
     machines: Vec<Machine>,
     summaries: HashMap<SessionKey, Summary>,
+    /// Every listed session as its events built it, for the session view.
+    sessions: HashMap<SessionKey, Session>,
     /// What each sidebar row selects, in row order.
     scopes: Vec<Scope>,
     scope: Scope,
@@ -128,10 +137,18 @@ impl MainWindow {
         let content_view = adw::ToolbarView::new();
         content_view.add_top_bar(&content_header);
         content_view.set_content(Some(&content_stack));
-        let content = adw::NavigationPage::builder()
+        let sessions_page = adw::NavigationPage::builder()
             .title("Sessions")
             .tag("sessions")
             .child(&content_view)
+            .build();
+        let nav = adw::NavigationView::new();
+        nav.add(&sessions_page);
+        let session_view = SessionView::new();
+        let content = adw::NavigationPage::builder()
+            .title("Sessions")
+            .tag("content")
+            .child(&nav)
             .build();
 
         let split = adw::NavigationSplitView::builder()
@@ -175,6 +192,9 @@ impl MainWindow {
             list,
             error,
             content,
+            nav,
+            sessions_page,
+            session_view,
             content_stack,
             groups,
             by_machine,
@@ -198,6 +218,9 @@ impl MainWindow {
                 Grouping::Projects
             });
         });
+        let opener = this.clone();
+        this.session_view
+            .set_opener(Rc::new(move |key| opener.open(&key)));
         let compact = this.clone();
         narrow.connect_apply(move |_| compact.set_compact(true));
         let wide = this.clone();
@@ -209,6 +232,54 @@ impl MainWindow {
         self.window.present();
     }
 
+    /// Where the session view's commands go.
+    pub fn set_sender(&self, sender: Sender) {
+        self.session_view.set_sender(sender);
+    }
+
+    /// Opens `key`'s session over the list.
+    pub fn open(&self, key: &SessionKey) {
+        if !self.show_session(key) {
+            return;
+        }
+        if self.nav.visible_page().as_ref() != Some(self.session_view.page()) {
+            if self.nav.find_page("session").is_some() {
+                self.nav.pop_to_tag("sessions");
+            }
+            self.nav.push(self.session_view.page());
+        }
+        self.split.set_show_content(true);
+    }
+
+    /// Shows `key`'s session in the session view as it stands; whether it is listed.
+    fn show_session(&self, key: &SessionKey) -> bool {
+        let state = self.state.borrow();
+        let Some(machine) = state.machines.iter().find(|m| m.host_id == key.host_id) else {
+            return false;
+        };
+        if !machine
+            .sessions
+            .iter()
+            .any(|head| head.session_id == key.session_id)
+        {
+            return false;
+        }
+        let empty = Session::default();
+        let session = state.sessions.get(key).unwrap_or(&empty);
+        // The models this app's sessions of the same provider use.
+        let mut recent: Vec<String> = state
+            .sessions
+            .values()
+            .filter(|other| other.provider.is_some() && other.provider == session.provider)
+            .map(|other| other.model.clone())
+            .filter(|model| !model.is_empty())
+            .collect();
+        recent.sort();
+        recent.dedup();
+        self.session_view.show(key, session, machine, recent);
+        true
+    }
+
     /// Redraws from the client's machines, keeping the selection, and drops what the
     /// subscriptions said of sessions no longer listed.
     pub fn show_machines(&self, machines: &[Machine]) {
@@ -217,6 +288,16 @@ impl MainWindow {
             let mut state = self.state.borrow_mut();
             state.machines = machines.to_vec();
             state.summaries.retain(|key, _| listed.contains(key));
+            state.sessions.retain(|key, _| listed.contains(key));
+        }
+        // The open session follows its machine, or closes when no longer listed.
+        if let Some(key) = self.session_view.key()
+            && !self.show_session(&key)
+        {
+            self.session_view.close();
+            if self.nav.find_page("session").is_some() {
+                self.nav.pop_to_tag("sessions");
+            }
         }
         self.sidebar_title.set_subtitle(&summary(machines));
         let scope = self.state.borrow().scope.clone();
@@ -268,6 +349,7 @@ impl MainWindow {
             None => {
                 self.state.borrow_mut().scope = Scope::All;
                 self.content.set_title("Sessions");
+                self.sessions_page.set_title("Sessions");
                 self.show_sessions();
             }
         }
@@ -285,6 +367,9 @@ impl MainWindow {
                         .iter()
                         .any(|head| head.session_id == key.session_id)
             });
+            if listed {
+                state.sessions.entry(key.clone()).or_default().apply(update);
+            }
             listed
                 && state
                     .summaries
@@ -292,6 +377,9 @@ impl MainWindow {
                     .or_default()
                     .apply(update)
         };
+        if self.session_view.key().as_ref() == Some(key) {
+            self.show_session(key);
+        }
         if changed {
             self.show_sessions();
         }
@@ -320,6 +408,7 @@ impl MainWindow {
             title
         };
         self.content.set_title(&title);
+        self.sessions_page.set_title(&title);
         self.show_sessions();
     }
 
@@ -330,6 +419,7 @@ impl MainWindow {
 
     fn set_compact(&self, compact: bool) {
         self.state.borrow_mut().compact = compact;
+        self.session_view.set_compact(compact);
         self.show_sessions();
     }
 
@@ -351,13 +441,72 @@ impl MainWindow {
                 .description(glib::markup_escape_text(&group.description))
                 .build();
             for row in &group.rows {
-                widget.add(&session_row(row, state.compact));
+                let widget_row = session_row(row, state.compact);
+                let opener = self.clone();
+                let key = row.key.clone();
+                widget_row.connect_activated(move |_| opener.open(&key));
+                widget.add(&widget_row);
             }
             self.groups.append(&widget);
         }
         let any = groups.iter().any(|group| !group.rows.is_empty());
         self.content_stack
             .set_visible_child_name(if any { "sessions" } else { "empty" });
+    }
+}
+
+#[cfg(test)]
+impl MainWindow {
+    pub fn set_size(&self, width: i32, height: i32) {
+        self.window.set_default_size(width, height);
+    }
+
+    pub fn root(&self) -> adw::ApplicationWindow {
+        self.window.clone()
+    }
+
+    /// The session row titled `title`.
+    fn row(&self, title: &str) -> Option<adw::ActionRow> {
+        fn find(widget: &gtk::Widget, title: &str) -> Option<adw::ActionRow> {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(row) = widget.downcast_ref::<adw::ActionRow>()
+                    && row.title() == title
+                {
+                    return Some(row.clone());
+                }
+                if let Some(row) = find(&widget, title) {
+                    return Some(row);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        find(self.groups.upcast_ref(), title)
+    }
+
+    pub fn has_row(&self, title: &str) -> bool {
+        self.row(title).is_some()
+    }
+
+    /// Activates the session row titled `title`, as a click does.
+    pub fn activate_row(&self, title: &str) {
+        self.row(title)
+            .expect("the session's row")
+            .emit_by_name::<()>("activated", &[]);
+    }
+
+    pub fn session_view(&self) -> &SessionView {
+        &self.session_view
+    }
+
+    pub fn scroll_to_end(&self) {
+        self.session_view.scroll_to_end();
+    }
+
+    /// Opens the composer's `account`, `model` or `mode` picker.
+    pub fn open_picker(&self, name: &str) -> gtk::Popover {
+        self.session_view.open_picker(name)
     }
 }
 
@@ -390,6 +539,7 @@ fn session_row(row: &lists::SessionRow, compact: bool) -> adw::ActionRow {
     widget.set_use_markup(false);
     widget.set_title(&row.title);
     widget.set_subtitle(&subtitle);
+    widget.set_activatable(true);
     if row.depth > 0 {
         let indent = i32::try_from(row.depth).unwrap_or(i32::MAX / INDENT);
         widget.add_prefix(
