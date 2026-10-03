@@ -11,7 +11,7 @@ the app's Application Support directory.
 
 ## Build
 
-Needs Xcode, rustup and XcodeGen (`brew install xcodegen`).
+Needs Xcode with its Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`, for SwiftTerm), rustup and XcodeGen (`brew install xcodegen`).
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
@@ -35,7 +35,7 @@ The iOS UI test pairs the app on a simulator with a running fake daemon:
 
 ```sh
 cargo run -p herder-ffi --example fake_daemon   # prints the pairing link first
-TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -project apple/herder.xcodeproj \
+TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 

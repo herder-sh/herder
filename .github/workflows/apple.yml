@@ -44,6 +44,8 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
       - name: Build the bindings, the xcframework and the fake daemon
         run: apple/scripts/build-ffi.sh
       - name: Test HerderKit against the fake daemon
@@ -62,13 +64,13 @@ jobs:
           device=$(xcrun simctl list devices available -j |
             jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
-            xcodebuild test -quiet -project apple/herder.xcodeproj -scheme herder-iOS \
+            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
             -destination "platform=iOS Simulator,id=$device"
       - name: Build the iOS app for devices
         run: >-
-          xcodebuild build -quiet -project apple/herder.xcodeproj -scheme herder-iOS
+          xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
           -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO
       - name: Build the macOS app
         run: >-
-          xcodebuild build -quiet -project apple/herder.xcodeproj -scheme herder-macOS
+          xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-macOS
           -destination "generic/platform=macOS" CODE_SIGNING_ALLOWED=NO

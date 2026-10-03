@@ -9,6 +9,7 @@ struct SessionView: View {
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
     @State private var switching = false
+    @State private var showsTerminal = false
     @State private var linking = false
     @State private var typedPR = ""
 
@@ -22,6 +23,9 @@ struct SessionView: View {
                 PRStrip(fleet: fleet, key: key, prs: model.prs)
             }
             Rectangle().fill(Theme.stroke).frame(height: 1)
+            if showsTerminal {
+                TerminalPane(fleet: fleet, key: key)
+            } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true {
@@ -43,8 +47,10 @@ struct SessionView: View {
             if let model {
                 controls(model, summary)
             }
+            }
         }
         .background(Theme.background)
+        .onChange(of: key) { showsTerminal = false }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
         .alert("Link a pull request", isPresented: $linking) {
             TextField("123, #123 or a link", text: $typedPR)
@@ -82,6 +88,16 @@ struct SessionView: View {
                 }
             }
             Spacer()
+            if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
+                Picker("View", selection: $showsTerminal) {
+                    Image(systemName: "text.bubble").tag(false).help("Chat")
+                    Image(systemName: "terminal").tag(true).help("Terminal")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .keyboardShortcut("`", modifiers: .command)
+            }
             if let model, model.state != .archived {
                 Menu {
                     if model.turn != nil {
