@@ -1,7 +1,8 @@
 name: android
 
 # Builds and tests the Compose app in android/, with the AAR it links built from
-# crates/herder-ffi in the same Gradle build, and uploads the debug APK. Runs only when the app
+# crates/herder-ffi in the same Gradle build, and uploads the debug APK and the screenshots the
+# tests take. Runs only when the app
 # or what it builds on changes; the required `ci` check needs no Android SDK.
 
 on:
@@ -65,6 +66,12 @@ jobs:
         with:
           name: herder-android-tests
           path: android/app/build/reports/tests/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: herder-android-screenshots
+          path: android/app/build/outputs/roborazzi/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
