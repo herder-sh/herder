@@ -676,6 +676,7 @@ fn limit_reset_frames() {
                 },
                 herder_protocol::EventBody::ItemAdded {
                     item: herder_protocol::Item {
+                        parent_call_id: None,
                         id: herder_protocol::ItemId::new("replacement"),
                         turn_id: herder_protocol::TurnId::new("retry"),
                         body: herder_protocol::ItemBody::UserMessage {

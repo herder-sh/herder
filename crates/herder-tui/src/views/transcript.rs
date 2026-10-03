@@ -323,6 +323,10 @@ impl<'a> Builder<'a> {
     }
 
     fn item(&mut self, item: &'a Item, streaming: bool) {
+        // Provider-native child transcripts belong under their spawning tool, not in the main chat.
+        if item.parent_call_id.is_some() {
+            return;
+        }
         let ui = self.ui;
         match &item.body {
             ItemBody::UserMessage { text, attachments } => {

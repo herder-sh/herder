@@ -6,6 +6,7 @@ use super::*;
 
 fn item(id: String, turn: usize, body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new(format!("turn-{turn}")),
         body,
@@ -228,4 +229,20 @@ fn budgets_follow_provider_and_model_family() {
     assert_eq!(budget(&Provider::Claude, "claude-opus-5-5[1m]"), 400_000);
     assert_eq!(budget(&Provider::Codex, "gpt-6"), 100_000);
     assert_eq!(budget(&Provider::Other("fake".into()), ""), DEFAULT_BUDGET);
+}
+
+#[test]
+fn child_transcripts_do_not_become_parent_turns_in_handoff() {
+    let root = turn(1, 20);
+    let mut child = item(
+        "child".into(),
+        1,
+        ItemBody::AssistantMessage {
+            text: "Child investigation".into(),
+        },
+    );
+    child.parent_call_id = Some(ItemId::new("1-call"));
+    let mut history = root.clone();
+    history.insert(3, child);
+    assert_eq!(transcript(history, usize::MAX), root);
 }

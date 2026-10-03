@@ -1334,6 +1334,7 @@ impl Actor {
         })
         .await;
         let call = Item {
+            parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::ToolCall {
@@ -1385,6 +1386,7 @@ impl Actor {
         });
         let message = outcome.error_message(&setup.command);
         let result = Item {
+            parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: setup.turn_id.clone(),
             body: ItemBody::ToolResult {
@@ -1647,7 +1649,8 @@ impl Actor {
             AdapterEvent::ItemCompleted { item } => {
                 match &item.body {
                     ItemBody::AssistantMessage { text }
-                        if self.turn.as_ref() == Some(&item.turn_id) =>
+                        if self.turn.as_ref() == Some(&item.turn_id)
+                            && item.parent_call_id.is_none() =>
                     {
                         self.last_reply = Some(text.clone());
                     }
@@ -2016,6 +2019,7 @@ impl Actor {
         attachments: Vec<Attachment>,
     ) {
         let item = Item {
+            parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::UserMessage { text, attachments },

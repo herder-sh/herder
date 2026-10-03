@@ -297,6 +297,7 @@ pub enum ErrorClass {
 
 #[uniffi::remote(Record)]
 pub struct Item {
+    pub parent_call_id: Option<ItemId>,
     pub id: ItemId,
     pub turn_id: TurnId,
     pub body: ItemBody,

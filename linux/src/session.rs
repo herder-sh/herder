@@ -605,6 +605,7 @@ pub mod tests {
     pub fn item(id: &str, body: ItemBody) -> EventBody {
         EventBody::ItemAdded {
             item: Item {
+                parent_call_id: None,
                 id: ItemId::new(id),
                 turn_id: TurnId::new("t1"),
                 body,

@@ -62,7 +62,7 @@ internal fun updateOf(seq: Int, second: Long, vararg bodies: EventBody, streamin
 private fun EventBody.byUser(): Boolean = this is EventBody.ModelSwitched || this is EventBody.AccountSwitched ||
     this is EventBody.ProviderSwitched || this is EventBody.PermissionModeChanged
 
-internal fun added(id: String, turn: String, body: ItemBody): EventBody = EventBody.ItemAdded(Item(id, turn, body))
+internal fun added(id: String, turn: String, body: ItemBody): EventBody = EventBody.ItemAdded(Item(null, id, turn, body))
 
 internal fun toolCall(id: String, turn: String, name: String, input: String) = added(id, turn, ItemBody.ToolCall(name, input))
 
@@ -138,7 +138,7 @@ internal fun sampleSession(stage: Stage): Session {
         Stage.Chat -> session.applied(
             SessionUpdate(
                 events = emptyList(),
-                streaming = listOf(Item("j3", "t2", ItemBody.AssistantMessage("Removing the old `target/` directory, then I'll"))),
+                streaming = listOf(Item(null, "j3", "t2", ItemBody.AssistantMessage("Removing the old `target/` directory, then I'll"))),
             ),
         )
         Stage.Approval -> session.applied(

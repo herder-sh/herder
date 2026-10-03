@@ -1889,6 +1889,17 @@
           "description": "The item.",
           "$ref": "#/$defs/ItemId"
         },
+        "parent_call_id": {
+          "description": "Spawning tool call for provider-native sub-agent content, in the same turn.\nNone identifies the main conversation. This ancestry survives journal replay.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "turn_id": {
           "description": "Turn the item belongs to.",
           "$ref": "#/$defs/TurnId"

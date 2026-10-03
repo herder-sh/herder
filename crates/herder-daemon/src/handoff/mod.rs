@@ -81,6 +81,11 @@ pub fn estimate(items: &[Item]) -> usize {
 /// The journal's `items`, oldest first, condensed to at most `budget` tokens as the module
 /// describes. The result may exceed `budget` only when the opening request alone does.
 pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
+    // Child transcripts are visible history, not turns spoken by the main agent.
+    let items: Vec<Item> = items
+        .into_iter()
+        .filter(|item| item.parent_call_id.is_none())
+        .collect();
     if estimate(&items) <= budget {
         return items;
     }
@@ -105,6 +110,7 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
     }
 
     let note = Item {
+        parent_call_id: None,
         id: ItemId::new(NOTE_ID),
         turn_id: head
             .as_ref()

@@ -85,6 +85,7 @@ fn pr(number: u64, state: PrState) -> PullRequest {
 fn message(text: String) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            parent_call_id: None,
             id: ItemId::new("item"),
             turn_id: TurnId::new("turn"),
             body: ItemBody::UserMessage {
@@ -1038,4 +1039,30 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
     assert_eq!(prompts[0].text, "continue");
     assert!(prompts[0].retry);
     assert_eq!(prompts[0].retry_at, None);
+}
+
+#[test]
+fn nested_item_ancestry_survives_journal_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("nested.db");
+    let session = SessionId::new("nested");
+    let child = EventBody::ItemAdded {
+        item: Item {
+            id: ItemId::new("child-message"),
+            turn_id: TurnId::new("turn"),
+            parent_call_id: Some(ItemId::new("agent-call")),
+            body: ItemBody::AssistantMessage {
+                text: "Child output".into(),
+            },
+        },
+    };
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.append(new_event(&session, 0, created())).unwrap();
+        store.append(new_event(&session, 1, child.clone())).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    let events = store.read_since(&session, 1, usize::MAX).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].body, child);
 }

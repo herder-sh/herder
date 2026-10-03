@@ -82,6 +82,7 @@ pub fn status(status: SessionStatus) -> EventBody {
 
 pub fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new("turn-1"),
         body,
@@ -585,6 +586,7 @@ pub fn with_resources(app: &mut App, host: herder_protocol::HostResources, busy:
 fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
             body: ItemBody::ToolCall {
@@ -599,6 +601,7 @@ fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody
 fn result(call: &str, turn: &str, output: &str) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            parent_call_id: None,
             id: ItemId::new(format!("{call}-result")),
             turn_id: TurnId::new(turn),
             body: ItemBody::ToolResult {
@@ -614,6 +617,7 @@ fn result(call: &str, turn: &str, output: &str) -> EventBody {
 fn turn_item(id: &str, turn: &str, body: ItemBody) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
             body,
@@ -805,6 +809,7 @@ pub fn chat() -> App {
         );
     }
     let streaming = vec![Item {
+        parent_call_id: None,
         id: ItemId::new("a2"),
         turn_id: TurnId::new("turn-2"),
         body: assistant("Removing the old target next: first I check that nothing"),

@@ -65,6 +65,7 @@ fn prompt(text: &str) -> AdapterCommand {
 
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),
         body,
