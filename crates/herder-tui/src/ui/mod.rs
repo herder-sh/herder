@@ -13,6 +13,8 @@
 //! | list | [`list`] | headers, items with a status dot, right-aligned meta, cursor, scrolling |
 //! | input editor | [`input`] | the prompt (`┃` bar, meta line, cap) and one-line fields |
 //! | usage bar | [`usage`] | `█████░░░ 38%` coloured by how full |
+//! | autocomplete | [`popup`] | the `/` command and `@` mention popup over the prompt |
+//! | request panel | [`request`] | an approval or question, inline where the prompt was |
 //!
 //! Spacing is fixed here too: rows start one column in ([`INSET`]), groups sit [`GAP`]
 //! columns apart, and dialogs pad [`dialog::PAD_X`] columns inside their border.
@@ -27,6 +29,8 @@ pub mod glyphs;
 pub mod hints;
 pub mod input;
 pub mod list;
+pub mod popup;
+pub mod request;
 pub mod state;
 pub mod theme;
 pub mod usage;
@@ -158,6 +162,22 @@ pub fn fit<'a>(line: Line<'a>, max: usize, glyphs: &GlyphSet) -> Line<'a> {
         spans.push(Span::styled(glyphs.ellipsis, last_style));
     }
     Line::from(spans).style(line.style)
+}
+
+/// `left` and `right` on one line `max` columns wide, `right` at its end, at least [`GAP`]
+/// apart; `left` is cut to make room, and `right` dropped when there is none.
+pub fn spread<'a>(left: Line<'a>, right: Line<'a>, max: usize, glyphs: &GlyphSet) -> Line<'a> {
+    let right_width = line_width(&right);
+    if right_width == 0 || right_width + GAP > max {
+        return fit(left, max, glyphs);
+    }
+    let left = fit(left, max - right_width - GAP, glyphs);
+    let pad = max - right_width - line_width(&left);
+    let style = left.style;
+    let mut spans = left.spans;
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.extend(right.spans);
+    Line::from(spans).style(style)
 }
 
 /// Sets `style` on every cell of `area`, clipped to `buf`.
