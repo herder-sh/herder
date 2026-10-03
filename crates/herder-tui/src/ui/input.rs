@@ -3,14 +3,14 @@
 //!
 //! - [`Prompt`]: OpenCode's prompt. A bar down the left in the accent while it has focus, the
 //!   text on the panel background, a meta line under it (`account · model · mode`) and a
-//!   half-row cap closing the panel.
+//!   row of padding; the panel is solid to its edges.
 //! - [`Field`]: a one-line field with a label, for dialog searches and forms.
 //!
 //! ```text
 //! ┃ write the docs page too▌
 //! ┃
 //! ┃ claude-main · opus · ask
-//! ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+//! ┃
 //! ```
 
 use ratatui::buffer::Buffer;
@@ -133,27 +133,25 @@ impl<'a, 'b> Prompt<'a, 'b> {
             let row = Rect::new(text.x, panel.bottom() - 1, text.width, 1);
             fit(meta, usize::from(row.width), ui.glyphs).render(row, buf);
         }
-        // The cap: the bar's end, then the panel's lower edge as a half row.
+        // The bottom row: solid panel to the edge, the bar running on. On the terminal's own
+        // background (`ansi`) there is no panel to show it, so the bar ends in a cap.
         let cap = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-        buf[(cap.x, cap.y)]
-            .set_symbol(ui.glyphs.cap_end)
-            .set_style(Style::new().fg(bar_color).bg(theme.background));
-        // On the terminal's own background (`none`), a half block would draw in the text
-        // colour: leave the edge out.
-        let (fill_symbol, fill_color) = if ui.glyphs.cap_fill == "▀" {
-            (
-                (theme.background_panel != Color::Reset).then_some(ui.glyphs.cap_fill),
-                theme.background_panel,
-            )
-        } else {
-            (Some(ui.glyphs.cap_fill), theme.border)
-        };
-        if let Some(symbol) = fill_symbol {
-            for x in cap.x + 1..cap.right() {
-                buf[(x, cap.y)]
-                    .set_symbol(symbol)
-                    .set_style(Style::new().fg(fill_color).bg(theme.background));
+        if theme.background_panel == Color::Reset {
+            buf[(cap.x, cap.y)]
+                .set_symbol(ui.glyphs.cap_end)
+                .set_style(Style::new().fg(bar_color));
+            if ui.glyphs.cap_fill != "▀" {
+                for x in cap.x + 1..cap.right() {
+                    buf[(x, cap.y)]
+                        .set_symbol(ui.glyphs.cap_fill)
+                        .set_style(Style::new().fg(theme.border));
+                }
             }
+        } else {
+            fill(buf, cap, ui.panel());
+            buf[(cap.x, cap.y)]
+                .set_symbol(ui.glyphs.bar)
+                .set_fg(bar_color);
         }
     }
 }

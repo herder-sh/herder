@@ -5,12 +5,12 @@ expression: dump(&buffer)
 |│ write the docs page too, and link it from @README.md                                              |
 |│                                                                                                   |
 |│ claude-main - opus - ask                                                                          |
-|└───────────────────────────────────────────────────────────────────────────────────────────────────|
+|│                                                                                                   |
 |                                                                                                    |
 |│ Write a prompt…                                                                                   |
 |│                                                                                                   |
 |│ claude-main - opus - ask                                                                          |
-|└───────────────────────────────────────────────────────────────────────────────────────────────────|
+|│                                                                                                   |
 |                                                                                                    |
 |                                                                                                    |
 
@@ -24,8 +24,8 @@ expression: dump(&buffer)
  2   1..13  fg=#1c1c1c bg=#f6f7f9
  2  13..26  fg=#6b6f7a bg=#f6f7f9
  2  26..100 fg=#1c1c1c bg=#f6f7f9
- 3   0..1   fg=#2f5bb7 bg=#ffffff
- 3   1..100 fg=#c6cad3 bg=#ffffff
+ 3   0..1   fg=#2f5bb7 bg=#f6f7f9
+ 3   1..100 fg=#1c1c1c bg=#f6f7f9
  4   0..100 fg=#1c1c1c bg=#ffffff
  5   0..1   fg=#c6cad3 bg=#f6f7f9
  5   1..2   fg=#1c1c1c bg=#f6f7f9
@@ -37,6 +37,7 @@ expression: dump(&buffer)
  7   1..13  fg=#1c1c1c bg=#f6f7f9
  7  13..26  fg=#6b6f7a bg=#f6f7f9
  7  26..100 fg=#1c1c1c bg=#f6f7f9
- 8   0..100 fg=#c6cad3 bg=#ffffff
+ 8   0..1   fg=#c6cad3 bg=#f6f7f9
+ 8   1..100 fg=#1c1c1c bg=#f6f7f9
  9   0..100 fg=#1c1c1c bg=#ffffff
 10   0..100 fg=#1c1c1c bg=#ffffff

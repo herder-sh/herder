@@ -169,7 +169,7 @@ impl Gallery {
         .render(inset(next(&mut y, 1)), buf);
         y += 1;
         Line::from(vec![
-            badge::subtle(ui, "QUEUED", theme.warning),
+            badge::subtle(ui, "queued", theme.warning),
             gap(),
             badge::subtle(ui, "open", theme.pr_open),
             gap(),

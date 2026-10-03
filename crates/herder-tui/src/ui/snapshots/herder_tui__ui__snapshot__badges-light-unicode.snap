@@ -3,7 +3,7 @@ source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
 |  PROMPT   NAVIGATE   APPROVAL          |
-|  QUEUED   open   merged   draft        |
+|  queued   open   merged   draft        |
 
  0   0..1   fg=#1c1c1c bg=#ffffff
  0   1..9   fg=#ffffff bg=#2f5bb7 BOLD

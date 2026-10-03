@@ -2,7 +2,9 @@
 //!
 //! - [`solid`]: background-coloured text on a colour, bold. The mode badge (` PROMPT `), and
 //!   anything that must be seen at a glance.
-//! - [`subtle`]: coloured text on the element background. ` QUEUED `, a PR's state, counts.
+//! - [`subtle`]: coloured text on the element background. ` queued `, a PR's state, counts.
+//!
+//! Casing: mode badges are uppercase (` PROMPT `), every status badge lowercase (` queued `).
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -52,7 +54,7 @@ mod tests {
                 ]),
                 line(vec![
                     Span::raw(" "),
-                    subtle(ui, "QUEUED", theme.warning),
+                    subtle(ui, "queued", theme.warning),
                     Span::raw(" "),
                     subtle(ui, "open", theme.pr_open),
                     Span::raw(" "),

@@ -6,12 +6,12 @@ expression: dump(&buffer)
 |┃ @README.md                                 |
 |┃                                            |
 |┃ claude-main · opus · ask                   |
-|╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀|
+|┃                                            |
 |                                             |
 |┃ Write a prompt…                            |
 |┃                                            |
 |┃ claude-main · opus · ask                   |
-|╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀|
+|┃                                            |
 |                                             |
 
  0   0..1   fg=#2f5bb7 bg=#f6f7f9
@@ -26,8 +26,8 @@ expression: dump(&buffer)
  3   1..13  fg=#1c1c1c bg=#f6f7f9
  3  13..26  fg=#6b6f7a bg=#f6f7f9
  3  26..45  fg=#1c1c1c bg=#f6f7f9
- 4   0..1   fg=#2f5bb7 bg=#ffffff
- 4   1..45  fg=#f6f7f9 bg=#ffffff
+ 4   0..1   fg=#2f5bb7 bg=#f6f7f9
+ 4   1..45  fg=#1c1c1c bg=#f6f7f9
  5   0..45  fg=#1c1c1c bg=#ffffff
  6   0..1   fg=#c6cad3 bg=#f6f7f9
  6   1..2   fg=#1c1c1c bg=#f6f7f9
@@ -39,6 +39,6 @@ expression: dump(&buffer)
  8   1..13  fg=#1c1c1c bg=#f6f7f9
  8  13..26  fg=#6b6f7a bg=#f6f7f9
  8  26..45  fg=#1c1c1c bg=#f6f7f9
- 9   0..1   fg=#c6cad3 bg=#ffffff
- 9   1..45  fg=#f6f7f9 bg=#ffffff
+ 9   0..1   fg=#c6cad3 bg=#f6f7f9
+ 9   1..45  fg=#1c1c1c bg=#f6f7f9
 10   0..45  fg=#1c1c1c bg=#ffffff

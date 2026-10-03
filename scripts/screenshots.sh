@@ -21,7 +21,7 @@ HERDER_SCREENSHOTS="$root/docs/screenshots/$todo" HERDER_SCENES="${2:-}" \
 if command -v magick >/dev/null; then
     shopt -s nullglob
     for png in "$root/docs/screenshots/$todo"/*-{45,100,160}-{dark,light}.png; do
-        magick "$png" -resize 50% -colors 128 "PNG8:$png"
+        magick "$png" -resize 50% -dither None -colors 128 "PNG8:$png"
     done
 else
     echo "magick is missing: screenshots stay full size" >&2
