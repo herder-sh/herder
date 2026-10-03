@@ -10,7 +10,8 @@
 //!
 //! - `initialize`, then `session/new` in the session's worktree, run in
 //!   [`Adapter::start`]. A JSON-RPC error there fails the start, classified like a turn error.
-//! - [`AdapterCommand::SendPrompt`] is `session/prompt`. Its `session/update` notifications
+//! - [`AdapterCommand::SendPrompt`] is `session/prompt`: an `image` block per image, then the
+//!   text. Its `session/update` notifications
 //!   become items: agent message and thought chunks stream as `assistant_message` and
 //!   `reasoning` items; a tool call is completed once it starts running, is approved, or
 //!   finishes, and its `completed`/`failed` status becomes a `tool_result`. The prompt's
@@ -28,6 +29,11 @@
 //!   one, which makes model switches native. `session/set_model` is unstable and unreliable in
 //!   OpenCode, so it is not used. A profile with a model flag passes the starting model on the
 //!   command line instead.
+//! - Whether the agent takes images is its `promptCapabilities.image` from `initialize`.
+//!   [`Adapter::accepts_images`] must answer before any start, so it gives the profile's
+//!   [`AgentProfile::images`] until an agent started, then what the latest one advertised. A
+//!   session whose agent turns out to take none still runs a prompt that carries images: each
+//!   becomes a line of text naming it, so the agent knows one was attached.
 //! - [`StartRequest::seed`] is rendered as a transcript in front of the first prompt; ACP has
 //!   no way to insert history.
 //!
@@ -46,6 +52,8 @@ mod schema;
 mod session;
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use herder_protocol::{ErrorClass, TurnError};
 
@@ -66,12 +74,16 @@ pub struct AcpAdapter {
     profile: AgentProfile,
     /// Replays this fixture instead of spawning the agent.
     fixture: Option<PathBuf>,
+    /// Whether the agent takes images: the profile's guess until an agent says in
+    /// `initialize`, then what the latest one said.
+    images: Arc<AtomicBool>,
 }
 
 impl AcpAdapter {
     /// An adapter that spawns the agent `profile` describes.
     pub fn new(profile: AgentProfile) -> Self {
         Self {
+            images: Arc::new(AtomicBool::new(profile.images)),
             profile,
             fixture: None,
         }
@@ -81,6 +93,7 @@ impl AcpAdapter {
     /// every start replays it afresh.
     pub fn replaying(profile: AgentProfile, path: impl Into<PathBuf>) -> Self {
         Self {
+            images: Arc::new(AtomicBool::new(profile.images)),
             profile,
             fixture: Some(path.into()),
         }
@@ -96,6 +109,7 @@ impl Adapter for AcpAdapter {
     fn start(&self, request: StartRequest) -> StartFuture {
         let profile = self.profile.clone();
         let fixture = self.fixture.clone();
+        let images = Arc::clone(&self.images);
         Box::pin(async move {
             let fatal = |message: String| TurnError {
                 class: ErrorClass::Fatal,
@@ -108,7 +122,11 @@ impl Adapter for AcpAdapter {
                 None => Transport::spawn(profile.command(&request))
                     .map_err(|err| fatal(format!("running {}: {err}", profile.program)))?,
             };
-            session::start(&profile, request, transport).await
+            session::start(&profile, request, transport, &images).await
         })
+    }
+
+    fn accepts_images(&self) -> bool {
+        self.images.load(Ordering::Relaxed)
     }
 }

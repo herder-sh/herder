@@ -1,6 +1,6 @@
 //! The Codex adapter, replayed against `codex app-server` recordings in `fixtures/codex`.
 //!
-//! Every fixture but `limit_reached.jsonl` was recorded from the real CLI with
+//! Every fixture but `limit_reached.jsonl` and `image.jsonl` was recorded from the real CLI with
 //! `fixtures/codex/record.py`; each test ends with a clean shutdown, which fails if the adapter
 //! sent anything the recording did not.
 
@@ -11,10 +11,10 @@ use std::time::Duration;
 use herder_adapters::codex;
 use herder_adapters::fixture::{Fixture, Record};
 use herder_adapters::transport::Transport;
-use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
+use herder_adapters::{Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, Timestamp,
-    TurnError, TurnId, UsageWindow,
+    ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
+    Timestamp, TurnError, TurnId, UsageWindow,
 };
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -24,8 +24,9 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The worktree the fixtures were recorded in; replay never touches it.
 const CWD: &str = "/tmp/herder-codex-fixture";
 
-const FIXTURES: [&str; 6] = [
+const FIXTURES: [&str; 7] = [
     "turn",
+    "image",
     "approval",
     "interrupt",
     "limit_reached",
@@ -39,7 +40,7 @@ const TURN_THREAD: &str = "01a0fc7b-3cda-7031-a6b4-7a11c1f09469";
 /// The thread each recording opened.
 fn thread(name: &str) -> &'static str {
     match name {
-        "turn" | "limit_reached" | "resume" => TURN_THREAD,
+        "turn" | "image" | "limit_reached" | "resume" => TURN_THREAD,
         "approval" => "01a0fc7b-51c2-7923-9f3f-644d234f31d0",
         "interrupt" => "01a0fc7b-74b0-7e30-a500-81aa38638e40",
         "seed" => "01a0fc7b-85e5-7f82-a515-5e0075532352",
@@ -237,6 +238,38 @@ async fn turn_streams_the_answer_on_the_switched_model_and_mode() {
             },
             AdapterEvent::TurnCompleted { turn_id: turn() },
         ]
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn a_prompts_images_go_ahead_of_its_text_as_data_urls() {
+    assert!(codex::CodexAdapter::default().accepts_images());
+    let mut session = start("image").await;
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\npng".to_vec()),
+    };
+    for command in [
+        AdapterCommand::SetModel {
+            model: "gpt-6-luna".into(),
+        },
+        AdapterCommand::SetPermissionMode {
+            mode: PermissionMode::ReadOnly,
+        },
+        AdapterCommand::SendPrompt {
+            turn_id: turn(),
+            text: "Reply with the word ok.".into(),
+            images: vec![image],
+        },
+    ] {
+        session.commands.send(command).unwrap();
+    }
+    // The recording only matches a `turn/start` that carries the image.
+    let events = until(&mut session, is_turn_end).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
     );
     shutdown(session).await;
 }

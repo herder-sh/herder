@@ -10,6 +10,9 @@
 
 use std::path::Path;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use herder_protocol::Image;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -38,6 +41,22 @@ pub(super) fn initialize() -> Value {
 #[serde(rename_all = "camelCase")]
 pub(super) struct InitializeResponse {
     pub protocol_version: u16,
+    #[serde(default)]
+    pub agent_capabilities: AgentCapabilities,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AgentCapabilities {
+    #[serde(default)]
+    pub prompt_capabilities: PromptCapabilities,
+}
+
+/// Content a prompt may carry beyond text; ACP agents all take text and resource links.
+#[derive(Default, Deserialize)]
+pub(super) struct PromptCapabilities {
+    #[serde(default)]
+    pub image: bool,
 }
 
 /// `session/new` params.
@@ -78,9 +97,20 @@ pub(super) struct ConfigOptionsResponse {
     pub config_options: Vec<ConfigOption>,
 }
 
-/// `session/prompt` params: one text block.
-pub(super) fn prompt(session_id: &str, text: &str) -> Value {
-    json!({"sessionId": session_id, "prompt": [{"type": "text", "text": text}]})
+/// `session/prompt` params: an `image` block per image, then one text block.
+pub(super) fn prompt(session_id: &str, text: &str, images: &[Image]) -> Value {
+    let blocks: Vec<Value> = images
+        .iter()
+        .map(|image| {
+            json!({
+                "type": "image",
+                "mimeType": image.media_type,
+                "data": STANDARD.encode(&image.data.0),
+            })
+        })
+        .chain([json!({"type": "text", "text": text})])
+        .collect();
+    json!({"sessionId": session_id, "prompt": blocks})
 }
 
 #[derive(Deserialize)]

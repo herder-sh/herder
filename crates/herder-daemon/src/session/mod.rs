@@ -57,8 +57,10 @@
 //! They are checked and kept as files when the prompt arrives ([`attachments`]), journaled as
 //! the attachments of its `user_message`, and handed to the agent with the prompt's text when
 //! its turn starts. `get_attachment` reads one back; it changes nothing, so its answer is not
-//! remembered ([`changes_nothing`]). A transcript replayed into another CLI carries the text
-//! only.
+//! remembered ([`changes_nothing`]). A transcript replayed into another CLI keeps each prompt's
+//! attachments, and the adapter names every image in a line of text: the seed carries no
+//! bytes, and the vault keeps none either, so a recovered session's earlier images are
+//! references only.
 //!
 //! # Checkpoints
 //!

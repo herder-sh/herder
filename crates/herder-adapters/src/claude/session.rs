@@ -928,7 +928,10 @@ fn seed_text(seed: &[Item]) -> Option<String> {
     let entries: Vec<String> = seed
         .iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text, .. } => Some(format!("User: {text}")),
+            ItemBody::UserMessage { text, attachments } => Some(format!(
+                "User: {}",
+                crate::seed_user_text(text, attachments)
+            )),
             ItemBody::AssistantMessage { text } => Some(format!("Assistant: {text}")),
             ItemBody::ToolCall { name, input } => {
                 Some(format!("[Assistant called tool {name} with {input}]"))
@@ -1033,6 +1036,8 @@ mod tests {
 
     #[test]
     fn seed_text_renders_the_transcript() {
+        use herder_protocol::{Attachment, AttachmentId};
+
         let item = |body| Item {
             id: ItemId::new("i"),
             turn_id: TurnId::new("t"),
@@ -1046,7 +1051,11 @@ mod tests {
         let seed = [
             item(ItemBody::UserMessage {
                 text: "Fix it".into(),
-                attachments: Vec::new(),
+                attachments: vec![Attachment {
+                    attachment_id: AttachmentId::new("a1"),
+                    media_type: "image/png".into(),
+                    size: 2048,
+                }],
             }),
             item(ItemBody::ToolCall {
                 name: "Bash".into(),
@@ -1064,7 +1073,7 @@ mod tests {
         assert_eq!(
             seed_text(&seed).unwrap(),
             format!(
-                "{SEED_PREAMBLE}\n\nUser: Fix it\n\n[Assistant called tool Bash with \
+                "{SEED_PREAMBLE}\n\nUser: Fix it\n[image attached: image/png, 2 KB; not part of this replay]\n\n[Assistant called tool Bash with \
                  {{\"command\":\"ls\"}}]\n\n[Tool failed: nope]\n\nAssistant: Done."
             )
         );

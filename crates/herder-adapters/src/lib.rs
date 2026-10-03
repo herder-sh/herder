@@ -38,8 +38,8 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, ApprovalId, Image, Item, ItemId, PermissionMode, QuestionId,
-    TurnError, TurnId, UsageWindow,
+    Answer, ApprovalDecision, ApprovalId, Attachment, Image, Item, ItemId, PermissionMode,
+    QuestionId, TurnError, TurnId, UsageWindow,
 };
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -297,6 +297,30 @@ pub enum AdapterEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<TurnError>,
     },
+}
+
+/// A user message's text as a CLI gets it in a replayed transcript: the text, then a line
+/// naming each image the message carried. A seed holds attachment references only, never the
+/// bytes, so every adapter replays images this way.
+pub(crate) fn seed_user_text(text: &str, attachments: &[Attachment]) -> String {
+    let mut text = text.to_owned();
+    for attachment in attachments {
+        text.push('\n');
+        text.push_str(&image_placeholder(
+            &attachment.media_type,
+            attachment.size,
+            "not part of this replay",
+        ));
+    }
+    text
+}
+
+/// Stands in for an image a CLI does not get, naming its media type, size and `why`.
+pub(crate) fn image_placeholder(media_type: &str, size: u64, why: &str) -> String {
+    format!(
+        "[image attached: {media_type}, {} KB; {why}]",
+        size.div_ceil(1024)
+    )
 }
 
 #[cfg(test)]

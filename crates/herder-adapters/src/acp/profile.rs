@@ -1,10 +1,13 @@
 //! What differs between ACP agents: how to launch one for an account.
 //!
-//! | Agent    | Command            | Account config dir                         | Verified                                 |
-//! | -------- | ------------------ | ------------------------------------------ | ---------------------------------------- |
-//! | OpenCode | `opencode acp`     | `XDG_DATA_HOME` (`opencode/auth.json`)     | 1.18.21, credentials path moves          |
-//! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | 1.0.46 logged out, config and sessions move |
-//! | Cursor   | `agent acp`        | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | no: from Cursor's docs, CLI not available |
+//! | Agent    | Command            | Account config dir                         | Images | Verified                                 |
+//! | -------- | ------------------ | ------------------------------------------ | ------ | ---------------------------------------- |
+//! | OpenCode | `opencode acp`     | `XDG_DATA_HOME` (`opencode/auth.json`)     | yes    | 1.18.21, credentials path moves          |
+//! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | no     | 1.0.46 logged out, config and sessions move |
+//! | Cursor   | `agent acp`        | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | no     | no: from Cursor's docs, CLI not available |
+//!
+//! Images is what each agent advertised as `promptCapabilities.image` in the recordings, and
+//! for Cursor, unverified, no.
 //!
 //! Each agent must ask before every write or command, so the adapter can apply the session's
 //! permission mode: OpenCode is launched with `OPENCODE_PERMISSION={"*":"ask"}`, as by default
@@ -45,6 +48,9 @@ pub struct AgentProfile {
     pub launch_env: Vec<(String, String)>,
     /// Variables that hold a login outside the config dir, removed when the account has one.
     pub login_env: Vec<String>,
+    /// Whether the agent is known to take images with a prompt, which it advertises in
+    /// `initialize`; what the adapter says until an agent started and told it.
+    pub images: bool,
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -67,6 +73,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["XDG_DATA_HOME"]),
             launch_env: vec![("OPENCODE_PERMISSION".into(), r#"{"*":"ask"}"#.into())],
             login_env: Vec::new(),
+            images: true,
         }
     }
 
@@ -85,6 +92,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["GROK_HOME"]),
             launch_env: Vec::new(),
             login_env: strings(&["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
+            images: false,
         }
     }
 
@@ -103,6 +111,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"]),
             launch_env: Vec::new(),
             login_env: Vec::new(),
+            images: false,
         }
     }
 
