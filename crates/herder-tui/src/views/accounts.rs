@@ -1,27 +1,39 @@
-//! The accounts screen, over the main screen: each machine with its failover settings and its
-//! accounts, which ones sessions fail over to, and how much of each usage window they used,
-//! with a bar and when it resets.
+//! The accounts view, in the main pane: each machine and its accounts, which ones sessions
+//! fail over to, and how much of each usage window they used, with a bar and when it resets.
+//!
+//! ```text
+//!  accounts                                             failover on a limit only
+//!
+//!  ● box                                                          sessions pinned
+//! ▶  claude-main  claude · failover off                                3 sessions
+//!      Session         ███████░░░░░░░░░░░░░  38%   resets in 2h 13m
+//!      Weekly          ██░░░░░░░░░░░░░░░░░░  12%   resets in 5d 3h
+//! ```
 
 use herder_client_core::Machine;
 use herder_protocol::{Account, SessionStatus, Timestamp, UsageWindow};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragraph};
+use ratatui::layout::Rect;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::account_screen::{self, AccountScreen, Pick};
 use crate::app::App;
-use crate::mouse::{Click, Hits, List as Rows};
+use crate::mouse::{Click, Hits, List as Rows, Wheel};
+use crate::ui::list::{ListView, Row};
+use crate::ui::{GAP, Ui, usage};
 
 /// The widest a usage bar gets.
-const BAR: usize = 30;
+const BAR: u16 = 24;
+
+/// The narrowest a usage bar gets beside its reset time; narrower, the reset goes under it.
+const MIN_BAR: u16 = 8;
 
 /// What the failover marks mean, and where they are set.
-const FAILOVER: &str = "A session whose account hits a limit moves to an account marked \
-                        failover of the same provider, on the same model, unless sessions are \
-                        pinned. Both are set in the machine's daemon config (failover = true \
-                        per account, [failover] pin).";
+const FAILOVER: &str = "A session whose account hits a limit moves to an account with \
+                        failover on, of the same provider and on the same model, unless its \
+                        machine pins sessions. Both are set in the machine's daemon config \
+                        (failover = true per account, [failover] pin).";
 
 pub(super) fn draw(
     frame: &mut Frame,
@@ -30,114 +42,159 @@ pub(super) fn draw(
     screen: &AccountScreen,
     hits: &mut Hits,
 ) {
-    let narrow = area.width < super::NARROW;
-    let keys = if narrow {
-        " n add  r reconnect  Esc close "
-    } else {
-        " j/k move  n add an account  r reconnect  Esc close "
-    };
-    let block = Block::bordered()
-        .title(Line::styled(" accounts ", super::bold()))
-        .title_bottom(Line::styled(keys, super::dim()).centered())
-        .border_style(Style::new().fg(Color::Cyan))
-        .padding(Padding::horizontal(1));
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
+    let ui = app.ui();
+    let compact = app.width < super::NARROW;
+    super::clear(frame, area, ui);
+    let area = super::heading(
+        frame,
+        area,
+        ui,
+        "accounts",
+        "",
+        "failover on a limit only",
+        compact,
+    );
 
-    let footer: Vec<Line> = textwrap::wrap(FAILOVER, usize::from(inner.width).max(8))
-        .into_iter()
-        .map(|part| Line::styled(part.into_owned(), super::dim()))
-        .collect();
-    let footer_height = u16::try_from(footer.len())
-        .unwrap_or(u16::MAX)
-        .min(inner.height / 3);
-    let [list, _, footer_area] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(footer_height),
-    ])
-    .areas(inner);
-
-    let rows = account_screen::rows(&app.machines);
-    let selected = screen.selected(&rows);
-    let width = usize::from(list.width);
-    let now = Timestamp::now();
-    // Each item with its row.
-    let items: Vec<(usize, ListItem)> = rows
+    let picks = account_screen::rows(&app.machines);
+    let selected = screen.selected(&picks);
+    // Past the pointer and the body's indent, and the right inset.
+    let width = area.width.saturating_sub(5);
+    let now = app.now();
+    // Every window's label and reset take the widest one's room, so the bars line up.
+    let windows = app
+        .machines
         .iter()
-        .enumerate()
-        .filter_map(|(at, pick)| {
-            let chosen = selected == Some(at);
-            let machine = app
-                .machines
-                .iter()
-                .find(|machine| machine.host_id == *pick.host_id())?;
-            let text = match pick {
-                Pick::Machine(_) => machine_text(machine, chosen),
-                Pick::Account(_, account_id) => {
-                    let account = machine
-                        .accounts
-                        .iter()
-                        .find(|account| account.account_id == *account_id)?;
-                    account_text(app, machine, account, chosen, width, now)
+        .flat_map(|machine| &machine.accounts)
+        .flat_map(|account| &account.usage);
+    let columns = Columns {
+        label: windows
+            .clone()
+            .map(|usage| crate::ui::width(&account_screen::window_label(&usage.window)))
+            .max()
+            .unwrap_or(0),
+        resets: windows
+            .filter_map(|usage| usage.resets_at)
+            .map(|at| crate::ui::width(&resets(at, now, compact)))
+            .max()
+            .unwrap_or(0),
+        compact,
+    };
+    let mut rows = Vec::new();
+    // The pick of each row; gaps have none.
+    let mut of_row = Vec::new();
+    let mut selected_row = None;
+    for (at, pick) in picks.iter().enumerate() {
+        let Some(machine) = app.machines.iter().find(|m| m.host_id == *pick.host_id()) else {
+            continue;
+        };
+        let row = match pick {
+            Pick::Machine(_) => {
+                if !rows.is_empty() {
+                    rows.push(Row::Gap);
+                    of_row.push(None);
                 }
-            };
-            Some((at, ListItem::new(text)))
-        })
-        .collect();
-    let heights: Vec<usize> = items.iter().map(|(_, item)| item.height()).collect();
-    let (picks, items): (Vec<usize>, Vec<ListItem>) = items.into_iter().unzip();
-    let selected = selected.and_then(|at| picks.iter().position(|pick| *pick == at));
-    let mut state = ListState::default().with_selected(selected);
-    frame.render_stateful_widget(List::new(items), list, &mut state);
-    if screen.adding.is_none() {
-        hits.list(list, state.offset(), &heights, |at| {
-            Some(Click::Row(Rows::Accounts, picks[at]))
-        });
+                machine_row(ui, machine)
+            }
+            Pick::Account(_, account_id) => {
+                let Some(account) = machine
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == *account_id)
+                else {
+                    continue;
+                };
+                account_row(app, ui, machine, account, width, now, columns)
+            }
+        };
+        if selected == Some(at) {
+            selected_row = Some(rows.len());
+        }
+        rows.push(row);
+        of_row.push(Some(at));
     }
-    frame.render_widget(Paragraph::new(footer), footer_area);
+
+    // The note on failover follows the list, or sits at the bottom once the list fills the
+    // pane.
+    let note: Vec<Line> =
+        textwrap::wrap(FAILOVER, usize::from(area.width.saturating_sub(2)).max(8))
+            .into_iter()
+            .map(|part| Line::styled(part.into_owned(), ui.muted()))
+            .collect();
+    let note_height = u16::try_from(note.len()).unwrap_or(u16::MAX);
+    let total = u16::try_from(rows.iter().map(Row::height).sum::<usize>()).unwrap_or(u16::MAX);
+    let room = area.height.saturating_sub(note_height + 1);
+    let list = Rect {
+        height: total.min(room),
+        ..area
+    };
+    let mut offset = 0;
+    let placed = ListView::new(ui, rows)
+        .select(selected_row)
+        .focused(screen.adding.is_none())
+        .render(list, frame.buffer_mut(), &mut offset);
+    if screen.adding.is_none() {
+        hits.wheel(area, Wheel::Keys);
+        for (row, rect) in placed {
+            if let Some(Some(at)) = of_row.get(row) {
+                hits.click(rect, Click::Row(Rows::Accounts, *at));
+            }
+        }
+    }
+    if area.height > list.height + 1 {
+        let note_area = Rect {
+            x: area.x + crate::ui::INSET,
+            y: list.bottom() + 1,
+            width: area.width.saturating_sub(2 * crate::ui::INSET),
+            height: area.bottom() - list.bottom() - 1,
+        };
+        frame.render_widget(Paragraph::new(note), note_area);
+    }
 
     if let Some(adding) = &screen.adding {
         super::machines::account_dialog(frame, area, app, adding);
     }
 }
 
-/// The style of a row's name: reversed while it is selected.
-fn name_style(chosen: bool) -> Style {
-    if chosen {
-        super::bold().reversed()
-    } else {
-        super::bold()
-    }
-}
-
-fn machine_text(machine: &Machine, chosen: bool) -> Text<'static> {
-    let (mark, color, state) = super::machines::connection(machine);
-    let mut facts = format!("  {state}");
-    if machine.failover.pin {
-        facts.push_str(" · pinned");
-    }
-    let mut lines = vec![Line::from(vec![
-        Span::styled(mark, Style::new().fg(color)),
+/// A machine: its connection and name, whether it pins sessions to their account, and why it
+/// is not connected.
+fn machine_row(ui: Ui, machine: &Machine) -> Row<'static> {
+    let (mark, color) = super::add_machine::connection_mark(ui, machine);
+    let left = Line::from(vec![
+        Span::styled(mark, ratatui::style::Style::new().fg(color)),
         Span::raw(" "),
-        Span::styled(machine.name.clone(), name_style(chosen)),
-        Span::styled(facts, super::dim()),
-    ])];
-    if machine.accounts.is_empty() {
-        lines.push(Line::styled("  no accounts: n adds one", super::dim()));
+        Span::styled(machine.name.clone(), ui.strong()),
+    ]);
+    let mut right = Vec::new();
+    if let herder_client_core::ConnectionState::Disconnected { error } = &machine.connection {
+        right.push(Span::styled(error.clone(), ui.muted()));
     }
-    Text::from(lines)
+    if machine.failover.pin {
+        right.push(Span::styled("sessions pinned", ui.muted()));
+    }
+    let mut row = Row::item(left).right(Line::from(ui.joined(right)));
+    if machine.accounts.is_empty() {
+        row = row.body(vec![Line::styled("no accounts: n adds one", ui.muted())]);
+    }
+    row
 }
 
-fn account_text(
+/// The widths the usage windows share, and whether they are drawn on a phone.
+#[derive(Clone, Copy)]
+struct Columns {
+    label: usize,
+    resets: usize,
+    compact: bool,
+}
+
+fn account_row(
     app: &App,
+    ui: Ui,
     machine: &Machine,
     account: &Account,
-    chosen: bool,
-    width: usize,
+    width: u16,
     now: Timestamp,
-) -> Text<'static> {
+    columns: Columns,
+) -> Row<'static> {
     let sessions = app
         .sessions
         .iter()
@@ -147,89 +204,89 @@ fn account_text(
                 && session.status != SessionStatus::Archived
         })
         .count();
-    let mut facts = account.provider.as_str().to_owned();
-    if account.label != account.account_id.as_str() {
-        facts.push_str(&format!(" · {}", account.account_id));
+    let mut facts = vec![Span::styled(
+        account.provider.as_str().to_owned(),
+        ui.muted(),
+    )];
+    if account.label != account.account_id.as_str() && !columns.compact {
+        facts.push(Span::styled(account.account_id.to_string(), ui.muted()));
     }
-    if account.failover {
-        facts.push_str(" · failover");
-    }
-    match sessions {
-        0 => {}
-        1 => facts.push_str(" · 1 session"),
-        n => facts.push_str(&format!(" · {n} sessions")),
-    }
-    let mut lines = vec![Line::from(vec![
+    facts.push(if account.failover {
+        Span::styled("failover on", ui.text())
+    } else {
+        Span::styled("failover off", ui.muted())
+    });
+    let mut left = vec![
         Span::raw("  "),
-        Span::styled(account.label.clone(), name_style(chosen)),
-        Span::styled(format!("  {facts}"), super::dim()),
-    ])];
+        Span::styled(account.label.clone(), ui.text()),
+        Span::raw(" ".repeat(GAP)),
+    ];
+    left.extend(ui.joined(facts));
+    let right = match sessions {
+        0 => String::new(),
+        1 => "1 session".to_owned(),
+        n => format!("{n} sessions"),
+    };
+    let mut body = Vec::new();
     if account.usage.is_empty() {
-        lines.push(Line::styled("    no usage reported yet", super::dim()));
+        body.push(Line::styled("  no usage reported yet", ui.muted()));
     }
-    let label_width = account
-        .usage
-        .iter()
-        .map(|usage| account_screen::window_label(&usage.window).chars().count())
-        .max()
-        .unwrap_or(0);
-    for usage in &account.usage {
-        lines.extend(window_lines(usage, label_width, width, now));
+    for window in &account.usage {
+        body.extend(window_lines(ui, window, columns, width, now));
     }
-    Text::from(lines)
+    Row::item(Line::from(left))
+        .right(Span::styled(right, ui.muted()))
+        .body(body)
 }
 
-/// A usage window: its name, a bar, the share used and when it resets; on two lines when one
-/// leaves the bar too little room.
+/// When a window resets, from `now`: `resets in 2h 13m`, or on a phone `2h 13m`.
+fn resets(at: Timestamp, now: Timestamp, compact: bool) -> String {
+    let until = account_screen::until(at.duration_since(now).as_secs());
+    if compact {
+        until
+    } else {
+        format!("resets in {until}")
+    }
+}
+
+/// A usage window: its name, a bar with the share used, and when it resets; the reset on a
+/// line of its own when a bar beside it would be too short.
 fn window_lines(
-    usage: &UsageWindow,
-    label_width: usize,
-    width: usize,
+    ui: Ui,
+    window: &UsageWindow,
+    columns: Columns,
+    width: u16,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
-    let label = account_screen::window_label(&usage.window);
-    let percent = usage.used_percent.clamp(0.0, 100.0);
-    let color = if percent >= 90.0 {
-        Color::Red
-    } else if percent >= 70.0 {
-        Color::Yellow
-    } else {
-        Color::Cyan
-    };
-    let used = Span::styled(format!("{percent:>3.0}%"), Style::new().fg(color));
-    let resets = usage.resets_at.map_or_else(String::new, |at| {
-        let secs = at.duration_since(now).as_secs();
-        format!("resets in {}", account_screen::until(secs))
-    });
-    let label = Span::raw(format!("    {label:<label_width$}  "));
-    // The indent, the label, the gaps, the share and the reset.
-    let fixed = 4 + label_width + 2 + 2 + 4 + 2 + resets.chars().count();
-    let room = width.saturating_sub(fixed).min(BAR);
-    if room >= 10 {
-        let mut spans = vec![label];
-        spans.extend(bar(percent, room, color));
-        spans.extend([
-            Span::raw("  "),
-            used,
-            Span::styled(format!("  {resets}"), super::dim()),
-        ]);
-        return vec![Line::from(spans)];
+    let label = account_screen::window_label(&window.window);
+    let label_width = columns.label;
+    // Clamped to 0..=100 first, so the cast cannot wrap.
+    let percent = window.used_percent.clamp(0.0, 100.0).round() as u8;
+    let resets = window.resets_at.map(|at| resets(at, now, columns.compact));
+    let label_span = Span::styled(format!("  {label:<label_width$}  "), ui.muted());
+    // The indent and gap round the label, and the share after the bar.
+    let fixed = u16::try_from(2 + label_width + 2 + 5).unwrap_or(u16::MAX);
+    let resets_width = u16::try_from(GAP + columns.resets).unwrap_or(u16::MAX);
+    let beside = width.saturating_sub(fixed + resets_width);
+    let mut first = vec![label_span];
+    if beside >= MIN_BAR {
+        first.extend(usage::bar(ui, percent, beside.min(BAR)).spans);
+        if let Some(resets) = resets {
+            first.push(Span::styled(
+                format!("{}{resets}", " ".repeat(GAP)),
+                ui.muted(),
+            ));
+        }
+        return vec![Line::from(first)];
     }
-    // Two lines: the name and share, then the bar and the reset.
-    // Bars line up whatever the reset says: `resets in 23h 59m` is the longest.
-    let room = width.saturating_sub(4 + 2 + 17).min(BAR);
-    let mut second = vec![Span::raw("    ")];
-    second.extend(bar(percent, room, color));
-    second.push(Span::styled(format!("  {resets}"), super::dim()));
-    vec![Line::from(vec![label, used]), Line::from(second)]
-}
-
-/// A bar `width` cells wide, filled to `percent`.
-fn bar(percent: f64, width: usize, color: Color) -> [Span<'static>; 2] {
-    // `as` saturates, and `percent` is clamped to 0..=100.
-    let filled = ((percent / 100.0 * width as f64).round() as usize).min(width);
-    [
-        Span::styled("█".repeat(filled), Style::new().fg(color)),
-        Span::styled("░".repeat(width - filled), super::dim()),
-    ]
+    let bar = width.saturating_sub(fixed).clamp(1, BAR);
+    first.extend(usage::bar(ui, percent, bar).spans);
+    let mut lines = vec![Line::from(first)];
+    if let Some(resets) = resets {
+        lines.push(Line::styled(
+            format!("  {:<label_width$}  {resets}", ""),
+            ui.muted(),
+        ));
+    }
+    lines
 }

@@ -21,6 +21,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Widget};
 
 use super::Ui;
+use super::glyphs::Glyphs;
 use super::hints::{Hint, ModeBar};
 
 /// Columns between the border and the body.
@@ -116,19 +117,36 @@ impl<'a> Dialog<'a> {
                 .collect::<Vec<_>>(),
         );
         // On a panel background the dialog is a card, its edge the panel's own; on the
-        // terminal's background (`ansi`) a line draws the edge.
-        let edge = if ui.theme.background_panel == Color::Reset {
-            ui.border(false)
+        // terminal's background (`ansi`) a line draws the edge. The ASCII set draws no lines,
+        // as OpenCode's dialogs: the panel and the dimmed backdrop set the card off, and the
+        // title and `esc` keep their places.
+        let esc = Line::styled(" esc ", ui.muted()).right_aligned();
+        let inner = if ui.glyphs == Glyphs::Unicode.set() {
+            let edge = if ui.theme.background_panel == Color::Reset {
+                ui.border(false)
+            } else {
+                Style::new().fg(ui.theme.background_panel)
+            };
+            let block = Block::bordered()
+                .border_style(edge)
+                .style(ui.panel())
+                .title(title)
+                .title(esc);
+            let inner = block.inner(outer);
+            block.render(outer, buf);
+            inner
         } else {
-            Style::new().fg(ui.theme.background_panel)
+            Block::new().style(ui.panel()).render(outer, buf);
+            let top = Rect::new(outer.x + 1, outer.y, outer.width.saturating_sub(2), 1);
+            esc.render(top, buf);
+            title.render(top, buf);
+            Rect::new(
+                outer.x + 1,
+                outer.y + 1,
+                outer.width.saturating_sub(2),
+                outer.height.saturating_sub(2),
+            )
         };
-        let block = Block::bordered()
-            .border_style(edge)
-            .style(ui.panel())
-            .title(title)
-            .title(Line::styled(" esc ", ui.muted()).right_aligned());
-        let inner = block.inner(outer);
-        block.render(outer, buf);
         let padded = Rect {
             x: inner.x + PAD_X.min(inner.width / 2),
             y: inner.y + 1.min(inner.height),

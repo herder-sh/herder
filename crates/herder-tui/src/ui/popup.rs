@@ -55,10 +55,15 @@ impl<'a> Popup<'a> {
         }
         Clear.render(area, buf);
         let menu = Style::new().fg(theme.text).bg(theme.background_menu);
-        Block::bordered()
-            .border_style(ui.border(false).bg(theme.background_menu))
-            .style(menu)
-            .render(area, buf);
+        // Lined in Unicode; in ASCII a menu panel, as OpenCode's.
+        if ui.glyphs == super::glyphs::Glyphs::Unicode.set() {
+            Block::bordered()
+                .border_style(ui.border(false).bg(theme.background_menu))
+                .style(menu)
+                .render(area, buf);
+        } else {
+            fill(buf, area, menu);
+        }
         let inner = Rect {
             x: area.x + 2,
             y: area.y + 1,

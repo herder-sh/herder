@@ -18,6 +18,7 @@ use ratatui::widgets::{Clear, Paragraph};
 use crate::action::Action;
 use crate::app::{App, Focus};
 use crate::compose::Act;
+use crate::machines::PanelEdit;
 use crate::mouse::{self, Click, Hits};
 use crate::nav::{LEADER_KEYS, Mode};
 use crate::ui::badge;
@@ -97,6 +98,47 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
     let running = app.open_session().is_some_and(|s| s.turn.is_some());
     let stop = act("ctrl+c", "stop", Action::Compose(Act::CtrlC));
     match app.mode() {
+        // The fleet and the accounts are views, whose keys the bar shows.
+        None if app
+            .machine_panel
+            .as_ref()
+            .is_some_and(|panel| panel.add.is_none() && panel.account.is_none()) =>
+        {
+            match app
+                .machine_panel
+                .as_ref()
+                .and_then(|panel| panel.edit.as_ref())
+            {
+                Some(PanelEdit::Rename(_)) => vec![
+                    tap("enter", "save on this device", KeyCode::Enter),
+                    tap("esc", "cancel", KeyCode::Esc),
+                ],
+                Some(PanelEdit::Forget) => {
+                    vec![tap("y", "forget", char('y')), tap("n", "keep", char('n'))]
+                }
+                None => vec![
+                    hint("j/k", "move"),
+                    tap("a", "add machine", char('a')),
+                    tap("n", "add account", char('n')),
+                    tap("e", "rename", char('e')),
+                    tap("d", "forget", char('d')),
+                    tap("r", "reconnect", char('r')),
+                    tap("esc", "back", KeyCode::Esc),
+                ],
+            }
+        }
+        None if app
+            .account_screen
+            .as_ref()
+            .is_some_and(|screen| screen.adding.is_none()) =>
+        {
+            vec![
+                hint("j/k", "move"),
+                tap("n", "add account", char('n')),
+                tap("r", "reconnect", char('r')),
+                tap("esc", "back", KeyCode::Esc),
+            ]
+        }
         // A dialog shows its own keys; this is its tap to close.
         None => vec![tap("esc", "close", KeyCode::Esc)],
         Some(Mode::Leader) => vec![tap("esc", "cancel", KeyCode::Esc)],

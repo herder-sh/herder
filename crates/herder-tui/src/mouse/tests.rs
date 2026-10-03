@@ -101,12 +101,13 @@ fn wheel(app: &mut App, size: (u16, u16), text: &str, steps: i32) -> Vec<Effect>
         .collect()
 }
 
-/// What closes a dialog: on a phone the header's back, on a desktop the mode bar's esc.
-fn close(size: (u16, u16)) -> &'static str {
+/// What leaves the accounts or the fleet view: on a phone the header's back, on a desktop the
+/// mode bar's esc.
+fn back(size: (u16, u16)) -> &'static str {
     if size.0 < crate::views::NARROW {
         "‹ back"
     } else {
-        "esc close"
+        "esc back"
     }
 }
 
@@ -306,7 +307,8 @@ fn the_inbox_selects_by_tap_and_wheel_and_answers_on_a_phone() {
         tap_last(&mut app, size, "Which port");
         assert_eq!(app.inbox_index(&app.waiting()), 0);
         if size.0 < crate::views::NARROW {
-            let effects = tap(&mut app, size, "1 8080");
+            // The bar's button, under the choice the list shows.
+            let effects = tap_last(&mut app, size, "1 8080");
             assert!(
                 matches!(
                     &effects[..],
@@ -349,9 +351,9 @@ fn pull_requests_select_by_tap_and_wheel_and_open_on_a_second_tap() {
         assert_eq!(app.focus, Focus::AllPrs);
         tap_last(&mut app, size, "#9");
         assert_eq!(app.pr_index(), 1, "{size:?}");
-        wheel(&mut app, size, "Document the health", 1);
+        wheel(&mut app, size, "Document the", 1);
         assert_eq!(app.pr_index(), 2);
-        wheel(&mut app, size, "Document the health", -2);
+        wheel(&mut app, size, "Document the", -2);
         assert_eq!(app.pr_index(), 0);
         tap_last(&mut app, size, "#7");
         let effects = tap_last(&mut app, size, "#7");
@@ -415,7 +417,7 @@ fn the_accounts_screen_selects_by_tap_and_wheel_and_closes_by_back() {
             chosen(&app),
             Some(crate::account_screen::Pick::Machine(HostId::new("h2")))
         );
-        tap(&mut app, size, close(size));
+        tap(&mut app, size, back(size));
         assert!(app.account_screen.is_none());
     }
 }
@@ -431,7 +433,7 @@ fn the_machines_panel_selects_by_tap() {
         wheel(&mut app, size, "0 sessions", -1);
         let panel = app.machine_panel.as_ref().unwrap();
         assert_eq!(panel.selected(&app.machines), Some(0));
-        tap(&mut app, size, close(size));
+        tap(&mut app, size, back(size));
         assert!(app.machine_panel.is_none());
     }
 }

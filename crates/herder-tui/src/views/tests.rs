@@ -382,12 +382,50 @@ fn an_offline_hosts_session_is_read_only_and_offers_recover() {
             format!("offline_session_{width}x{height}"),
             render(&mut app, width, height).backend()
         );
-        press(&mut app, KeyCode::Char('R'));
-        insta::assert_snapshot!(
-            format!("recover_{width}x{height}"),
-            render(&mut app, width, height).backend()
-        );
     }
+}
+
+#[test]
+fn the_recover_dialog_at_three_widths() {
+    let mut app = fake::vault();
+    app.choose_row(crate::app::Row::Session {
+        key: fake::key("v", "s2"),
+        depth: 0,
+    });
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('R'));
+    at_three_widths("recover", &mut app);
+}
+
+#[test]
+fn the_terminals_list_at_three_widths() {
+    let mut app = crate::terminal::app_tests::with_terminals();
+    press(&mut app, KeyCode::Char('t'));
+    press(&mut app, KeyCode::Char('j'));
+    at_three_widths("terminals", &mut app);
+}
+
+#[test]
+fn the_sessions_prs_tab_at_three_widths() {
+    let mut app = fake::with_prs();
+    press(&mut app, KeyCode::Char('p'));
+    press(&mut app, KeyCode::Char('j'));
+    at_three_widths("prs_tab", &mut app);
+}
+
+#[test]
+fn the_accounts_and_fleet_views_show_their_keys_in_the_mode_bar() {
+    let mut app = with_accounts();
+    press(&mut app, KeyCode::Char('A'));
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(
+        screen.contains("n add account  r reconnect  esc back"),
+        "{screen}"
+    );
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('m'));
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains("a add machine  n add account"), "{screen}");
 }
 
 #[test]
@@ -666,6 +704,7 @@ fn a_primary_counts_its_children_and_badges_the_ones_waiting_on_you() {
 #[test]
 fn the_inbox_shows_each_request_with_its_task_reason_and_note() {
     let mut app = fake::escalated();
+    app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());
     press(&mut app, KeyCode::Char('i'));
     insta::assert_snapshot!(render(&mut app, 110, 20).backend());
     press(&mut app, KeyCode::Enter);
@@ -706,6 +745,16 @@ fn a_child_names_its_primary_and_what_the_primary_answered() {
 /// `name_120x40`.
 fn narrow_and_wide(name: &str, app: &mut App) {
     for (width, height) in [(45, 40), (120, 40)] {
+        let terminal = render(app, width, height);
+        assert_last_column_blank(terminal.backend().buffer());
+        insta::assert_snapshot!(format!("{name}_{width}x{height}"), terminal.backend());
+    }
+}
+
+/// Snapshots `app` at the screenshots' sizes, a phone, a laptop terminal and a wide one,
+/// named `name_45x40`, `name_100x30` and `name_160x40`.
+fn at_three_widths(name: &str, app: &mut App) {
+    for (width, height) in [(45, 40), (100, 30), (160, 40)] {
         let terminal = render(app, width, height);
         assert_last_column_blank(terminal.backend().buffer());
         insta::assert_snapshot!(format!("{name}_{width}x{height}"), terminal.backend());
@@ -802,15 +851,21 @@ fn an_approval_on_a_narrow_screen_answers_without_esc() {
 #[test]
 fn the_inbox_on_narrow_and_wide_screens() {
     let mut app = fake::escalated();
+    // Two minutes after the escalation.
+    app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());
     press(&mut app, KeyCode::Char('i'));
-    narrow_and_wide("inbox", &mut app);
+    at_three_widths("inbox", &mut app);
+    // Answering: the answer is typed in a prompt under the list.
+    press(&mut app, KeyCode::Enter);
+    fake::type_text(&mut app, "9000");
+    at_three_widths("inbox_answer", &mut app);
 }
 
 #[test]
 fn every_pr_on_narrow_and_wide_screens() {
     let mut app = fake::with_prs();
     press(&mut app, KeyCode::Char('P'));
-    narrow_and_wide("prs", &mut app);
+    at_three_widths("prs", &mut app);
 }
 
 #[test]
@@ -898,11 +953,12 @@ fn with_accounts() -> App {
 pub(super) fn add_accounts(app: &mut App) {
     use herder_protocol::{Provider, Timestamp, UsageWindow};
 
+    let now = app.now().as_second();
     // Half a minute past each reset time, so the countdown reads the same while the test runs.
     let window = |name: &str, used_percent: f64, secs: i64| UsageWindow {
         window: name.into(),
         used_percent,
-        resets_at: Some(Timestamp::from_second(Timestamp::now().as_second() + secs + 30).unwrap()),
+        resets_at: Some(Timestamp::from_second(now + secs + 30).unwrap()),
     };
     let mut machines = app.machines.clone();
     let mut main = fake::account("claude-main", "Main");
@@ -933,7 +989,7 @@ pub(super) fn add_accounts(app: &mut App) {
 fn the_accounts_screen_on_narrow_and_wide_screens() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Char('A'));
-    narrow_and_wide("accounts", &mut app);
+    at_three_widths("accounts", &mut app);
 }
 
 #[test]
@@ -964,7 +1020,7 @@ fn projects_across_machines_on_narrow_and_wide_screens() {
 fn each_projects_prs_on_narrow_and_wide_screens() {
     let mut app = fake::projects();
     press(&mut app, KeyCode::Char('P'));
-    narrow_and_wide("project_prs", &mut app);
+    at_three_widths("project_prs", &mut app);
 }
 
 #[test]
@@ -980,7 +1036,7 @@ fn host_resources_in_the_machines_panel_on_narrow_and_wide_screens() {
     let mut app = fake::tree();
     fake::with_resources(&mut app, fake::host_resources(4), false);
     press(&mut app, KeyCode::Char('m'));
-    narrow_and_wide("machine_resources", &mut app);
+    at_three_widths("machine_resources", &mut app);
 }
 
 #[test]
@@ -989,7 +1045,7 @@ fn a_sessions_usage_wait_and_leftovers_on_narrow_and_wide_screens() {
         herder_protocol::SessionStatus::WaitingForCapacity,
     )]);
     fake::with_resources(&mut app, fake::host_resources(4), true);
-    narrow_and_wide("session_resources", &mut app);
+    at_three_widths("session_resources", &mut app);
 }
 
 #[test]
