@@ -89,7 +89,9 @@ struct HomeView: View {
         let lists = fleet.lists
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
+                #if os(iOS)
                 ConnectionLine(machines: lists.machines)
+                #endif
                 if lists.machines.isEmpty {
                     EmptyFleet(pairing: $pairing)
                 }
@@ -110,6 +112,9 @@ struct HomeView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("herder")
+        #if os(macOS)
+        .navigationSubtitle(ConnectionLine.text(lists.machines))
+        #endif
         .navigationDestination(for: SessionKey.self) { SessionPlaceholder(fleet: fleet, key: $0) }
     }
 }
@@ -118,15 +123,20 @@ struct HomeView: View {
 private struct ConnectionLine: View {
     let machines: [MachineSummary]
 
+    static func text(_ machines: [MachineSummary]) -> String {
+        let connected = machines.filter(\.connected).count
+        if machines.isEmpty { return "" }
+        if connected < machines.count { return "\(connected) of \(machines.count) machines connected" }
+        return machines.count == 1 ? "1 machine connected" : "All \(machines.count) machines connected"
+    }
+
     var body: some View {
         let connected = machines.filter(\.connected).count
         if !machines.isEmpty {
             HStack(spacing: 8) {
                 Circle().fill(connected == machines.count ? Theme.success : Theme.accent)
                     .frame(width: 7, height: 7)
-                Text(connected == machines.count
-                     ? (machines.count == 1 ? "1 machine connected" : "All \(machines.count) machines connected")
-                     : "\(connected) of \(machines.count) machines connected")
+                Text(Self.text(machines))
             }
             .font(.footnote.weight(.medium))
             .foregroundStyle(Theme.secondary)
