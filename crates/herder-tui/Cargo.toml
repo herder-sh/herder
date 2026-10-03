@@ -12,6 +12,7 @@ base64.workspace = true
 herder-client-core.workspace = true
 herder-protocol.workspace = true
 nix.workspace = true
+nucleo-matcher.workspace = true
 ratatui.workspace = true
 ratatui-textarea.workspace = true
 serde_json.workspace = true

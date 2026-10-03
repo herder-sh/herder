@@ -1,7 +1,6 @@
 //! The machines panel, the add-machine dialog and the add-account dialog, over the main
 //! screen.
 
-use herder_client_core::PairingUri;
 use herder_client_core::{ConnectionState, Machine};
 use herder_protocol::Role;
 use ratatui::Frame;
@@ -12,7 +11,7 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragra
 
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
-use crate::machines::{AddMachine, Field, Form, MachinePanel, PanelEdit, Step};
+use crate::machines::{MachinePanel, PanelEdit};
 use crate::mouse::{Click, Hits, List as Rows};
 
 /// Width of the label column of details and form fields.
@@ -27,7 +26,7 @@ pub(super) fn draw(
 ) {
     match (&panel.account, &panel.add) {
         (Some(account), _) => account_dialog(frame, area, app, account),
-        (None, Some(add)) => dialog(frame, area, app, add),
+        (None, Some(add)) => super::add_machine::draw(frame, area, app, add, hits),
         (None, None) => list(frame, area, app, panel, hits),
     }
 }
@@ -213,58 +212,6 @@ fn field(label: &str, value: &str, style: Style, width: usize) -> Vec<Line<'stat
         .collect()
 }
 
-fn dialog(frame: &mut Frame, area: Rect, app: &App, add: &AddMachine) {
-    let width = value_width(area);
-    let (lines, keys_text) = match &add.step {
-        Step::Edit => (
-            form(&add.form, None, width),
-            "Enter next  Tab field  Esc cancel",
-        ),
-        Step::Failed(error) => (
-            form(&add.form, Some(error), width),
-            "Enter next  Tab field  Esc cancel",
-        ),
-        Step::Confirm(uri) => (confirm(app, uri, width), "Enter pair  Esc back"),
-        Step::Pairing(uri) => {
-            let to = uri.hosts.join(", ");
-            let lines = vec![Line::raw(format!("Pairing with {to}…"))];
-            (lines, "Esc close")
-        }
-        Step::Paired(machine) => {
-            let mut lines = vec![
-                Line::styled(format!("Paired with {}.", machine.name), super::bold()),
-                Line::raw(""),
-            ];
-            lines.extend(field(
-                "host id",
-                machine.host_id.as_str(),
-                Style::new(),
-                width,
-            ));
-            lines.extend(field(
-                "fingerprint",
-                &machine.fingerprint,
-                Style::new(),
-                width,
-            ));
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "Its sessions show in the list as it connects.",
-                super::dim(),
-            ));
-            (lines, "Enter done")
-        }
-    };
-    let area = popup(area, lines.len() + 4);
-    let block = Block::bordered()
-        .title(" add a machine ")
-        .title_bottom(keys(keys_text))
-        .border_style(Style::new().fg(Color::Cyan))
-        .padding(Padding::uniform(1));
-    frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
 pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: &AddAccount) {
     let width = value_width(area);
     let machine = app
@@ -344,35 +291,6 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn form(form: &Form, error: Option<&String>, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::raw("On the machine to add, run `herder pair` and paste the link it prints:"),
-        Line::raw(""),
-        input(form, Field::Link, "link", &form.link, width),
-        Line::raw(""),
-        Line::styled("or enter what it prints:", super::dim()),
-        input(form, Field::Host, "address", &form.host, width),
-        input(
-            form,
-            Field::Fingerprint,
-            "fingerprint",
-            &form.fingerprint,
-            width,
-        ),
-        input(form, Field::Code, "code", &form.code, width),
-    ];
-    if let Some(error) = error {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled(error.clone(), Style::new().fg(Color::Red)));
-    }
-    lines
-}
-
-/// One form field: its label, then its value's end, with a cursor when it is being typed in.
-fn input(form: &Form, which: Field, label: &str, value: &str, width: usize) -> Line<'static> {
-    text_input(form.focus == which, label, value, width)
-}
-
 /// A text field: its label, then its value's end, with a cursor if `focused`.
 fn text_input(focused: bool, label: &str, value: &str, width: usize) -> Line<'static> {
     let room = width.saturating_sub(1).max(4);
@@ -391,29 +309,4 @@ fn text_input(focused: bool, label: &str, value: &str, width: usize) -> Line<'st
         spans.push(Span::styled("▌", Style::new().fg(Color::Cyan)));
     }
     Line::from(spans)
-}
-
-fn confirm(app: &App, uri: &PairingUri, width: usize) -> Vec<Line<'static>> {
-    let mut lines = vec![
-        Line::styled("Pair with this daemon?", super::bold()),
-        Line::raw(""),
-    ];
-    lines.extend(field("address", &uri.hosts.join(", "), Style::new(), width));
-    let fingerprint = uri.fingerprint.to_ascii_lowercase();
-    let yellow = Style::new().fg(Color::Yellow);
-    lines.extend(field("fingerprint", &fingerprint, yellow, width));
-    lines.push(Line::raw(""));
-    lines.push(Line::raw(
-        "Check that the fingerprint is the one `herder pair` printed.",
-    ));
-    if let Some(known) = app.machines.iter().find(|m| m.fingerprint == fingerprint) {
-        lines.push(Line::styled(
-            format!(
-                "Already paired as {}: pairing again gives it a new key.",
-                known.name
-            ),
-            super::dim(),
-        ));
-    }
-    lines
 }

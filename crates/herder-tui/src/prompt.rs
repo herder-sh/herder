@@ -56,6 +56,9 @@ pub const COMMANDS: &[Command] = &[
     command("prs", "", "every session's pull requests"),
     command("accounts", "", "accounts and their usage"),
     command("fleet", "", "machines"),
+    command("add", "", "add a machine"),
+    command("reconnect", "", "reconnect every machine now"),
+    command("group", "", "group sessions by project or by machine"),
     command("help", "", "keys"),
     command("quit", "", "leave herder"),
 ];
@@ -308,7 +311,13 @@ impl App {
 
     /// Runs the `/command` line `line` on the open session `key`: the effects, or why it
     /// cannot run.
-    pub(crate) fn slash(&mut self, key: &SessionKey, line: &str) -> Result<Vec<Effect>, String> {
+    pub(crate) fn slash(
+        &mut self,
+        target: Option<&SessionKey>,
+        line: &str,
+    ) -> Result<Vec<Effect>, String> {
+        // The commands on a session name it; the rest run without one, as from the palette.
+        let session = || target.ok_or_else(|| "no session selected".to_owned());
         let mut words = line.trim_start_matches('/').split_whitespace();
         let name = words.next().unwrap_or("");
         let args: Vec<&str> = words.collect();
@@ -323,6 +332,9 @@ impl App {
             ("accounts", []) => open(self, Action::OpenAccounts),
             ("fleet", []) => open(self, Action::OpenMachines),
             ("help", []) => open(self, Action::ToggleHelp),
+            ("add", []) => open(self, Action::AddMachine),
+            ("reconnect", []) => open(self, Action::Reconnect),
+            ("group", []) => open(self, Action::Group),
             ("quit", []) => Ok(vec![Effect::Quit]),
             ("thinking", []) => {
                 self.chat.thinking = !self.chat.thinking;
@@ -347,6 +359,7 @@ impl App {
             }
             ("mouse", _) => Err("usage: /mouse on|off".to_owned()),
             ("pr", [pr]) => {
+                let key = session()?;
                 let number = parse_number(pr).ok_or_else(|| format!("not a pull request: {pr}"))?;
                 let command = CommandBody::LinkPr {
                     session_id: key.session_id.clone(),
@@ -356,6 +369,7 @@ impl App {
             }
             ("pr", _) => Err("usage: /pr <number or URL>".to_owned()),
             ("unpr", args) => {
+                let key = session()?;
                 let prs = self
                     .sessions
                     .get(key)
@@ -375,9 +389,9 @@ impl App {
                 };
                 Ok(vec![send(key, command)])
             }
-            ("stop", []) => self.session_command(key, "interrupt", &[]),
+            ("stop", []) => self.session_command(session()?, "interrupt", &[]),
             ("model" | "mode" | "archive" | "archive!" | "down", args) => {
-                self.session_command(key, name, args)
+                self.session_command(session()?, name, args)
             }
             _ => match COMMANDS.iter().find(|command| command.name == name) {
                 Some(command) => Err(format!("usage: /{} {}", command.name, command.args)),

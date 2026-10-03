@@ -289,7 +289,8 @@ fn the_sidebar_and_the_switcher_open_the_inbox_and_new_session() {
         draw(&mut app, size);
         tap_at(&mut app, (3, 4));
         assert_eq!(app.open, None);
-        tap(&mut app, size, close(size));
+        // A tap outside a dialog closes it.
+        assert!(app.compose.dialog.is_none(), "{size:?}");
         assert!(app.compose.dialog.is_none());
     }
 }

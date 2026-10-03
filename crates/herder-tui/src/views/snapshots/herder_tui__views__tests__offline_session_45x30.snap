@@ -2,9 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, width, height).backend()"
 ---
-" o docs - app - vault          3/3  │ switch "
-" all quiet                          │        "
-"──────────────────────────────────────────── "
+" o docs - app - vault          3/3  | switch "
+" all quiet                          |        "
+"-------------------------------------------- "
 "                                             "
 "                                             "
 "                                             "

@@ -1,168 +1,222 @@
-//! The switch dialog, over the main screen: the session's machine's accounts with their
-//! busiest usage window, the model, and what switching to the chosen account does.
+//! The switch picker, over the main screen: the session's machine's accounts, those of its
+//! provider apart from those that replay the transcript, each with its busiest usage window;
+//! then the model, with the models the machine's sessions use; then what the switch does.
 
 use herder_protocol::Account;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Padding, Paragraph};
 
 use crate::account_screen;
+use crate::action::Action;
 use crate::app::App;
 use crate::mouse::{Click, Hits, List as Rows};
+use crate::palette::search_line;
 use crate::session::Session;
-use crate::switch::{self, Kind};
+use crate::switch::{self, Input, Kind};
+use crate::ui::dialog::Size;
+use crate::ui::glyphs::Glyphs;
+use crate::ui::hints::Hint;
+use crate::ui::input::Field;
+use crate::ui::list::Row;
+use crate::ui::select::{Select, label_width};
+use crate::ui::{GAP, Ui};
 
-pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
+pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits) {
     let Some(switch) = &app.switch else {
         return;
     };
     let Some(session) = app.sessions.get(&switch.session) else {
         return;
     };
+    let theme = app.theme.clone();
+    let ui = Ui::new(&theme, Glyphs::for_width(app.glyphs, app.width));
     let accounts = app.accounts_of(&switch.session);
-    let accounts_len = accounts.len();
-    let current = session
-        .account_id
-        .as_ref()
-        .and_then(|id| account_screen::find(&app.machines, &switch.session.host_id, id));
-    let now_on = match (current, &session.account_id) {
-        (Some(account), _) => format!("{} ({})", account.label, account.provider.as_str()),
-        (None, Some(id)) => id.to_string(),
-        (None, None) => "unknown".to_owned(),
-    };
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("now  ", super::dim()),
-            Span::raw(format!("{now_on} · {}", session.model)),
-        ]),
-        Line::raw(""),
-    ];
-    if accounts.is_empty() {
-        lines.push(Line::styled(
-            "This machine has no accounts: A shows them.",
-            super::dim(),
-        ));
+    let order = app.switch_rows();
+    let cursor = switch.selected.min(order.len().saturating_sub(1));
+    let chosen = order.get(cursor).and_then(|at| accounts.get(*at));
+    let narrow = area.width < super::NARROW;
+
+    // The list: by kind, a header over each.
+    let mut rows = Vec::new();
+    let mut items = Vec::new();
+    let mut last = None;
+    for at in &order {
+        let account = &accounts[*at];
+        let group = switch::kind(session, account) == Kind::Provider;
+        if last != Some(group) {
+            if last.is_some() {
+                rows.push(Row::Gap);
+            }
+            let (title, note) = if group {
+                ("other provider", "replays the transcript")
+            } else {
+                ("same provider", "conversation continues")
+            };
+            rows.push(Row::header(title).right(note));
+            last = Some(group);
+        }
+        items.push(rows.len());
+        rows.push(row(ui, session, account, narrow));
     }
-    let label_width = accounts
-        .iter()
-        .map(|account| account.label.chars().count())
-        .max()
-        .unwrap_or(0);
-    let first_account = lines.len();
-    for (at, account) in accounts.iter().enumerate() {
-        lines.push(account_line(
-            session,
-            account,
-            at == switch.selected,
-            label_width,
-        ));
-    }
-    let chosen = accounts.get(switch.selected);
+    let selected = items.get(cursor).copied();
+
+    // Under it: the model, the models in use, what the switch does, and why it was refused.
+    let recent = app.switch_recent();
     let placeholder = match chosen.map(|account| switch::kind(session, account)) {
         Some(Kind::Provider) => "the provider's default".to_owned(),
+        _ if session.model.is_empty() => "keep the current model".to_owned(),
         _ => format!("keep {}", session.model),
     };
-    let label_style = if switch.editing {
-        Style::new().fg(Color::Cyan)
-    } else {
-        super::dim()
-    };
-    let mut model = vec![
-        Span::styled("model  ", label_style),
-        Span::raw(switch.model.clone()),
-    ];
-    if switch.editing {
-        model.push(Span::styled("▌", Style::new().fg(Color::Cyan)));
+    let mut footer = vec![Line::default()];
+    if !recent.is_empty() {
+        let mut spans = vec![Span::styled(
+            // Under the model field's text, past its label and padding.
+            format!(
+                "{:<w$}",
+                "recent",
+                w = usize::from(label_width("search")) + 1
+            ),
+            ui.muted(),
+        )];
+        spans.extend(
+            ui.joined(
+                recent
+                    .iter()
+                    .map(|model| Span::styled(model.clone(), ui.text())),
+            ),
+        );
+        footer.push(Line::from(spans));
     }
-    if switch.model.is_empty() {
-        model.push(Span::styled(placeholder, super::dim()));
-    }
-    lines.push(Line::raw(""));
-    lines.push(Line::from(model));
-    lines.push(Line::raw(""));
-    let width = area.width.saturating_sub(4).min(72);
-    // Inside the borders and padding.
-    let wrap_at = usize::from(width.saturating_sub(4)).max(8);
+    let mut notes = Vec::new();
+    let room = usize::from(
+        Size::Medium
+            .width()
+            .min(area.width)
+            .saturating_sub(2 + 2 * crate::ui::dialog::PAD_X),
+    )
+    .max(8);
     let mut wrapped = |text: &str, style: Style| {
-        for part in textwrap::wrap(text, wrap_at) {
-            lines.push(Line::styled(part.into_owned(), style));
+        for line in textwrap::wrap(text, room) {
+            notes.push(Line::styled(line.into_owned(), style));
         }
     };
     if let Some(account) = chosen {
-        wrapped(&what(session, account), super::dim());
+        wrapped(&what(session, account), ui.muted());
     }
     if let Some(error) = &switch.error {
-        wrapped(error, Style::new().fg(Color::Red));
+        wrapped(error, Style::new().fg(theme.error));
     }
-    let keys = if switch.editing {
-        " Enter switch  ⌫ accounts "
-    } else if area.width < super::NARROW {
-        " Enter switch  m model  ⌫ close "
+    if !notes.is_empty() {
+        footer.push(Line::default());
+        footer.extend(notes);
+    }
+
+    let editing = switch.editing;
+    let hints = if editing {
+        vec![
+            Hint::new("enter", "switch"),
+            Hint::new("tab", "accounts"),
+            Hint::new("esc", "back"),
+        ]
     } else {
-        " Enter switch  j/k account  m model  Esc close "
+        vec![
+            Hint::new("enter", "switch"),
+            Hint::new("tab", "model"),
+            Hint::new("esc", "close"),
+        ]
     };
-    let block = Block::bordered()
-        .title(Line::styled(
-            format!(" switch {} ", session.short_title()),
-            super::bold(),
-        ))
-        .title_bottom(Line::styled(keys, super::dim()).centered())
-        .border_style(Style::new().fg(Color::Cyan))
-        .padding(Padding::uniform(1));
-    let height = u16::try_from(lines.len() + 4).unwrap_or(u16::MAX);
-    let area = super::centered(area, width, height);
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-    let first_account = inner.y + u16::try_from(first_account).unwrap_or(u16::MAX);
-    let rows = Rect::new(inner.x, first_account, inner.width, inner.height).intersection(inner);
-    hits.list(rows, 0, &vec![1; accounts_len], |at| {
-        Some(Click::Row(Rows::Switch, at))
-    });
+    let title = Line::from(ui.joined([Span::raw("switch"), Span::raw(session.short_title())]));
+    let empty = if accounts.is_empty() {
+        "this machine has no accounts: A shows them"
+    } else {
+        "no account matches"
+    };
+    let Some(switch) = &mut app.switch else {
+        return;
+    };
+    let mut search = search_line(&switch.search, "type to filter");
+    let mut model = search_line(&switch.model, &placeholder);
+    let placed = Select::new(ui, title, Size::Medium, &mut search)
+        .searching(!editing)
+        .rows(rows, selected)
+        .empty(empty)
+        .footer(footer)
+        .hints(if narrow { &hints[..2] } else { &hints })
+        .render(area, frame.buffer_mut(), &mut switch.offset);
+    super::palette::dialog_taps(hits, area, &placed.dialog);
+    hits.click(placed.search, Click::Act(Action::Switch(Input::Accounts)));
+    if let Some((_, model_row)) = placed.footer.first() {
+        Field::new(ui, "model", &mut model).focused(editing).render(
+            *model_row,
+            frame.buffer_mut(),
+            label_width("search"),
+        );
+        hits.click(*model_row, Click::Act(Action::Switch(Input::EditModel)));
+    }
+    // Each recent model, tapped, is taken.
+    if let Some((_, recent_row)) = placed.footer.get(1).filter(|_| !recent.is_empty()) {
+        let mut x = recent_row.x + label_width("search") + 1;
+        let separator = u16::try_from(crate::ui::width(ui.glyphs.separator)).unwrap_or(3);
+        for (at, model) in recent.iter().enumerate() {
+            let width = u16::try_from(crate::ui::width(model)).unwrap_or(u16::MAX);
+            let rect = Rect::new(x, recent_row.y, width, 1).intersection(*recent_row);
+            hits.click(rect, Click::Act(Action::Switch(Input::Recent(at))));
+            x = x.saturating_add(width + separator);
+        }
+    }
+    for (row, rect) in placed.rows {
+        if let Some(at) = items.iter().position(|item| *item == row) {
+            hits.click(rect, Click::Row(Rows::Switch, at));
+        }
+    }
 }
 
-/// An account to pick: its label, provider and busiest window, marked if the session is on it.
-fn account_line(
-    session: &Session,
-    account: &Account,
-    chosen: bool,
-    label_width: usize,
-) -> Line<'static> {
-    let mark = if switch::kind(session, account) == Kind::Current {
-        "• "
+/// An account to pick: marked if the session is on it, its label, and its busiest window.
+fn row<'a>(ui: Ui, session: &Session, account: &Account, narrow: bool) -> Row<'a> {
+    let current = switch::kind(session, account) == Kind::Current;
+    let mark = if current {
+        Span::styled(ui.glyphs.connected, ui.accent())
     } else {
-        "  "
+        Span::raw(" ")
     };
-    let label = format!("{:<label_width$}", account.label);
-    let label = if chosen {
-        Span::styled(label, super::bold().reversed())
-    } else {
-        Span::raw(label)
-    };
-    let busiest = account
+    let mut left = vec![
+        mark,
+        Span::raw(" "),
+        Span::styled(account.label.clone(), ui.text()),
+    ];
+    if !narrow && account.label != account.account_id.as_str() {
+        left.push(Span::raw("  "));
+        left.push(Span::styled(account.account_id.to_string(), ui.muted()));
+    }
+    let mut right = Vec::new();
+    if let Some(usage) = account
         .usage
         .iter()
         .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
-        .map_or_else(String::new, |usage| {
-            format!(
-                " · {} {:.0}%",
-                account_screen::window_label(&usage.window),
-                usage.used_percent
-            )
-        });
-    Line::from(vec![
-        Span::styled(mark, Style::new().fg(Color::Cyan)),
-        label,
-        Span::styled(
-            format!("  {}{busiest}", account.provider.as_str()),
-            super::dim(),
-        ),
-    ])
+    {
+        // Rounded, then held to 0–100, so the cast cannot truncate.
+        let percent = usage.used_percent.round().clamp(0.0, 100.0) as u8;
+        right.push(Span::styled(
+            format!("{} ", account_screen::window_label(&usage.window)),
+            ui.muted(),
+        ));
+        right.push(Span::styled(
+            format!("{percent:>3}%"),
+            Style::new().fg(ui.theme.usage(percent)),
+        ));
+    }
+    if current && !narrow {
+        right.push(Span::styled(
+            format!("{}current", " ".repeat(GAP)),
+            ui.muted(),
+        ));
+    }
+    Row::item(Line::from(left)).right(Line::from(right))
 }
 
-/// What switching `session` to `account` does, for the dialog.
+/// What switching `session` to `account` does.
 fn what(session: &Session, account: &Account) -> String {
     match switch::kind(session, account) {
         Kind::Current => "The session is on this account: a model changes only the model.".into(),

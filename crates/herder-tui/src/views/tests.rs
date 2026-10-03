@@ -481,8 +481,8 @@ fn the_new_session_dialog() {
     machines[0].accounts = vec![fake::account("claude-main", "Main")];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('n'));
-    press(&mut app, KeyCode::Tab);
-    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Tab);
     insta::assert_snapshot!(render(&mut app, 100, 20).backend());
 }
@@ -501,7 +501,7 @@ fn the_session_list_badges_each_sessions_prs() {
     let at = row(s2).find("#7").unwrap();
     let x = u16::try_from(row(s2)[..at].chars().count()).unwrap();
     assert_eq!(buffer[(x, s2)].fg, Color::Green);
-    assert_eq!(buffer[(x + 2, s2)].symbol(), "✓");
+    assert_eq!(buffer[(x + 3, s2)].symbol(), "✓");
 }
 
 #[test]
@@ -574,7 +574,7 @@ fn typed(app: &mut App, text: &str) {
     }
 }
 
-const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
+pub(super) const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
                     &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\
                     &code=ABCDE-FGHJK";
 
@@ -734,11 +734,8 @@ fn a_narrow_screen_shows_ascii_unless_glyphs_chose_unicode() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Esc);
     let ascii = render(&mut app, 45, 20).backend().to_string();
-    let borders = '\u{2500}'..='\u{257f}';
-    assert!(
-        ascii.chars().all(|c| c.is_ascii() || borders.contains(&c)),
-        "{ascii}"
-    );
+    // Not even box drawing: it is two columns wide on some phones.
+    assert!(ascii.is_ascii(), "{ascii}");
     assert!(
         ascii.contains(r#"Done - the "fix" works. mostly > ship"#),
         "{ascii}"
@@ -751,7 +748,7 @@ fn a_narrow_screen_shows_ascii_unless_glyphs_chose_unicode() {
     let palette = app.compose.palette.as_ref().unwrap();
     assert_eq!(
         palette.error.as_deref(),
-        Some("usage: glyphs unicode|ascii")
+        Some("usage: glyphs ascii|unicode")
     );
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char(':'));
@@ -886,6 +883,14 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
 /// to failover, and pins its sessions and fails over to codex, beside a disconnected machine
 /// with none; `s2` and `s3` run on `claude-main`.
 fn with_accounts() -> App {
+    let mut app = fake::tree();
+    add_accounts(&mut app);
+    app
+}
+
+/// Gives `app`'s first machine three accounts with usage, Claude's and Codex's, and adds a
+/// disconnected `laptop`.
+pub(super) fn add_accounts(app: &mut App) {
     use herder_protocol::{Provider, Timestamp, UsageWindow};
 
     // Half a minute past each reset time, so the countdown reads the same while the test runs.
@@ -894,7 +899,6 @@ fn with_accounts() -> App {
         used_percent,
         resets_at: Some(Timestamp::from_second(Timestamp::now().as_second() + secs + 30).unwrap()),
     };
-    let mut app = fake::tree();
     let mut machines = app.machines.clone();
     let mut main = fake::account("claude-main", "Main");
     main.usage = vec![
@@ -918,7 +922,6 @@ fn with_accounts() -> App {
     };
     machines.push(laptop);
     app.update(Msg::Machines(machines));
-    app
 }
 
 #[test]
@@ -941,8 +944,8 @@ fn the_switch_dialog_on_narrow_and_wide_screens() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('s'));
-    press(&mut app, KeyCode::Char('j'));
-    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     narrow_and_wide("switch", &mut app);
 }
 
@@ -1044,4 +1047,26 @@ fn the_command_popup_opens_over_the_transcript() {
     let mut app = fake::chat();
     fake::type_text(&mut app, "/mo");
     insta::assert_snapshot!(render(&mut app, 100, 30).backend());
+}
+
+#[test]
+fn the_command_palette_on_narrow_and_wide_screens() {
+    let mut app = open_s2(vec![fake::started("turn-1")]);
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )));
+    assert!(app.compose.palette.is_some());
+    narrow_and_wide("palette", &mut app);
+    // Typing filters; names the search starts come first.
+    fake::type_text(&mut app, "acc");
+    insta::assert_snapshot!("palette_filtered", render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn the_new_session_projects_on_narrow_and_wide_screens() {
+    let mut app = fake::projects();
+    press(&mut app, KeyCode::Char('v'));
+    press(&mut app, KeyCode::Char('n'));
+    narrow_and_wide("new_session_projects", &mut app);
 }

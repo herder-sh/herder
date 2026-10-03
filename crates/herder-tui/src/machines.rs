@@ -217,6 +217,8 @@ pub enum Input {
     Backspace,
     /// Clear the field.
     Clear,
+    /// Type in a field of the add dialog: a tapped one.
+    Focus(Field),
 }
 
 /// The action a key asks for while the panel is open.
@@ -412,6 +414,7 @@ impl App {
                 add.form.field().pop();
             }
             (Step::Edit | Step::Failed(_), Input::Clear) => add.form.field().clear(),
+            (Step::Edit | Step::Failed(_), Input::Focus(field)) => add.form.focus = field,
             (Step::Confirm(_), Input::Close) => add.step = Step::Edit,
             (Step::Confirm(uri), Input::Submit) => {
                 let link = uri.to_string();

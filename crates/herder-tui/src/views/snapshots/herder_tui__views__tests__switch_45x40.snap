@@ -2,9 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" ! api - app - box             1/4  │ switch "
-" ! 1 need you  x 1  * 1  x lapt...  │    !   "
-"──────────────────────────────────────────── "
+" ! api - app - box             1/4  | switch "
+" ! 1 need you  x 1  * 1  x lapt...  |    !   "
+"-------------------------------------------- "
 "                                             "
 "                                             "
 "                                             "
@@ -36,9 +36,9 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-" │ sjj                                       "
-" │                                           "
-" │ Main - claude-opus - ask                  "
-" └─────────────────────────────────────────  "
+" | s                                         "
+" |                                           "
+" | Main - claude-opus - ask                  "
+" `-----------------------------------------  "
 "                         Weekly - Fable 93%  "
 " > send   s switch   t term                  "

@@ -6,7 +6,7 @@ expression: terminal.backend()
 "                                 │ No session open                              "
 " machines             by machine │                                              "
 "  ◉ box                        1 │   enter  open the selected session           "
-"▶   ├ ◉ app · api         #7✓ +1 │       n  start a new session                 "
+"▶   ├ ◉ app · api        #7 ✓ +1 │       n  start a new session                 "
 "    │ ├ ● write the tests     #8 │       I  inbox: what waits on you            "
 " ─────────────────────────────── │  ctrl+x  leader: every view, from anywhere   "
 " + new                    ≡ menu │       ?  every key                           "

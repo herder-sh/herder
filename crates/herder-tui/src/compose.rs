@@ -8,18 +8,16 @@
 use std::collections::HashMap;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, PermissionMode, ProjectId,
-    SessionStatus,
+    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, PermissionMode, SessionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
 use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::action::Action;
-use crate::app::{App, Effect, Focus, Row};
+use crate::app::{App, Effect, Focus};
 use crate::prompt::Recall;
 use crate::session::{MODES, SessionKey, mode_name};
-use crate::ui::glyphs::Glyphs;
 
 /// A user action of this module; see [`Action::Compose`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,10 +42,6 @@ pub enum Act {
     Palette,
     /// Open the new-session dialog.
     NewSession,
-    /// Move to the next (1) or previous (-1) dialog field.
-    Field(i8),
-    /// Change the dialog's focused choice to the next (1) or previous (-1) value.
-    Cycle(i8),
     /// Move the completion popup's selection down (1) or up (-1).
     Completion(i8),
     /// Accept the popup's completion.
@@ -81,9 +75,9 @@ pub struct Compose {
     /// The open session's prompt being written.
     pub editor: TextArea<'static>,
     /// The command palette, while open.
-    pub palette: Option<Palette>,
+    pub palette: Option<crate::palette::Palette>,
     /// The new-session dialog, while open.
-    pub dialog: Option<NewSession>,
+    pub dialog: Option<crate::new_session::NewSession>,
     /// The latest failed command of each session, shown in its view until the next command.
     pub errors: HashMap<SessionKey, String>,
     /// Ctrl-C was pressed with no turn to interrupt; a second press quits.
@@ -143,99 +137,6 @@ impl Compose {
     }
 }
 
-/// The `:` command line.
-#[derive(Debug)]
-pub struct Palette {
-    /// The command being typed.
-    pub input: TextArea<'static>,
-    /// Why the last command was not run.
-    pub error: Option<String>,
-    /// Session the command applies to.
-    target: Option<SessionKey>,
-}
-
-/// The palette's commands, for its hint and the help.
-pub const COMMANDS: &str = "model <name> · mode read_only|ask|auto_edit|full_access · archive[!] · interrupt · new · \
-     down [project] · mouse on|off · glyphs unicode|ascii";
-
-/// The new-session dialog.
-#[derive(Debug)]
-pub struct NewSession {
-    /// Project the session starts from; the machine field then picks among its clones.
-    pub project: Option<ProjectId>,
-    /// Machine to create on.
-    pub host_id: HostId,
-    /// Field with focus.
-    pub field: Field,
-    /// Repository path on the machine.
-    pub repo: TextArea<'static>,
-    /// Index of the account in the machine's accounts.
-    pub account: usize,
-    /// Model; empty for the provider's default.
-    pub model: TextArea<'static>,
-    /// Starting permission mode.
-    pub mode: PermissionMode,
-    /// Why the last create failed.
-    pub error: Option<String>,
-    /// A create is on its way.
-    pub sending: bool,
-}
-
-/// A field of the new-session dialog, in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Field {
-    /// Which machine.
-    Machine,
-    /// Repository path.
-    Repo,
-    /// Which account.
-    Account,
-    /// Model.
-    Model,
-    /// Permission mode.
-    Mode,
-}
-
-impl Field {
-    const ALL: [Field; 5] = [
-        Field::Machine,
-        Field::Repo,
-        Field::Account,
-        Field::Model,
-        Field::Mode,
-    ];
-
-    fn by(self, step: i8) -> Field {
-        let at = Self::ALL.iter().position(|f| *f == self).unwrap_or(0);
-        Self::ALL[cycle(at, Self::ALL.len(), step)]
-    }
-
-    /// Whether the field is typed into rather than picked.
-    pub fn is_text(self) -> bool {
-        matches!(self, Field::Repo | Field::Model)
-    }
-}
-
-impl NewSession {
-    /// Whether the focused field is a text field with nothing typed.
-    fn field_is_empty(&self) -> bool {
-        match self.field {
-            Field::Repo => self.repo.is_empty(),
-            Field::Model => self.model.is_empty(),
-            _ => false,
-        }
-    }
-}
-
-/// `at` moved one place forward (`step` > 0) or back in a ring of `len`.
-fn cycle(at: usize, len: usize, step: i8) -> usize {
-    match len {
-        0 => 0,
-        _ if step < 0 => (at + len - 1) % len,
-        _ => (at + 1) % len,
-    }
-}
-
 /// A one-line editor with `placeholder`.
 fn line(placeholder: &str) -> TextArea<'static> {
     let mut input = TextArea::default();
@@ -263,32 +164,10 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
     let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if let Some(dialog) = &app.compose.dialog {
-        // Without Tab or arrows, as on a phone: a choice field moves with j / k and changes
-        // with h / l, Backspace on an empty text field goes back a field, and Backspace on a
-        // choice closes the dialog.
-        let text = dialog.field.is_text();
-        return match key.code {
-            KeyCode::Esc => compose(Act::Leave),
-            KeyCode::Enter => compose(Act::Submit),
-            KeyCode::Tab | KeyCode::Down => compose(Act::Field(1)),
-            KeyCode::BackTab | KeyCode::Up => compose(Act::Field(-1)),
-            KeyCode::Char('j') if !text => compose(Act::Field(1)),
-            KeyCode::Char('k') if !text => compose(Act::Field(-1)),
-            KeyCode::Left | KeyCode::Char('h') if !text => compose(Act::Cycle(-1)),
-            KeyCode::Right | KeyCode::Char(' ' | 'l') if !text => compose(Act::Cycle(1)),
-            KeyCode::Backspace if !text => compose(Act::Leave),
-            KeyCode::Backspace if dialog.field_is_empty() => compose(Act::Field(-1)),
-            _ if text => compose(Act::Key(key)),
-            _ => Some(None),
-        };
+        return Some(crate::new_session::for_key(key, dialog));
     }
     if let Some(palette) = &app.compose.palette {
-        return match key.code {
-            KeyCode::Esc => compose(Act::Leave),
-            KeyCode::Backspace if palette.input.is_empty() => compose(Act::Leave),
-            KeyCode::Enter => compose(Act::Submit),
-            _ => compose(Act::Key(key)),
-        };
+        return Some(Some(crate::palette::for_key(key, palette)));
     }
     if app.focus != Focus::Composer {
         return None;
@@ -409,39 +288,20 @@ impl App {
             Act::CtrlC => return self.ctrl_c(),
             Act::Approve(decision) => return self.approve(decision),
             Act::Choose(index) => return self.choose(index),
-            Act::Palette => {
-                let target = match self.focus {
-                    Focus::Sessions => self.selected().as_ref().and_then(Row::session).cloned(),
-                    _ => self.open.clone(),
-                };
-                self.compose.palette = Some(Palette {
-                    input: line(""),
-                    error: None,
-                    target,
-                });
-            }
+            Act::Palette => self.open_palette(),
             Act::NewSession => self.new_session(),
-            Act::Field(step) => {
-                if let Some(dialog) = &mut self.compose.dialog {
-                    dialog.field = dialog.field.by(step);
-                }
-            }
-            Act::Cycle(step) => self.cycle(step),
         }
         Vec::new()
     }
 
     /// Inserts pasted text into the editor that has the keys.
     pub(crate) fn paste(&mut self, text: &str) {
-        if let Some(dialog) = &mut self.compose.dialog {
-            let one_line = text.replace(['\r', '\n'], " ");
-            match dialog.field {
-                Field::Repo => dialog.repo.insert_str(one_line.trim()),
-                Field::Model => dialog.model.insert_str(one_line.trim()),
-                _ => false,
-            };
-        } else if let Some(palette) = &mut self.compose.palette {
-            palette.input.insert_str(text.replace(['\r', '\n'], " "));
+        if self.paste_new_session(text) {
+            return;
+        }
+        if let Some(palette) = &mut self.compose.palette {
+            palette.search.insert_str(text.replace(['\r', '\n'], " "));
+            palette.selected = 0;
         } else if self.focus == Focus::Composer {
             self.paste_prompt(text);
         }
@@ -510,26 +370,10 @@ impl App {
     }
 
     fn edit(&mut self, key: KeyEvent) {
-        if let Some(dialog) = &mut self.compose.dialog {
-            match dialog.field {
-                Field::Repo => dialog.repo.input(key),
-                Field::Model => dialog.model.input(key),
-                _ => false,
-            };
-        } else if let Some(palette) = &mut self.compose.palette {
-            palette.input.input(key);
-        } else {
-            self.compose.editor.input(key);
-        }
+        self.compose.editor.input(key);
     }
 
     fn submit(&mut self) -> Vec<Effect> {
-        if self.compose.dialog.is_some() {
-            return self.create();
-        }
-        if let Some(palette) = self.compose.palette.take() {
-            return self.run(palette);
-        }
         let Some(key) = self.open.clone() else {
             return Vec::new();
         };
@@ -542,7 +386,7 @@ impl App {
         }
         // A `/command` runs; `//` sends a literal `/`.
         if typed.starts_with('/') && !typed.starts_with("//") {
-            return match self.slash(&key, &typed) {
+            return match self.slash(Some(&key), &typed) {
                 Ok(effects) => {
                     self.compose.clear();
                     self.compose.errors.remove(&key);
@@ -642,50 +486,6 @@ impl App {
         vec![send(key, command, Origin::Session(key.clone()))]
     }
 
-    /// Runs a palette command, or reopens the palette with why it cannot.
-    fn run(&mut self, mut palette: Palette) -> Vec<Effect> {
-        let line = text(&palette.input);
-        let mut words = line.split_whitespace();
-        let Some(name) = words.next() else {
-            return Vec::new();
-        };
-        let rest: Vec<&str> = words.collect();
-        if name == "new" {
-            self.new_session();
-            return Vec::new();
-        }
-        if name == "mouse" {
-            let on = match rest.as_slice() {
-                ["on"] => true,
-                ["off"] => false,
-                _ => {
-                    palette.error = Some("usage: mouse on|off".to_owned());
-                    self.compose.palette = Some(palette);
-                    return Vec::new();
-                }
-            };
-            self.mouse = on;
-            return vec![Effect::Mouse(on), Effect::Save];
-        }
-        if name == "glyphs" {
-            let Some(glyphs) = rest.as_slice().first().and_then(|name| Glyphs::parse(name)) else {
-                palette.error = Some("usage: glyphs unicode|ascii".to_owned());
-                self.compose.palette = Some(palette);
-                return Vec::new();
-            };
-            self.glyphs = Some(glyphs);
-            return vec![Effect::Save];
-        }
-        match self.command(palette.target.as_ref(), name, &rest) {
-            Ok((key, body)) => vec![send(&key, body, Origin::Session(key.clone()))],
-            Err(error) => {
-                palette.error = Some(error);
-                self.compose.palette = Some(palette);
-                Vec::new()
-            }
-        }
-    }
-
     /// The command a palette line names, for the session it applies to.
     pub(crate) fn command(
         &self,
@@ -745,165 +545,6 @@ impl App {
         projects.sort_unstable();
         projects.dedup();
         projects
-    }
-
-    fn new_session(&mut self) {
-        self.compose.palette = None;
-        let selected = self.selected();
-        let host_id = match &selected {
-            Some(Row::Machine(host_id) | Row::Host { vault: host_id, .. }) => Some(host_id.clone()),
-            Some(Row::Session { key, .. }) => Some(key.host_id.clone()),
-            Some(Row::Project(_)) | None => None,
-        };
-        let mut repo = line("/absolute/path/to/repo");
-        // From a project, on the clone used last.
-        let project = self.selected_project();
-        if let Some(clone) = project.as_ref().and_then(|p| self.last_used_clone(p)) {
-            repo.insert_str(&clone.repo);
-            let account = self.default_account(&clone.host_id, project.as_ref());
-            self.compose.dialog = Some(NewSession {
-                project,
-                host_id: clone.host_id,
-                field: Field::Machine,
-                repo,
-                account,
-                model: line("provider default"),
-                mode: PermissionMode::Ask,
-                error: None,
-                sending: false,
-            });
-            return;
-        }
-        let Some(host_id) = host_id.or_else(|| self.machines.first().map(|m| m.host_id.clone()))
-        else {
-            return;
-        };
-        let known = self
-            .open
-            .as_ref()
-            .or(selected.as_ref().and_then(Row::session))
-            .and_then(|key| self.sessions.get(key))
-            .filter(|session| !session.repo.is_empty());
-        if let Some(session) = known {
-            repo.insert_str(&session.repo);
-        }
-        self.compose.dialog = Some(NewSession {
-            project: None,
-            host_id,
-            field: Field::Repo,
-            repo,
-            account: 0,
-            model: line("provider default"),
-            mode: PermissionMode::Ask,
-            error: None,
-            sending: false,
-        });
-    }
-
-    fn cycle(&mut self, step: i8) {
-        let project = self
-            .compose
-            .dialog
-            .as_ref()
-            .and_then(|dialog| dialog.project.clone());
-        let clones = project.as_ref().map(|project| self.clones(project));
-        // The account each machine starts the project's sessions on.
-        let accounts: Vec<usize> = self
-            .machines
-            .iter()
-            .map(|m| self.default_account(&m.host_id, project.as_ref()))
-            .collect();
-        let account_on = |machines: &[herder_client_core::Machine], host_id: &HostId| {
-            machines
-                .iter()
-                .position(|m| m.host_id == *host_id)
-                .map_or(0, |at| accounts[at])
-        };
-        let Some(dialog) = &mut self.compose.dialog else {
-            return;
-        };
-        match dialog.field {
-            Field::Machine if let Some(clones) = clones => {
-                let repo = text(&dialog.repo);
-                let at = clones
-                    .iter()
-                    .position(|c| c.host_id == dialog.host_id && c.repo == repo.trim())
-                    .or_else(|| clones.iter().position(|c| c.host_id == dialog.host_id))
-                    .unwrap_or(0);
-                if let Some(clone) = clones.get(cycle(at, clones.len(), step)) {
-                    dialog.host_id = clone.host_id.clone();
-                    dialog.repo = line("/absolute/path/to/repo");
-                    dialog.repo.insert_str(&clone.repo);
-                    dialog.account = account_on(&self.machines, &clone.host_id);
-                }
-            }
-            Field::Machine => {
-                let at = self
-                    .machines
-                    .iter()
-                    .position(|m| m.host_id == dialog.host_id)
-                    .unwrap_or(0);
-                if let Some(machine) = self.machines.get(cycle(at, self.machines.len(), step)) {
-                    dialog.host_id = machine.host_id.clone();
-                    dialog.account = 0;
-                }
-            }
-            Field::Account => {
-                let accounts = self
-                    .machines
-                    .iter()
-                    .find(|m| m.host_id == dialog.host_id)
-                    .map_or(0, |m| m.accounts.len());
-                dialog.account = cycle(dialog.account, accounts, step);
-            }
-            Field::Mode => {
-                let at = MODES.iter().position(|m| *m == dialog.mode).unwrap_or(0);
-                dialog.mode = MODES[cycle(at, MODES.len(), step)];
-            }
-            Field::Repo | Field::Model => {}
-        }
-    }
-
-    fn create(&mut self) -> Vec<Effect> {
-        let Some(dialog) = &mut self.compose.dialog else {
-            return Vec::new();
-        };
-        if dialog.sending {
-            return Vec::new();
-        }
-        let account = self
-            .machines
-            .iter()
-            .find(|m| m.host_id == dialog.host_id)
-            .and_then(|m| m.accounts.get(dialog.account));
-        let repo = text(&dialog.repo).trim().to_owned();
-        let model = text(&dialog.model).trim().to_owned();
-        let Some(account) = account else {
-            dialog.error = Some("this machine has no accounts".to_owned());
-            return Vec::new();
-        };
-        if repo.is_empty() {
-            dialog.error = Some("enter the repository's path".to_owned());
-            dialog.field = Field::Repo;
-            return Vec::new();
-        }
-        dialog.error = None;
-        dialog.sending = true;
-        let command = CommandBody::CreateSession {
-            repo: Some(repo),
-            project_id: None,
-            branch: None,
-            account_id: Some(account.account_id.clone()),
-            model: (!model.is_empty()).then_some(model),
-            permission_mode: dialog.mode,
-            max_children: None,
-            failover_pin: None,
-        };
-        vec![Effect::Send {
-            host_id: dialog.host_id.clone(),
-            command,
-            origin: Origin::NewSession(dialog.host_id.clone()),
-        }]
     }
 }
 
@@ -1021,40 +662,16 @@ mod tests {
     }
 
     #[test]
-    fn the_palette_and_dialog_close_with_backspace_and_move_with_letters() {
+    fn the_palette_and_dialog_close_with_backspace() {
         let mut app = open_s2(vec![]);
         press(&mut app, KeyCode::Char(':'));
         press(&mut app, KeyCode::Backspace);
         assert!(app.compose.palette.is_none());
 
-        // In the transcript n denies; from the list it opens the dialog.
-        press(&mut app, KeyCode::Backspace);
+        // From the list, n opens the dialog; Backspace on its empty search closes it.
+        press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('n'));
-        let field = |app: &App| app.compose.dialog.as_ref().map(|d| d.field);
-        // The repo comes filled in from the open session.
-        assert_eq!(field(&app), Some(Field::Repo));
-        press(&mut app, KeyCode::Up);
-        assert_eq!(field(&app), Some(Field::Machine));
-        press(&mut app, KeyCode::Char('k'));
-        assert_eq!(field(&app), Some(Field::Mode));
-        press(&mut app, KeyCode::Char('k'));
-        // In a text field, letters type; Backspace on it empty goes back a field.
-        type_text(&mut app, "jk");
-        press(&mut app, KeyCode::Backspace);
-        press(&mut app, KeyCode::Backspace);
-        assert_eq!(field(&app), Some(Field::Model));
-        press(&mut app, KeyCode::Backspace);
-        assert_eq!(field(&app), Some(Field::Account));
-        press(&mut app, KeyCode::Char('j'));
-        assert_eq!(field(&app), Some(Field::Model));
-        press(&mut app, KeyCode::Down);
-        assert_eq!(field(&app), Some(Field::Mode));
-        let mode = |app: &App| app.compose.dialog.as_ref().map(|d| d.mode);
-        let before = mode(&app);
-        press(&mut app, KeyCode::Char('l'));
-        assert_ne!(mode(&app), before);
-        press(&mut app, KeyCode::Char('h'));
-        assert_eq!(mode(&app), before);
+        assert!(app.compose.dialog.is_some());
         press(&mut app, KeyCode::Backspace);
         assert!(app.compose.dialog.is_none());
     }
@@ -1292,85 +909,6 @@ mod tests {
                 Origin::Session(key("h1", "s1"))
             )]
         );
-    }
-
-    #[test]
-    fn the_dialog_creates_a_session_and_opens_it_once_listed() {
-        let mut app = fake::tree();
-        let mut machines = app.machines.clone();
-        machines[0].accounts = vec![
-            fake::account("claude-main", "Main"),
-            fake::account("claude-work", "Work"),
-        ];
-        app.update(Msg::Machines(machines.clone()));
-
-        press(&mut app, KeyCode::Char('n'));
-        let dialog = app.compose.dialog.as_ref().unwrap();
-        assert_eq!(dialog.field, Field::Repo);
-        assert_eq!(dialog.repo.lines(), ["/home/ann/src/app"]);
-
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Right);
-        press(&mut app, KeyCode::Tab);
-        type_text(&mut app, "claude-opus");
-        press(&mut app, KeyCode::Tab);
-        press(&mut app, KeyCode::Left);
-        let effects = press(&mut app, KeyCode::Enter);
-        assert_eq!(
-            effects,
-            [Effect::Send {
-                host_id: HostId::new("h1"),
-                command: CommandBody::CreateSession {
-                    repo: Some("/home/ann/src/app".into()),
-                    project_id: None,
-                    branch: None,
-                    account_id: Some(herder_protocol::AccountId::new("claude-work")),
-                    model: Some("claude-opus".into()),
-                    permission_mode: PermissionMode::ReadOnly,
-                    max_children: None,
-                    failover_pin: None,
-                },
-                origin: Origin::NewSession(HostId::new("h1")),
-            }]
-        );
-        // A second Enter while it is on its way sends nothing.
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
-
-        app.update(Msg::Sent {
-            origin: Origin::NewSession(HostId::new("h1")),
-            result: Err("not a git repository".into()),
-        });
-        let dialog = app.compose.dialog.as_ref().unwrap();
-        assert_eq!(dialog.error.as_deref(), Some("not a git repository"));
-        assert!(!dialog.sending);
-
-        press(&mut app, KeyCode::Enter);
-        app.update(Msg::Sent {
-            origin: Origin::NewSession(HostId::new("h1")),
-            result: Ok(CommandResult::SessionCreated {
-                session_id: SessionId::new("s5"),
-            }),
-        });
-        assert!(app.compose.dialog.is_none());
-        assert_eq!(app.open, None);
-        machines[0] = fake::machine("h1", "box", &["s1", "s2", "s3", "s4", "s5"]);
-        app.update(Msg::Machines(machines));
-        assert_eq!(app.open, Some(key("h1", "s5")));
-        assert_eq!(app.focus, Focus::Composer);
-    }
-
-    #[test]
-    fn the_dialog_needs_an_account_and_a_repo() {
-        let mut app = fake::tree();
-        press(&mut app, KeyCode::Char('n'));
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
-        let dialog = app.compose.dialog.as_ref().unwrap();
-        assert_eq!(
-            dialog.error.as_deref(),
-            Some("this machine has no accounts")
-        );
-        press(&mut app, KeyCode::Esc);
-        assert!(app.compose.dialog.is_none());
     }
 
     #[test]
