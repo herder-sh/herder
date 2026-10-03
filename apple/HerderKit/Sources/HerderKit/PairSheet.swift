@@ -41,11 +41,13 @@ struct PairSheet: View {
                 }
                 if let error {
                     Section {
-                        Text(error).foregroundStyle(.red)
+                        Text(error).foregroundStyle(Theme.failure)
                     }
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
             .navigationTitle("Add Machine")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
