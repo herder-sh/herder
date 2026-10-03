@@ -2,6 +2,7 @@ package sh.herder.android
 
 import java.time.Instant
 import sh.herder.ffi.Account
+import sh.herder.ffi.Attachment
 import sh.herder.ffi.CiStatus
 import sh.herder.ffi.ConnectionState
 import sh.herder.ffi.Event
@@ -105,6 +106,22 @@ internal fun firstTurn(): SessionUpdate = updateOf(
     EventBody.TurnCompleted("t1"),
     EventBody.SessionStatusChanged(SessionStatus.IDLE, null),
 )
+
+/** A finished turn that sent a photo with the prompt. */
+internal fun imageTurn(
+    attachments: List<Attachment> = listOf(Attachment("01J9A", "image/png", 2400uL)),
+): SessionUpdate = updateOf(
+    100, 60,
+    EventBody.TurnStarted("t2"),
+    added("j1", "t2", ItemBody.UserMessage("What does this screen look like?", attachments)),
+    added("j2", "t2", ItemBody.AssistantMessage("It is the session composer with a photo attached.")),
+    EventBody.TurnCompleted("t2"),
+)
+
+/** The sample session after a turn that carried [attachments]. */
+internal fun sampleImageSession(
+    attachments: List<Attachment> = listOf(Attachment("01J9A", "image/png", 2400uL)),
+): Session = Session().applied(firstTurn()).applied(imageTurn(attachments))
 
 /** The sample session with its second turn at [stage]. */
 internal fun sampleSession(stage: Stage): Session {
