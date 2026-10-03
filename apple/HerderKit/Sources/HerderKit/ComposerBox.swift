@@ -12,26 +12,18 @@ struct ComposerBox<Footer: View>: View {
     /// Images going with the prompt: pasted, dropped or attached.
     @Binding var images: [Herder.Image]
     let placeholder: String
-    /// The provider whose models the menu offers.
-    let provider: Provider?
-    /// The model in use, by id; `""` for the provider's default.
-    let model: String
-    /// Models used on this machine with this provider, offered after the catalog's.
-    let usedModels: [String]
-    /// Offers "Default model" first, for a session not created yet.
-    var offersDefault = false
-    let providers: [Provider]
+    /// The model menu's groups, from `ModelCatalog.groups`.
+    let models: [ModelCatalog.Group]
+    /// The provider and model in use; `""` is the provider's default.
+    let current: ModelCatalog.Choice
     let mode: PermissionMode?
     let running: Bool
-    let setModel: (String) -> Void
-    let setProvider: (Provider) -> Void
+    let choose: (ModelCatalog.Choice) -> Void
     let setMode: (PermissionMode) -> Void
     let send: () -> Void
     let stop: () -> Void
     @ViewBuilder var footer: Footer
     @FocusState private var focused: Bool
-    @State private var otherModel = false
-    @State private var typedModel = ""
     @State private var imageError: String?
     @State private var dictation = Dictation()
     /// The text before dictation started; what is heard follows it.
@@ -62,25 +54,7 @@ struct ComposerBox<Footer: View>: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .accessibilityIdentifier("composer")
                 HStack(spacing: 4) {
-                    Menu {
-                        if providers.count > 1 {
-                            Section("Provider") {
-                                ForEach(providers, id: \.self) { provider in Button(provider) { setProvider(provider) } }
-                            }
-                        }
-                        Section("Model") {
-                            ForEach(menuModels, id: \.self) { id in
-                                Button { setModel(id) } label: {
-                                    let name = ModelCatalog.name(id, provider: provider)
-                                    if id == model { Label(name, systemImage: "checkmark") } else { Text(name) }
-                                }
-                            }
-                            Button("Other…") { otherModel = true }
-                        }
-                    } label: {
-                        MenuLabel(symbol: "sparkle", text: ModelCatalog.name(model, provider: provider))
-                    }
-                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                    ModelPicker(groups: models, current: current, choose: choose)
                     Divider().frame(height: 16).overlay(Theme.stroke)
                     Menu {
                         ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { option in
@@ -151,13 +125,6 @@ struct ComposerBox<Footer: View>: View {
         .onChange(of: focused) { watchPaste(focused) }
         .onDisappear { watchPaste(false) }
         #endif
-        .alert("Model", isPresented: $otherModel) {
-            TextField("Model name", text: $typedModel)
-            Button("Use") { if !typedModel.trimmingCharacters(in: .whitespaces).isEmpty { setModel(typedModel) } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("A model in the provider's naming.")
-        }
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -227,14 +194,6 @@ struct ComposerBox<Footer: View>: View {
         }
     }
     #endif
-
-    /// The catalog's models, then the ones used here, then the provider's default for a draft.
-    private var menuModels: [String] {
-        var ids = ModelCatalog.models(provider ?? "").map(\.id)
-        for id in usedModels + [model] where !id.isEmpty && !ids.contains(id) { ids.append(id) }
-        if offersDefault { ids.append("") }
-        return ids
-    }
 }
 
 /// A menu's label in the composer: icon, text and a chevron.
@@ -307,5 +266,35 @@ extension Fleet {
             if let model = session.model, !seen.contains(model) { seen.append(model) }
         }
         return seen
+    }
+}
+
+extension Fleet {
+    /// The providers a machine has accounts for.
+    func providers(on hostId: HostId) -> [Provider] {
+        Array(Set(machines.first { $0.hostId == hostId }?.accounts.map(\.provider) ?? []))
+    }
+
+    /// The model menu's groups on a machine: the providers' models with the ones used there.
+    func modelGroups(
+        on hostId: HostId, providers: [Provider], current: ModelCatalog.Choice, offersDefault: Bool
+    ) -> [ModelCatalog.Group] {
+        ModelCatalog.groups(
+            providers: providers, current: current,
+            used: Dictionary(uniqueKeysWithValues: Set(providers).map { ($0, models(on: hostId, provider: $0)) }),
+            offersDefault: offersDefault)
+    }
+
+    /// What a new session on a machine starts on: the default provider there, on its default
+    /// model.
+    func draftChoice(on hostId: HostId, projectId: String?) -> ModelCatalog.Choice {
+        let provider = defaultProvider(on: hostId, projectId: projectId) ?? ""
+        return ModelCatalog.Choice(provider: provider, model: ModelCatalog.defaultModel(provider))
+    }
+
+    /// A draft's choice once it moves to another machine: kept while that machine has an
+    /// account for its provider, else that machine's default.
+    func draftChoice(_ choice: ModelCatalog.Choice, movedTo hostId: HostId, projectId: String?) -> ModelCatalog.Choice {
+        providers(on: hostId).contains(choice.provider) ? choice : draftChoice(on: hostId, projectId: projectId)
     }
 }
