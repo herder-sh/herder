@@ -10,7 +10,9 @@ enum SidebarItem: Hashable {
 /// The fleet: tabs on iPhone; herder's own sidebar and panes on iPad and the Mac.
 struct FleetView: View {
     let fleet: Fleet
-    @State private var pairing = false
+    @State private var sheet: AppSheet?
+    @State private var item: SidebarItem = .home
+    @State private var session: SessionKey?
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -18,25 +20,43 @@ struct FleetView: View {
     var body: some View {
         Group {
             #if os(iOS)
-            if sizeClass == .compact { tabs } else { DesktopShell(fleet: fleet, pairing: $pairing) }
+            if sizeClass == .compact { tabs } else { shell }
             #else
-            DesktopShell(fleet: fleet, pairing: $pairing)
+            shell
             #endif
         }
         .tint(Theme.text)
-        .sheet(isPresented: $pairing) { PairSheet(fleet: fleet) }
+        .sheet(item: $sheet) { sheet in
+            sheet.view(fleet: fleet) { key in
+                // A new session opens where its project's sessions are listed.
+                if let project = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } }) {
+                    item = .project(project.id)
+                }
+                session = key
+            }
+        }
         .task { await fleet.follow() }
+    }
+
+    private var shell: some View {
+        DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session)
     }
 
     #if os(iOS)
     private var tabs: some View {
         TabView {
-            NavigationStack { HomeView(fleet: fleet, pairing: $pairing) }
-                .tabItem { Label("Home", systemImage: "tray.full") }
-                .badge(fleet.lists.requests.count)
-            NavigationStack { ProjectsView(fleet: fleet, projects: fleet.lists.projects) }
-                .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
-            NavigationStack { MachinesView(fleet: fleet, pairing: $pairing) }
+            NavigationStack {
+                HomeView(fleet: fleet, sheet: $sheet)
+                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession(projectId: nil) } }
+            }
+            .tabItem { Label("Home", systemImage: "tray.full") }
+            .badge(fleet.lists.requests.count)
+            NavigationStack {
+                ProjectsView(fleet: fleet, sheet: $sheet, projects: fleet.lists.projects)
+                    .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
+            }
+            .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
+            NavigationStack { MachinesView(fleet: fleet, sheet: $sheet) }
                 .tabItem { Label("Machines", systemImage: "server.rack") }
         }
     }
@@ -46,7 +66,7 @@ struct FleetView: View {
 /// What needs you, then what is running, then what finished.
 struct HomeView: View {
     let fleet: Fleet
-    @Binding var pairing: Bool
+    @Binding var sheet: AppSheet?
     /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
 
@@ -58,7 +78,7 @@ struct HomeView: View {
                 ConnectionLine(machines: lists.machines)
                 #endif
                 if lists.machines.isEmpty {
-                    EmptyFleet(pairing: $pairing)
+                    EmptyFleet { sheet = .pair }
                 }
                 if !lists.requests.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -66,8 +86,8 @@ struct HomeView: View {
                         ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet) }
                     }
                 }
-                SessionGroup(title: "Active", sessions: lists.active, selection: selection)
-                SessionGroup(title: "Recent", sessions: Array(lists.recent.prefix(20)), selection: selection)
+                SessionGroup(title: "Active", sessions: lists.active, fleet: fleet, selection: selection)
+                SessionGroup(title: "Recent", sessions: Array(lists.recent.prefix(20)), fleet: fleet, selection: selection)
             }
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
@@ -110,7 +130,7 @@ private struct ConnectionLine: View {
 }
 
 private struct EmptyFleet: View {
-    @Binding var pairing: Bool
+    let add: () -> Void
 
     var body: some View {
         Card {
@@ -119,7 +139,7 @@ private struct EmptyFleet: View {
                 Text("Run `herder pair` on a machine, then add it here with the link it prints.")
                     .font(.subheadline)
                     .foregroundStyle(Theme.secondary)
-                ActionButton(title: "Add Machine", style: .primary) { pairing = true }
+                ActionButton(title: "Add Machine", style: .primary) { add() }
                     #if os(macOS)
                     .frame(maxWidth: 220)
                     #endif
@@ -132,6 +152,7 @@ private struct EmptyFleet: View {
 struct SessionGroup: View {
     let title: String
     let sessions: [SessionSummary]
+    let fleet: Fleet
     var selection: Binding<SessionKey?>?
     var showsProject = true
 
@@ -142,7 +163,7 @@ struct SessionGroup: View {
                 VStack(spacing: 0) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                         if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
-                        SessionLink(session: session, selection: selection, showsProject: showsProject)
+                        SessionLink(session: session, fleet: fleet, selection: selection, showsProject: showsProject)
                     }
                 }
                 .padding(4)
@@ -152,22 +173,39 @@ struct SessionGroup: View {
     }
 }
 
-/// A session row that opens the session: into `selection` when given, else by pushing it.
+/// A session row that opens the session, into `selection` when given, else by pushing it,
+/// with archiving at hand: a button on hover, and in the context menu.
 struct SessionLink: View {
     let session: SessionSummary
+    let fleet: Fleet
     let selection: Binding<SessionKey?>?
     var showsProject = true
+    @State private var hovering = false
 
     var body: some View {
-        if let selection {
-            Button { selection.wrappedValue = session.key } label: { row }
-                .buttonStyle(.plain)
-                .background(
-                    selection.wrappedValue == session.key ? Theme.raised : .clear,
-                    in: .rect(cornerRadius: Theme.corner - 2))
-        } else {
-            NavigationLink(value: session.key) { row }
-                .buttonStyle(.plain)
+        Group {
+            if let selection {
+                Button { selection.wrappedValue = session.key } label: { row }
+                    .buttonStyle(.plain)
+                    .background(
+                        selection.wrappedValue == session.key || hovering ? Theme.raised : .clear,
+                        in: .rect(cornerRadius: Theme.corner - 2))
+            } else {
+                NavigationLink(value: session.key) { row }
+                    .buttonStyle(.plain)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if hovering && session.state != .archived {
+                IconButton(symbol: "archivebox", help: "Archive") { Task { await fleet.archive(session.key) } }
+                    .padding(8)
+            }
+        }
+        .onHover { hovering = $0 }
+        .contextMenu {
+            if session.state != .archived {
+                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
+            }
         }
     }
 
@@ -180,6 +218,7 @@ struct SessionLink: View {
 /// Every session, grouped by project, with the task tree.
 struct ProjectsView: View {
     let fleet: Fleet
+    @Binding var sheet: AppSheet?
     let projects: [ProjectGroup]
     var title = "Projects"
 
@@ -200,6 +239,11 @@ struct ProjectsView: View {
                                 .tint(Theme.raised)
                             }
                         }
+                        .contextMenu {
+                            if session.state != .archived {
+                                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
+                            }
+                        }
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -207,7 +251,15 @@ struct ProjectsView: View {
                             .foregroundStyle(Theme.secondary)
                         Text(project.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         Text(project.machines.joined(separator: ", ")).font(.caption).foregroundStyle(Theme.tertiary)
+                        Spacer()
+                        if let id = project.projectId {
+                            Button("New Session", systemImage: "plus") { sheet = .newSession(projectId: id) }
+                                .labelStyle(.iconOnly)
+                            Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
+                                .labelStyle(.iconOnly)
+                        }
                     }
+                    .foregroundStyle(Theme.secondary)
                     .textCase(nil)
                 }
             }

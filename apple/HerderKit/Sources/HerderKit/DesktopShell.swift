@@ -6,13 +6,13 @@ import SwiftUI
 /// the width.
 struct DesktopShell: View {
     let fleet: Fleet
-    @Binding var pairing: Bool
-    @State private var item: SidebarItem = .home
-    @State private var session: SessionKey?
+    @Binding var sheet: AppSheet?
+    @Binding var item: SidebarItem
+    @Binding var session: SessionKey?
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(fleet: fleet, item: $item, pairing: $pairing)
+            Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet)
                 .frame(width: 236)
             Rectangle().fill(Theme.stroke).frame(width: 1)
             content
@@ -22,7 +22,6 @@ struct DesktopShell: View {
         #if os(macOS)
         .ignoresSafeArea(.container, edges: .top)
         #endif
-        .onChange(of: item) { session = nil }
     }
 
     @ViewBuilder private var content: some View {
@@ -31,7 +30,9 @@ struct DesktopShell: View {
         case .home:
             ListAndSession(fleet: fleet, session: $session) {
                 Pane(title: "Home", subtitle: subtitle(lists)) {
-                    HomeView(fleet: fleet, pairing: $pairing, selection: $session)
+                    HomeView(fleet: fleet, sheet: $sheet, selection: $session)
+                } actions: {
+                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: nil) }
                 }
             }
         case .project(let id):
@@ -40,16 +41,21 @@ struct DesktopShell: View {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "") {
                     ScrollView {
                         if let project {
-                            SessionGroup(title: "Sessions", sessions: project.sessions, selection: $session,
-                                         showsProject: false)
+                            SessionGroup(title: "Sessions", sessions: project.sessions, fleet: fleet,
+                                         selection: $session, showsProject: false)
                                 .padding(16)
                         }
                     }
+                } actions: {
+                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: id) }
+                    IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists)) {
-                MachinesView(fleet: fleet, pairing: $pairing)
+                MachinesView(fleet: fleet, sheet: $sheet)
+            } actions: {
+                PaneButton(title: "Add Machine", symbol: "plus") { sheet = .pair }
             }
         }
     }
@@ -109,19 +115,24 @@ private struct ListAndSession<List: View>: View {
     }
 }
 
-/// A pane with herder's header: a title, a quiet subtitle, then the content.
-struct Pane<Content: View>: View {
+/// A pane with herder's header: a title, a quiet subtitle, the pane's actions, then the content.
+struct Pane<Content: View, Actions: View>: View {
     let title: String
     var subtitle = ""
     @ViewBuilder var content: Content
+    @ViewBuilder var actions: Actions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-                if !subtitle.isEmpty {
-                    Text(subtitle).font(.footnote).foregroundStyle(Theme.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
+                    if !subtitle.isEmpty {
+                        Text(subtitle).font(.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
+                    }
                 }
+                Spacer()
+                actions
             }
             .padding(.horizontal, 20)
             .padding(.top, 22)
@@ -129,6 +140,26 @@ struct Pane<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// A labelled header button in herder's style.
+struct PaneButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.onPrimary)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(Theme.primary, in: .rect(cornerRadius: 8))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -141,7 +172,13 @@ private struct Sidebar: View {
     #endif
     let fleet: Fleet
     @Binding var item: SidebarItem
-    @Binding var pairing: Bool
+    @Binding var session: SessionKey?
+    @Binding var sheet: AppSheet?
+
+    private func select(_ next: SidebarItem) {
+        if item != next { session = nil }
+        item = next
+    }
 
     var body: some View {
         let lists = fleet.lists
@@ -150,28 +187,41 @@ private struct Sidebar: View {
                 Spacer()
                 IconButton(symbol: "arrow.clockwise", help: "Reconnect") { fleet.wake() }
                     .keyboardShortcut("r")
-                IconButton(symbol: "plus", help: "Add Machine") { pairing = true }
+                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession(projectId: nil) }
+                    .keyboardShortcut("n")
             }
             // Room for the window's traffic lights on the Mac.
             .frame(height: Self.topBar)
             .padding(.horizontal, 10)
 
             SidebarRow(title: "Home", symbol: "tray.full", badge: lists.requests.count, attention: true,
-                       selected: item == .home) { item = .home }
-            SidebarRow(title: "Machines", symbol: "server.rack", selected: item == .machines) { item = .machines }
+                       selected: item == .home) { select(.home) }
+            SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
+                       selected: item == .machines) { select(.machines) }
 
-            SectionHeading(title: "Projects")
-                .padding(.horizontal, 14)
-                .padding(.top, 18)
-                .padding(.bottom, 6)
+            HStack {
+                SectionHeading(title: "Projects")
+                Spacer()
+                Button { sheet = .newProject } label: {
+                    Image(systemName: "plus").font(.caption.weight(.bold)).foregroundStyle(Theme.secondary)
+                        .frame(width: 24, height: 24).contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("New Project")
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .padding(.top, 18)
+            .padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 2) {
                     ForEach(lists.projects) { project in
                         SidebarRow(
                             title: project.name, symbol: "shippingbox",
                             badge: project.sessions.count,
-                            selected: item == .project(project.id)
-                        ) { item = .project(project.id) }
+                            selected: item == .project(project.id),
+                            settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
+                        ) { select(.project(project.id)) }
                     }
                 }
             }
@@ -204,7 +254,10 @@ private struct SidebarRow: View {
     var badge = 0
     var attention = false
     let selected: Bool
+    /// Opens the row's settings, from a gear shown on hover and when selected.
+    var settings: (() -> Void)?
     let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -214,7 +267,14 @@ private struct SidebarRow: View {
                     .foregroundStyle(selected ? Theme.text : Theme.secondary)
                 Text(title).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer()
-                if badge > 0 {
+                if let settings, hovering || selected {
+                    Button(action: settings) {
+                        Image(systemName: "gearshape").foregroundStyle(Theme.secondary)
+                            .frame(width: 22, height: 22).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Project Settings")
+                } else if badge > 0 {
                     Text("\(badge)")
                         .font(.caption.weight(.semibold).monospacedDigit())
                         .foregroundStyle(attention ? Theme.onPrimary : Theme.tertiary)
@@ -226,10 +286,12 @@ private struct SidebarRow: View {
             .font(.body.weight(selected ? .semibold : .regular))
             .padding(.horizontal, 10)
             .frame(height: 34)
-            .background(selected ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
+            .background(selected ? Theme.raised : hovering ? Theme.raised.opacity(0.5) : .clear,
+                        in: .rect(cornerRadius: 8))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
