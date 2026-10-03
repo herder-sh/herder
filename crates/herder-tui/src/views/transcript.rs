@@ -418,9 +418,11 @@ impl<'a> Builder<'a> {
         for line in lines {
             self.push(Row::panel(ui, bar, line.spans));
         }
-        for image in images {
-            let line = format!("image · {}", describe_image(image));
-            self.push(Row::panel(ui, bar, vec![Span::styled(line, ui.muted())]));
+        if !images.is_empty() && !text.is_empty() {
+            self.push(Row::panel(ui, bar, vec![]));
+        }
+        for row in badge::chip_rows(image_chips(ui, images), room) {
+            self.push(Row::panel(ui, bar, row.spans));
         }
         if self.padded {
             self.push(Row::panel(ui, bar, vec![]));
@@ -590,17 +592,19 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     hits.wheel(area, Wheel::Transcript);
 }
 
-/// An attached image as a line of the transcript tells it: its type and size, as in
-/// `png · 12 KB`. The terminal shows no images; the apps fetch and show them inline.
-fn describe_image(image: &Attachment) -> String {
-    let kind = image
-        .media_type
-        .strip_prefix("image/")
-        .unwrap_or(&image.media_type);
-    let size = match image.size {
-        size if size >= 1024 * 1024 => format!("{:.1} MB", size as f64 / (1024.0 * 1024.0)),
-        size if size >= 1024 => format!("{} KB", size / 1024),
-        size => format!("{size} B"),
-    };
-    format!("{kind} · {size}")
+/// A prompt's images as chips, `image 1 · 340 KB`. The terminal shows no images: `o` opens
+/// them with the desktop's viewer, `w` saves them; the apps fetch and show them inline.
+fn image_chips(ui: Ui, images: &[Attachment]) -> Vec<Span<'static>> {
+    images
+        .iter()
+        .zip(1..)
+        .map(|(image, n)| {
+            let size = crate::attach::size(image.size);
+            badge::chip(
+                ui,
+                &format!("image {n}{}{size}", ui.glyphs.separator),
+                ui.text(),
+            )
+        })
+        .collect()
 }

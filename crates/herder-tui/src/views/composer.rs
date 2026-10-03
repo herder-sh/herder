@@ -2,8 +2,8 @@
 //!
 //! - a pending approval or question, inline as a [`Request`] panel. An approval takes the
 //!   prompt's place; a question sits over it, and the prompt takes a typed answer;
-//! - the [`Prompt`], with `account · model · mode` under the text, and the `/` and `@`
-//!   [`Popup`] over the transcript;
+//! - the [`Prompt`], with its images' chips over the text (`image 1 · 340 KB`) and
+//!   `account · model · mode` under it, and the `/` and `@` [`Popup`] over the transcript;
 //! - the status row: the spinner and how long the turn has run, and the busiest usage
 //!   window of the session's account.
 //!
@@ -26,7 +26,7 @@ use crate::session::Session;
 use crate::ui::input::Prompt;
 use crate::ui::popup::Popup;
 use crate::ui::request::{self, Request};
-use crate::ui::{Ui, fit, spread};
+use crate::ui::{Ui, badge, fit, spread};
 
 /// Rows of a request's body before `f` shows the rest.
 const REQUEST_ROWS: usize = 15;
@@ -176,6 +176,26 @@ fn fit_sep(ui: Ui, text: &str) -> String {
     text.replace(" · ", ui.glyphs.separator)
 }
 
+/// The chips of the prompt's images, then of those loading, in rows `width` wide.
+fn chips(app: &App, width: u16) -> Vec<Line<'static>> {
+    let ui = app.ui();
+    let compose = &app.compose;
+    let loaded = compose.images.iter().map(|image| {
+        let size = crate::attach::size(image.data.0.len() as u64);
+        (size, ui.text())
+    });
+    let loading = (0..compose.loading).map(|_| ("loading…".to_owned(), ui.muted()));
+    let chips = loaded
+        .chain(loading)
+        .zip(1..)
+        .map(|((what, style), n)| {
+            let label = format!("image {n}{}{what}", ui.glyphs.separator);
+            badge::chip(ui, &label.replace('…', ui.glyphs.ellipsis), style)
+        })
+        .collect();
+    badge::chip_rows(chips, usize::from(width.saturating_sub(3)))
+}
+
 /// The prompt's meta line: `account · model · mode`.
 fn meta(app: &App, session: &Session) -> Line<'static> {
     let ui = app.ui();
@@ -229,7 +249,12 @@ fn heights(app: &App, session: &Session, area: Rect, compact: bool, tall: bool) 
         1
     } else {
         let max_lines = (area.height / 3).max(6);
-        Prompt::height(&app.compose.editor, width, max_lines, tall)
+        // The chips, and a row between them and the text.
+        let chips = match chips(app, width).len() {
+            0 => 0,
+            rows => u16::try_from(rows + 1).unwrap_or(0),
+        };
+        Prompt::height(&app.compose.editor, width, max_lines, tall) + chips
     };
     Heights {
         request,
@@ -362,7 +387,9 @@ pub(super) fn draw(
         return;
     }
     let focused = app.focus == Focus::Composer;
-    let mut widget = Prompt::new(ui, &app.compose.editor).focused(focused);
+    let mut widget = Prompt::new(ui, &app.compose.editor)
+        .focused(focused)
+        .chips(chips(app, inner.width));
     if heights.meta {
         widget = widget.meta(meta(app, session));
     }
@@ -442,8 +469,15 @@ fn status_row(frame: &mut Frame, area: Rect, app: &App, session: &Session, compa
             Style::new().fg(theme.warning),
         ));
     }
+    let left = Line::from(left);
     let right = usage(app, session, compact).unwrap_or_default();
-    let line = spread(Line::from(left), right, usize::from(area.width), ui.glyphs);
+    // An error that does not fit beside the usage takes the row: it says what to do now.
+    let right = if error.is_some() && left.width() + 2 + right.width() > usize::from(area.width) {
+        Line::default()
+    } else {
+        right
+    };
+    let line = spread(left, right, usize::from(area.width), ui.glyphs);
     line.render(area, frame.buffer_mut());
 }
 

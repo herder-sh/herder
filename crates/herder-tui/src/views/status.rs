@@ -227,8 +227,14 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     hint("[ ]", "items"),
                     tap("e", "expand", char('e')),
                     tap("c", "copy", char('c')),
-                    tap("esc", "sidebar", KeyCode::Esc),
                 ];
+                if app.open_session().is_some_and(has_images) {
+                    hints.extend([
+                        tap("o", "open images", char('o')),
+                        tap("w", "save", char('w')),
+                    ]);
+                }
+                hints.push(tap("esc", "sidebar", KeyCode::Esc));
                 if running {
                     hints.push(stop);
                 }
@@ -327,4 +333,13 @@ pub(super) fn leader_popup(frame: &mut Frame, area: Rect, app: &App) {
         .padding(ratatui::widgets::Padding::horizontal(1));
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
+/// Whether a prompt of `session` carries images.
+fn has_images(session: &crate::session::Session) -> bool {
+    session.entries.iter().any(|entry| {
+        matches!(entry, crate::session::Entry::Item(item)
+            if matches!(&item.body, herder_protocol::ItemBody::UserMessage { attachments, .. }
+                if !attachments.is_empty()))
+    })
 }

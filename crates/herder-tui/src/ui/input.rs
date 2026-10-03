@@ -1,9 +1,10 @@
 //! Input editors, over [`ratatui_textarea::TextArea`]: the editing stays the text area's, the
 //! look is the theme's.
 //!
-//! - [`Prompt`]: OpenCode's prompt. A bar down the left in the accent while it has focus, the
-//!   text on the panel background, a meta line under it (`account · model · mode`) and a
-//!   row of padding; the panel is solid to its edges.
+//! - [`Prompt`]: OpenCode's prompt. A bar down the left in the accent while it has focus,
+//!   the attachments' chips over the text, the text on the panel background, a meta line
+//!   under it (`account · model · mode`) and a row of padding; the panel is solid to its
+//!   edges.
 //! - [`Field`]: a one-line field with a label, for dialog searches and forms.
 //!
 //! ```text
@@ -51,6 +52,7 @@ pub struct Prompt<'a, 'b> {
     focused: bool,
     accent: Option<Color>,
     placeholder: Option<&'a str>,
+    chips: Vec<Line<'a>>,
 }
 
 impl<'a, 'b> Prompt<'a, 'b> {
@@ -62,7 +64,15 @@ impl<'a, 'b> Prompt<'a, 'b> {
             focused: false,
             accent: None,
             placeholder: None,
+            chips: Vec::new(),
         }
+    }
+
+    /// Rows of attachment chips over the text, as [`super::badge::chip_rows`] lays them out,
+    /// a blank row between them and the text: rows [`Self::height`] does not count.
+    pub fn chips(mut self, rows: Vec<Line<'a>>) -> Self {
+        self.chips = rows;
+        self
     }
 
     /// What the empty prompt shows in place of the editor's placeholder.
@@ -121,11 +131,21 @@ impl<'a, 'b> Prompt<'a, 'b> {
                 .set_fg(bar_color);
         }
         let meta_rows = if self.meta.is_some() { 2 } else { 0 };
+        // The chips and the blank row under them leave the text a row at least.
+        let chip_rows = match self.chips.len() {
+            0 => 0,
+            rows => u16::try_from(rows + 1).unwrap_or(u16::MAX),
+        }
+        .min(panel.height.saturating_sub(meta_rows + 1));
+        for (y, row) in (panel.y..panel.y + chip_rows.saturating_sub(1)).zip(self.chips) {
+            let row_area = Rect::new(panel.x + 2, y, panel.width - 3, 1);
+            fit(row, usize::from(row_area.width), ui.glyphs).render(row_area, buf);
+        }
         let text = Rect {
             x: panel.x + 2,
+            y: panel.y + chip_rows,
             width: panel.width - 3,
-            height: panel.height.saturating_sub(meta_rows).max(1),
-            ..panel
+            height: panel.height.saturating_sub(meta_rows + chip_rows).max(1),
         };
         if self.editor.is_empty() {
             // The placeholder starts where the text will; with focus, after the cursor.

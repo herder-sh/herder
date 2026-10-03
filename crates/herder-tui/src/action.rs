@@ -178,6 +178,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('e') if in_transcript => Action::Chat(ChatAct::Toggle),
         KeyCode::Char('c') if in_transcript => Action::Chat(ChatAct::Copy),
         KeyCode::Char('x') if in_transcript => Action::Chat(ChatAct::Stop),
+        KeyCode::Char('o') if in_transcript => Action::Chat(ChatAct::OpenImages),
+        KeyCode::Char('w') if in_transcript => Action::Chat(ChatAct::SaveImages),
         // On an item, Enter expands it, as `e` does.
         KeyCode::Enter if in_transcript && app.chat.cursor.is_some() => {
             Action::Chat(ChatAct::Toggle)
@@ -304,11 +306,22 @@ pub const HELP: &[(&str, &str)] = &[
     ("g / G", "first / last; G follows the transcript"),
     ("i, Enter", "write in the open session"),
     ("Enter / Alt-Enter", "send / new line, in the composer"),
-    ("/ , @", "in the composer: commands, mention a task child"),
+    (
+        "/ , @",
+        "in the composer: commands; a task child, or a file",
+    ),
+    (
+        "Ctrl-v, @file.png",
+        "in the composer: attach the clipboard's image, a file",
+    ),
     ("↑ / ↓", "in the composer: earlier prompts"),
     ("[ / ]", "previous / next item of the transcript"),
     ("e, Enter", "expand the item: tool output, diff, reasoning"),
     ("c", "copy the item"),
+    (
+        "o / w",
+        "open / save the item's images, else the last prompt's",
+    ),
     ("x", "stop the running turn"),
     ("Esc, ⌫ on empty", "leave the composer or close a dialog"),
     ("y / n", "allow / deny the pending approval"),

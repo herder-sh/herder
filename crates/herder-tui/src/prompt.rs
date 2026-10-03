@@ -2,8 +2,9 @@
 //!
 //! - `/` at the start opens command completion; a `/command` line runs instead of being
 //!   sent, and `//` sends a literal `/`.
-//! - `@` opens mention completion: the session's task children, by branch. Files of the
-//!   worktree need a file-list call client-core does not have yet.
+//! - `@` opens mention completion: the session's task children, by branch, then the folders
+//!   and images of this machine, from the working directory. Picking an image attaches it;
+//!   so does sending an `@path` to one.
 //! - `↑` on the first line and `↓` on the last walk the prompt history: the session's own
 //!   prompts first, then those sent to other sessions.
 //! - A long paste collapses to `[pasted ~N lines]`, and is sent in full.
@@ -79,6 +80,8 @@ pub struct Completion {
     pub does: String,
     /// A command that takes no arguments: accepting it runs it.
     pub runs: bool,
+    /// An image file, by its path: accepting it attaches it.
+    pub attach: Option<String>,
 }
 
 /// Where the history walk is: the entry shown, and the text written before it started.
@@ -86,6 +89,14 @@ pub struct Completion {
 pub struct Recall {
     pub at: usize,
     pub draft: String,
+}
+
+/// A path as typed split after its last `/`: the folder, and the start of a name in it.
+fn split_path(path: &str) -> (&str, &str) {
+    match path.rfind('/') {
+        Some(at) => path.split_at(at + 1),
+        None => ("", path),
+    }
 }
 
 /// Whether `query`'s characters appear in `name` in order.
@@ -151,6 +162,7 @@ impl App {
                     },
                     does: command.does.to_owned(),
                     runs: command.args.is_empty(),
+                    attach: None,
                 })
                 .collect();
         }
@@ -168,26 +180,95 @@ impl App {
                     label: format!("@{}", child.branch),
                     does: child.title(),
                     runs: false,
+                    attach: None,
                 })
                 .collect();
             children.sort_by(|a, b| a.label.cmp(&b.label));
+            children.extend(self.file_completions(query));
             return children;
         }
         Vec::new()
     }
 
-    /// Puts the popup's selected completion in place of the word at the cursor; returns
-    /// whether it is a command to run now.
-    pub(crate) fn accept_completion(&mut self) -> bool {
+    /// The folders and images of the listed folder that `query`, a path after an `@`, may
+    /// go on to name: those it starts first; hidden ones only for a query starting with `.`.
+    fn file_completions(&self, query: &str) -> Vec<Completion> {
+        let (dir, stem) = split_path(query);
+        let Some((_, entries)) = self
+            .compose
+            .listing
+            .as_ref()
+            .filter(|(listed, _)| listed == dir)
+        else {
+            return Vec::new();
+        };
+        let mut found: Vec<Completion> = entries
+            .iter()
+            .filter(|entry| !entry.name.starts_with('.') || stem.starts_with('.'))
+            .filter(|entry| fuzzy(&entry.name, stem))
+            .map(|entry| {
+                let path = format!("{dir}{}", entry.name);
+                if entry.is_dir {
+                    Completion {
+                        insert: format!("@{path}/"),
+                        label: format!("@{path}/"),
+                        does: "folder".to_owned(),
+                        runs: false,
+                        attach: None,
+                    }
+                } else {
+                    Completion {
+                        insert: String::new(),
+                        label: format!("@{path}"),
+                        does: "attach image".to_owned(),
+                        runs: false,
+                        attach: Some(path),
+                    }
+                }
+            })
+            .collect();
+        let starts = |c: &Completion| {
+            let name = c.label.trim_start_matches('@')[dir.len()..].to_lowercase();
+            name.starts_with(&stem.to_lowercase())
+        };
+        found.sort_by_key(|c| !starts(c));
+        found
+    }
+
+    /// The folder to list for the `@` path at the cursor, when it is not listed yet.
+    pub(crate) fn list_wanted(&mut self) -> Vec<Effect> {
+        let Some((_, _, word)) = self.word_at_cursor() else {
+            return Vec::new();
+        };
+        let Some(query) = word.strip_prefix('@') else {
+            return Vec::new();
+        };
+        let (dir, _) = split_path(query);
+        if self
+            .compose
+            .listing
+            .as_ref()
+            .is_some_and(|(listed, _)| listed == dir)
+        {
+            return Vec::new();
+        }
+        // Listed as asked: a second ask before the answer finds it there.
+        self.compose.listing = Some((dir.to_owned(), Vec::new()));
+        vec![Effect::List(dir.to_owned())]
+    }
+
+    /// Puts the popup's selected completion in place of the word at the cursor: a command
+    /// without arguments runs, an image attaches, a folder lists.
+    pub(crate) fn accept_completion(&mut self) -> Vec<Effect> {
         let completions = self.completions();
         let Some(completion) = completions
             .get(self.compose.popup.min(completions.len().saturating_sub(1)))
             .cloned()
         else {
-            return false;
+            return Vec::new();
         };
         let Some((_, _, word)) = self.word_at_cursor() else {
-            return false;
+            return Vec::new();
         };
         let editor = &mut self.compose.editor;
         for _ in word.chars() {
@@ -195,7 +276,13 @@ impl App {
         }
         editor.insert_str(&completion.insert);
         self.compose.popup = 0;
-        completion.runs
+        if completion.runs {
+            return self.submit();
+        }
+        if let Some(path) = completion.attach {
+            return self.attach(crate::attach::Source::File(path), None);
+        }
+        self.list_wanted()
     }
 
     /// Moves the popup's selection by `step`, wrapping.

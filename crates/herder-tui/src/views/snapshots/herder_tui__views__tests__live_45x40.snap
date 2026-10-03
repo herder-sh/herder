@@ -40,5 +40,5 @@ expression: terminal.backend()
 " |                                           "
 " | claude-main - claude-opus - full_access   "
 " `-----------------------------------------  "
-"   x model opus-9 is not availab...  5h 31%  "
+"   x model opus-9 is not available on cl...  "
 " > send   esc done   ^c stop   s switch      "

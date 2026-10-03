@@ -1,0 +1,24 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: terminal.backend()
+---
+" ! api - app - box             1/4  | switch "
+" ! 1 need you  x 1  * 1             |    !   "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+"                                             "
+" | [image 1 - 340 KB] [image 2 - 1.2 MB]     "
+" | [image 3 - loading...]                    "
+" |                                           "
+" | why does the sidebar overlap here?        "
+" |                                           "
+" | claude-main - claude-opus - ask           "
+" `-----------------------------------------  "
+"                                             "
+" > send   esc done   s switch   t term       "

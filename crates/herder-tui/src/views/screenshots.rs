@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 33] = [
+const SCENES: [Scene; 37] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -104,6 +104,68 @@ const SCENES: [Scene; 33] = [
             app.chat.expanded.insert(herder_protocol::ItemId::new(id));
         }
         app.chat.cursor = Some(herder_protocol::ItemId::new("c3"));
+        app.chat.reveal = true;
+        app_buffer(app, theme, width, height)
+    }),
+    ("attach-prompt", |theme, _, width, height| {
+        let mut app = fake::chat();
+        for bytes in [348_160, 1_258_291] {
+            attached(&mut app, Ok(bytes));
+        }
+        app.compose.loading = 1;
+        fake::type_text(&mut app, "the sidebar overlaps the list here, fix it");
+        app_buffer(app, theme, width, height)
+    }),
+    ("attach-popup", |theme, _, width, height| {
+        let mut app = fake::chat();
+        fake::type_text(&mut app, "match @shots/");
+        let entry = |name: &str, is_dir| crate::attach::Entry {
+            name: name.into(),
+            is_dir,
+        };
+        app.update(Msg::Listed {
+            dir: "shots/".into(),
+            entries: vec![
+                entry("mockups", true),
+                entry("login-dark.png", false),
+                entry("login-light.png", false),
+                entry("sidebar.webp", false),
+            ],
+        });
+        app_buffer(app, theme, width, height)
+    }),
+    ("attach-error", |theme, _, width, height| {
+        let mut app = fake::chat();
+        attached(&mut app, Ok(348_160));
+        attached(&mut app, Err("raw.png: 7.4 MB, over the 5 MB limit"));
+        fake::type_text(&mut app, "the sidebar overlaps the list here");
+        app_buffer(app, theme, width, height)
+    }),
+    ("attach-transcript", |theme, _, width, height| {
+        let mut app = fake::chat();
+        let key = fake::key("h1", "s2");
+        let session = app.sessions.get_mut(&key).unwrap();
+        let mut first = None;
+        for entry in &mut session.entries {
+            if let crate::session::Entry::Item(item) = entry
+                && let herder_protocol::ItemBody::UserMessage { attachments, .. } = &mut item.body
+            {
+                *attachments = [
+                    ("01J9A", "image/png", 348_160),
+                    ("01J9B", "image/jpeg", 1_258_291),
+                ]
+                .map(|(id, media_type, size)| herder_protocol::Attachment {
+                    attachment_id: herder_protocol::AttachmentId::new(id),
+                    media_type: media_type.into(),
+                    size,
+                })
+                .to_vec();
+                first = Some(item.id.clone());
+                break;
+            }
+        }
+        app.focus = crate::app::Focus::Transcript;
+        app.chat.cursor = first;
         app.chat.reveal = true;
         app_buffer(app, theme, width, height)
     }),
@@ -238,6 +300,18 @@ fn inbox() -> App {
     app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());
     press(&mut app, KeyCode::Char('i'));
     app
+}
+
+/// An image of `bytes` loaded for the prompt, or why it could not be.
+fn attached(app: &mut App, bytes: Result<usize, &str>) {
+    let result = bytes
+        .map(|bytes| herder_protocol::Image {
+            media_type: "image/png".into(),
+            data: herder_protocol::Bytes(vec![0; bytes]),
+        })
+        .map_err(str::to_owned);
+    app.compose.loading += 1;
+    app.update(Msg::Attached { word: None, result });
 }
 
 /// Presses `code`.

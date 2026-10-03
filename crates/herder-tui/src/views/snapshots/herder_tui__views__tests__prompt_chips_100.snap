@@ -1,0 +1,24 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: terminal.backend()
+---
+" herder        inbox 0 « │                                                                          "
+"                         │                                                                          "
+" machines     by machine │                                                                          "
+"  ◉ box                1 │                                                                          "
+"▶   ├ ◉ app · api        │                                                                          "
+"    │ ├ ● write the tes… │                                                                          "
+"    │ └ ✗ document it    │                                                                          "
+"    └ ○ app · fix-login  │                                                                          "
+"                         │                                                                          "
+" ─────────────────────── │                                                                          "
+" attention      priority │                                                                          "
+"  ◉ api · app · box      │  ┃ [image 1 · 340 KB] [image 2 · 1.2 MB] [image 3 · loading…]            "
+"  ✗ document it · app    │  ┃                                                                       "
+"  ● write the tests      │  ┃ why does the sidebar overlap here?                                    "
+"                         │  ┃                                                                       "
+"                         │  ┃ claude-main · claude-opus · ask                                       "
+" ─────────────────────── │  ╹                                                                       "
+" + new            ≡ menu │                                                                          "
+"─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate                ● box  "

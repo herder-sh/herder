@@ -4,6 +4,8 @@ expression: dump(&buffer)
 ---
 |  PROMPT   NAVIGATE   APPROVAL          |
 |  queued   open   merged   draft        |
+| [image 1 · 340 KB] [image 2 · 1.2 MB]  |
+| [image 3 · loading…]                   |
 
  0   0..1   fg=Reset bg=Reset
  0   1..9   fg=Black bg=Cyan BOLD
@@ -21,3 +23,7 @@ expression: dump(&buffer)
  1  25..26  fg=Reset bg=Reset
  1  26..33  fg=DarkGray bg=Reset
  1  33..40  fg=Reset bg=Reset
+ 2   0..40  fg=Reset bg=Reset
+ 3   0..1   fg=Reset bg=Reset
+ 3   1..21  fg=DarkGray bg=Reset
+ 3  21..40  fg=Reset bg=Reset
