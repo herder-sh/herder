@@ -247,6 +247,7 @@ fn an_image_attached_in_the_app_goes_with_the_turn() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let script = dir.path().join("image.jsonl");
     let send = AdapterCommand::SendPrompt {
+        agent_sender: None,
         turn_id: TurnId::new("turn-1"),
         text: "What is wrong here?".to_owned(),
         images: vec![Image {
