@@ -131,7 +131,8 @@ struct Picture: View {
 
 /// The images about to go with a prompt, each removable.
 struct AttachmentStrip: View {
-    @Binding var images: [Herder.Image]
+    let images: [Herder.Image]
+    let remove: (Int) -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -139,7 +140,7 @@ struct AttachmentStrip: View {
                 ForEach(Array(images.enumerated()), id: \.offset) { index, image in
                     Picture(data: image.data, height: 64)
                         .overlay(alignment: .topTrailing) {
-                            Button { images.remove(at: index) } label: {
+                            Button { remove(index) } label: {
                                 SwiftUI.Image(systemName: "xmark.circle.fill")
                                     .foregroundStyle(Theme.text, Theme.background)
                             }

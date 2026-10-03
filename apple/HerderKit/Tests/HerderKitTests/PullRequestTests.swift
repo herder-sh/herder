@@ -105,3 +105,35 @@ struct ImageAttachmentTests {
         #expect(throws: (any Error).self) { try ImageAttachment.make(Data("not a picture".utf8), type: nil) }
     }
 }
+
+struct RoundTwoTests {
+    @Test func aProjectWithoutSessionsStillLists() {
+        let project = Project(projectId: "github.com/acme/new", name: "new", paths: ["/src/new"], defaultPermissionMode: nil,
+                              defaultAccount: nil, setupCommand: nil)
+        let lists = Lists(machines: [machine("h", name: "alpha", sessions: [], projects: [project])], sessions: [:])
+        #expect(lists.projects.map(\.name) == ["new"])
+        #expect(lists.projects[0].machines == ["alpha"])
+    }
+
+    @Test func retriesThatFailAlikeFoldIntoOneRun() {
+        let start = Date(timeIntervalSince1970: 0)
+        let refused = ConnectionState.disconnected(error: "refused")
+        let log = [
+            ConnectionChange(at: start, state: .connecting),
+            ConnectionChange(at: start + 10, state: refused),
+            ConnectionChange(at: start + 25, state: .connecting),
+            ConnectionChange(at: start + 35, state: refused),
+            ConnectionChange(at: start + 50, state: .connecting),
+            ConnectionChange(at: start + 60, state: .connected),
+        ]
+        let runs = ConnectionHealth.runs(log, now: start + 100)
+        #expect(runs.map(\.state) == [.connecting, refused, .connecting, .connected])
+        #expect(runs[1].times == 2)
+    }
+
+    @Test func aProtocolMismatchSaysWhatToDo() {
+        let raw = "10.0.0.1:7447: no answer in 10s; 100.1.2.3:7447: protocol version 4 is not supported; this daemon speaks 3"
+        #expect(ConnectionState.explain(raw) == "Runs a different herder (protocol 3; this app speaks 4). Update one of them to connect.")
+        #expect(ConnectionState.explain("refused") == "refused")
+    }
+}

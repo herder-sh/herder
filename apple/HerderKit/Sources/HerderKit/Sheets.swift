@@ -412,15 +412,17 @@ struct MachineSettingsSheet: View {
                             stat("Disconnected", Self.duration(health.down))
                         }
                         .padding(.bottom, 4)
-                        ForEach(Array(log.enumerated().reversed()), id: \.offset) { index, change in
-                            HStack(spacing: 10) {
-                                ConnectionMark(state: change.state)
-                                Text(change.at.formatted(date: .omitted, time: .standard))
+                        ForEach(Array(ConnectionHealth.runs(log, now: .now).reversed().enumerated()), id: \.offset) { _, run in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                ConnectionMark(state: run.state)
+                                Text(run.at.formatted(date: .omitted, time: .standard))
                                     .monospacedDigit().foregroundStyle(Theme.tertiary)
-                                Text(change.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                Text(run.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                if run.times > 1 {
+                                    Text("×\(run.times)").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                                }
                                 Spacer()
-                                Text(Self.duration((index + 1 < log.count ? log[index + 1].at : .now).timeIntervalSince(change.at)))
-                                    .monospacedDigit().foregroundStyle(Theme.tertiary)
+                                Text(Self.duration(run.lasted)).monospacedDigit().foregroundStyle(Theme.tertiary)
                             }
                             .font(.footnote)
                         }
@@ -511,6 +513,35 @@ struct MachineSettingsSheet: View {
 /// A machine's connection over its log: how long it has been up, how often it came back, and
 /// how long it was down.
 struct ConnectionHealth {
+    /// A stretch of the log that kept failing the same way, or one other state.
+    struct Run {
+        let state: ConnectionState
+        let at: Date
+        var times: Int
+        var lasted: TimeInterval
+    }
+
+    /// The log with retries that fail alike folded into one run: a failure and the reconnect
+    /// attempt after it repeat until something else happens.
+    static func runs(_ log: [ConnectionChange], now: Date) -> [Run] {
+        var runs: [Run] = []
+        for (index, change) in log.enumerated() {
+            let lasted = (index + 1 < log.count ? log[index + 1].at : now).timeIntervalSince(change.at)
+            if change.state == .connecting, index + 1 < log.count, let last = runs.last,
+               last.state == log[index + 1].state, case .disconnected = last.state {
+                runs[runs.count - 1].lasted += lasted
+                continue
+            }
+            if let last = runs.last, last.state == change.state, case .disconnected = change.state {
+                runs[runs.count - 1].times += 1
+                runs[runs.count - 1].lasted += lasted
+                continue
+            }
+            runs.append(Run(state: change.state, at: change.at, times: 1, lasted: lasted))
+        }
+        return runs
+    }
+
     let currentUp: TimeInterval?
     let reconnects: Int
     let down: TimeInterval
@@ -634,7 +665,19 @@ struct FolderBrowser: View {
         }
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-        .task { await load(path) }
+        .task { await load(picked.isEmpty ? path : picked) }
+        // A typed path moves the browser there once the typing pauses.
+        .task(id: picked) {
+            let typed = picked.trimmingCharacters(in: .whitespaces)
+            guard typed.hasPrefix("/") || typed.hasPrefix("~"), typed != path, !isEntry(typed) else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            await load(typed.count > 1 && typed.hasSuffix("/") ? String(typed.dropLast()) : typed, quiet: true)
+        }
+    }
+
+    /// Whether the path is one of the shown folders, picked rather than typed.
+    private func isEntry(_ full: String) -> Bool {
+        entries.contains { join(path, $0.name) == full }
     }
 
     private var parent: String {
@@ -651,7 +694,9 @@ struct FolderBrowser: View {
         Task { await load(next) }
     }
 
-    private func load(_ next: String) async {
+    /// Lists a folder and makes it the path; `quiet` keeps the last listing when a half-typed
+    /// path does not exist.
+    private func load(_ next: String, quiet: Bool = false) async {
         loading = true
         defer { loading = false }
         do {
@@ -659,8 +704,9 @@ struct FolderBrowser: View {
             path = listing.path
             entries = listing.entries.sorted { ($0.isRepo ? 0 : 1, $0.name.lowercased()) < ($1.isRepo ? 0 : 1, $1.name.lowercased()) }
             error = nil
+            if !quiet { picked = listing.path }
         } catch {
-            self.error = describe(error)
+            if !quiet { self.error = describe(error) }
         }
     }
 }

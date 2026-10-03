@@ -40,7 +40,7 @@ struct ComposerBox<Footer: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
-                if !images.isEmpty { AttachmentStrip(images: $images) }
+                if !images.isEmpty { AttachmentStrip(images: images, remove: remove) }
                 TextField(placeholder, text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
@@ -113,7 +113,7 @@ struct ComposerBox<Footer: View>: View {
             .contentShape(.rect)
             .onTapGesture { focused = true }
             .onDrop(of: [.image], isTargeted: nil) { providers in
-                Task { images += await ImageAttachment.load(providers) }
+                Task { add(await ImageAttachment.load(providers)) }
                 return true
             }
             HStack(spacing: 14) { footer }
@@ -142,6 +142,26 @@ struct ComposerBox<Footer: View>: View {
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    /// Removes an image and its marker, renumbering the markers after it.
+    private func remove(_ index: Int) {
+        images.remove(at: index)
+        text = text.replacingOccurrences(of: "[Image #\(index + 1)] ", with: "")
+            .replacingOccurrences(of: "[Image #\(index + 1)]", with: "")
+        for number in (index + 2)...(images.count + 1) where number > index + 1 {
+            text = text.replacingOccurrences(of: "[Image #\(number)]", with: "[Image #\(number - 1)]")
+        }
+    }
+
+    /// Adds images and a `[Image #N]` marker for each to the text, numbered in the order they
+    /// go to the agent, so the prompt can refer to them.
+    private func add(_ added: [Herder.Image]) {
+        for image in added {
+            images.append(image)
+            let marker = "[Image #\(images.count)]"
+            text += text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") ? marker + " " : " " + marker + " "
+        }
+    }
+
     #if os(macOS)
     /// While the box has focus, ⌘V with an image on the clipboard attaches it; text pastes as usual.
     private func watchPaste(_ on: Bool) {
@@ -152,7 +172,7 @@ struct ComposerBox<Footer: View>: View {
             guard event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" else { return event }
             let pasted = ImageAttachment.fromPasteboard()
             guard !pasted.isEmpty else { return event }
-            images += pasted
+            add(pasted)
             return nil
         }
     }
@@ -163,9 +183,9 @@ struct ComposerBox<Footer: View>: View {
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         do {
-            images += try panel.urls.map { url in
+            add(try panel.urls.map { url in
                 try ImageAttachment.make(try Data(contentsOf: url), type: UTType(filenameExtension: url.pathExtension))
-            }
+            })
             imageError = nil
         } catch {
             imageError = error.localizedDescription
