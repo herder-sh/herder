@@ -248,12 +248,19 @@ fn phone_frame(
         app.bar_focus = None;
     }
     let switch_focused = switch && app.bar_focus == Some(app.bar.len() - 1);
+    // Lined in Unicode; in ASCII the header is a panel over a blank row.
+    let lined = app.ui().glyphs == Glyphs::Unicode.set();
+    if !lined {
+        crate::ui::fill(frame.buffer_mut(), header, app.ui().panel());
+    }
     phone::header(frame, header, app, switch_focused, touch);
-    let border = Style::new().fg(app.theme.border);
-    frame.render_widget(
-        Span::styled("─".repeat(usize::from(rule.width)), border),
-        rule,
-    );
+    if lined {
+        let border = Style::new().fg(app.theme.border);
+        frame.render_widget(
+            Span::styled("─".repeat(usize::from(rule.width)), border),
+            rule,
+        );
+    }
     if app.machines.is_empty() {
         pairing::draw(frame, body);
     } else if app.focus == Focus::Sessions {
@@ -387,6 +394,26 @@ fn edge(frame: &mut Frame, area: Rect, ui: crate::ui::Ui) {
         if let Some(cell) = buf.cell_mut((area.x, y)) {
             cell.set_symbol("│").set_fg(ui.theme.border);
         }
+    }
+}
+
+/// A pane's block: lined with the Unicode glyph set; with the ASCII set a panel without
+/// lines, as OpenCode's, since box drawing is drawn two columns wide by some phone fonts.
+fn pane(app: &App) -> Block<'static> {
+    if app.ui().glyphs == Glyphs::Unicode.set() {
+        Block::bordered()
+    } else {
+        Block::new().padding(ratatui::widgets::Padding::horizontal(1))
+    }
+}
+
+/// [`pane`] raised on the panel background: the composer, a request, a strip.
+fn raised(app: &App) -> Block<'static> {
+    let block = pane(app);
+    if app.ui().glyphs == Glyphs::Unicode.set() {
+        block
+    } else {
+        block.style(app.ui().panel())
     }
 }
 

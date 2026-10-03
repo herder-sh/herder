@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 100, 20).backend()"
 ---
-" herder        inbox 1 « │ ┌ app · herder/api needs you ──────── claude-main · claude-opus · ask ┐  "
+" herder        inbox 1 « │ ┌ app · herder/api needs you ─────────────────────────────────────────┐  "
 "                         │ │  · question: Which database should the cache use?                   │  "
 " machines     by machine │ │                                                                     │  "
 "  ◉ box                1 │ │                                                                     │  "

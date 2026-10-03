@@ -4,7 +4,7 @@ expression: "render(&mut app, width, height).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks   prs   term                        │ ○ docs  idle                             "
 "                         │                                                   │ herder/docs · vault · ~/src/app          "
-" machines     by machine │ ┌ app · herder/ claude-main · claude-opus · ask ┐ │ claude-main · claude-opus · ask          "
+" machines     by machine │ ┌ app · herder/docs idle ───────────────────────┐ │ claude-main · claude-opus · ask          "
 "  ○ vault                │ │                                               │ │                                          "
 "    ├ ○ devbox           │ │                                               │ │                                          "
 "    │ ├ ○ app · api      │ │                                               │ │                                          "

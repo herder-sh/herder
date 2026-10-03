@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::action::Action;
 use crate::app::{App, Focus};
@@ -73,7 +73,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
             " approval needed "
         };
         let waiting = session.approvals.len() + session.questions.len();
-        let mut block = Block::bordered()
+        let mut block = super::raised(app)
             .border_style(Style::new().fg(Color::Magenta))
             .title(Line::styled(title, attention()));
         if waiting > 1 {
@@ -93,7 +93,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         }
     }
     if let Some((text, recover)) = app.open.as_ref().and_then(|key| app.read_only(key)) {
-        let block = Block::bordered().border_style(super::dim());
+        let block = super::raised(app).border_style(super::dim());
         let style = if recover {
             Style::new().fg(Color::Red)
         } else {
@@ -112,12 +112,15 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         return;
     }
     let title = composer_title(session);
-    let placeholder = if session.questions.is_empty() {
-        "Write a prompt…"
-    } else {
-        "Type an answer…"
-    };
     let focused = app.focus == Focus::Composer;
+    // While focused, the cursor sits on the first column: the placeholder starts after it.
+    let what = if session.questions.is_empty() {
+        "Write a prompt"
+    } else {
+        "Type an answer"
+    };
+    let lead = if focused { " " } else { "" };
+    let placeholder = format!("{lead}{what}{}", app.ui().glyphs.ellipsis);
     let error = app
         .open
         .as_ref()
@@ -125,14 +128,14 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         .cloned();
     let bottom = match error {
         Some(error) => Line::styled(format!(" {error} "), Style::new().fg(Color::Red)),
-        None if focused && compact => Line::styled(" Enter send · ⌫ leave ", super::dim()),
+        None if focused && compact => Line::styled(" enter send · esc done ", super::dim()),
         None if focused => Line::styled(
-            " Enter send · Alt-Enter new line · Esc leave ",
+            " enter send · alt+enter newline · esc navigate ",
             super::dim(),
         ),
         None => Line::styled(" i to write ", super::dim()),
     };
-    let block = Block::bordered()
+    let block = super::raised(app)
         .border_style(super::border(app, Focus::Composer))
         .title(title)
         .title_bottom(bottom.right_aligned());

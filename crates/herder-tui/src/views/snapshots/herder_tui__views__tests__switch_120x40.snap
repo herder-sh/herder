@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◉ api  needs you                         "
 "                         │                                                   │ herder/api · box · ~/src/app             "
-" machines     by machine │ ┌ app · herder/api nee Main · claude-opus · ask ┐ │ Main · claude-opus · ask                 "
+" machines     by machine │ ┌ app · herder/api needs you ───────────────────┐ │ Main · claude-opus · ask                 "
 "  ◉ box                1 │ │                                               │ │                                          "
 "▶   ├ ◉ app · api        │ │                                               │ │ Usage · Main                             "
 "    │ ├ ● write the tes… │ │                                               │ │ Session         ████████░░░░░░░░░░  42%  "
@@ -39,6 +39,6 @@ expression: terminal.backend()
 "                         │ └───────────────────────────────────────────────┘ │                                          "
 "                         │ ┌ message ──────────────────────────────────────┐ │                                          "
 " ─────────────────────── │ │sjj                                            │ │                                          "
-" + new            ≡ menu │ └── Enter send · Alt-Enter new line · Esc leave ┘ │                                          "
+" + new            ≡ menu │ └ enter send · alt+enter newline · esc navigate ┘ │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  esc navigate  ctrl+x leader                                  ● box  ✗ laptop  "

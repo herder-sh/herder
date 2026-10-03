@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◌ api  waiting                           "
 "                         │                                                   │ herder/api · box · ~/src/app             "
-" machines     by machine │ ┌ app · herder/ claude-main · claude-opus · ask ┐ │ claude-main · claude-opus · ask          "
+" machines     by machine │ ┌ app · herder/api waiting ─────────────────────┐ │ claude-main · claude-opus · ask          "
 "  ✗ box                  │ │                                               │ │                                          "
 "▶   ├ ◌ app · api        │ │                                               │ │ Tasks 2                                  "
 "    │ ├ ● write the tes… │ │                                               │ │ ● write the tests                        "
@@ -38,7 +38,7 @@ expression: terminal.backend()
 "                         │ │                                               │ │                                          "
 "                         │ └───────────────────────────────────────────────┘ │                                          "
 "                         │ ┌ message ──────────────────────────────────────┐ │                                          "
-" ─────────────────────── │ │ Write a prompt…                               │ │                                          "
-" + new            ≡ menu │ └── Enter send · Alt-Enter new line · Esc leave ┘ │                                          "
+" ─────────────────────── │ │  Write a prompt…                              │ │                                          "
+" + new            ≡ menu │ └ enter send · alt+enter newline · esc navigate ┘ │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  esc navigate  ctrl+x leader                                            ● box  "

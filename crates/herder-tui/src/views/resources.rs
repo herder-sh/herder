@@ -10,7 +10,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Padding, Paragraph};
+use ratatui::widgets::{Padding, Paragraph};
 
 use crate::app::App;
 use crate::session::Session;
@@ -143,7 +143,7 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
     if area.height == 0 || lines.is_empty() {
         return;
     }
-    let block = Block::bordered()
+    let block = super::raised(app)
         .title(Line::styled(" resources ", super::bold()))
         .border_style(super::dim())
         .padding(Padding::horizontal(1));
