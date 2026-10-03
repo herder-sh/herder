@@ -1842,12 +1842,22 @@ impl Switching {
 
     /// A session on `account` with its own failover pin.
     async fn create_pinned(&self, account: &str, failover_pin: Option<bool>) -> SessionId {
+        self.create_on(account, None, failover_pin).await
+    }
+
+    /// A session on `account` and `model`, with its own failover pin.
+    async fn create_on(
+        &self,
+        account: &str,
+        model: Option<&str>,
+        failover_pin: Option<bool>,
+    ) -> SessionId {
         let create = CommandBody::CreateSession {
             repo: Some(self.repo.to_str().unwrap().to_owned()),
             project_id: None,
             branch: None,
             account_id: Some(AccountId::new(account)),
-            model: None,
+            model: model.map(str::to_owned),
             permission_mode: PermissionMode::Ask,
             max_children: None,
             failover_pin,
@@ -2968,10 +2978,7 @@ async fn a_pinned_session_does_not_fail_over() {
         Vec::new(),
     )
     .await;
-    let pin = FailoverConfig {
-        providers: Vec::new(),
-        pin: true,
-    };
+    let pin = FailoverConfig { pin: true };
     daemon.manager.configure_failover(pin).unwrap();
     let session = daemon.create("claude-a").await;
     daemon.send(&session, "Refactor the parser.").await;
@@ -3027,10 +3034,7 @@ async fn a_session_unpinned_at_creation_fails_over_on_a_pinning_daemon() {
         Vec::new(),
     )
     .await;
-    let pin = FailoverConfig {
-        providers: Vec::new(),
-        pin: true,
-    };
+    let pin = FailoverConfig { pin: true };
     daemon.manager.configure_failover(pin).unwrap();
     let session = daemon.create_pinned("claude-a", Some(false)).await;
     daemon.send(&session, "Refactor the parser.").await;
@@ -3119,10 +3123,10 @@ async fn a_retry_that_hits_a_limit_too_is_not_retried_again() {
 }
 
 #[tokio::test]
-async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback_provider() {
+async fn failover_keeps_the_sessions_provider_and_model() {
     let dir = tempfile::tempdir().unwrap();
-    let claude = Scripted::new(&["failover_limit.jsonl"]);
-    let codex = Scripted::new(&["failover_retry.jsonl"]);
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry.jsonl"]);
+    let codex = Scripted::new(&[]);
     let mut daemon = Switching::open(
         dir.path(),
         &[
@@ -3131,18 +3135,16 @@ async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback
         ],
         &[
             ("claude-a", Provider::Claude, false),
-            ("claude-b", Provider::Claude, false),
-            ("codex-spare", Provider::Codex, true),
+            // Opted in and first by id, but of another provider.
+            ("a-codex", Provider::Codex, true),
+            ("claude-b", Provider::Claude, true),
         ],
         Vec::new(),
     )
     .await;
-    let fallback = FailoverConfig {
-        providers: vec![Provider::Codex],
-        pin: false,
-    };
-    daemon.manager.configure_failover(fallback).unwrap();
-    let session = daemon.create("claude-a").await;
+    let session = daemon
+        .create_on("claude-a", Some("claude-opus-4-5"), None)
+        .await;
     daemon.send(&session, "Refactor the parser.").await;
 
     let journal = daemon.settled(&session, SessionStatus::Idle).await;
@@ -3151,20 +3153,73 @@ async fn with_no_account_of_its_provider_left_a_session_fails_over_to_a_fallback
         lines[4..7],
         [
             "-: turn_failed turn-1 LimitReached",
-            "-: provider_switched codex codex-spare \"\"",
+            "-: account_switched claude-b",
             "alice: user turn-2 Refactor the parser.",
         ]
     );
-    let [on_codex] = codex.starts().try_into().unwrap();
-    assert_eq!(on_codex.config_dir, Some(dir.path().join("codex-spare")));
-    assert_eq!(on_codex.model, None);
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("model_switched") || line.contains("provider_switched")),
+        "{lines:?}"
+    );
+    let starts = claude.starts();
+    let [on_a, on_b] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_b.config_dir, Some(dir.path().join("claude-b")));
+    assert_eq!(on_a.model.as_deref(), Some("claude-opus-4-5"));
+    assert_eq!(on_b.model.as_deref(), Some("claude-opus-4-5"));
+    assert!(codex.starts().is_empty());
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_failover_target_that_rejects_the_model_leaves_the_session_needing_you() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&[
+        "failover_limit.jsonl",
+        "failover_retry_model_rejected.jsonl",
+    ]);
+    let codex = Scripted::new(&[]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[
+            (Provider::Claude, claude.clone()),
+            (Provider::Codex, codex.clone()),
+        ],
+        &[
+            ("claude-a", Provider::Claude, false),
+            ("claude-b", Provider::Claude, true),
+            // Eligible too: the session moves on to neither.
+            ("claude-c", Provider::Claude, true),
+            ("codex", Provider::Codex, true),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon
+        .create_on("claude-a", Some("claude-opus-4-5"), None)
+        .await;
+    daemon.send(&session, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
     assert_eq!(
-        seed_texts(&on_codex),
+        lines[4..],
         [
-            "user: Refactor the parser.",
-            "assistant: Splitting the lexer out."
+            "-: turn_failed turn-1 LimitReached",
+            "-: account_switched claude-b",
+            "alice: user turn-2 Refactor the parser.",
+            "-: turn_started turn-2",
+            "-: turn_failed turn-2 Fatal",
+            "-: status NeedsYou",
         ]
     );
+    let starts = claude.starts();
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert_eq!(starts[1].model.as_deref(), Some("claude-opus-4-5"));
+    assert!(codex.starts().is_empty());
     daemon.shutdown.cancel();
 }
 

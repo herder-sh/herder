@@ -145,9 +145,13 @@
 //! `by` since the daemon caused it, and retries the failed turn's prompt there, once, ahead of
 //! any queued prompt. The failed turn stays journaled and its partial items are replayed with
 //! the transcript. A child does not report the failed turn to its primary, only the retry. The
-//! account that hit its limit is passed over by every session until it resets. With no eligible
+//! account that hit its limit is passed over by every session until it resets. Failover only
+//! moves to an account of the session's own provider and keeps the session's model: the retry
+//! starts that account's CLI on it. With no eligible
 //! account, with the session pinned (its `failover_pin`, else [`FailoverConfig::pin`]), or when
-//! the retry hits a limit too, the session is `needs_you` with the limit error.
+//! the retry hits a limit too, the session is `needs_you` with the limit error; when the retry
+//! fails otherwise, as when the account rejects the model, it is `needs_you` with that error,
+//! and nothing else is tried.
 //!
 //! # Restart
 //!
@@ -351,10 +355,8 @@ impl Inner {
         provider: &Provider,
         failing: &AccountId,
     ) -> Option<AccountId> {
-        let config = self.failover.get().cloned().unwrap_or_default();
         let accounts = self.accounts_lock();
         let choice = failover::Choice {
-            config: &config,
             accounts: &accounts,
             adapters: &self.adapters,
             usage: &self.usage.all(),
@@ -646,7 +648,7 @@ impl SessionManager {
     }
 
     /// Fails sessions over as `config` says ([`failover`]); once per manager. Without it,
-    /// sessions fail over to their own provider's accounts only.
+    /// sessions are not pinned.
     pub fn configure_failover(&self, config: FailoverConfig) -> anyhow::Result<()> {
         self.inner
             .failover
