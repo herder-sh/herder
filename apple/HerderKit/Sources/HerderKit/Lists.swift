@@ -74,10 +74,7 @@ struct Lists {
             grouped[project.projectId] = []
         }
         return grouped.map { projectId, members in
-            let name = projectId.map { id in
-                machines.lazy.flatMap(\.projects).first { $0.projectId == id }?.name
-                    ?? String(id.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? Substring(id))
-            } ?? "No project yet"
+            let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
             let ordered = forest(members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) })
             var machineNames = machines.filter { machine in
                 projectId != nil && machine.projects.contains { $0.projectId == projectId }
@@ -97,6 +94,12 @@ struct Lists {
             if (a.projectId == nil) != (b.projectId == nil) { return b.projectId == nil }
             return (a.name.lowercased(), a.id) < (b.name.lowercased(), b.id)
         }
+    }
+
+    /// A project's name as its machine knows it, else the last part of its id.
+    static func projectName(_ projectId: String, machines: [Machine]) -> String {
+        machines.lazy.flatMap(\.projects).first { $0.projectId == projectId }?.name
+            ?? String(projectId.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? Substring(projectId))
     }
 
     /// Top-level sessions newest first, each followed by its children oldest first. A child

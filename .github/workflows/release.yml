@@ -1,14 +1,15 @@
 name: release
 
-# A `v*` tag builds static musl binaries and publishes them as a GitHub Release.
-# workflow_dispatch, and PRs that change this file, run the same build without publishing.
+# A `v*` tag builds static musl binaries and the macOS app, and publishes them as a GitHub
+# Release. workflow_dispatch, and PRs that change this file or the app's release script, run the
+# same build without publishing.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
   pull_request:
-    paths: [".github/workflows/release.yml"]
+    paths: [".github/workflows/release.yml", "apple/scripts/build-mac-release.sh"]
 
 concurrency:
   group: release-${{ github.ref }}
@@ -87,9 +88,41 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  macos:
+    name: build macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain and the Apple targets
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the tag matches the version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | select(.name == "herder") | .version')
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it) and XcodeGen
+        run: |
+          xcodebuild -downloadComponent MetalToolchain
+          brew install xcodegen
+      - name: Build the bindings and the xcframework
+        run: apple/scripts/build-ffi.sh
+      - name: Build, ad-hoc sign and zip the app
+        run: apple/scripts/build-mac-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herder-app-macos-arm64
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish
-    needs: build
+    needs: [build, macos]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:

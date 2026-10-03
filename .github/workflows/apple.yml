@@ -1,7 +1,7 @@
 name: apple
 
-# Builds and tests the iOS and macOS apps in apple/ on the client core's Swift bindings. Runs
-# only when the apps or what they build on change.
+# Builds and tests the iOS and macOS apps in apple/ on the client core's Swift bindings, and
+# uploads the macOS app as an artifact. Runs only when the apps or what they build on change.
 
 on:
   pull_request:
@@ -70,7 +70,10 @@ jobs:
         run: >-
           xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
           -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO
-      - name: Build the macOS app
-        run: >-
-          xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-macOS
-          -destination "generic/platform=macOS" CODE_SIGNING_ALLOWED=NO
+      - name: Build, ad-hoc sign and zip the macOS app
+        run: apple/scripts/build-mac-release.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herder-app-macos-arm64
+          path: dist/*
+          if-no-files-found: error
