@@ -172,9 +172,10 @@ struct SessionModel {
         }
     }
 
-    /// The task label, else the branch, as the TUI names a session in a project.
-    var title: String {
-        task ?? branch ?? (loaded ? key.sessionId : "Loading…")
+    /// The task label, else the branch, as the TUI names a session in a project; `nil` until
+    /// the session's creation is known.
+    var title: String? {
+        task ?? branch
     }
 
     /// What the session is doing now, or the last thing it said.
