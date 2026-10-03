@@ -151,7 +151,7 @@ pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool) {
 }
 
 /// The strip's lines for the open session.
-fn lines(app: &App, compact: bool) -> Vec<Line<'static>> {
+pub(super) fn lines(app: &App, compact: bool) -> Vec<Line<'static>> {
     let (Some(key), Some(session)) = (&app.open, app.open_session()) else {
         return Vec::new();
     };

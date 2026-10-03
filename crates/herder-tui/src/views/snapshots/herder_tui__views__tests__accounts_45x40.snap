@@ -2,7 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" < back  herder                  inbox 0  +  "
+" accounts                            < back  "
+" ! 1 need you  x 1  * 1  x laptop offline    "
+"──────────────────────────────────────────── "
 "┌ accounts ────────────────────────────────┐ "
 "│ * box  connected - pinned                │ "
 "│   Main  claude - claude-main - 4 session │ "
@@ -32,7 +34,6 @@ expression: terminal.backend()
 "│                                          │ "
 "│                                          │ "
 "│                                          │ "
-"│                                          │ "
 "│ A session whose account hits a limit     │ "
 "│ moves to an account marked failover of   │ "
 "│ the same provider, on the same model,    │ "
@@ -41,4 +42,3 @@ expression: terminal.backend()
 "│ = true per account, [failover] pin).     │ "
 "└───── n add  r reconnect  Esc close ──────┘ "
 " n add   esc close                           "
-" ? help                     * box  x laptop  "

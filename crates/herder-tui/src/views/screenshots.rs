@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 4] = [
+const SCENES: [Scene; 9] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -39,6 +39,44 @@ const SCENES: [Scene; 4] = [
     }),
     ("session", |theme, _, width, height| {
         app_buffer(super::tests::mid_turn(), theme, width, height)
+    }),
+    ("shell", |theme, _, width, height| {
+        app_buffer(super::tests::herd(), theme, width, height)
+    }),
+    ("approval", |theme, _, width, height| {
+        let mut app = super::tests::herd();
+        let asked = vec![fake::approval("a1", "rm -rf target/")];
+        fake::feed(
+            &mut app,
+            "h1",
+            "s2",
+            fake::update("s2", 20, asked, Vec::new()),
+        );
+        // Out of the prompt and back: the request takes it.
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        app_buffer(app, theme, width, height)
+    }),
+    ("switcher", |theme, _, width, height| {
+        let mut app = super::tests::herd();
+        app.act(crate::action::Action::GoTo);
+        press(&mut app, KeyCode::Char('j'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("leader", |theme, _, width, height| {
+        let mut app = super::tests::herd();
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::CONTROL,
+        )));
+        app_buffer(app, theme, width, height)
+    }),
+    ("collapsed", |theme, _, width, height| {
+        let mut app = super::tests::herd();
+        app.layout.collapsed = true;
+        press(&mut app, KeyCode::Esc);
+        app_buffer(app, theme, width, height)
     }),
     ("help", |theme, _, width, height| {
         let mut app = fake::tree();
@@ -49,6 +87,10 @@ const SCENES: [Scene; 4] = [
         app_buffer(app, theme, width, height)
     }),
 ];
+
+fn press(app: &mut App, code: KeyCode) {
+    app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+}
 
 fn gallery(theme: &Theme, mode: Mode, width: u16, height: u16, dialog: bool) -> Buffer {
     // The last column stays blank, as the TUI leaves it.

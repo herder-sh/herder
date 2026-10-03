@@ -2,7 +2,6 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 80, 16).backend()"
 ---
-" herder                                                             inbox 0  +  "
 "                                                                                "
 "                                                                                "
 "                                                                                "
@@ -17,4 +16,5 @@ expression: "render(&mut app, 80, 16).backend()"
 "                                                                                "
 "                                                                                "
 "                                                                                "
-" ? help  q quit                                                                 "
+"─────────────────────────────────────────────────────────────────────────────── "
+"  NAVIGATE   a pair a machine  ? help  q quit                                   "

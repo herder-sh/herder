@@ -2,7 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" < back  box > app - api         inbox 0  +  "
+" ! api - app - box             1/4  │ switch "
+" ! 1 need you  x 1  * 1             │    !   "
+"──────────────────────────────────────────── "
 "┌──────────────────────────────────────────┐ "
 "│you                                       │ "
 "│  Add a health endpoint and test it.      │ "
@@ -35,10 +37,8 @@ expression: terminal.backend()
 "│                                          │ "
 "│                                          │ "
 "│                                          │ "
-"│                                          │ "
 "└──────────────────────────────────────────┘ "
 "┌ message ─────────────────────────────────┐ "
 "│ Write a prompt.                          │ "
 "└────────────────────────────── i to write ┘ "
-" i write   s switch   t term                 "
-" ? help                               * box  "
+" i write   < back   s switch   t term        "

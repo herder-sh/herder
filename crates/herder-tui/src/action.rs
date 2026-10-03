@@ -18,6 +18,7 @@ use herder_protocol::ApprovalDecision;
 use crate::app::{App, Focus};
 use crate::compose::{self, Act};
 use crate::inbox::{self, InboxAction};
+use crate::nav::Tab;
 use crate::prs::{self, PrAction};
 
 /// Something the user asked for.
@@ -77,6 +78,22 @@ pub enum Action {
     OpenRecover,
     /// Input to the recover dialog.
     Recover(crate::recover::Input),
+    /// Arm the leader: the next key is a NAVIGATE key, from any mode.
+    Leader,
+    /// Go to another session: the sidebar, or on a phone the switcher.
+    GoTo,
+    /// Back from the sidebar to the open session.
+    Resume,
+    /// Select the sidebar row one level up.
+    Parent,
+    /// Collapse the sidebar to a strip of state glyphs, or expand it.
+    ToggleSidebar,
+    /// Show or hide the details panel.
+    ToggleDetails,
+    /// Open the session of the attention list's row, from 0.
+    Attention(usize),
+    /// Show a tab of the open session.
+    Tab(Tab),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -87,6 +104,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl && key.code == KeyCode::Char('c') {
         return Some(Action::Compose(Act::CtrlC));
+    }
+    if ctrl && key.code == KeyCode::Char('x') && !app.dialog_open() {
+        return Some(Action::Leader);
     }
     if app.help {
         // Any key but scrolling closes the help.
@@ -151,6 +171,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             Action::Compose(Act::Choose(u32::from(digit) - u32::from('1')))
         }
         KeyCode::Char(':') => Action::Compose(Act::Palette),
+        KeyCode::Char('/') => Action::GoTo,
         KeyCode::Char('n') => Action::Compose(Act::NewSession),
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('?') => Action::ToggleHelp,
@@ -162,14 +183,29 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::PageDown | KeyCode::Char(' ') => Action::PageDown,
         KeyCode::Char('g') | KeyCode::Home => Action::Top,
         KeyCode::Char('G') | KeyCode::End => Action::Bottom,
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right if app.focus == Focus::Sessions => {
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right
+            if matches!(app.focus, Focus::Sessions | Focus::Tasks) =>
+        {
             Action::Open
         }
         KeyCode::Tab | KeyCode::BackTab => Action::SwitchPane,
         KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left
-            if app.focus == Focus::Transcript =>
+            if matches!(app.focus, Focus::Transcript | Focus::Tasks) =>
         {
             Action::Back
+        }
+        // In the sidebar, Esc returns to the open session; on a phone, so does ⌫, which
+        // closes the switcher.
+        KeyCode::Esc if app.focus == Focus::Sessions && app.open.is_some() => Action::Resume,
+        KeyCode::Backspace
+            if app.focus == Focus::Sessions
+                && app.open.is_some()
+                && app.width < crate::views::NARROW =>
+        {
+            Action::Resume
+        }
+        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left if app.focus == Focus::Sessions => {
+            Action::Parent
         }
         KeyCode::Char('r') => Action::Reconnect,
         KeyCode::Char('m') => Action::OpenMachines,
@@ -189,8 +225,49 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     Some(action)
 }
 
+/// The action `ctrl+x` then `key` asks for: what `key` does in NAVIGATE, plus `b` and `d`
+/// for the sidebar and the details panel, and a digit for that attention row.
+pub fn for_leader(key: KeyEvent) -> Option<Action> {
+    if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+        return None;
+    }
+    let action = match key.code {
+        KeyCode::Char('b') => Action::ToggleSidebar,
+        KeyCode::Char('d') => Action::ToggleDetails,
+        KeyCode::Char(digit @ '1'..='9') => {
+            Action::Attention(usize::from(u8::try_from(digit).ok()? - b'1'))
+        }
+        KeyCode::Char('/') => Action::GoTo,
+        KeyCode::Char('?') => Action::ToggleHelp,
+        KeyCode::Char(':') => Action::Compose(Act::Palette),
+        KeyCode::Char('n') => Action::Compose(Act::NewSession),
+        KeyCode::Char('s') => Action::OpenSwitch,
+        KeyCode::Char('t') => Action::Terminals,
+        KeyCode::Char('R') => Action::OpenRecover,
+        KeyCode::Char('I') => Action::Inbox(InboxAction::Toggle),
+        KeyCode::Char('P') => Action::Pr(PrAction::ToggleAll),
+        KeyCode::Char('p') => Action::Pr(PrAction::FocusStrip),
+        KeyCode::Char('L') => Action::Pr(PrAction::StartLink),
+        KeyCode::Char('A') => Action::OpenAccounts,
+        KeyCode::Char('m') => Action::OpenMachines,
+        KeyCode::Char('a') => Action::AddMachine,
+        KeyCode::Char('v') => Action::Group,
+        KeyCode::Char('z') => Action::Fold,
+        KeyCode::Char('r') => Action::Reconnect,
+        KeyCode::Char('q') => Action::Quit,
+        _ => return None,
+    };
+    Some(action)
+}
+
 /// The keys [`for_key`] knows, for the help screen: key, then what it does.
 pub const HELP: &[(&str, &str)] = &[
+    ("ctrl+x <key>", "the key's NAVIGATE action, from any mode"),
+    ("ctrl+x b / d", "collapse the sidebar / show the details"),
+    ("ctrl+x 1-9", "open that row of the attention list"),
+    ("/", "go to a session: the sidebar, or the switcher"),
+    ("h, ⌫, ←", "in the sidebar: up a level"),
+    ("Esc", "in the sidebar: back to the open session"),
     ("j / k, ↓ / ↑", "move, or scroll the transcript"),
     ("Enter, l", "open the selected session"),
     ("Tab", "switch between sessions and transcript"),

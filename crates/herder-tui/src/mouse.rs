@@ -19,6 +19,7 @@ use ratatui::layout::{Position, Rect};
 use crate::action::{self, Action};
 use crate::app::{App, Effect, Focus};
 use crate::inbox::InboxAction;
+use crate::nav::Tab;
 use crate::prs::PrAction;
 use crate::switch;
 
@@ -38,6 +39,8 @@ pub enum Click {
     Open,
     /// A row of a list, by index; see [`List`].
     Row(List, usize),
+    /// The sidebar's edge: a drag from here resizes the sidebar.
+    Resize,
 }
 
 /// A list whose rows a tap selects.
@@ -61,6 +64,10 @@ pub enum List {
     Switch,
     /// The recover dialog's hosts.
     Recover,
+    /// The sidebar's attention list, by [`App::attention`] index; a tap opens the session.
+    Attention,
+    /// The open session's tasks tab, by [`App::tasks`] index; a second tap opens the task.
+    Tasks,
 }
 
 /// What a wheel step over a spot scrolls.
@@ -74,6 +81,8 @@ pub enum Wheel {
     Strip,
     /// Does what ↑ and ↓ do: for the view or dialog that has the keys.
     Keys,
+    /// Moves along the open session's tabs.
+    Tabs,
 }
 
 /// The last frame's tappable and scrollable spots, in drawing order.
@@ -192,8 +201,21 @@ impl App {
             // dropped.
             MouseEventKind::Down(MouseButton::Left) => {
                 self.pressed = self.hits.click_at(x, y).cloned();
+                self.resizing = self.pressed == Some(Click::Resize);
                 self.dragged = Some((x, y, y));
                 Vec::new()
+            }
+            // A drag on the sidebar's edge moves it.
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing => {
+                self.resize_sidebar(x);
+                Vec::new()
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.resizing => {
+                self.resizing = false;
+                self.pressed = None;
+                self.dragged = None;
+                self.resize_sidebar(x);
+                vec![Effect::Save]
             }
             // A finger dragged up or down scrolls what it pressed on, a step a row, as the
             // wheel would; the press is then no tap.
@@ -241,6 +263,12 @@ impl App {
                     .saturating_add_signed(step)
                     .min(last);
             }
+            Some(Wheel::Tabs) => {
+                let tabs = [Tab::Chat, Tab::Tasks, Tab::Prs];
+                let at = tabs.iter().position(|tab| *tab == self.tab()).unwrap_or(0);
+                let next = at.saturating_add_signed(step).min(tabs.len() - 1);
+                self.show_tab(tabs[next]);
+            }
             Some(Wheel::Keys) => {
                 let code = if step < 0 { KeyCode::Up } else { KeyCode::Down };
                 if let Some(action) = action::for_key(KeyEvent::new(code, KeyModifiers::NONE), self)
@@ -269,6 +297,7 @@ impl App {
                 Vec::new()
             }
             Click::Row(list, at) => self.tap_row(list, at),
+            Click::Resize => Vec::new(),
         }
     }
 
@@ -324,6 +353,14 @@ impl App {
                 if let (Some(panel), Some(host_id)) = (&mut self.machine_panel, host_id) {
                     panel.chosen = Some(host_id);
                 }
+            }
+            List::Attention => self.open_attention(at),
+            List::Tasks => {
+                if self.focus == Focus::Tasks && self.task_cursor == at {
+                    return self.act(Action::Open);
+                }
+                self.focus = Focus::Tasks;
+                self.task_cursor = at;
             }
             List::Recover => {
                 if let Some(dialog) = &mut self.recover {
