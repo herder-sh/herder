@@ -4,7 +4,8 @@
 //! `fixtures/claude/record.py`; each test ends with a clean shutdown, which fails if the adapter
 //! sent anything the recording did not. The inline fixtures at the end cover what no recording
 //! shows: subagent approvals, requests herder does not handle, several questions in one call,
-//! free-text and multi-select answers, and a CLI that dies.
+//! free-text and multi-select answers, a dangerous removal in `full_access`, and a CLI that
+//! dies.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The model the recordings ran on.
 const HAIKU: &str = "claude-haiku-4-5-20251001";
 
-const FIXTURES: [&str; 8] = [
+const FIXTURES: [&str; 9] = [
     "turn",
     "switch",
     "approval",
@@ -35,6 +36,7 @@ const FIXTURES: [&str; 8] = [
     "interrupt",
     "seed",
     "limit_reached",
+    "full_access",
 ];
 
 fn fixture(name: &str) -> Fixture {
@@ -346,6 +348,56 @@ async fn a_tool_call_waits_for_its_approval() {
     shutdown(session).await;
 }
 
+fn full_access() -> StartRequest {
+    StartRequest {
+        permission_mode: PermissionMode::FullAccess,
+        ..request(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn full_access_allows_what_a_safety_check_still_asks() {
+    let mut session = start_with(fixture("full_access"), full_access()).await;
+    session
+        .commands
+        .send(prompt(
+            "Run these two shell commands with the Bash tool, verbatim, as two separate calls \
+             in order, then reply with the word done. First: `cd sub` Second: `cd \
+             /tmp/herder-claude-fixture && rm -f sub/*; ls sub`",
+        ))
+        .unwrap();
+    // The recording answers the dangerous rm check's `can_use_tool` with an allow, which the
+    // replay expects from the adapter before Claude goes on.
+    let events = until(&mut session, is_turn_end).await;
+    let approvals: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, AdapterEvent::ApprovalRequested { .. }))
+        .collect();
+    assert_eq!(approvals, Vec::<&AdapterEvent>::new());
+    let tools: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AdapterEvent::ItemCompleted { item } => match &item.body {
+                ItemBody::ToolCall { input, .. } => Some(input["command"].clone()),
+                ItemBody::ToolResult { output, .. } => Some(json!(output)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            json!("cd sub"),
+            json!("(Bash completed with no output)"),
+            json!("cd /tmp/herder-claude-fixture && rm -f sub/*; ls sub"),
+            json!("(Bash completed with no output)"),
+        ]
+    );
+    assert_eq!(events.last(), Some(&completed()));
+    shutdown(session).await;
+}
+
 const QUESTION_PROMPT: &str = "Use the AskUserQuestion tool to ask me whether to print A or B, \
                                then reply with exactly the letter I chose.";
 
@@ -624,6 +676,43 @@ async fn a_subagent_approval_first_shows_its_tool_call() {
                 summary: "Write: /w/a.txt".into(),
             },
         ]
+    );
+    session
+        .commands
+        .send(AdapterCommand::AnswerApproval {
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Deny,
+        })
+        .unwrap();
+    assert_eq!(until(&mut session, is_turn_end).await, [completed()]);
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn full_access_still_asks_before_removing_a_critical_path() {
+    let fixture = inline(
+        r#"{"dir":"out","line":"{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_rm\",\"name\":\"Bash\",\"input\":{\"command\":\"rm -rf $DIR/\"}}]},\"parent_tool_use_id\":null}"}
+{"dir":"out","line":"{\"type\":\"control_request\",\"request_id\":\"r1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Bash\",\"input\":{\"command\":\"rm -rf $DIR/\"},\"decision_reason\":\"Dangerous rm operation on critical path: /\",\"decision_reason_type\":\"safetyCheck\",\"classifier_approvable\":false,\"tool_use_id\":\"toolu_rm\"}}"}
+{"dir":"in","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"r1\",\"response\":{\"behavior\":\"deny\",\"message\":\"The user denied this tool call.\"}}}"}
+{"dir":"out","line":"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"\"}"}
+{"dir":"in","eof":true}
+{"exit":0}
+"#,
+    );
+    let mut session = start_with(fixture, full_access()).await;
+    session.commands.send(prompt("go")).unwrap();
+    let events = until(&mut session, |event| {
+        matches!(event, AdapterEvent::ApprovalRequested { .. })
+    })
+    .await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::ApprovalRequested {
+            approval_id: ApprovalId::new("approval-1"),
+            turn_id: turn(),
+            tool_call_id: id(1),
+            summary: "Bash: rm -rf $DIR/".into(),
+        })
     );
     session
         .commands

@@ -43,7 +43,7 @@
 //! | `read_only`   | `dontAsk`           | reads and pre-approved tools; denies whatever would ask |
 //! | `ask`         | `default`           | reads freely, asks before edits, commands and network   |
 //! | `auto_edit`   | `acceptEdits`       | also edits and runs common filesystem commands          |
-//! | `full_access` | `bypassPermissions` | never asks                                              |
+//! | `full_access` | `bypassPermissions` | asks only when a safety check holds a call (below)      |
 //!
 //! `plan` is not `read_only`: it is a planning workflow whose exit (`ExitPlanMode`) turns
 //! writes back on. The CLI always gets `--allow-dangerously-skip-permissions`, without which
@@ -51,6 +51,27 @@
 //! itself, the CLI reports it in a `system` `status` line and the adapter maps it back:
 //! `plan` and `dontAsk` as `read_only`, `default` (shown as "manual") as `ask`. `auto`, where
 //! a classifier approves instead of a person, has no herder mode and is not reported.
+//!
+//! `bypassPermissions` skips every permission prompt except those Claude Code's own safety
+//! checks hold back (`decision_reason_type` `safetyCheck`, alone or among a compound
+//! command's `subcommandResults`), and those still arrive as `can_use_tool`. One is the
+//! dangerous `rm` check: it resolves a glob target such as `rm -f dir/*` against the shell's
+//! working directory from before the command, ignoring a `cd` earlier in the same command, so
+//! `cd <worktree> && rm -f docs/*` asks whenever an earlier call left the shell in a
+//! subdirectory. Others hold `&` background jobs and writes to Claude's own settings. In
+//! `full_access` the adapter allows these itself, so a session does not stop on them: the user
+//! chose a mode that never asks. Still asked as in any mode:
+//!
+//! - Calls that need a person's answer rather than a permission (`requires_user_interaction`),
+//!   such as `AskUserQuestion`.
+//! - Removals the dangerous `rm` check flags for their target, its `decision_reason` reading
+//!   `Dangerous rm operation on critical path: ..` (a system directory such as `/` or the
+//!   home directory) or `.. on working directory or its ancestor: ..`, or that it could not
+//!   analyse at all. Only `.. on statically-unresolvable target: ..`, the stale-`cd` case
+//!   above, is allowed. A compound command reports one reason, the first held subcommand's.
+//!
+//! Claude Code's hard refusals never reach herder at all: deny rules, and calls its checks
+//! deny outright, such as PowerShell `Remove-Item` on a protected system path.
 //!
 //! # Items
 //!
