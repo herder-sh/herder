@@ -164,7 +164,7 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if case .userMessage(let text) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+            if case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
                 outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
@@ -283,7 +283,7 @@ extension ItemBody {
     /// The text of a message, reasoning or tool output.
     var text: String? {
         switch self {
-        case .userMessage(let text), .assistantMessage(let text), .reasoning(let text): text
+        case .userMessage(let text, _), .assistantMessage(let text), .reasoning(let text): text
         case .toolResult(_, let output, _): output
         case .toolCall, .unknown: nil
         }

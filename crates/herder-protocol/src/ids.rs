@@ -55,4 +55,6 @@ id! {
     TerminalId,
     /// Client-chosen idempotency key of a command; a ULID string, opaque to the daemon.
     CommandId,
+    /// Identifies an image a prompt carried, within its session; a ULID string, opaque.
+    AttachmentId,
 }

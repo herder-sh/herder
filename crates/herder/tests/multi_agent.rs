@@ -107,7 +107,7 @@ async fn agent(
     while let Some(command) = received.recv().await {
         let mut out = Vec::new();
         match command {
-            AdapterCommand::SendPrompt { turn_id, text } => {
+            AdapterCommand::SendPrompt { turn_id, text, .. } => {
                 out.push(AdapterEvent::TurnStarted {
                     turn_id: turn_id.clone(),
                 });
@@ -442,7 +442,6 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             provider: Provider::Claude,
             label: "Work".into(),
             config_dir: None,
-            failover: false,
         },
     )]);
     let shutdown = CancellationToken::new();
@@ -480,8 +479,9 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             project_id: None,
             branch: None,
             account_id: Some(account),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::AutoEdit,
+            permission_mode: Some(PermissionMode::AutoEdit),
             max_children: None,
             failover_pin: None,
         })
@@ -494,6 +494,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
         .command(CommandBody::SendPrompt {
             session_id: primary.clone(),
             text: "Plan.".into(),
+            images: Vec::new(),
         })
         .await;
     client

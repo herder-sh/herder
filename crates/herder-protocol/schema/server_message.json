@@ -85,7 +85,7 @@
       "type": "object",
       "properties": {
         "accounts": {
-          "description": "The accounts.",
+          "description": "The accounts; a session whose account hits a limit may rotate to any other of its\nprovider.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/Account"
@@ -370,10 +370,6 @@
           "description": "The account.",
           "$ref": "#/$defs/AccountId"
         },
-        "failover": {
-          "description": "Whether sessions may fail over to this account when theirs hits a limit.",
-          "type": "boolean"
-        },
         "label": {
           "description": "Display label chosen by the owner.",
           "type": "string"
@@ -394,8 +390,7 @@
         "account_id",
         "provider",
         "label",
-        "usage",
-        "failover"
+        "usage"
       ]
     },
     "AccountId": {
@@ -505,6 +500,35 @@
         }
       ]
     },
+    "Attachment": {
+      "description": "An image a prompt carried, kept on the session's host.",
+      "type": "object",
+      "properties": {
+        "attachment_id": {
+          "description": "Fetches the bytes with `get_attachment`.",
+          "$ref": "#/$defs/AttachmentId"
+        },
+        "media_type": {
+          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size of the image in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "attachment_id",
+        "media_type",
+        "size"
+      ]
+    },
+    "AttachmentId": {
+      "description": "Identifies an image a prompt carried, within its session; a ULID string, opaque.",
+      "type": "string"
+    },
     "Bytes": {
       "description": "Raw bytes, encoded as a standard padded base64 string.",
       "type": "string",
@@ -589,6 +613,73 @@
           "required": [
             "type",
             "terminal_id"
+          ]
+        },
+        {
+          "description": "The bytes of an image, answering `get_attachment`.",
+          "type": "object",
+          "properties": {
+            "data": {
+              "description": "The image file's bytes.",
+              "$ref": "#/$defs/Bytes"
+            },
+            "media_type": {
+              "description": "The image's media type.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "attachment"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        },
+        {
+          "description": "A folder's entries, answering `list_directory`.",
+          "type": "object",
+          "properties": {
+            "entries": {
+              "description": "Its entries, ordered by name.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DirectoryEntry"
+              }
+            },
+            "path": {
+              "description": "The folder, as an absolute path with `~` expanded.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "directory"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "entries"
+          ]
+        },
+        {
+          "description": "A repository is a project of this daemon, answering `add_project`; the project list\nwith it follows.",
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "description": "The project the repository belongs to.",
+              "$ref": "#/$defs/ProjectId"
+            },
+            "type": {
+              "type": "string",
+              "const": "project_added"
+            }
+          },
+          "required": [
+            "type",
+            "project_id"
           ]
         }
       ]
@@ -696,6 +787,29 @@
     "DeviceId": {
       "description": "Identifies a paired client device; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "DirectoryEntry": {
+      "description": "One entry of a folder.",
+      "type": "object",
+      "properties": {
+        "is_dir": {
+          "description": "Whether it is a folder, following symlinks.",
+          "type": "boolean"
+        },
+        "is_repo": {
+          "description": "Whether it is a folder at the top of a git repository or worktree.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "File name of the entry.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "is_dir",
+        "is_repo"
+      ]
     },
     "ErrorClass": {
       "description": "Kind of turn failure.",
@@ -1347,7 +1461,7 @@
           ]
         },
         {
-          "description": "The account changed within the same provider; `by` is absent for a failover.",
+          "description": "The account changed within the same provider; `by` is absent when the daemon rotated\nthe session off an account that hit its limit.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1469,7 +1583,7 @@
       ]
     },
     "FailoverSettings": {
-      "description": "How a daemon's sessions fail over when their account hits a limit.",
+      "description": "How a daemon's sessions fail over when their account hits a limit: they rotate to the\navailable account of their provider with the most room left, unless pinned.",
       "type": "object",
       "properties": {
         "pin": {
@@ -1628,6 +1742,13 @@
           "description": "A prompt from a user; the author is the event's `by`.",
           "type": "object",
           "properties": {
+            "attachments": {
+              "description": "Images sent with the prompt, in order; `get_attachment` fetches their bytes.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Attachment"
+              }
+            },
             "text": {
               "description": "Prompt text.",
               "type": "string"
@@ -1845,6 +1966,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AccountId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_permission_mode": {
+          "description": "Permission mode new sessions of the project start in on this host when none is chosen;\nabsent when none is configured.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
             },
             {
               "type": "null"

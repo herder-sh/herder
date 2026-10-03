@@ -11,9 +11,10 @@ use herder_adapters::{
     AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest, transcript,
 };
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CommandResult,
-    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Item, ItemBody, ItemId,
-    PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError, TurnId, UserId,
+    AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
+    CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Image, Item,
+    ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError,
+    TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -23,6 +24,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::attachments;
 use super::journal::Journal;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
@@ -48,9 +50,11 @@ pub(super) struct SessionCommand {
 
 /// What a session command asks for.
 pub(super) enum Request {
-    /// Queues a prompt; `queued` learns whether it waits behind a running turn.
+    /// Queues a prompt, keeping its images; `queued` learns whether it waits behind a running
+    /// turn.
     SendPrompt {
         text: String,
+        images: Vec<Image>,
         queued: Option<oneshot::Sender<bool>>,
     },
     Interrupt,
@@ -81,6 +85,8 @@ pub(super) enum Request {
     Archive {
         force: bool,
     },
+    /// Adds an archived session's worktree back and makes the session writable again.
+    Unarchive,
     /// Moves the session to another account between turns, replaying its transcript.
     Switch {
         account_id: AccountId,
@@ -118,6 +124,8 @@ pub(super) enum PrimaryAct {
 struct Prompt {
     by: Option<UserId>,
     text: String,
+    /// The images it carries, kept apart ([`attachments`]).
+    attachments: Vec<Attachment>,
     /// Whether it retries a turn that hit a limit, on the account failover moved to.
     retry: bool,
 }
@@ -222,6 +230,7 @@ impl Actor {
                     .map(|prompt| Prompt {
                         by: prompt.by.clone(),
                         text: prompt.text.clone(),
+                        attachments: prompt.attachments.clone(),
                         retry: prompt.retry,
                     })
                     .collect();
@@ -247,6 +256,7 @@ impl Actor {
             .map(|prompt| QueuedPrompt {
                 by: prompt.by.clone(),
                 text: prompt.text.clone(),
+                attachments: prompt.attachments.clone(),
                 retry: prompt.retry,
             })
             .collect();
@@ -359,6 +369,10 @@ impl Actor {
             let _ = done.send(self.primary_act(primary, act).await);
             return Ok(CommandResult::Applied);
         }
+        if let Request::Unarchive = request {
+            self.unarchive(by).await?;
+            return Ok(CommandResult::Applied);
+        }
         if self.session.status == SessionStatus::Archived {
             return Err(error(
                 ErrorCode::Conflict,
@@ -375,11 +389,17 @@ impl Actor {
             ));
         }
         match request {
-            Request::SendPrompt { text, queued } => {
+            Request::SendPrompt {
+                text,
+                images,
+                queued,
+            } => {
+                let attachments = self.keep(images).await?;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
                     by,
                     text,
+                    attachments,
                     retry: false,
                 });
                 if let Some(queued) = queued {
@@ -450,7 +470,7 @@ impl Actor {
             Request::Switch { account_id, to } => self.switch(by, account_id, to).await?,
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::MovedAway => self.moved_away().await,
-            Request::FromPrimary { .. } => {}
+            Request::FromPrimary { .. } | Request::Unarchive => {}
         }
         Ok(CommandResult::Applied)
     }
@@ -906,6 +926,63 @@ impl Actor {
         Ok(())
     }
 
+    /// Checks a prompt's `images` and keeps them; refused when the session's adapter cannot
+    /// take images.
+    async fn keep(&self, images: Vec<Image>) -> Result<Vec<Attachment>, ErrorInfo> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+        let provider = &self.session.provider;
+        let takes_images = self
+            .inner
+            .adapters
+            .get(provider)
+            .is_some_and(|adapter| adapter.accepts_images());
+        if !takes_images {
+            return Err(error(
+                ErrorCode::Unsupported,
+                format!("{} cannot take images with a prompt", provider.as_str()),
+            ));
+        }
+        attachments::validate(&images)?;
+        attachments::save(&self.inner.attachments, &self.session.session_id, images).await
+    }
+
+    /// Adds the worktree of an archived session back, at the path it had, on the session's own
+    /// branch as archive kept it, and makes the session writable again.
+    async fn unarchive(&mut self, by: Option<UserId>) -> Result<(), ErrorInfo> {
+        match self.session.status {
+            SessionStatus::Archived => {}
+            SessionStatus::Moved => {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    "the session was recovered on another host and is read-only here",
+                ));
+            }
+            _ => return Err(error(ErrorCode::Conflict, "the session is not archived")),
+        }
+        let session = &self.session;
+        self.inner
+            .worktrees
+            .reopen(
+                Path::new(&session.repo),
+                Path::new(&session.worktree),
+                &session.branch,
+            )
+            .await
+            .map_err(super::worktree_error)?;
+        if let Some(prs) = self.inner.prs.get() {
+            prs.install(&session.session_id, Path::new(&session.worktree))
+                .await;
+        }
+        let status = SessionStatus::Idle;
+        self.record(by, EventBody::SessionStatusChanged { status })
+            .await
+            .map_err(super::internal)?;
+        self.session.status = status;
+        Ok(())
+    }
+
     /// The session was recovered on another host, which goes on with it: stops the CLI, the
     /// setup command and whatever the session left running, fails the open turn and makes the
     /// session read-only here. The worktree stays as the session left it.
@@ -992,25 +1069,6 @@ impl Actor {
                 ErrorCode::Unsupported,
                 format!("no adapter runs {} sessions", provider.as_str()),
             ));
-        }
-        if let Some(primary) = &self.session.parent {
-            let primary = self
-                .inner
-                .journal
-                .session(primary.clone())
-                .await
-                .map_err(super::internal)?
-                .ok_or_else(|| super::not_found(primary))?;
-            if account_id != primary.account_id && !account.failover {
-                return Err(error(
-                    ErrorCode::BadRequest,
-                    format!(
-                        "account {account_id} is outside the task's failover chain: a child \
-                         session runs on its primary's account or on one that opted in to \
-                         failover"
-                    ),
-                ));
-            }
         }
         if self.turn.is_some() {
             return Err(error(
@@ -1133,14 +1191,19 @@ impl Actor {
             };
             // Before the prompt is journaled, so a restart never runs it twice.
             self.save_queue().await;
-            let Prompt { by, text, retry } = prompt;
+            let Prompt {
+                by,
+                text,
+                attachments,
+                retry,
+            } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
             if self.adapter.is_none() {
                 match self.start_adapter().await {
                     Ok(adapter) => self.adapter = Some(adapter),
                     Err(error) => {
-                        self.user_message(by, &turn_id, text).await;
+                        self.user_message(by, &turn_id, text, attachments).await;
                         self.log(EventBody::TurnStarted {
                             turn_id: turn_id.clone(),
                         })
@@ -1160,18 +1223,40 @@ impl Actor {
                     }
                 }
             }
-            self.user_message(by.clone(), &turn_id, text.clone()).await;
+            let images = self.images(&attachments).await;
+            self.user_message(by.clone(), &turn_id, text.clone(), attachments.clone())
+                .await;
             if let Some(adapter) = &self.adapter {
                 // A closed channel means the CLI is gone; its `exited` fails this turn.
                 let _ = adapter.commands.send(AdapterCommand::SendPrompt {
                     turn_id: turn_id.clone(),
                     text: text.clone(),
+                    images,
                 });
             }
             self.turn = Some(turn_id);
-            self.prompt = Some(Prompt { by, text, retry });
+            self.prompt = Some(Prompt {
+                by,
+                text,
+                attachments,
+                retry,
+            });
             self.last_reply = None;
         }
+    }
+
+    /// The images `attachments` name, read back for the agent; one that cannot be read is
+    /// logged and left out, as the turn can go on without it.
+    async fn images(&self, attachments: &[Attachment]) -> Vec<Image> {
+        let mut images = Vec::with_capacity(attachments.len());
+        for attachment in attachments {
+            let session_id = &self.session.session_id;
+            match attachments::load(&self.inner.attachments, session_id, attachment).await {
+                Ok(image) => images.push(image),
+                Err(err) => warn!(%session_id, "leaving an image out: {}", err.message),
+            }
+        }
+        images
     }
 
     /// Starts the setup command in the worktree, in the session's scope, as a turn of its own:
@@ -1646,9 +1731,9 @@ impl Actor {
         self.inner.limit_hit(&failing);
         let prompt = self.prompt.take().filter(|prompt| !prompt.retry);
         let target = match prompt {
-            Some(_) if !self.pinned().await => {
-                self.inner.failover_target(&self.session.provider, &failing)
-            }
+            Some(_) if !self.pinned().await => self
+                .inner
+                .available_account(&self.session.provider, Some(&failing)),
             _ => None,
         };
         let (Some(prompt), Some(account_id)) = (prompt, target) else {
@@ -1794,11 +1879,17 @@ impl Actor {
         }
     }
 
-    async fn user_message(&mut self, by: Option<UserId>, turn_id: &TurnId, text: String) {
+    async fn user_message(
+        &mut self,
+        by: Option<UserId>,
+        turn_id: &TurnId,
+        text: String,
+        attachments: Vec<Attachment>,
+    ) {
         let item = Item {
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
-            body: ItemBody::UserMessage { text },
+            body: ItemBody::UserMessage { text, attachments },
         };
         if let Err(err) = self.record(by, EventBody::ItemAdded { item }).await {
             warn!(session_id = %self.session.session_id, "cannot journal a prompt: {err:#}");

@@ -424,6 +424,7 @@ impl App {
         let command = CommandBody::SendPrompt {
             session_id,
             text: prompt.clone(),
+            images: Vec::new(),
         };
         vec![send(&key, command, Origin::Prompt(key.clone(), prompt))]
     }
@@ -513,6 +514,7 @@ impl App {
                 session_id,
                 force: name == "archive!",
             },
+            ("unarchive", []) => CommandBody::UnarchiveSession { session_id },
             ("interrupt", []) => CommandBody::Interrupt { session_id },
             ("down", []) => match self.compose_projects(key).as_slice() {
                 [project] => CommandBody::ComposeDown {
@@ -621,6 +623,7 @@ mod tests {
                 CommandBody::SendPrompt {
                     session_id: SessionId::new("s2"),
                     text: prompt.clone(),
+                    images: Vec::new(),
                 },
                 Origin::Prompt(key("h1", "s2"), prompt.clone()),
             )]
@@ -630,7 +633,13 @@ mod tests {
         assert_eq!(session.queued, std::slice::from_ref(&prompt));
 
         // It leaves the queue once its turn starts with it.
-        let message = added("i9", ItemBody::UserMessage { text: prompt });
+        let message = added(
+            "i9",
+            ItemBody::UserMessage {
+                text: prompt,
+                attachments: Vec::new(),
+            },
+        );
         fake::feed(&mut app, "h1", "s2", update("s2", 4, vec![message], vec![]));
         assert!(app.sessions[&key("h1", "s2")].queued.is_empty());
 
@@ -886,6 +895,10 @@ mod tests {
                 session_id: s2(),
                 force: true
             })]
+        );
+        assert_eq!(
+            run(&mut app, "unarchive"),
+            [on_s2(CommandBody::UnarchiveSession { session_id: s2() })]
         );
 
         // A bad command keeps the palette open with why.

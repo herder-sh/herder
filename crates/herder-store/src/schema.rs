@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -105,6 +105,12 @@ CREATE TABLE native_sessions (
     account_id TEXT NOT NULL,
     native_id  TEXT NOT NULL
 ) STRICT;
+";
+
+/// The images each queued prompt carries, as a JSON array of attachments; none for those
+/// queued before.
+const V7: &str = "
+ALTER TABLE queued_prompts ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

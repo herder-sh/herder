@@ -277,7 +277,6 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         provider: Provider::Claude,
         label: label.to_owned(),
         usage: Vec::new(),
-        failover: false,
     }
 }
 
@@ -657,6 +656,7 @@ pub fn chat() -> App {
                     t1,
                     ItemBody::UserMessage {
                         text: "Add a health endpoint and test it.".into(),
+                        attachments: Vec::new(),
                     },
                 ),
             ],
@@ -783,6 +783,7 @@ pub fn chat() -> App {
                     "turn-2",
                     ItemBody::UserMessage {
                         text: "Good. Now remove the old target directory.".into(),
+                        attachments: Vec::new(),
                     },
                 ),
             ],

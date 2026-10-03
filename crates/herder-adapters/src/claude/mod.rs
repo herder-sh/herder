@@ -13,6 +13,8 @@
 //!   `can_use_tool` control request whenever its permission mode would prompt. herder answers
 //!   `{"behavior": "allow"}` or `{"behavior": "deny", "message": ..}`. On interrupt the CLI
 //!   withdraws an unanswered one with `control_cancel_request`.
+//! - A prompt with images is one `user` line whose content is the images, as base64 `image`
+//!   blocks, then the text as a `text` block; without images the content is the text alone.
 //! - Interrupt is the `interrupt` control request; the turn's `result` then ends it.
 //! - Model and permission mode switch natively, with `set_model` and `set_permission_mode`.
 //! - The CLI's session id comes on the `system` `init` line of the first turn and is reported
@@ -161,6 +163,10 @@ impl Default for ClaudeAdapter {
 }
 
 impl Adapter for ClaudeAdapter {
+    fn accepts_images(&self) -> bool {
+        true
+    }
+
     fn start(&self, request: StartRequest) -> StartFuture {
         let command = command(&self.program, &request);
         Box::pin(async move {

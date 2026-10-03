@@ -69,7 +69,7 @@ impl SessionLog {
             return false;
         };
         match &mut item.body {
-            ItemBody::UserMessage { text: so_far }
+            ItemBody::UserMessage { text: so_far, .. }
             | ItemBody::AssistantMessage { text: so_far }
             | ItemBody::Reasoning { text: so_far } => so_far.push_str(text),
             ItemBody::ToolResult { output, .. } => output.push_str(text),

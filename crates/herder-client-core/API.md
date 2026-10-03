@@ -20,7 +20,10 @@ says what exists, why, and how it maps to foreign languages.
   `public-api.txt`. Such a change is a `[CONTRACT]` todo of its own (AGENTS.md).
 - The API passes `herder-protocol` types through (`HostId`, `SessionHead`, `Event`,
   `CommandBody`, ...). Those are versioned by `PROTOCOL_VERSION` and change only in a
-  protocol `[CONTRACT]` todo; this list names them but does not track their fields.
+  protocol `[CONTRACT]` todo; this list names them but does not track their fields. Protocol
+  version 4 (P0.10) changed them without changing this API: `Account.failover` is gone,
+  `CreateSession` takes a `provider` and an optional `permission_mode`, and there are new
+  commands and results for images, folders, projects and unarchiving.
 
 ## Shape, and how it maps to UniFFI
 
@@ -59,16 +62,19 @@ It is part of the frozen list but not of the foreign-language surface.
 
 Everything a client does is one of: read the machines list, stream a session, send a command,
 stream a terminal. Commands are `herder_protocol::CommandBody` values sent with
-`Client::send`, so a new command is a protocol change, not a client-core change.
+`Client::send`, so a new command is a protocol change, not a client-core change. Queries
+(`GetAttachment`, `ListDirectory`) are commands too: their answer is the `CommandResult`, and
+the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
-| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`   | `send`: `CreateSession`, `ArchiveSession`, `SendPrompt`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Projects  | `Machine::projects`                                                  | owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings` |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
-| Accounts  | `Machine::accounts`, `failover`; `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
+| Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
 | Fleet     | `Machine::hosts` (a vault), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`                                     |
 
 ## Reference

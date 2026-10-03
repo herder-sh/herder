@@ -62,7 +62,7 @@ struct ListsTests {
     @Test func projectsAreNamedByTheirMachineAndSpanMachines() {
         var onA = Script("01A", host: "host-a")
         var onB = Script("01B", host: "host-b")
-        let project = Project(projectId: "github.com/acme/demo", name: "Demo", paths: [], defaultAccount: nil, setupCommand: nil)
+        let project = Project(projectId: "github.com/acme/demo", name: "Demo", paths: [], defaultPermissionMode: nil, defaultAccount: nil, setupCommand: nil)
         let machines = [
             machine("host-a", name: "alpha", sessions: ["01A"], projects: [project]),
             machine("host-b", name: "beta", sessions: ["01B"]),

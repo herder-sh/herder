@@ -59,7 +59,7 @@ impl Adapter for Echo {
                 while let Some(command) = received.recv().await {
                     let mut out = Vec::new();
                     match command {
-                        AdapterCommand::SendPrompt { turn_id, text } => {
+                        AdapterCommand::SendPrompt { turn_id, text, .. } => {
                             let started = AdapterEvent::TurnStarted {
                                 turn_id: turn_id.clone(),
                             };
@@ -210,7 +210,6 @@ impl Daemon {
                 provider: Provider::Other("echo".into()),
                 label: "Account 1".into(),
                 config_dir: None,
-                failover: false,
             },
         );
         let setup = Setup {
@@ -220,6 +219,7 @@ impl Daemon {
             sink: Arc::new(Quiet),
             turn_ids: ulid_turn_ids(),
             worktrees: Worktrees::new(dir.join("worktrees")),
+            attachments: dir.join("attachments"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -269,8 +269,9 @@ impl Daemon {
             project_id: None,
             branch: None,
             account_id: Some(AccountId::new("account-1")),
+            provider: None,
             model: Some("echo-1".into()),
-            permission_mode: mode,
+            permission_mode: Some(mode),
             max_children,
             failover_pin: None,
         };
@@ -294,6 +295,7 @@ impl Daemon {
         let prompt = CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: "Plan.".into(),
+            images: Vec::new(),
         };
         self.manager.handle(alice(), prompt).await.unwrap();
         for _ in 0..250 {
@@ -699,6 +701,7 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
     let prompt = CommandBody::SendPrompt {
         session_id: primary.clone(),
         text: "Hang.".into(),
+        images: Vec::new(),
     };
     daemon.manager.handle(alice(), prompt).await.unwrap();
     daemon

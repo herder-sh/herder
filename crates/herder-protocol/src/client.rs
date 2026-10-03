@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandId, PermissionMode, ProjectId,
-    Provider, QuestionId, Seq, SessionId, TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, Image,
+    PermissionMode, ProjectId, Provider, QuestionId, Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -81,21 +81,28 @@ pub enum CommandBody {
         /// Branch to create; the daemon picks a name when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
-        /// Account to run on; the project's `default_account` when absent, which then must be
-        /// set.
+        /// Account to run on. When absent: the available account of `provider` with the most
+        /// room left in its usage windows, when `provider` is set; else the project's
+        /// `default_account`, which then must be set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<AccountId>,
+        /// Provider to run on, when `account_id` is absent; with `account_id`, it must be that
+        /// account's provider.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<Provider>,
         /// Model to use; the provider's default when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<String>,
-        /// Starting permission mode.
-        permission_mode: PermissionMode,
+        /// Starting permission mode; the project's `default_permission_mode` when absent, else
+        /// `ask`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permission_mode: Option<PermissionMode>,
         /// Most live children the session may have as a task's primary; the daemon's
         /// `[tasks] max_children` when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_children: Option<u32>,
-        /// Whether the session stays on its account when it hits a limit instead of failing
-        /// over; the daemon's `[failover] pin` when absent.
+        /// Whether the session stays on its account when it hits a limit instead of rotating
+        /// to another account of its provider; the daemon's `[failover] pin` when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failover_pin: Option<bool>,
     },
@@ -106,12 +113,31 @@ pub enum CommandBody {
         /// Remove the worktree even when it has uncommitted or untracked changes.
         force: bool,
     },
+    /// Bring an archived session back: recreate its worktree, at the path it had, on the
+    /// session's own branch as archive kept it, and make the session writable again.
+    UnarchiveSession {
+        /// Target session.
+        session_id: SessionId,
+    },
     /// Start a turn with a prompt.
     SendPrompt {
         /// Target session.
         session_id: SessionId,
         /// Prompt text.
         text: String,
+        /// Images for the agent to see with the text, together at most
+        /// [`crate::MAX_PROMPT_IMAGE_BYTES`]; a provider that cannot take images refuses them
+        /// as `unsupported`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
+    },
+    /// Fetch the bytes of an image a prompt of the session carried; answered with
+    /// `attachment`. It changes nothing, so a resend is answered afresh.
+    GetAttachment {
+        /// Session whose prompt carried it.
+        session_id: SessionId,
+        /// The image, as the prompt's `user_message` names it.
+        attachment_id: AttachmentId,
     },
     /// Stop the running turn.
     Interrupt {
@@ -217,6 +243,34 @@ pub enum CommandBody {
         cols: u16,
         /// Height in rows.
         rows: u16,
+    },
+    /// List a folder on the host, to pick a repository; owners only. Answered with
+    /// `directory`. It changes nothing, so a resend is answered afresh.
+    ListDirectory {
+        /// Absolute path of the folder, or one starting with `~/`.
+        path: String,
+    },
+    /// Register a repository on the host as a project, as a `[[project]]` entry of the
+    /// daemon's config declaring its path; owners only. Answered with `project_added`. A path
+    /// declared already is answered with its project.
+    AddProject {
+        /// Absolute path of the repository, or one starting with `~/`.
+        path: String,
+    },
+    /// Replace a project's settings on this host, kept in its `[[project]]` entry of the
+    /// daemon's config; owners only. An absent setting is cleared.
+    SetProjectSettings {
+        /// The project, one of this daemon's.
+        project_id: ProjectId,
+        /// Permission mode new sessions of the project start in when none is given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_permission_mode: Option<PermissionMode>,
+        /// Account new sessions of the project use when none is given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_account: Option<AccountId>,
+        /// Shell command run in each new worktree of the project before its session starts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        setup_command: Option<String>,
     },
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {

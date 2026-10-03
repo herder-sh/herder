@@ -355,7 +355,7 @@ pub(super) fn draw(
         return;
     }
     if session.status == SessionStatus::Archived {
-        Line::styled("archived", ui.muted()).render(prompt, buf);
+        Line::styled("archived · :unarchive brings it back", ui.muted()).render(prompt, buf);
         return;
     }
     if heights.prompt == 0 {

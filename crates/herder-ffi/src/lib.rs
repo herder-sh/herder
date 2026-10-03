@@ -12,6 +12,8 @@
 //!   clash with Swift's `Error` or Kotlin's `Throwable.message`.
 //! - [`parse_pairing_uri`] and [`pairing_uri_to_string`], `PairingUri`'s `FromStr` and
 //!   `Display`, which UniFFI cannot export as trait impls on a record.
+//! - [`image_media_types`], [`max_image_bytes`] and [`max_prompt_image_bytes`], the protocol's
+//!   limits on a prompt's images, which UniFFI cannot export as constants.
 
 mod types;
 
@@ -82,6 +84,28 @@ impl From<client_core::Error> for HerderError {
 #[uniffi::export]
 pub fn client_api_version() -> u32 {
     client_core::CLIENT_API_VERSION
+}
+
+/// The media types a prompt's image may have, `herder_protocol::IMAGE_MEDIA_TYPES`.
+#[uniffi::export]
+pub fn image_media_types() -> Vec<String> {
+    herder_protocol::IMAGE_MEDIA_TYPES
+        .iter()
+        .map(|media_type| (*media_type).to_owned())
+        .collect()
+}
+
+/// The most bytes one image of a prompt may have, `herder_protocol::MAX_IMAGE_BYTES`.
+#[uniffi::export]
+pub fn max_image_bytes() -> u64 {
+    herder_protocol::MAX_IMAGE_BYTES as u64
+}
+
+/// The most bytes all images of one prompt may have together,
+/// `herder_protocol::MAX_PROMPT_IMAGE_BYTES`.
+#[uniffi::export]
+pub fn max_prompt_image_bytes() -> u64 {
+    herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
 }
 
 /// Parses a `herder://pair` link, to confirm it before pairing.

@@ -109,7 +109,10 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
         turn_id: head
             .as_ref()
             .map_or_else(|| TurnId::new(NOTE_ID), |head| head.turn_id.clone()),
-        body: ItemBody::UserMessage { text: NOTE.into() },
+        body: ItemBody::UserMessage {
+            text: NOTE.into(),
+            attachments: Vec::new(),
+        },
     };
     total += cost(&note);
     while total > budget && turns.len() > PROTECTED_TURNS {
@@ -146,7 +149,7 @@ fn shorten(turns: &mut [Vec<Item>], total: &mut usize, budget: usize) {
 /// Estimated tokens of one item.
 fn cost(item: &Item) -> usize {
     let bytes = match &item.body {
-        ItemBody::UserMessage { text }
+        ItemBody::UserMessage { text, .. }
         | ItemBody::AssistantMessage { text }
         | ItemBody::Reasoning { text } => text.len(),
         ItemBody::ToolCall { name, input } => name.len() + input.to_string().len(),

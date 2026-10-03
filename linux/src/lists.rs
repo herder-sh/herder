@@ -580,6 +580,7 @@ pub mod tests {
             project_id: ProjectId::new("github.com/org/app"),
             name: "App".to_owned(),
             paths: vec!["/srv/app".to_owned()],
+            default_permission_mode: None,
             default_account: None,
             setup_command: None,
         }];

@@ -9,7 +9,6 @@
 //!
 //!  Usage · claude-main
 //!  5h    ███████░░░░░░░░░  38%
-//!  failover on
 //!
 //!  Tasks 2
 //!  ● write tests
@@ -111,12 +110,6 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
         if account.usage.is_empty() {
             lines.push(Line::styled("no usage reported yet", ui.muted()));
         }
-        let failover = if account.failover {
-            "failover on"
-        } else {
-            "failover off"
-        };
-        lines.push(Line::styled(failover, ui.muted()));
     }
 
     let tasks = app.tasks();

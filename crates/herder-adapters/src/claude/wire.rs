@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use herder_protocol::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -250,7 +251,33 @@ pub(super) struct UserLine<'a> {
 #[derive(Serialize)]
 pub(super) struct UserMessage<'a> {
     pub role: &'static str,
-    pub content: &'a str,
+    pub content: Content<'a>,
+}
+
+/// A user message's content: plain text, or content blocks when it carries images.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(super) enum Content<'a> {
+    Text(&'a str),
+    Blocks(Vec<UserBlock<'a>>),
+}
+
+/// One content block of a user message, as the Messages API takes it.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum UserBlock<'a> {
+    Text { text: &'a str },
+    Image { source: ImageSource<'a> },
+}
+
+/// An image's bytes, inline.
+#[derive(Serialize)]
+pub(super) struct ImageSource<'a> {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub media_type: &'a str,
+    /// Serialized as standard base64.
+    pub data: &'a Bytes,
 }
 
 /// Who wrote a prompt; `human` for herder's users, as the SDK asks hosts to stamp.
@@ -361,7 +388,7 @@ mod tests {
                 kind: "user",
                 message: UserMessage {
                     role: "user",
-                    content: "hi"
+                    content: Content::Text("hi")
                 },
                 parent_tool_use_id: None,
                 session_id: "",
@@ -369,6 +396,21 @@ mod tests {
                 origin: Some(Origin { kind: "human" }),
             }),
             r#"{"type":"user","message":{"role":"user","content":"hi"},"parent_tool_use_id":null,"session_id":"","origin":{"kind":"human"}}"#
+        );
+        let png = Bytes(b"\x89PNG".to_vec());
+        let image = UserBlock::Image {
+            source: ImageSource {
+                kind: "base64",
+                media_type: "image/png",
+                data: &png,
+            },
+        };
+        assert_eq!(
+            line(&Content::Blocks(vec![
+                image,
+                UserBlock::Text { text: "hi" }
+            ])),
+            r#"[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw=="}},{"type":"text","text":"hi"}]"#
         );
         assert_eq!(
             line(&ControlRequestLine {

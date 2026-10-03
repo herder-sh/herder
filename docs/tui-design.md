@@ -165,7 +165,7 @@ At **160 columns** a details panel (42 columns, OpenCode's sidebar) opens to the
 sections are, in order:
 
 - session: branch, machine and path
-- account usage and failover
+- account usage
 - tasks
 - PRs
 - resources
@@ -182,7 +182,7 @@ an overlay with `ctrl+x d`.
    ├ ✓ fix-login              │   + Thought: where the router lives · 4s                                             │ Usage · claude-main
    └ ● api              #12 ✓ │   → Read src/api.rs                                                                  │ 5h    ███████░░░░░░░░░░ 38%
      ├ ● write tests          │   ✱ Grep "Router::new" in src (3 matches)                                            │ week  ██░░░░░░░░░░░░░░░ 12%
-     └ ◉ docs               ? │                                                                                      │ failover on · next: claude-alt
+     └ ◉ docs               ? │                                                                                      │
  ● herder                  m2 │ ┃ # cargo test --workspace            (in ~/src/app · wt api)                        │
    └ ● p2d-1-design     #88 … │ ┃ running 12 tests                                                                   │ ▼ Tasks 2 · max 4
  ○ infra                  box │ ┃ test health::ok ... ok                                                             │ ● write tests   ↳ Bash cargo test
@@ -468,26 +468,27 @@ session. The `prs` tab of a session shows the same rows filtered to that session
 ### 2.5 Accounts
 
 Accounts are listed per machine, with usage bars (`█░`, or `#-` in ASCII) and reset times.
-Failover is shown here but not editable from the client: there is no command for it (§10).
+Every account takes part in failover; the machine's pin is shown here but not editable from
+the client: there is no command for it (§10).
 
 ```text
  herder         inbox 2 «│ accounts                                                n add · esc back
                          │
  projects                │ box                                          failover pin: claude
- ◉ app                 2 │ ▶ claude-main   claude   failover on    3 sessions
+ ◉ app                 2 │ ▶ claude-main   claude                  3 sessions
    ├ ✓ fix-login         │     5h    ███████░░░░░░░░░░░░░ 38%   resets 14:20
    └ ◉ api             1 │     week  ██░░░░░░░░░░░░░░░░░░ 12%   resets Mon
-     ├ ● write tests     │   claude-alt    claude   failover on    0 sessions
+     ├ ● write tests     │   claude-alt    claude                  0 sessions
      └ ◉ docs          ? │     5h    █░░░░░░░░░░░░░░░░░░░  4%   resets 15:05
- ● herder                │   codex-work    codex    failover off   1 session
+ ● herder                │   codex-work    codex                   1 session
    └ ● p2d-1-design      │     day   ██████████████████░░ 91%   resets 23:00    ◉ near limit
  ○ infra                 │
                          │ m2
- ─────────────────────── │   claude-home   claude   failover off   1 session
+ ─────────────────────── │   claude-home   claude                  1 session
  attention      priority │     5h    ███░░░░░░░░░░░░░░░░░ 17%   resets 13:40
                          │
- ◉ api · app · box       │ failover only happens when a turn hits a limit, only to an account
- ◉ docs · app · box      │ with failover on, on the same provider and model. never ahead of time.
+ ◉ api · app · box       │ failover only happens when a turn hits a limit: it rotates to the
+ ◉ docs · app · box      │ provider's account with the most room left, same model. never early.
  ✓ fix-login · app · box │
  ● p2d-1 · herder · m2   │
  ● write tests · app     │
@@ -504,13 +505,13 @@ Failover is shown here but not editable from the client: there is no command for
  ! 2 need you - 3 running             │   !
 ────────────────────────────────────────────
  box                            pin: claude
- > claude-main  claude  failover on
+ > claude-main  claude
      5h   #######------------- 38% 14:20
      week ##------------------ 12% Mon
-   codex-work   codex   failover off
+   codex-work   codex
      day  ##################-- 91% 23:00
  m2
-   claude-home  claude  failover off
+   claude-home  claude
      5h   ###----------------- 17% 13:40
 
  n add  < back

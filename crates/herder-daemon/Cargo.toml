@@ -30,6 +30,7 @@ tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 toml.workspace = true
+toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 ulid.workspace = true

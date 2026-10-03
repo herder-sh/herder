@@ -136,7 +136,7 @@ impl Adapter for Seeds {
             .seed
             .iter()
             .filter_map(|item| match &item.body {
-                ItemBody::UserMessage { text } | ItemBody::AssistantMessage { text } => {
+                ItemBody::UserMessage { text, .. } | ItemBody::AssistantMessage { text } => {
                     Some(text.clone())
                 }
                 _ => None,
@@ -188,7 +188,6 @@ impl HostDaemon {
                         provider: fake(),
                         label: "Account".into(),
                         config_dir: Some(dir.join("account")),
-                        failover: false,
                     },
                 );
                 let changed = Arc::new(Notify::new());
@@ -210,6 +209,7 @@ impl HostDaemon {
                         ))
                     }),
                     worktrees: Worktrees::new(dir.join("worktrees")),
+                    attachments: dir.join("attachments"),
                 };
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -225,6 +225,7 @@ impl HostDaemon {
                         project_id: project(),
                         name: "app".into(),
                         paths: vec![repo.to_str().unwrap().to_owned()],
+                        default_permission_mode: None,
                         default_account: None,
                         setup_command: None,
                     }])
@@ -280,6 +281,7 @@ impl HostDaemon {
         self.handle(CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: text.into(),
+            images: Vec::new(),
         })
         .await
     }
@@ -401,8 +403,9 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
             project_id: Some(project()),
             branch: None,
             account_id: Some(AccountId::new("a-account")),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         })

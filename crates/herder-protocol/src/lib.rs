@@ -3,13 +3,14 @@
 //! One WebSocket carries JSON text frames: [`ClientMessage`] from client to daemon and
 //! [`ServerMessage`] from daemon to client. Both are internally tagged on `"type"`.
 //!
-//! Evolution rules (protocol version 3):
+//! Evolution rules (protocol version 4):
 //! - Adding a variant, or an optional field, is compatible and keeps [`PROTOCOL_VERSION`].
 //! - Renaming or removing anything, or changing a field's type, bumps [`PROTOCOL_VERSION`].
 //! - Receivers ignore unknown fields. Enums that grow over time ([`ServerMessage`],
 //!   [`EventBody`], [`ItemBody`], [`SessionStatus`]) decode unknown tags to an `Unknown` variant
 //!   that is absent from the schema and never sent; [`Provider`] keeps unknown names verbatim.
 
+mod attachment;
 mod bytes;
 mod client;
 mod event;
@@ -20,6 +21,9 @@ mod resources;
 mod server;
 mod types;
 
+pub use attachment::{
+    Attachment, IMAGE_MEDIA_TYPES, Image, MAX_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES,
+};
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
 pub use event::{
@@ -28,8 +32,8 @@ pub use event::{
     SessionStatus, TurnError,
 };
 pub use ids::{
-    AccountId, ApprovalId, CommandId, DeviceId, HostId, ItemId, QuestionId, SessionId, TerminalId,
-    TurnId, UserId,
+    AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, QuestionId,
+    SessionId, TerminalId, TurnId, UserId,
 };
 pub use project::{Project, ProjectId};
 pub use replication::{
@@ -39,13 +43,13 @@ pub use replication::{
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
-    Account, CommandResult, ErrorCode, ErrorInfo, FailoverSettings, FleetHost, Role, ServerHello,
-    ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow,
+    Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
+    Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow,
 };
 pub use types::{PermissionMode, Provider};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Per-session sequence number of a durable event: starts at 1 and increases by 1 per event.
 pub type Seq = u64;

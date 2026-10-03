@@ -73,7 +73,7 @@ enum Transcript {
                 if let index = calls.lastIndex(where: { $0.id == callId }) {
                     calls[index].attach(output: output, isError: isError, streaming: streaming)
                 }
-            case .userMessage(let text):
+            case .userMessage(let text, _):
                 flushCalls(); flushChildren()
                 blocks.append(.user(id: item.id, text: text, outgoing: nil))
             case .assistantMessage(let text):

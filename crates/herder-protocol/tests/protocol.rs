@@ -83,8 +83,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             project_id: None,
             branch: Some("p0-2-protocol".into()),
             account_id: Some(AccountId::new("01J9ACCOUNT")),
+            provider: Some(Provider::Claude),
             model: Some("opus".into()),
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: Some(3),
             failover_pin: Some(true),
         }),
@@ -93,8 +94,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
             branch: None,
             account_id: None,
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: None,
             max_children: None,
             failover_pin: None,
         }),
@@ -104,6 +106,40 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::SendPrompt {
             session_id: session_id(),
             text: "Fix the build".into(),
+            images: Vec::new(),
+        }),
+        command(CommandBody::SendPrompt {
+            session_id: session_id(),
+            text: "Match this mockup".into(),
+            images: vec![Image {
+                media_type: "image/png".into(),
+                data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            }],
+        }),
+        command(CommandBody::GetAttachment {
+            session_id: session_id(),
+            attachment_id: AttachmentId::new("01J9ATTACHMENT"),
+        }),
+        command(CommandBody::UnarchiveSession {
+            session_id: session_id(),
+        }),
+        command(CommandBody::ListDirectory {
+            path: "~/Projects".into(),
+        }),
+        command(CommandBody::AddProject {
+            path: "/home/dev/herder".into(),
+        }),
+        command(CommandBody::SetProjectSettings {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+            default_permission_mode: Some(PermissionMode::AutoEdit),
+            default_account: Some(AccountId::new("01J9ACCOUNT")),
+            setup_command: Some("cargo fetch".into()),
+        }),
+        command(CommandBody::SetProjectSettings {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+            default_permission_mode: None,
+            default_account: None,
+            setup_command: None,
         }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
@@ -287,6 +323,37 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 terminal_id: terminal_id(),
             },
         },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Attachment {
+                media_type: "image/png".into(),
+                data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Directory {
+                path: "/home/dev/Projects".into(),
+                entries: vec![
+                    DirectoryEntry {
+                        name: "herder".into(),
+                        is_dir: true,
+                        is_repo: true,
+                    },
+                    DirectoryEntry {
+                        name: "notes.md".into(),
+                        is_dir: false,
+                        is_repo: false,
+                    },
+                ],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::ProjectAdded {
+                project_id: ProjectId::new("github.com/herder-sh/herder"),
+            },
+        },
         event(
             1,
             owner,
@@ -311,6 +378,11 @@ fn server_fixtures() -> Vec<ServerMessage> {
             EventBody::ItemAdded {
                 item: item(ItemBody::UserMessage {
                     text: "Fix the build".into(),
+                    attachments: vec![Attachment {
+                        attachment_id: AttachmentId::new("01J9ATTACHMENT"),
+                        media_type: "image/png".into(),
+                        size: 8,
+                    }],
                 }),
             },
         ),
@@ -533,7 +605,6 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     resets_at: None,
                 },
             ],
-            failover: true,
         })
         .collect(),
         failover: FailoverSettings { pin: true },
@@ -603,6 +674,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     project_id: ProjectId::new("github.com/herder-sh/herder"),
                     name: "herder".into(),
                     paths: vec!["/home/dev/herder".into(), "/srv/herder".into()],
+                    default_permission_mode: Some(PermissionMode::AutoEdit),
                     default_account: Some(AccountId::new("01J9ACCOUNT")),
                     setup_command: Some("cargo fetch".into()),
                 },
@@ -610,6 +682,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
                     name: "scratch".into(),
                     paths: vec!["/home/dev/scratch".into()],
+                    default_permission_mode: None,
                     default_account: None,
                     setup_command: None,
                 },
@@ -952,7 +1025,10 @@ fn wire_shape_is_tagged_and_nested() {
         3,
         Some("01J9OWNER"),
         EventBody::ItemAdded {
-            item: item(ItemBody::UserMessage { text: "hi".into() }),
+            item: item(ItemBody::UserMessage {
+                text: "hi".into(),
+                attachments: Vec::new(),
+            }),
         },
     );
     assert_eq!(
@@ -1192,8 +1268,7 @@ fn project_optional_fields_may_be_absent() {
 
     let command: CommandBody = serde_json::from_value(json!({
         "type": "create_session",
-        "repo": "/r",
-        "permission_mode": "ask"
+        "repo": "/r"
     }))
     .unwrap();
     assert_eq!(
@@ -1203,8 +1278,9 @@ fn project_optional_fields_may_be_absent() {
             project_id: None,
             branch: None,
             account_id: None,
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: None,
             max_children: None,
             failover_pin: None,
         }
@@ -1217,8 +1293,27 @@ fn project_optional_fields_may_be_absent() {
     }))
     .unwrap();
     assert_eq!(
-        (project.default_account, project.setup_command),
-        (None, None)
+        (
+            project.default_permission_mode,
+            project.default_account,
+            project.setup_command
+        ),
+        (None, None, None)
+    );
+
+    let command: CommandBody = serde_json::from_value(json!({
+        "type": "set_project_settings",
+        "project_id": "github.com/org/repo"
+    }))
+    .unwrap();
+    assert_eq!(
+        command,
+        CommandBody::SetProjectSettings {
+            project_id: ProjectId::new("github.com/org/repo"),
+            default_permission_mode: None,
+            default_account: None,
+            setup_command: None,
+        }
     );
 }
 
@@ -1265,6 +1360,41 @@ fn add_account_may_omit_label_and_config_dir() {
             cols: 80,
             rows: 24,
         }
+    );
+}
+
+#[test]
+fn prompts_without_images_keep_their_wire_shape() {
+    let prompt = json!({ "type": "send_prompt", "session_id": "s", "text": "hi" });
+    let body: CommandBody = serde_json::from_value(prompt.clone()).unwrap();
+    assert_eq!(
+        body,
+        CommandBody::SendPrompt {
+            session_id: SessionId::new("s"),
+            text: "hi".into(),
+            images: Vec::new(),
+        }
+    );
+    assert_eq!(serde_json::to_value(&body).unwrap(), prompt);
+
+    let message = json!({ "type": "user_message", "text": "hi" });
+    let body: ItemBody = serde_json::from_value(message.clone()).unwrap();
+    assert_eq!(
+        body,
+        ItemBody::UserMessage {
+            text: "hi".into(),
+            attachments: Vec::new(),
+        }
+    );
+    assert_eq!(serde_json::to_value(&body).unwrap(), message);
+
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG".to_vec()),
+    };
+    assert_eq!(
+        serde_json::to_value(&image).unwrap(),
+        json!({ "media_type": "image/png", "data": "iVBORw==" })
     );
 }
 
@@ -1456,7 +1586,10 @@ fn journal_records_carry_bodies_as_stored() {
         at: at(),
         by: Some(UserId::new("01J9OWNER")),
         body: EventBody::ItemAdded {
-            item: item(ItemBody::UserMessage { text: "hi".into() }),
+            item: item(ItemBody::UserMessage {
+                text: "hi".into(),
+                attachments: Vec::new(),
+            }),
         },
     };
     let record = JournalRecord::from_event(&event).unwrap();

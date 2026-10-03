@@ -101,7 +101,6 @@ pub(crate) fn list(accounts: &Accounts, usage: &Windows) -> Vec<Account> {
             provider: account.provider.clone(),
             label: account.label.clone(),
             usage: usage.get(id).cloned().unwrap_or_default(),
-            failover: account.failover,
         })
         .collect()
 }
@@ -123,7 +122,6 @@ mod tests {
             provider,
             label: "Label".into(),
             config_dir: config_dir.map(Path::to_owned),
-            failover: false,
         }
     }
 
@@ -232,14 +230,12 @@ mod tests {
                     provider: Provider::Claude,
                     label: "Label".into(),
                     usage: vec![window],
-                    failover: false,
                 },
                 Account {
                     account_id: AccountId::new("codex"),
                     provider: Provider::Codex,
                     label: "Label".into(),
                     usage: Vec::new(),
-                    failover: false,
                 }
             ]
         );

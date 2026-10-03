@@ -10,9 +10,13 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
-use herder_ffi::{Client, HerderError, pairing_uri_to_string, parse_pairing_uri};
+use herder_ffi::{
+    Client, HerderError, image_media_types, max_image_bytes, max_prompt_image_bytes,
+    pairing_uri_to_string, parse_pairing_uri,
+};
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, EventBody, ItemBody, PermissionMode, SessionStatus,
+    AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
+    SessionStatus,
 };
 use support::{ACCOUNT, FakeDaemon};
 
@@ -65,8 +69,9 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
             project_id: None,
             branch: None,
             account_id: Some(AccountId::new(ACCOUNT)),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         },
@@ -83,6 +88,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         CommandBody::SendPrompt {
             session_id,
             text: "Say hello.".into(),
+            images: Vec::new(),
         },
     ))
     .unwrap();
@@ -111,6 +117,28 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         "{events:?}"
     );
 
+    // A query's answer comes back as the command's result.
+    let repo = std::path::Path::new(&daemon.repo);
+    let listed = block_on(client.send(
+        host.clone(),
+        CommandBody::ListDirectory {
+            path: repo.parent().unwrap().display().to_string(),
+        },
+    ))
+    .unwrap();
+    let CommandResult::Directory { entries, .. } = listed else {
+        panic!("expected a listing, got {listed:?}");
+    };
+    let name = repo.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        entries.contains(&DirectoryEntry {
+            name,
+            is_dir: true,
+            is_repo: true,
+        }),
+        "{entries:?}"
+    );
+
     // Backgrounded and back, the client syncs again.
     client.suspend();
     client.wake();
@@ -119,6 +147,16 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     drop(subscription);
     drop(client);
     runtime.block_on(daemon.stop()).unwrap();
+}
+
+#[test]
+fn the_image_limits_are_the_protocols() {
+    assert_eq!(image_media_types(), herder_protocol::IMAGE_MEDIA_TYPES);
+    assert_eq!(max_image_bytes(), herder_protocol::MAX_IMAGE_BYTES as u64);
+    assert_eq!(
+        max_prompt_image_bytes(),
+        herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
+    );
 }
 
 #[test]

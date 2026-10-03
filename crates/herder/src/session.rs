@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use herder_client_core::{Client, ConnectionState, Machine, SessionSubscription};
 use herder_protocol::{
     AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, CommandResult, Event, EventBody,
-    ItemBody, PermissionMode, ProjectId, PullRequest, QuestionId, Route, Seq, SessionId,
+    ItemBody, PermissionMode, ProjectId, Provider, PullRequest, QuestionId, Route, Seq, SessionId,
     SessionStatus, TurnError, TurnId,
 };
 use serde::Serialize;
@@ -56,12 +56,16 @@ enum Command {
         /// project's default account].
         #[arg(long, value_name = "ACCOUNT")]
         account: Option<String>,
+        /// Run on the account of this provider with the most room left, instead of a named
+        /// one.
+        #[arg(long, value_name = "PROVIDER", conflicts_with = "account")]
+        provider: Option<String>,
         /// Model, in the provider's naming [default: the provider's default].
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
-        /// Permission mode.
-        #[arg(long, value_enum, default_value = "ask")]
-        mode: Mode,
+        /// Permission mode [default: the project's default mode, else ask].
+        #[arg(long, value_enum)]
+        mode: Option<Mode>,
         /// Branch to create [default: a name herder picks].
         #[arg(long, value_name = "BRANCH")]
         branch: Option<String>,
@@ -73,8 +77,8 @@ enum Command {
         /// failover setting].
         #[arg(long, conflicts_with = "no_pin")]
         pin: bool,
-        /// Let the session fail over when its account hits a limit, even on a machine that
-        /// pins sessions.
+        /// Let the session rotate to another account when its account hits a limit, even on a
+        /// machine that pins sessions.
         #[arg(long)]
         no_pin: bool,
     },
@@ -116,6 +120,11 @@ enum Command {
         /// Remove the worktree even with uncommitted or untracked changes.
         #[arg(long)]
         force: bool,
+    },
+    /// Bring an archived session back: its worktree again, on its branch, and writable.
+    Unarchive {
+        /// The session id.
+        session: String,
     },
 }
 
@@ -230,6 +239,7 @@ impl Cli {
                 repo,
                 project,
                 account,
+                provider,
                 model,
                 mode,
                 branch,
@@ -237,15 +247,19 @@ impl Cli {
                 pin,
                 no_pin,
             } => {
-                let account_id = self.account(account.as_deref())?;
+                let account_id = match &provider {
+                    Some(_) => None,
+                    None => self.account(account.as_deref())?,
+                };
                 let created = self
                     .send(CommandBody::CreateSession {
                         repo,
                         project_id: project.map(ProjectId::new),
                         branch,
                         account_id,
+                        provider: provider.map(Provider::from),
                         model,
-                        permission_mode: mode.into(),
+                        permission_mode: mode.map(Into::into),
                         max_children,
                         failover_pin: (pin || no_pin).then_some(pin),
                     })
@@ -306,6 +320,16 @@ impl Cli {
                 self.send(CommandBody::ArchiveSession {
                     session_id: session_id.clone(),
                     force,
+                })
+                .await?;
+                if self.json {
+                    self.print_id(&session_id)?;
+                }
+            }
+            Command::Unarchive { session } => {
+                let session_id = SessionId::new(session);
+                self.send(CommandBody::UnarchiveSession {
+                    session_id: session_id.clone(),
                 })
                 .await?;
                 if self.json {
@@ -409,6 +433,7 @@ impl Cli {
         self.send(CommandBody::SendPrompt {
             session_id: view.session_id.clone(),
             text,
+            images: Vec::new(),
         })
         .await?;
         let deadline = Instant::now() + CONNECT_TIMEOUT;

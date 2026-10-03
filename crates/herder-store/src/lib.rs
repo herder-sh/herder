@@ -24,8 +24,9 @@ mod schema;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, CommandId, CommandResult, Event, EventBody, JournalRecord, PermissionMode, Provider,
-    PullRequest, RawEventBody, Seq, SessionId, SessionStatus, Timestamp, UserId,
+    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, JournalRecord,
+    PermissionMode, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus, Timestamp,
+    UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -117,6 +118,8 @@ pub struct QueuedPrompt {
     pub by: Option<UserId>,
     /// Prompt text.
     pub text: String,
+    /// Images it carries, kept by the daemon apart from the store.
+    pub attachments: Vec<Attachment>,
     /// Whether it retries a turn that hit a limit, on the account failover moved to.
     pub retry: bool,
 }
@@ -403,13 +406,18 @@ impl Store {
     /// The prompts queued in `session`, oldest first.
     pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT by, text, retry FROM queued_prompts WHERE session_id = ?1 ORDER BY position",
+            "SELECT by, text, attachments, retry FROM queued_prompts WHERE session_id = ?1
+             ORDER BY position",
         )?;
         let rows = stmt.query_map([session.as_str()], |row| {
+            let attachments: String = row.get(2)?;
             Ok(QueuedPrompt {
                 by: row.get::<_, Option<String>>(0)?.map(UserId::new),
                 text: row.get(1)?,
-                retry: row.get(2)?,
+                attachments: serde_json::from_str(&attachments).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(err))
+                })?,
+                retry: row.get(3)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -427,8 +435,8 @@ impl Store {
         tx.prepare_cached("DELETE FROM queued_prompts WHERE session_id = ?1")?
             .execute([session.as_str()])?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO queued_prompts (session_id, position, by, text, retry)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )?;
         for (position, prompt) in prompts.iter().enumerate() {
             insert.execute(params![
@@ -436,6 +444,7 @@ impl Store {
                 clamp(position),
                 prompt.by.as_ref().map(UserId::as_str),
                 prompt.text,
+                serde_json::to_string(&prompt.attachments)?,
                 prompt.retry,
             ])?;
         }

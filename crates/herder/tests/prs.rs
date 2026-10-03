@@ -371,7 +371,6 @@ impl World {
                 provider: fake,
                 label: "Account 1".into(),
                 config_dir: Some(root.join("account")),
-                failover: false,
             },
         );
         let data = root.join("data");
@@ -383,6 +382,7 @@ impl World {
             sink: Arc::new(Silent),
             turn_ids: herder_daemon::session::ulid_turn_ids(),
             worktrees: Worktrees::new(data.join("worktrees")),
+            attachments: data.join("attachments"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -426,8 +426,9 @@ impl World {
                     project_id: None,
                     branch: None,
                     account_id: Some(AccountId::new("account-1")),
+                    provider: None,
                     model: None,
-                    permission_mode: PermissionMode::Ask,
+                    permission_mode: Some(PermissionMode::Ask),
                     max_children: None,
                     failover_pin: None,
                 },

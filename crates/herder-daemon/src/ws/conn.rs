@@ -20,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::{Backend, Shared, Tls, Ws, fingerprint};
-use crate::auth;
 use crate::hub::{Outbox, OutboxState};
+use crate::{auth, session};
 
 /// Time a client gets for the TLS and WebSocket handshakes, and again for its hello.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -196,6 +196,7 @@ async fn read<B: Backend>(
                     continue;
                 }
                 let key = (identity.user_id.clone(), id.clone());
+                let query = session::changes_nothing(&body);
                 let apply = {
                     let shared = Arc::clone(shared);
                     let identity = identity.clone();
@@ -203,7 +204,13 @@ async fn read<B: Backend>(
                     let id = id.clone();
                     async move { shared.apply(&identity, &outbox, &id, body).await }
                 };
-                outbox.push(match shared.commands.apply(key, apply).await {
+                // A query's answer is not kept: it may be large, and asking again is harmless.
+                let answer = if query {
+                    apply.await
+                } else {
+                    shared.commands.apply(key, apply).await
+                };
+                outbox.push(match answer {
                     Ok(result) => ServerMessage::CommandAccepted {
                         command_id: id,
                         result,

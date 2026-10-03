@@ -253,7 +253,6 @@ impl Logins {
             provider: (*provider).clone(),
             label: label.map_or_else(|| account_id.to_string(), str::to_owned),
             config_dir: Some(dir),
-            failover: false,
         };
         Ok(Login {
             command,
@@ -454,7 +453,6 @@ mod tests {
                 provider: Provider::Codex,
                 label: "Codex".into(),
                 config_dir: None,
-                failover: false,
             },
         )]);
         let setup = Setup {
@@ -464,6 +462,7 @@ mod tests {
             sink: Arc::clone(&hub) as Arc<dyn session::EventSink>,
             turn_ids: session::ulid_turn_ids(),
             worktrees: Worktrees::new(home.path().join("worktrees")),
+            attachments: home.path().join("attachments"),
         };
         let sessions = SessionManager::open(setup, CancellationToken::new())
             .await

@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalId, ItemId, PermissionMode, Provider, QuestionId, Seq, SessionId, Timestamp,
-    TurnId, UserId,
+    AccountId, ApprovalId, Attachment, ItemId, PermissionMode, Provider, QuestionId, Seq,
+    SessionId, Timestamp, TurnId, UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -198,7 +198,8 @@ pub enum EventBody {
         /// New model, in the provider's own naming.
         model: String,
     },
-    /// The account changed within the same provider; `by` is absent for a failover.
+    /// The account changed within the same provider; `by` is absent when the daemon rotated
+    /// the session off an account that hit its limit.
     AccountSwitched {
         /// New account.
         account_id: AccountId,
@@ -307,6 +308,9 @@ pub enum ItemBody {
     UserMessage {
         /// Prompt text.
         text: String,
+        /// Images sent with the prompt, in order; `get_attachment` fetches their bytes.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
     /// Text the agent wrote to the user.
     AssistantMessage {

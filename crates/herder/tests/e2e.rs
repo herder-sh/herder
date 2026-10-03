@@ -271,7 +271,7 @@ fn describe(events: &[Event], alice: &UserId) -> Vec<String> {
                 EventBody::TurnStarted { .. } => "turn_started".to_owned(),
                 EventBody::TurnCompleted { .. } => "turn_completed".to_owned(),
                 EventBody::ItemAdded { item } => match &item.body {
-                    ItemBody::UserMessage { text } => format!("user {text}"),
+                    ItemBody::UserMessage { text, .. } => format!("user {text}"),
                     ItemBody::AssistantMessage { text } => format!("assistant {text}"),
                     ItemBody::ToolCall { name, .. } => format!("tool_call {name}"),
                     ItemBody::ToolResult { output, .. } => format!("tool_result {output}"),
@@ -329,7 +329,6 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: Provider::Claude,
             label: "Work".into(),
             config_dir: Some(account_dir.clone()),
-            failover: false,
         },
     )]);
     let shutdown = CancellationToken::new();
@@ -382,7 +381,6 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: Provider::Claude,
             label: "Work".into(),
             usage: Vec::new(),
-            failover: false,
         }]
     );
     assert_eq!(failover, FailoverSettings::default());
@@ -394,8 +392,9 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             project_id: None,
             branch: None,
             account_id: Some(account.clone()),
+            provider: None,
             model: None,
-            permission_mode: PermissionMode::Ask,
+            permission_mode: Some(PermissionMode::Ask),
             max_children: None,
             failover_pin: None,
         })
@@ -416,6 +415,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
         .command(CommandBody::SendPrompt {
             session_id: session_id.clone(),
             text: PROMPT.into(),
+            images: Vec::new(),
         })
         .await;
     client

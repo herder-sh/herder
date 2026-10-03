@@ -387,7 +387,7 @@ struct MachineSettingsSheet: View {
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
                 Field(label: "Accounts",
-                      hint: "Accounts and failover are set in the machine's `daemon.toml`.") {
+                      hint: "Accounts are set in the machine's `daemon.toml`; a session at its limit rotates to another of the provider's accounts.") {
                     VStack(alignment: .leading, spacing: 8) {
                         if machine.accounts.isEmpty {
                             Text("No accounts yet").foregroundStyle(Theme.tertiary)
@@ -396,7 +396,6 @@ struct MachineSettingsSheet: View {
                             HStack {
                                 Text(account.label).foregroundStyle(Theme.text)
                                 Text(account.provider).foregroundStyle(Theme.secondary)
-                                if account.failover { Chip(text: "failover") }
                                 Spacer()
                                 Text(account.accountId).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
                             }

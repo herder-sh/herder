@@ -195,6 +195,41 @@ impl Worktrees {
         Ok(Worktree { path, branch })
     }
 
+    /// Adds a worktree of `repo` back at `path`, where [`Self::remove`] removed it, on the
+    /// existing branch `branch`. Refuses when the branch is gone or the path is taken.
+    pub async fn reopen(&self, repo: &Path, path: &Path, branch: &str) -> Result<(), Error> {
+        if !is_branch(repo, branch).await? {
+            return Err(Error::Conflict(format!(
+                "branch {branch} no longer exists in {}",
+                repo.display()
+            )));
+        }
+        if path.exists() {
+            return Err(Error::Conflict(format!(
+                "{} already exists",
+                path.display()
+            )));
+        }
+        if let Some(parent) = path.parent() {
+            // One mkdir; not worth a blocking-pool hop.
+            std::fs::create_dir_all(parent)
+                .map_err(|err| Error::Git(format!("creating {}: {err}", parent.display())))?;
+        }
+        // Forgets the removed worktree, should git still list it.
+        git(repo, ["worktree", "prune"]).await?;
+        git(
+            repo,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                path.as_os_str(),
+                OsStr::new(branch),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Removes the worktree at `path` of `repo`, keeping every branch. Refuses while it has
     /// uncommitted or untracked changes, unless `force`. A worktree that is already gone is
     /// pruned; a path outside this directory, such as the repository itself, is left alone.

@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod auth;
+mod browse;
 pub mod config;
 pub mod data_dir;
 pub mod handoff;
@@ -116,9 +117,14 @@ pub async fn serve(
         sink,
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
+        attachments: data_dir.root().join("attachments"),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
-    sessions.set_up_worktrees(host.id.clone(), config.projects.clone())?;
+    let projects = Arc::new(projects::Overrides::new(
+        config.path.clone(),
+        config.projects.clone(),
+    ));
+    sessions.manage_projects(host.id.clone(), Arc::clone(&projects))?;
     sessions.checkpoint_turns(worktree::checkpoint::Config {
         dir: data_dir.root().join("checkpoints"),
         keep: worktree::checkpoint::KEEP,
@@ -146,7 +152,7 @@ pub async fn serve(
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),
-            config: config.projects.clone(),
+            config: projects,
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
