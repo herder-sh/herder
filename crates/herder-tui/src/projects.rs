@@ -130,7 +130,7 @@ impl App {
                     host_id: machine.host_id.clone(),
                     session_id: head.session_id.clone(),
                 };
-                if self.shadowed(&key) {
+                if self.shadowed(&key) || self.hidden(&key) {
                     continue;
                 }
                 let project = self.project_of(&key);

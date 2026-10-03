@@ -1,21 +1,43 @@
-//! The machines panel, the add-machine dialog and the add-account dialog, over the main
-//! screen.
+//! The fleet view, in the main pane: every machine with its role, address and load; under the
+//! list, the selected machine in full, its host resources included. Over it go the
+//! add-machine and add-account dialogs.
+//!
+//! ```text
+//!  fleet · 2 machines
+//!
+//! ▶ ● box     owner   10.0.0.4:7447              cpu  23%  mem  41%  3/6 turns
+//!     9f2c…41ab · 3 accounts · 5 sessions
+//!   ✗ laptop  member  laptop.lan:7447
+//!     01de…77c0 · connection refused
+//!
+//!  box
+//!  state        connected
+//!  cpu          23% of 8 cores
+//! ```
 
 use herder_client_core::{ConnectionState, Machine};
 use herder_protocol::Role;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding, Paragraph};
+use ratatui::widgets::{Paragraph, Widget};
+use ratatui_textarea::TextArea;
 
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
 use crate::machines::{MachinePanel, PanelEdit};
-use crate::mouse::{Click, Hits, List as Rows};
+use crate::mouse::{Click, Hits, List as Rows, Wheel};
+use crate::palette::search_line;
+use crate::ui::dialog::{Dialog, Size};
+use crate::ui::hints::Hint;
+use crate::ui::input::{Choice, Field as TextField};
+use crate::ui::list::{ListView, Row};
+use crate::ui::select::label_width;
+use crate::ui::{Ui, fit};
 
-/// Width of the label column of details and form fields.
-const LABEL: usize = 13;
+/// Width of the label column of the details.
+const LABEL: usize = 14;
 
 pub(super) fn draw(
     frame: &mut Frame,
@@ -24,138 +46,170 @@ pub(super) fn draw(
     panel: &MachinePanel,
     hits: &mut Hits,
 ) {
+    list(frame, area, app, panel, hits);
     match (&panel.account, &panel.add) {
         (Some(account), _) => account_dialog(frame, area, app, account),
         (None, Some(add)) => super::add_machine::draw(frame, area, app, add, hits),
-        (None, None) => list(frame, area, app, panel, hits),
+        (None, None) => {}
     }
 }
 
-fn popup_width(area: Rect) -> u16 {
-    area.width.saturating_sub(4).min(86)
-}
-
-/// Room for a detail or field value in a popup over `area`: inside borders, padding, the
-/// indent and the label.
-fn value_width(area: Rect) -> usize {
-    usize::from(popup_width(area).saturating_sub(6)).saturating_sub(LABEL)
-}
-
-fn popup(area: Rect, height: usize) -> Rect {
-    let width = popup_width(area);
-    let height = u16::try_from(height).unwrap_or(u16::MAX);
-    super::centered(area, width, height.min(area.height))
-}
-
-fn keys(text: &str) -> Line<'_> {
-    Line::styled(format!(" {text} "), super::dim()).centered()
-}
-
 fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &mut Hits) {
+    let ui = app.ui();
+    let compact = app.width < super::NARROW;
+    super::clear(frame, area, ui);
+    let count = match app.machines.len() {
+        1 => "1 machine".to_owned(),
+        n => format!("{n} machines"),
+    };
+    let area = super::heading(frame, area, ui, "fleet", &count, "", compact);
+    if app.machines.is_empty() {
+        super::nothing(frame, area, ui, "No machines paired yet: a adds one.");
+        return;
+    }
     let selected = panel.selected(&app.machines);
-    let mut details =
-        selected.map_or_else(Vec::new, |at| details(&app.machines[at], value_width(area)));
-    let keys_text = match &panel.edit {
+    let width = usize::from(area.width.saturating_sub(3)).saturating_sub(LABEL);
+    let mut details = selected.map_or_else(Vec::new, |at| details(ui, &app.machines[at], width));
+    match &panel.edit {
         Some(PanelEdit::Rename(name)) => {
             // The name being typed replaces the details' heading.
             if let Some(heading) = details.first_mut() {
                 *heading = Line::from(vec![
-                    Span::styled("name: ", super::dim()),
-                    Span::styled(format!("{name}▏"), super::bold()),
+                    Span::styled(format!("{:<LABEL$}", "name"), ui.accent()),
+                    Span::styled(name.clone(), ui.strong()),
+                    Span::styled(ui.glyphs.cursor, ui.accent()),
                 ]);
             }
-            "Enter save the name on this device  Esc cancel"
         }
         Some(PanelEdit::Forget) => {
             if let Some(heading) = details.first_mut() {
                 let name = selected.map_or("", |at| app.machines[at].name.as_str());
                 *heading = Line::styled(
-                    format!("Forget {name} on this device? Pair again to get it back."),
-                    Style::new().fg(Color::Yellow),
+                    format!("Forget {name} on this device? y forgets, n keeps it."),
+                    Style::new().fg(ui.theme.warning),
                 );
             }
-            "y forget  n keep"
         }
-        None => "a add machine  n add account  e rename  d forget  r reconnect  Esc close",
-    };
-    let rows = app.machines.len().max(1);
-    // Borders, the machines, a blank line, the details.
-    let area = popup(area, rows + details.len() + 3);
-    let block = Block::bordered()
-        .title(" machines ")
-        .title_bottom(keys(keys_text))
-        .border_style(Style::new().fg(Color::Cyan))
-        .padding(Padding::horizontal(1));
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    let rows = u16::try_from(rows).unwrap_or(u16::MAX);
-    let [top, _, bottom] = Layout::vertical([
-        Constraint::Length(rows),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .areas(inner);
-    if app.machines.is_empty() {
-        let hint = "No machines paired yet: press a to add one.";
-        frame.render_widget(Line::styled(hint, super::dim()), top);
-        return;
+        None => {}
     }
-    let compact = area.width < 70;
-    let items: Vec<ListItem> = app.machines.iter().map(|m| row(m, compact)).collect();
-    let mut state = ListState::default().with_selected(selected);
-    let list = List::new(items).highlight_style(Style::new().reversed());
-    frame.render_stateful_widget(list, top, &mut state);
-    frame.render_widget(Paragraph::new(details), bottom);
+    let rows: Vec<Row> = app
+        .machines
+        .iter()
+        .map(|machine| row(ui, app, machine, compact))
+        .collect();
+    let total = u16::try_from(rows.iter().map(Row::height).sum::<usize>()).unwrap_or(u16::MAX);
+    // The list first; the details take what is left.
+    let list_height = total.min(area.height);
+    let list_area = Rect {
+        height: list_height,
+        ..area
+    };
+    let mut offset = 0;
+    let placed = ListView::new(ui, rows)
+        .select(selected)
+        .focused(panel.edit.is_none() && panel.add.is_none() && panel.account.is_none())
+        .render(list_area, frame.buffer_mut(), &mut offset);
     if panel.edit.is_none() {
-        hits.list(top, state.offset(), &vec![1; app.machines.len()], |at| {
-            Some(Click::Row(Rows::Machines, at))
-        });
+        hits.wheel(list_area, Wheel::Keys);
+        for (at, rect) in placed {
+            hits.click(rect, Click::Row(Rows::Machines, at));
+        }
+    }
+    if area.height > list_height + 1 {
+        let details_area = Rect {
+            // In line with the rows' status dots.
+            x: area.x + 2,
+            y: list_area.bottom() + 1,
+            width: area.width.saturating_sub(2 + crate::ui::INSET),
+            height: area.bottom() - list_area.bottom() - 1,
+        };
+        let details: Vec<Line> = details
+            .into_iter()
+            .map(|line| fit(line, usize::from(details_area.width), ui.glyphs))
+            .collect();
+        frame.render_widget(Paragraph::new(details), details_area);
     }
 }
 
 /// A machine's connection mark, its colour, and what it says.
-pub(super) fn connection(machine: &Machine) -> (&'static str, Color, String) {
-    match &machine.connection {
-        ConnectionState::Connected => ("●", Color::Green, "connected".to_owned()),
-        ConnectionState::Connecting => ("◌", Color::Yellow, "connecting".to_owned()),
-        ConnectionState::Disconnected { error } => ("✗", Color::Red, error.clone()),
-    }
+pub(super) fn connection(ui: Ui, machine: &Machine) -> (&'static str, Style, String) {
+    let (mark, color) = super::add_machine::connection_mark(ui, machine);
+    let state = match &machine.connection {
+        ConnectionState::Connected => "connected".to_owned(),
+        ConnectionState::Connecting => "connecting".to_owned(),
+        ConnectionState::Disconnected { error } => error.clone(),
+    };
+    (mark, Style::new().fg(color), state)
 }
 
-/// A machine's row; `compact` in a narrow popup, where its load replaces the session count
-/// and connection while it has figures.
-fn row(machine: &Machine, compact: bool) -> ListItem<'static> {
-    let (mark, color, state) = connection(machine);
-    let sessions = match machine.sessions.len() {
-        1 => "1 session".to_owned(),
-        n => format!("{n} sessions"),
-    };
-    let load = super::resources::row(machine, compact);
-    let mut spans = vec![
-        Span::styled(mark, Style::new().fg(color)),
-        Span::styled(format!(" {:<16} ", machine.name), super::bold()),
+/// A machine's row: its connection, name, role and address, its load at the right; under it
+/// its fingerprint, accounts and sessions, or why it is not connected. `compact` on a phone,
+/// where the address and the load's pressure and turns go.
+fn row<'a>(ui: Ui, app: &App, machine: &Machine, compact: bool) -> Row<'a> {
+    let (mark, style, state) = connection(ui, machine);
+    let mut left = vec![
+        Span::styled(mark, style),
+        Span::raw(" "),
+        Span::styled(machine.name.clone(), ui.text()),
     ];
-    if !(compact && !load.is_empty()) {
-        spans.push(Span::styled(format!("{sessions:<12} "), super::dim()));
+    if let Some(role) = machine.role {
+        left.push(Span::raw("  "));
+        left.push(Span::styled(role_name(role), ui.muted()));
     }
-    spans.extend(load);
-    if !compact || machine.resources.is_none() {
-        spans.push(Span::styled(state, super::dim()));
+    if let Some(address) = machine.addresses.first().filter(|_| !compact) {
+        left.push(Span::raw("  "));
+        left.push(Span::styled(address.clone(), ui.muted()));
     }
-    ListItem::new(Line::from(spans))
+    let right = Line::from(super::resources::row(ui, machine, compact));
+    let sessions = app
+        .sessions
+        .keys()
+        .filter(|key| key.host_id == machine.host_id)
+        .count();
+    let count = |n: usize, one: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {one}s"),
+    };
+    let mut facts = vec![Span::styled(short(ui, &machine.fingerprint), ui.muted())];
+    if matches!(machine.connection, ConnectionState::Connected) {
+        facts.push(Span::styled(
+            count(machine.accounts.len(), "account"),
+            ui.muted(),
+        ));
+        facts.push(Span::styled(count(sessions, "session"), ui.muted()));
+    } else {
+        facts.push(Span::styled(state, style));
+    }
+    Row::item(Line::from(left))
+        .right(right)
+        .body(vec![Line::from(ui.joined(facts))])
 }
 
-fn details(machine: &Machine, width: usize) -> Vec<Line<'static>> {
-    let (_, color, state) = connection(machine);
-    let role = match machine.role {
-        Some(Role::Owner) => "owner",
-        Some(Role::Member) => "member",
-        None => "not known until connected",
-    };
-    let mut lines = vec![Line::styled(machine.name.clone(), super::bold())];
-    lines.extend(field("state", &state, Style::new().fg(color), width));
-    lines.extend(field("role", role, Style::new(), width));
+fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::Owner => "owner",
+        Role::Member => "member",
+    }
+}
+
+/// A fingerprint's first and last four digits, as a glance compares them.
+fn short(ui: Ui, fingerprint: &str) -> String {
+    let digits: Vec<char> = fingerprint.chars().collect();
+    if digits.len() <= 12 {
+        return fingerprint.to_owned();
+    }
+    let head: String = digits[..4].iter().collect();
+    let tail: String = digits[digits.len() - 4..].iter().collect();
+    format!("{head}{}{tail}", ui.glyphs.ellipsis)
+}
+
+/// The selected machine in full: its name, then each fact, the values `width` wide.
+fn details(ui: Ui, machine: &Machine, width: usize) -> Vec<Line<'static>> {
+    let (_, style, state) = connection(ui, machine);
+    let role = machine.role.map_or("not known until connected", role_name);
+    let mut lines = vec![Line::styled(machine.name.clone(), ui.strong())];
+    lines.extend(field(ui, "state", &state, style, width));
+    lines.extend(field(ui, "role", role, ui.text(), width));
     let accounts = machine
         .accounts
         .iter()
@@ -167,53 +221,56 @@ fn details(machine: &Machine, width: usize) -> Vec<Line<'static>> {
     } else {
         accounts
     };
-    lines.extend(field("accounts", &accounts, Style::new(), width));
-    for (label, value, style) in super::resources::facts(machine) {
-        lines.extend(field(label, &value, style, width));
+    lines.extend(field(ui, "accounts", &accounts, ui.text(), width));
+    for (label, value, style) in super::resources::facts(ui, machine) {
+        lines.extend(field(ui, label, &value, style, width));
     }
     lines.extend(field(
+        ui,
         "host id",
         machine.host_id.as_str(),
-        Style::new(),
+        ui.text(),
         width,
     ));
     let addresses = machine.addresses.join(", ");
-    lines.extend(field("addresses", &addresses, Style::new(), width));
+    lines.extend(field(ui, "addresses", &addresses, ui.text(), width));
     lines.extend(field(
+        ui,
         "fingerprint",
         &machine.fingerprint,
-        Style::new(),
+        ui.text(),
         width,
     ));
     lines
 }
 
-/// A label and its value, the value cut into lines `width` wide under each other.
-fn field(label: &str, value: &str, style: Style, width: usize) -> Vec<Line<'static>> {
-    let chars: Vec<char> = value.chars().collect();
-    let chunks: Vec<String> = if chars.is_empty() {
-        vec![String::new()]
-    } else {
-        chars
-            .chunks(width.max(8))
-            .map(|chunk| chunk.iter().collect())
-            .collect()
-    };
+/// A label and its value, the value wrapped `width` wide under itself; a word longer than a
+/// line, such as a fingerprint, is cut.
+fn field(ui: Ui, label: &str, value: &str, style: Style, width: usize) -> Vec<Line<'static>> {
+    let mut chunks: Vec<String> = textwrap::wrap(value, width.max(8))
+        .into_iter()
+        .map(|chunk| chunk.into_owned())
+        .collect();
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
     chunks
         .into_iter()
         .enumerate()
         .map(|(at, chunk)| {
             let label = if at == 0 { label } else { "" };
             Line::from(vec![
-                Span::styled(format!("  {label:<LABEL$}"), super::dim()),
+                Span::styled(format!("{label:<LABEL$}"), ui.muted()),
                 Span::styled(chunk, style),
             ])
         })
         .collect()
 }
 
+/// The add-account dialog: the provider, the id, label and config dir, and how the login
+/// runs.
 pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: &AddAccount) {
-    let width = value_width(area);
+    let ui = app.ui();
     let machine = app
         .machines
         .iter()
@@ -222,91 +279,92 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
             || account.host_id.to_string(),
             |machine| machine.name.clone(),
         );
-    let choices: Vec<Span> = accounts::PROVIDERS
-        .iter()
-        .enumerate()
-        .flat_map(|(at, provider)| {
-            let style = if at == account.provider {
-                Style::new().reversed()
-            } else {
-                super::dim()
-            };
-            [
-                Span::styled(format!(" {} ", provider.as_str()), style),
-                Span::raw(" "),
-            ]
-        })
-        .collect();
-    let label_style = |which: accounts::Field| {
-        if account.focus == which {
-            Style::new().fg(Color::Cyan)
-        } else {
-            super::dim()
-        }
+    let body_width = usize::from(
+        Size::Medium
+            .width()
+            .min(area.width)
+            .saturating_sub(2 + 2 * crate::ui::dialog::PAD_X),
+    )
+    .max(8);
+    let wrapped = |text: &str, style: Style| -> Vec<Line<'static>> {
+        textwrap::wrap(text, body_width)
+            .into_iter()
+            .map(|line| Line::styled(line.into_owned(), style))
+            .collect()
     };
-    let mut provider = vec![Span::styled(
-        format!("  {:<LABEL$}", "provider"),
-        label_style(accounts::Field::Provider),
-    )];
-    provider.extend(choices);
-    let text = |which, label: &str, value: &str, placeholder: &str| {
-        let mut line = text_input(account.focus == which, label, value, width);
-        if value.is_empty() {
-            line.push_span(Span::styled(placeholder.to_owned(), super::dim()));
+    let mut top = wrapped(
+        &format!("Runs the provider's own login on {machine}, in a terminal here."),
+        ui.muted(),
+    );
+    top.push(Line::default());
+    let mut bottom = vec![Line::default()];
+    bottom.extend(wrapped(
+        accounts::login_hint(account.provider()),
+        ui.muted(),
+    ));
+    bottom.extend(wrapped(
+        "The account is added once the login succeeds. ctrl+] d detaches.",
+        ui.muted(),
+    ));
+    if let Some(error) = &account.error {
+        bottom.push(Line::default());
+        bottom.extend(super::failure(ui, error, body_width));
+    }
+    let fields = 4;
+    let height = u16::try_from(top.len() + fields + bottom.len()).unwrap_or(u16::MAX);
+    let hints = [
+        Hint::new("enter", "log in"),
+        Hint::new("tab", "field"),
+        Hint::new("←/→", "provider"),
+        Hint::new("esc", "cancel"),
+    ];
+    let narrow = area.width < super::NARROW;
+    let areas = Dialog::new(ui, "add account", Size::Medium)
+        .hints(if narrow { &hints[..2] } else { &hints })
+        .render(area, height, frame.buffer_mut());
+    let body = areas.body;
+    let buf = frame.buffer_mut();
+    let mut y = body.y;
+    let line = |line: Line<'static>, y: &mut u16, buf: &mut ratatui::buffer::Buffer| {
+        if *y < body.bottom() {
+            line.render(Rect::new(body.x, *y, body.width, 1), buf);
         }
-        line
+        *y += 1;
     };
-    let mut lines = vec![
-        Line::raw(format!(
-            "Runs the provider's own login on {machine}, in a terminal here."
-        )),
-        Line::raw(""),
-        Line::from(provider),
-        text(accounts::Field::Id, "id", &account.id, "e.g. work"),
-        text(accounts::Field::Label, "label", &account.label, "the id"),
-        text(
+    for text in top {
+        line(text, &mut y, buf);
+    }
+    let label = label_width("config dir");
+    if y < body.bottom() {
+        Choice::new(
+            ui,
+            "provider",
+            Span::styled(account.provider().as_str().to_owned(), ui.text()),
+        )
+        .focused(account.focus == accounts::Field::Provider)
+        .render(Rect::new(body.x, y, body.width, 1), buf, label);
+    }
+    y += 1;
+    let default_dir = account.default_config_dir();
+    for (field, name, value, placeholder) in [
+        (accounts::Field::Id, "id", &account.id, "e.g. work"),
+        (accounts::Field::Label, "label", &account.label, "the id"),
+        (
             accounts::Field::ConfigDir,
             "config dir",
             &account.config_dir,
-            &account.default_config_dir(),
+            default_dir.as_str(),
         ),
-        Line::raw(""),
-        Line::styled(accounts::login_hint(account.provider()), super::dim()),
-        Line::styled(
-            "The account is added once the login succeeds. Ctrl-] d detaches.",
-            super::dim(),
-        ),
-    ];
-    if let Some(error) = &account.error {
-        lines.push(Line::raw(""));
-        lines.push(Line::styled(error.clone(), Style::new().fg(Color::Red)));
+    ] {
+        if y < body.bottom() {
+            let mut editor: TextArea = search_line(value, placeholder);
+            TextField::new(ui, name, &mut editor)
+                .focused(account.focus == field)
+                .render(Rect::new(body.x, y, body.width, 1), buf, label);
+        }
+        y += 1;
     }
-    let area = popup(area, lines.len() + 4);
-    let block = Block::bordered()
-        .title(" add an account ")
-        .title_bottom(keys("Enter log in  Tab field  ←→ provider  Esc cancel"))
-        .border_style(Style::new().fg(Color::Cyan))
-        .padding(Padding::uniform(1));
-    frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-/// A text field: its label, then its value's end, with a cursor if `focused`.
-fn text_input(focused: bool, label: &str, value: &str, width: usize) -> Line<'static> {
-    let room = width.saturating_sub(1).max(4);
-    let chars: Vec<char> = value.chars().collect();
-    let shown: String = chars[chars.len().saturating_sub(room)..].iter().collect();
-    let label_style = if focused {
-        Style::new().fg(Color::Cyan)
-    } else {
-        super::dim()
-    };
-    let mut spans = vec![
-        Span::styled(format!("  {label:<LABEL$}"), label_style),
-        Span::raw(shown),
-    ];
-    if focused {
-        spans.push(Span::styled("▌", Style::new().fg(Color::Cyan)));
+    for text in bottom {
+        line(text, &mut y, buf);
     }
-    Line::from(spans)
 }

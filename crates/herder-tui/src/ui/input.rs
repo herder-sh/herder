@@ -35,6 +35,14 @@ fn style(ui: Ui, editor: &mut TextArea, focused: bool, background: Color) {
     });
 }
 
+/// The cursor of an empty editor at `x`, `y`: the glyph set's bar in the accent, in a cell
+/// of its own before the placeholder, over whatever background is there.
+fn cursor(ui: Ui, buf: &mut Buffer, x: u16, y: u16) {
+    if let Some(cell) = buf.cell_mut((x, y)) {
+        cell.set_symbol(ui.glyphs.cursor).set_fg(ui.theme.primary);
+    }
+}
+
 /// The prompt: the editor in its panel.
 pub struct Prompt<'a, 'b> {
     ui: Ui<'a>,
@@ -134,7 +142,7 @@ impl<'a, 'b> Prompt<'a, 'b> {
             let placeholder = placeholder.replace('…', ui.glyphs.ellipsis);
             Line::styled(placeholder, ui.muted()).render(rest, buf);
             if self.focused {
-                buf[(text.x, text.y)].modifier.insert(Modifier::REVERSED);
+                cursor(ui, buf, text.x, text.y);
             }
         } else {
             Wrapped::new(self.editor, usize::from(text.width)).render(
@@ -348,10 +356,17 @@ impl<'a, 'b> Field<'a, 'b> {
         };
         style(ui, self.editor, self.focused, background);
         if self.editor.is_empty() {
-            // The placeholder starts where the text will, under the cursor.
-            Line::styled(self.editor.placeholder_text().to_owned(), ui.muted()).render(inner, buf);
+            // The placeholder starts where the text will; with focus, after the cursor, so
+            // none of it hides under it.
+            let after = u16::from(self.focused).min(inner.width);
+            let rest = Rect {
+                x: inner.x + after,
+                width: inner.width - after,
+                ..inner
+            };
+            Line::styled(self.editor.placeholder_text().to_owned(), ui.muted()).render(rest, buf);
             if self.focused && inner.width > 0 {
-                buf[(inner.x, inner.y)].modifier.insert(Modifier::REVERSED);
+                cursor(ui, buf, inner.x, inner.y);
             }
         } else {
             (&*self.editor).render(inner, buf);

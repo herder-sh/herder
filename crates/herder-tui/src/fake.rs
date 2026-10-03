@@ -890,3 +890,275 @@ pub fn chat_question() -> App {
     );
     app
 }
+
+/// A tool result that failed.
+fn failed(call: &str, turn: &str, output: &str) -> EventBody {
+    let mut body = result(call, turn, output);
+    if let EventBody::ItemAdded { item } = &mut body
+        && let ItemBody::ToolResult { is_error, .. } = &mut item.body
+    {
+        *is_error = true;
+    }
+    body
+}
+
+/// A session of [`live`]: id, branch, parent, task, status and first prompt.
+type LiveSession = (
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+    SessionStatus,
+    &'static str,
+);
+
+/// What a real daemon lists, as the owner's screen showed it: sessions with ULID ids on the
+/// branches herder makes up from them (`herder/<slug>`), named by their first prompts; one on
+/// a branch someone named; a task child; three archived sessions; a long repo path. The open
+/// session runs in `full_access`, mid-turn, with timed tool calls, one of them failed, and
+/// the last command refused. `claude-main` has used 31% of its session window and 22% of
+/// its week; the host is loaded. Grouped by project; the clock stands at 400 s.
+pub fn live() -> App {
+    use serde_json::json;
+    const REPO: &str = "/home/ann/Projects/herder-sh/herder";
+    const PROJECT: &str = "github.com/herder-sh/herder";
+    let sessions: [LiveSession; 7] = [
+        (
+            "01JB7Q2M3N4P5R6S7EQ3Z0KAE",
+            "herder/eq3z0kae",
+            None,
+            None,
+            SessionStatus::Running,
+            "Fix the flaky reconnect test in herder-client-core and explain the root cause",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S77XBBHPH3",
+            "herder/7xbbhph3",
+            None,
+            None,
+            SessionStatus::Idle,
+            "Restyle the secondary views to the spec",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S7K2WD9TQA",
+            "herder/p2d-6-secondary-views",
+            None,
+            None,
+            SessionStatus::NeedsYou,
+            "Ship P2d.6",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S7M4FJ8VZC",
+            "herder/m4fj8vzc",
+            Some("01JB7Q2M3N4P5R6S7EQ3Z0KAE"),
+            Some("write the regression test"),
+            SessionStatus::Running,
+            "Write a regression test for the reconnect race",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S7A1B2C3D4",
+            "herder/a1b2c3d4",
+            None,
+            None,
+            SessionStatus::Archived,
+            "Bump ratatui",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S7E5F6G7H8",
+            "herder/e5f6g7h8",
+            None,
+            None,
+            SessionStatus::Archived,
+            "Try a sqlite WAL checkpoint",
+        ),
+        (
+            "01JB7Q2M3N4P5R6S7J9K0M1N2",
+            "herder/j9k0m1n2",
+            None,
+            None,
+            SessionStatus::Archived,
+            "Draft the pairing docs",
+        ),
+    ];
+    let mut app = App {
+        clock: Some(Timestamp::from_second(400).unwrap()),
+        ..App::default()
+    };
+    let mut machine = machine("h1", "box", &[]);
+    machine.sessions = sessions
+        .iter()
+        .map(|(id, _, parent, task, status, _)| SessionHead {
+            parent: parent.map(SessionId::new),
+            task: task.map(str::to_owned),
+            status: *status,
+            ..head(id, Some(PROJECT))
+        })
+        .collect();
+    machine.accounts = vec![herder_protocol::Account {
+        usage: vec![
+            herder_protocol::UsageWindow {
+                window: "five_hour".to_owned(),
+                used_percent: 31.0,
+                resets_at: Some(Timestamp::from_second(400 + 3 * 3600 + 20 * 60).unwrap()),
+            },
+            herder_protocol::UsageWindow {
+                window: "seven_day".to_owned(),
+                used_percent: 22.0,
+                resets_at: Some(Timestamp::from_second(400 + 4 * 86400).unwrap()),
+            },
+        ],
+        ..account("claude-main", "claude-main")
+    }];
+    app.update(Msg::Machines(vec![machine]));
+    for (id, branch, parent, task, state, prompt) in sessions {
+        let mut created = created_in(REPO, branch, parent, task);
+        if let EventBody::SessionCreated {
+            permission_mode,
+            worktree,
+            ..
+        } = &mut created
+        {
+            *permission_mode = PermissionMode::FullAccess;
+            *worktree = format!(
+                "/home/ann/.local/share/herder/worktrees/herder-{}",
+                &id[17..]
+            );
+        }
+        let prompt = turn_item(
+            &format!("{id}-u"),
+            "turn-0",
+            ItemBody::UserMessage {
+                text: prompt.to_owned(),
+                attachments: Vec::new(),
+            },
+        );
+        feed(
+            &mut app,
+            "h1",
+            id,
+            at(
+                update(id, 1, vec![created, prompt, status(state)], Vec::new()),
+                100,
+            ),
+        );
+    }
+    let open = "01JB7Q2M3N4P5R6S7EQ3Z0KAE";
+    let t = "turn-1";
+    let worktree = "/home/ann/.local/share/herder/worktrees/herder-EQ3Z0KAE";
+    let test_output: String = (1..=38)
+        .map(|n| format!("test client::reconnect::case_{n:02} ... ok\n"))
+        .chain(["\ntest result: ok. 38 passed; 0 failed".to_owned()])
+        .collect();
+    let steps: Vec<(i64, Vec<EventBody>)> = vec![
+        (
+            200,
+            vec![
+                EventBody::TurnStarted {
+                    turn_id: TurnId::new(t),
+                },
+                call(
+                    "c1",
+                    t,
+                    "Read",
+                    json!({"file_path": format!("{worktree}/crates/herder-client-core/src/connection.rs")}),
+                ),
+            ],
+        ),
+        (201, vec![result("c1", t, "pub struct Connection {")]),
+        (
+            203,
+            vec![call(
+                "c2",
+                t,
+                "Grep",
+                json!({"pattern": "reconnect", "path": format!("{worktree}/crates")}),
+            )],
+        ),
+        (
+            204,
+            vec![result(
+                "c2",
+                t,
+                "Found 4 files\nconnection.rs\nclient.rs\nlib.rs\ntests.rs",
+            )],
+        ),
+        (
+            206,
+            vec![call(
+                "c3",
+                t,
+                "Bash",
+                json!({"command": "cargo test -p herder-client-core reconnect"}),
+            )],
+        ),
+        (220, vec![result("c3", t, &test_output)]),
+        (
+            222,
+            vec![call(
+                "c4",
+                t,
+                "Bash",
+                json!({"command": "cargo clippy -p herder-client-core -- -D warnings"}),
+            )],
+        ),
+        (
+            225,
+            vec![failed(
+                "c4",
+                t,
+                "error: unused variable: `backoff`\n  --> crates/herder-client-core/src/connection.rs:212:13\n\nerror: could not compile `herder-client-core`",
+            )],
+        ),
+        (
+            230,
+            vec![call(
+                "c5",
+                t,
+                "Edit",
+                json!({
+                    "file_path": format!("{worktree}/crates/herder-client-core/src/connection.rs"),
+                    "old_string": "let backoff = self.backoff.next();\nself.retry();\n",
+                    "new_string": "let backoff = self.backoff.next();\nself.retry_after(backoff);\n",
+                }),
+            )],
+        ),
+        (231, vec![result("c5", t, "The file has been updated.")]),
+        (
+            240,
+            vec![turn_item(
+                "a1",
+                t,
+                assistant(
+                    "The test raced the reconnect timer: `retry()` ignored the backoff, so a \
+                     second attempt could land before the first one closed.",
+                ),
+            )],
+        ),
+    ];
+    for (seq, (secs, bodies)) in (10..).step_by(10).zip(steps) {
+        feed(
+            &mut app,
+            "h1",
+            open,
+            at(update(open, seq, bodies, Vec::new()), secs),
+        );
+    }
+    let host = HostId::new("h1");
+    let mut resources = host_resources(2);
+    resources.cpu_percent = 44.0;
+    resources.memory_available_bytes = resources.memory_total_bytes * 55 / 100;
+    if let Some(machine) = app.machines.iter_mut().find(|m| m.host_id == host) {
+        machine.resources = Some(resources);
+    }
+    app.choose_row(crate::app::Row::Session {
+        key: key("h1", open),
+        depth: 0,
+    });
+    app.act(crate::action::Action::Open);
+    app.focus = crate::app::Focus::Composer;
+    app.compose.errors.insert(
+        key("h1", open),
+        "model opus-9 is not available on claude-main".to_owned(),
+    );
+    app
+}

@@ -1,49 +1,96 @@
 //! The terminal picker, over everything else: a new shell, or one of the session's open ones.
+//!
+//! ```text
+//! ┌─ terminals · app · api ───────────────── esc ─┐
+//! │                                               │
+//! │▶ + new terminal                               │
+//! │                                               │
+//! │  open shells                                1 │
+//! │  $ terminal t1                                │
+//! └───────────────────────────────────────────────┘
+//! ```
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Padding};
+use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::mouse::{Click, Hits, List as Rows};
 use crate::terminal::{self, Target};
+use crate::ui::dialog::{Dialog, Size};
+use crate::ui::hints::Hint;
+use crate::ui::list::{ListView, Row};
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let Some(picker) = &app.terminals else {
         return;
     };
-    let rows = terminal::rows(&app.machines, &picker.session);
+    let ui = app.ui();
+    let targets = terminal::rows(&app.machines, &picker.session);
     let title = app
         .sessions
         .get(&picker.session)
-        .map_or_else(String::new, |session| session.title());
-    let items: Vec<ListItem> = rows
+        .map_or_else(String::new, |session| session.short_title());
+    let mut rows = Vec::new();
+    // The target of each row; the gap and the heading have none.
+    let mut of_row = Vec::new();
+    let open = targets
         .iter()
-        .map(|row| match row {
-            Target::New(_) => ListItem::new(Line::styled("+ new terminal", super::bold())),
-            Target::Existing(terminal_id) => ListItem::new(format!("  terminal {terminal_id}")),
+        .filter(|target| !matches!(target, Target::New(_)))
+        .count();
+    for (at, target) in targets.iter().enumerate() {
+        let item = match target {
+            Target::New(_) => Row::item(Line::from(vec![
+                Span::styled("+", ui.accent()),
+                Span::styled(" new terminal", ui.text()),
+            ])),
+            Target::Existing(terminal_id) => Row::item(Line::from(vec![
+                Span::styled(ui.glyphs.tools[0], ui.muted()),
+                Span::styled(format!(" terminal {terminal_id}"), ui.text()),
+            ])),
             // Never a picker row: a login is started from the machines panel.
-            Target::Login(account) => ListItem::new(format!("  login {}", account.account_id)),
-        })
-        .collect();
-    let height = u16::try_from(rows.len() + 4).unwrap_or(u16::MAX);
-    let popup = super::centered(area, 52, height);
-    let block = Block::bordered()
-        .title(format!(" terminals · {title} "))
-        .title_bottom(Line::styled(" Enter attach  Esc close ", super::dim()).centered())
-        .padding(Padding::uniform(1));
-    let inner = block.inner(popup);
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::new().add_modifier(Modifier::REVERSED));
-    let mut state = ListState::default().with_selected(Some(picker.selected.min(rows.len() - 1)));
-    frame.render_widget(Clear, popup);
-    frame.render_stateful_widget(list, popup, &mut state);
-    hits.list(inner, state.offset(), &vec![1; rows.len()], |at| {
-        Some(Click::Row(Rows::Picker, at))
-    });
+            Target::Login(account) => Row::item(Line::styled(
+                format!("login {}", account.account_id),
+                ui.text(),
+            )),
+        };
+        if at == 1 {
+            rows.push(Row::Gap);
+            rows.push(Row::header("open shells").right(open.to_string()));
+            of_row.extend([None, None]);
+        }
+        rows.push(item);
+        of_row.push(Some(at));
+    }
+    let selected = picker.selected.min(targets.len().saturating_sub(1));
+    let hints = [Hint::new("enter", "attach"), Hint::new("esc", "close")];
+    let height = u16::try_from(rows.iter().map(Row::height).sum::<usize>()).unwrap_or(u16::MAX);
+    let title = Line::from(ui.joined([Span::raw("terminals"), Span::raw(title)]));
+    let areas =
+        Dialog::new(ui, title, Size::Medium)
+            .hints(&hints)
+            .render(area, height, frame.buffer_mut());
+    super::palette::dialog_taps(hits, area, &areas);
+    // As a picker's: the pointer sits in the padding, the cursor's row a column past the
+    // text either side.
+    let body = areas.body;
+    let list = Rect::new(
+        body.x.saturating_sub(1),
+        body.y,
+        body.width + 2,
+        body.height,
+    )
+    .intersection(areas.outer);
+    let mut offset = 0;
+    let placed = ListView::new(ui, rows)
+        .select(of_row.iter().position(|at| *at == Some(selected)))
+        .focused(true)
+        .render(list, frame.buffer_mut(), &mut offset);
+    for (row, rect) in placed {
+        if let Some(Some(at)) = of_row.get(row) {
+            hits.click(rect, Click::Row(Rows::Picker, *at));
+        }
+    }
 }
 
 #[cfg(test)]

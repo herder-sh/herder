@@ -53,8 +53,9 @@ mod touch;
 mod transcript;
 
 use ratatui::backend::Backend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{Frame, Terminal};
@@ -68,25 +69,82 @@ use crate::ui::glyphs::{self, Glyphs};
 /// mobile layout, since the last column stays blank.
 pub const NARROW: u16 = 64;
 
-/// Draws the screen; with `full`, onto a cleared screen with nothing assumed of the last
-/// frame.
+/// How [`paint`] puts a frame on the terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paint {
+    /// Only the cells that changed since the last frame: what nearly every frame is.
+    Diff,
+    /// Onto a cleared screen, with nothing assumed of the last frame: after a resize or when
+    /// the terminal comes back to the front.
+    Full,
+    /// Every cell written again over what is shown, without a clear: for a terminal that may
+    /// have lost track of the screen, as a phone app over mosh, nothing ever blanks.
+    Resync,
+}
+
+/// Draws the screen as `how` says: [`render`], then [`write`] if anything changed.
 ///
 /// While resizing, the terminal may reflow or scroll what it shows, and a resize that ends at
 /// the size of the last draw, as a phone keyboard opening and closing between two draws, does
 /// not set off ratatui's own clear. Either leaves stale rows a diff against the last frame
-/// never touches, so every resize repaints every cell. So does the first frame, over what the
-/// shell left on a terminal without an alternate screen, as under mosh, and a frame now and
-/// then, over whatever a terminal got wrong since.
+/// never touches, so every resize repaints every cell ([`Paint::Full`]). So does the first
+/// frame, over what the shell left on a terminal without an alternate screen, as under mosh.
+#[cfg(test)]
 pub fn paint<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    full: bool,
-) -> Result<(), B::Error> {
-    if full {
+    how: Paint,
+    last: &mut Buffer,
+) -> Result<bool, B::Error> {
+    if !render(terminal, app, how, last)? {
+        return Ok(false);
+    }
+    write(terminal, how, last)?;
+    Ok(true)
+}
+
+/// Draws the frame into `terminal`'s buffer; returns whether it has anything to write. A
+/// [`Paint::Diff`] that comes out the same as `last`, the frame last written, has nothing:
+/// the buffer is reset and the terminal gets not a byte.
+pub fn render<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    how: Paint,
+    last: &Buffer,
+) -> Result<bool, B::Error> {
+    if how == Paint::Full {
         let size = terminal.size()?;
         terminal.resize(Rect::new(0, 0, size.width, size.height))?;
+    } else {
+        terminal.autoresize()?;
     }
-    terminal.draw(|frame| draw(frame, app))?;
+    let mut frame = terminal.get_frame();
+    draw(&mut frame, app);
+    if how == Paint::Diff && terminal.current_buffer_mut() == last {
+        terminal.current_buffer_mut().reset();
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Writes the frame [`render`] drew: the cells that changed, or with [`Paint::Resync`] every
+/// cell; keeps it in `last`.
+pub fn write<B: Backend>(
+    terminal: &mut Terminal<B>,
+    how: Paint,
+    last: &mut Buffer,
+) -> Result<(), B::Error> {
+    let frame = terminal.apply_buffer()?;
+    last.clone_from(frame.buffer);
+    if how == Paint::Resync {
+        let width = last.area.width.max(1);
+        let cells = last.content.iter().enumerate().map(|(at, cell)| {
+            let at = u16::try_from(at).unwrap_or(u16::MAX);
+            (at % width, at / width, cell)
+        });
+        terminal.backend_mut().draw(cells)?;
+        terminal.backend_mut().flush()?;
+    }
     Ok(())
 }
 
@@ -161,7 +219,7 @@ fn desktop_frame(
         status::draw(frame, bar, app, touch);
     }
     if app.machines.is_empty() {
-        pairing::draw(frame, body);
+        pairing::draw(frame, body, app.ui());
         rule_with_joints(frame, rule, &[], app.ui());
         return (body, body);
     }
@@ -266,7 +324,7 @@ fn phone_frame(
         );
     }
     if app.machines.is_empty() {
-        pairing::draw(frame, body);
+        pairing::draw(frame, body, app.ui());
     } else if app.focus == Focus::Sessions {
         sessions::switcher(frame, body, app, hits);
     } else {
@@ -401,6 +459,71 @@ fn edge(frame: &mut Frame, area: Rect, ui: crate::ui::Ui) {
     }
 }
 
+/// A main-pane view's heading, as the session's tab row sits: `title` bold and `meta` muted
+/// at the left, `right` muted at the right end, then a blank row. Returns the area under it.
+/// On a phone (`compact`) the header names the view, so the view starts at the top.
+fn heading(
+    frame: &mut Frame,
+    area: Rect,
+    ui: crate::ui::Ui,
+    title: &str,
+    meta: &str,
+    right: &str,
+    compact: bool,
+) -> Rect {
+    if compact || area.height < 3 {
+        return area;
+    }
+    let mut left = vec![Span::styled(title.to_owned(), ui.strong())];
+    if !meta.is_empty() {
+        left.push(Span::styled(ui.glyphs.separator, ui.muted()));
+        left.push(Span::styled(meta.to_owned(), ui.muted()));
+    }
+    let line = crate::ui::spread(
+        Line::from(left),
+        Line::from(Span::styled(right.to_owned(), ui.muted())),
+        usize::from(area.width),
+        ui.glyphs,
+    );
+    frame.render_widget(line, Rect { height: 1, ..area });
+    Rect {
+        y: area.y + 2,
+        height: area.height - 2,
+        ..area
+    }
+}
+
+/// A failure as the design draws one: the error marker, then the message muted, wrapped
+/// `width` wide under itself.
+fn failure(ui: crate::ui::Ui, text: &str, width: usize) -> Vec<Line<'static>> {
+    let options = textwrap::Options::new(width.max(8))
+        .initial_indent("  ")
+        .subsequent_indent("  ");
+    textwrap::wrap(text, options)
+        .into_iter()
+        .enumerate()
+        .map(|(at, line)| {
+            let marker = if at == 0 { ui.glyphs.check_fail } else { " " };
+            Line::from(vec![
+                Span::styled(marker, Style::new().fg(ui.theme.error)),
+                Span::styled(line.get(1..).unwrap_or_default().to_owned(), ui.muted()),
+            ])
+        })
+        .collect()
+}
+
+/// What an empty view says, muted and centred in `area`.
+fn nothing(frame: &mut Frame, area: Rect, ui: crate::ui::Ui, text: &str) {
+    let line = Line::styled(text.to_owned(), ui.muted()).centered();
+    frame.render_widget(line, centered(area, area.width, 1));
+}
+
+/// Clears `area` to the screen's background, for a view drawn over the main pane.
+fn clear(frame: &mut Frame, area: Rect, ui: crate::ui::Ui) {
+    frame.render_widget(ratatui::widgets::Clear, area);
+    crate::ui::fill(frame.buffer_mut(), area, ui.base());
+}
+
 /// A pane's block: lined with the Unicode glyph set; with the ASCII set a panel without
 /// lines, as OpenCode's, since some phone fonts draw box drawing two columns wide.
 fn pane(app: &App) -> Block<'static> {
@@ -409,31 +532,6 @@ fn pane(app: &App) -> Block<'static> {
     } else {
         Block::new().padding(ratatui::widgets::Padding::horizontal(1))
     }
-}
-
-/// [`pane`], raised on the panel background where it has no lines: a strip, an answer.
-fn raised(app: &App) -> Block<'static> {
-    let block = pane(app);
-    if app.ui().glyphs == Glyphs::Unicode.set() {
-        block
-    } else {
-        block.style(app.ui().panel())
-    }
-}
-
-/// The border style of a pane: highlighted while it has focus.
-fn border(app: &App, pane: Focus) -> Style {
-    app.ui().border(app.focus == pane)
-}
-
-/// Style for secondary text.
-fn dim() -> Style {
-    Style::new().fg(Color::DarkGray)
-}
-
-/// Style for headings.
-fn bold() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
 }
 
 /// A `width` by `height` rect centred in `area`, clipped to it.

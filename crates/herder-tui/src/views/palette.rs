@@ -4,7 +4,6 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -102,7 +101,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     let selected = items.get(cursor).copied();
     let mut footer = Vec::new();
     if let Some(error) = &palette.error {
-        footer.push(Line::styled(error.clone(), Style::new().fg(theme.error)));
+        footer.extend(super::failure(ui, error, usize::MAX));
     } else if let Some((_, command)) = matches.get(cursor)
         && !command.args.is_empty()
     {

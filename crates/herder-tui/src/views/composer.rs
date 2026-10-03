@@ -414,7 +414,11 @@ fn status_row(frame: &mut Frame, area: Rect, app: &App, session: &Session, compa
         .as_ref()
         .and_then(|key| app.compose.errors.get(key));
     if let Some(error) = error {
-        left.push(Span::styled(error.clone(), Style::new().fg(theme.error)));
+        left.push(Span::styled(
+            format!("{} ", ui.glyphs.check_fail),
+            Style::new().fg(theme.error),
+        ));
+        left.push(Span::styled(error.clone(), ui.muted()));
     } else if session.turn.is_some() {
         let elapsed = session.turn_started.map_or(0, |start| {
             app.now().as_millisecond() - start.as_millisecond()

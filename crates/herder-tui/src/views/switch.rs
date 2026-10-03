@@ -106,7 +106,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
         wrapped(&what(session, account), ui.muted());
     }
     if let Some(error) = &switch.error {
-        wrapped(error, Style::new().fg(theme.error));
+        notes.extend(super::failure(ui, error, room));
     }
     if !notes.is_empty() {
         footer.push(Line::default());

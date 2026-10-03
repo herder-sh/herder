@@ -2,10 +2,10 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-| 5h    ████████░░░░░░░░░░░░  38%  |
-| week  ███████████████░░░░░  74%  |
-| day   ██████████████████░░  91%  |
-| idle  ░░░░░░░░░░░░░░░░░░░░   0%  |
+| 5h    ━━━━━━━━━━━━━━━━━━━━  38%  |
+| week  ━━━━━━━━━━━━━━━━━━━━  74%  |
+| day   ━━━━━━━━━━━━━━━━━━━━  91%  |
+| idle  ━━━━━━━━━━━━━━━━━━━━   0%  |
 
  0   0..7   fg=DarkGray bg=Reset
  0   7..15  fg=Cyan bg=Reset
