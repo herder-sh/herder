@@ -10,6 +10,11 @@ project or by machine, each with its status, its task tree, how many of its task
 its PRs. On a tablet the machines and the sessions sit side by side; on a phone the sessions are
 a page of their own.
 
+Add a machine from **Add a machine**: run `herder pair` on the host, then scan the QR code it
+prints (CameraX + ML Kit) or paste the `herder://pair` link — or all of `herder pair`'s
+output. The fingerprint is shown to confirm before the client pairs. Opening a
+`herder://pair?…` link lands on that confirm step.
+
 A tap opens a session (docs/tui-design.md §2.1, §5): its transcript streams, each tool call one
 row that expands on a tap; an approval or a question replaces the composer with a card, answered
 with large Allow / Deny buttons or a swipe (right allows, left denies), a choice or typed text.
