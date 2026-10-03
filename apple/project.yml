@@ -12,6 +12,8 @@ settings:
     CURRENT_PROJECT_VERSION: 1
     SWIFT_VERSION: 6.0
     PRODUCT_NAME: herder
+    # Not `herder`: on a case-insensitive disk it clashes with the bindings module `Herder`.
+    PRODUCT_MODULE_NAME: HerderApp
     PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_CFBundleDisplayName: herder
@@ -45,7 +47,21 @@ targets:
           UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: >-
           herder connects to the machines you pair with, which may be on your local network.
-    scheme: {}
+    scheme:
+      testTargets: [herder-iOS-UITests]
+  herder-iOS-UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: herder-iOS
+    settings:
+      base:
+        PRODUCT_NAME: herder-iOS-UITests
+        PRODUCT_MODULE_NAME: HerderUITests
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.UITests
+        GENERATE_INFOPLIST_FILE: YES
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
   herder-macOS:
     type: application
     platform: macOS

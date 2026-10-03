@@ -6,6 +6,7 @@ the app's Application Support directory.
 
 - `HerderKit/`: the app itself, a Swift package with the models and the views.
 - `App/`: the thin iOS and macOS app targets over it.
+- `UITests/`: the iOS UI tests.
 - `project.yml`: the Xcode project, generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ## Build
@@ -29,6 +30,16 @@ The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:
 ```sh
 HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-path apple/HerderKit
 ```
+
+The iOS UI test pairs the app on a simulator with a running fake daemon:
+
+```sh
+cargo run -p herder-ffi --example fake_daemon   # prints the pairing link first
+TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -project apple/herder.xcodeproj \
+  -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
+```
+
+A pairing code works once, so start a new fake daemon for each run.
 
 To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
 link it prints into **Add Machine**. For a real machine, run `herder pair` on it.

@@ -15,6 +15,7 @@ struct PairSheet: View {
                 Section {
                     TextField("Link", text: $link, prompt: Text("herder://pair?…"), axis: .vertical)
                         .labelsHidden()
+                        .accessibilityIdentifier("pairing-link")
                         .lineLimit(3...6)
                         .autocorrectionDisabled()
                         #if os(iOS)

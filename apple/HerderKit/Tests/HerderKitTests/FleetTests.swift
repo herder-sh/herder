@@ -32,4 +32,28 @@ struct FleetTests {
         #expect(await eventually { fleet.machines.first?.connection == .connected })
         #expect(await eventually { fleet.machines.first?.role == .owner })
     }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func followingShowsAConnectionMadeBeforeIt() async throws {
+        let daemon = try FakeDaemon()
+        let profile = temporaryProfile()
+        do {
+            guard case .opened(let fleet) = Profile.open(at: profile, client: "test") else {
+                Issue.record("cannot open a fresh profile")
+                return
+            }
+            try await fleet.pair(link: daemon.link)
+            fleet.suspend()
+        }
+        // Reopened, as on an app launch: the machine connects before the view follows.
+        guard case .opened(let fleet) = Profile.open(at: profile, client: "test") else {
+            Issue.record("cannot reopen the profile")
+            return
+        }
+        let host = try #require(fleet.machines.first?.hostId)
+        try await fleet.client.synced(hostId: host)
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        #expect(await eventually { fleet.machines.first?.connection == .connected })
+    }
 }
