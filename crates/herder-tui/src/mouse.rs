@@ -6,8 +6,10 @@
 //! what the matching key would: a button names its key or action, a row selects itself, and a
 //! tap on the selected row opens it. With `:mouse off` the TUI stops asking, so the terminal
 //! selects text again; Shift-drag (Option-drag on macOS) selects text either way.
-
-use std::path::Path;
+//!
+//! mosh 1.4 passes this through: mosh-client turns on the same reporting (1000, SGR 1006) in
+//! the terminal it runs in, and the reports reach the TUI. mosh has no alternate screen,
+//! though, which [`crate::views::paint`] and the exit's clear make up for.
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -22,9 +24,6 @@ use crate::switch;
 
 /// Lines a wheel step scrolls the transcript.
 const WHEEL_LINES: isize = 3;
-
-/// The client profile's file of TUI settings, next to its machines.
-const SETTINGS: &str = "tui.json";
 
 /// What a tap on a spot does.
 #[derive(Clone, Debug, PartialEq)]
@@ -159,34 +158,23 @@ pub fn key(code: KeyCode) -> Click {
     Click::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
-/// Whether the profile in `config_dir` asks for mouse reporting: yes unless `:mouse off` was
-/// saved.
-pub fn load(config_dir: &Path) -> bool {
-    std::fs::read(config_dir.join(SETTINGS))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|settings| settings.get("mouse")?.as_bool())
-        .unwrap_or(true)
-}
+/// Turns every mouse reporting mode off: what [`report`] turns on, and the encodings and
+/// modes other programs may have left on.
+const ALL_OFF: &[u8] =
+    b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?9l";
 
-/// Saves whether to ask for mouse reporting in the profile in `config_dir`.
-pub fn save(config_dir: &Path, on: bool) -> std::io::Result<()> {
-    let settings = serde_json::json!({ "mouse": on });
-    std::fs::write(config_dir.join(SETTINGS), format!("{settings}\n"))
-}
-
-/// Turns the terminal's mouse reporting on or off: clicks with their release, and the wheel,
-/// in SGR encoding. Motion is not asked for, so a phone over SSH is not sent a report for
-/// every move.
+/// Turns the terminal's mouse reporting on or off. On is crossterm's full capture: clicks,
+/// drags and motion (1000, 1002, 1003) in SGR encoding, as Herdr asks for; touch apps such as
+/// Moshi send taps only to programs that track the button. Motion is dropped as it is read,
+/// so it costs no redraw.
 pub fn report(on: bool) -> std::io::Result<()> {
+    use ratatui::crossterm::event::EnableMouseCapture;
     use std::io::Write;
-    let codes: &[u8] = if on {
-        b"\x1b[?1000h\x1b[?1006h"
-    } else {
-        b"\x1b[?1006l\x1b[?1000l"
-    };
     let mut out = std::io::stdout();
-    out.write_all(codes)?;
+    out.write_all(ALL_OFF)?;
+    if on {
+        ratatui::crossterm::execute!(out, EnableMouseCapture)?;
+    }
     out.flush()
 }
 
@@ -204,9 +192,29 @@ impl App {
             // dropped.
             MouseEventKind::Down(MouseButton::Left) => {
                 self.pressed = self.hits.click_at(x, y).cloned();
+                self.dragged = Some((x, y, y));
                 Vec::new()
             }
+            // A finger dragged up or down scrolls what it pressed on, a step a row, as the
+            // wheel would; the press is then no tap.
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some((at_x, at_y, last)) = self.dragged else {
+                    return Vec::new();
+                };
+                if y == last {
+                    return Vec::new();
+                }
+                self.pressed = None;
+                self.dragged = Some((at_x, at_y, y));
+                let step = if y < last { 1 } else { -1 };
+                let mut effects = Vec::new();
+                for _ in 0..y.abs_diff(last) {
+                    effects.extend(self.wheel(at_x, at_y, step));
+                }
+                effects
+            }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.dragged = None;
                 let pressed = self.pressed.take();
                 match self.hits.click_at(x, y).cloned() {
                     Some(click) if pressed.as_ref() == Some(&click) => {

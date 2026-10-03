@@ -13,6 +13,7 @@ use ratatui::crossterm::event::{
 use crate::app::{App, Effect, Focus, Msg};
 use crate::compose::Origin;
 use crate::fake::{self, added, key, update};
+use crate::glyphs::{self, Glyphs};
 
 /// A phone over SSH, and a desktop terminal.
 const SIZES: [(u16, u16); 2] = [(45, 40), (120, 40)];
@@ -33,7 +34,12 @@ fn draw(app: &mut App, (width, height): (u16, u16)) -> Terminal<TestBackend> {
 fn spots(app: &mut App, size: (u16, u16), text: &str) -> Vec<(u16, u16)> {
     let terminal = draw(app, size);
     let buffer = terminal.backend().buffer();
-    let wanted: Vec<String> = text.chars().map(String::from).collect();
+    // As the screen shows it: with ASCII glyphs on a phone.
+    let shown = match Glyphs::for_width(app.glyphs, size.0 - 1) {
+        Glyphs::Ascii => glyphs::folded(text),
+        Glyphs::Unicode => text.to_owned(),
+    };
+    let wanted: Vec<String> = shown.chars().map(String::from).collect();
     let mut found = Vec::new();
     for y in 0..size.1 {
         let row: Vec<&str> = (0..size.0).map(|x| buffer[(x, y)].symbol()).collect();
@@ -474,7 +480,10 @@ fn mouse_off_saves_the_setting_and_ignores_the_mouse() {
     let mut app = fake::tree();
     press(&mut app, KeyCode::Char(':'));
     fake::type_text(&mut app, "mouse off");
-    assert_eq!(press(&mut app, KeyCode::Enter), [Effect::Mouse(false)]);
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        [Effect::Mouse(false), Effect::Save]
+    );
     assert!(!app.mouse);
     tap_last(&mut app, size, "fix-login");
     assert_eq!(app.open, None);
@@ -487,17 +496,38 @@ fn mouse_off_saves_the_setting_and_ignores_the_mouse() {
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char(':'));
     fake::type_text(&mut app, "mouse on");
-    assert_eq!(press(&mut app, KeyCode::Enter), [Effect::Mouse(true)]);
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        [Effect::Mouse(true), Effect::Save]
+    );
     tap_last(&mut app, size, "fix-login");
     assert_eq!(app.open, Some(key("h1", "s1")));
 }
 
 #[test]
-fn the_profile_keeps_the_mouse_setting() {
-    let dir = tempfile::tempdir().unwrap();
-    assert!(super::load(dir.path()), "on until turned off");
-    super::save(dir.path(), false).unwrap();
-    assert!(!super::load(dir.path()));
-    super::save(dir.path(), true).unwrap();
-    assert!(super::load(dir.path()));
+fn a_finger_dragged_up_scrolls_like_the_wheel_and_is_no_tap() {
+    for size in SIZES {
+        let mut app = fake::with_prs();
+        press(&mut app, KeyCode::Char('P'));
+        let at = spots(&mut app, size, "#7").pop().unwrap();
+        assert_eq!(
+            mouse(&mut app, MouseEventKind::Down(MouseButton::Left), at),
+            []
+        );
+        // Two rows up: two steps down the list.
+        let up = (at.0, at.1 - 2);
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), up);
+        assert_eq!(app.pr_index(), 2, "{size:?}");
+        // Back down a row: a step up.
+        let back = (at.0, at.1 - 1);
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), back);
+        assert_eq!(app.pr_index(), 1, "{size:?}");
+        // Released where it was pressed, it still taps nothing.
+        mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), at);
+        assert_eq!(
+            mouse(&mut app, MouseEventKind::Up(MouseButton::Left), at),
+            []
+        );
+        assert_eq!(app.pr_index(), 0, "{size:?}");
+    }
 }

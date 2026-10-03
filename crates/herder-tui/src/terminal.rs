@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, NewAccount, TerminalEvent, TerminalStream};
 use herder_protocol::{ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
-use ratatui::DefaultTerminal;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{cursor, execute};
 use tokio::sync::mpsc;
@@ -207,7 +206,7 @@ pub async fn attach(
     host_id: &HostId,
     target: Target,
     input: &RawInput,
-    terminal: &mut DefaultTerminal,
+    terminal: &mut crate::backend::Tui,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
     let login = matches!(target, Target::Login(_));

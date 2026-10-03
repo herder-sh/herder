@@ -224,6 +224,10 @@ pub const HELP: &[(&str, &str)] = &[
         "give the mouse to the terminal, or take it",
     ),
     ("Shift-drag", "select text while herder has the mouse"),
+    (
+        ":glyphs ascii",
+        "plain marks, for phone SSH apps and mosh; unicode for symbols",
+    ),
     ("?", "show or hide this help"),
     ("q, Ctrl-c twice", "quit"),
 ];
