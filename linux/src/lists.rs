@@ -482,6 +482,7 @@ pub mod tests {
             addresses: vec!["127.0.0.1:7447".to_owned()],
             fingerprint: "ab".repeat(32),
             connection: ConnectionState::Connected,
+            quality: Default::default(),
             role: Some(Role::Owner),
             sessions,
             hosts: Vec::new(),
