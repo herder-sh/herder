@@ -1,5 +1,6 @@
 package sh.herder.android.ui
 
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -18,7 +19,6 @@ import sh.herder.android.SampleKey
 import sh.herder.android.SampleStart
 import sh.herder.android.Stage
 import sh.herder.android.Summary
-import sh.herder.android.firstTurn
 import sh.herder.android.sampleFleet
 import sh.herder.android.sampleMachine
 import sh.herder.android.sampleSession
@@ -68,7 +68,10 @@ class PrsScreenshotsTest {
         }
         capture("phone-$theme-session")
         compose.onNodeWithContentDescription("Session").performClick()
+        compose.waitForIdle()
         compose.onNodeWithText("Link Pull Request…").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("Link a Pull Request").assertExists()
         capture("phone-$theme-link")
     }
 
@@ -79,16 +82,26 @@ class PrsScreenshotsTest {
     }
 
     private fun tabletSession(theme: String) {
+        val session = sampleSession(Stage.Switched)
         val profile = Profile.Open(
             listOf(sampleMachine(SessionStatus.IDLE)),
-            mapOf(SampleKey to Summary().applied(firstTurn())),
+            mapOf(
+                SampleKey to Summary(
+                    loaded = true,
+                    repo = session.repo,
+                    branch = session.branch,
+                    prs = session.prs,
+                    provider = session.provider.orEmpty(),
+                    model = session.model,
+                ),
+            ),
         )
         compose.setContent {
             HerderTheme(dark = theme == "dark") {
                 MachinesScreen(profile, SampleStart) { _, _, _, onBack ->
                     SessionScreen(
                         SampleKey,
-                        sampleSession(Stage.Switched),
+                        session,
                         profile.machines[0],
                         listOf("opus", "sonnet"),
                         { _, _ -> null },
