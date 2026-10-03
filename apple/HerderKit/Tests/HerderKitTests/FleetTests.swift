@@ -56,4 +56,31 @@ struct FleetTests {
         defer { following.cancel() }
         #expect(await eventually { fleet.machines.first?.connection == .connected })
     }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aSessionStartedFromTheAppShowsLiveAndArchives() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(link: daemon.link)
+        try await fleet.client.synced(hostId: machine.hostId)
+
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .ask, prompt: "Say hello.")
+        let sessionId = key.sessionId
+
+        #expect(await eventually {
+            fleet.lists.recent.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
+        })
+        #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
+
+        await fleet.archive(key)
+        #expect(await eventually { fleet.sessions[key]?.state == .archived })
+        #expect(fleet.refusals[key] == nil)
+    }
 }

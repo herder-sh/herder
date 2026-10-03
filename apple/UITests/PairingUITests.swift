@@ -16,7 +16,8 @@ final class PairingUITests: XCTestCase {
         field.typeText(link)
         app.buttons["Pair"].tap()
 
-        XCTAssertTrue(app.staticTexts["fake-host"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["1 machine connected"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["Machines"].tap()
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 5))
     }
 }

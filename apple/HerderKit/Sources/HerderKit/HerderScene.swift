@@ -13,12 +13,18 @@ public struct HerderScene: Scene {
             switch profile {
             case .opened(let fleet):
                 FleetView(fleet: fleet)
+                    // Dark only for now; light mode comes later.
+                    .preferredColorScheme(.dark)
             case .failed(let message):
                 ContentUnavailableView(
                     "Cannot open the profile", systemImage: "exclamationmark.triangle",
                     description: Text(message))
             }
         }
+        #if os(macOS)
+        // herder draws its own window: the sidebar runs up under the traffic lights.
+        .windowStyle(.hiddenTitleBar)
+        #endif
         .onChange(of: scenePhase) { _, phase in
             guard case .opened(let fleet) = profile else { return }
             switch phase {

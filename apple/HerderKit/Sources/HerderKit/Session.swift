@@ -1,0 +1,266 @@
+import Foundation
+import Herder
+
+/// A session on a machine. `hostId` is the machine the app is connected to, which for a vault
+/// is the vault, not the host the session runs on.
+struct SessionKey: Hashable, Sendable {
+    let hostId: HostId
+    let sessionId: SessionId
+}
+
+/// An approval or a question waiting on someone, oldest first in its session.
+struct Pending: Hashable {
+    enum Kind: Hashable {
+        case approval(summary: String)
+        case question(text: String, choices: [String])
+    }
+
+    /// The approval or question id.
+    let id: String
+    let turnId: TurnId
+    let kind: Kind
+    var routedTo: Route
+    var reason: EscalationReason?
+    var note: String?
+    /// When it was asked, or escalated to the user.
+    var since: Date
+}
+
+/// A session's state, folded from its events as the TUI does (crates/herder-tui/src/session.rs):
+/// status comes from `session_status_changed`, approvals and questions are pending until
+/// resolved or answered, and a turn's questions go when the turn ends.
+struct SessionModel {
+    let key: SessionKey
+    /// Whether the first update, with every cached event, has arrived.
+    var loaded = false
+    var repo: String?
+    var branch: String?
+    var provider: Provider?
+    var model: String?
+    var accountId: AccountId?
+    var mode: PermissionMode?
+    var parent: SessionId?
+    var task: String?
+    var status: SessionStatus = .idle
+    var turn: TurnId?
+    var approvals: [Pending] = []
+    var questions: [Pending] = []
+    var prs: [PullRequest] = []
+    /// Why the last turn failed, until the next one starts.
+    var failure: String?
+    var lastMessage: String?
+    /// The last tool call of the turn running now.
+    var lastTool: String?
+    var streaming: [Item] = []
+    var updatedAt: Date?
+
+    init(key: SessionKey) {
+        self.key = key
+    }
+
+    mutating func apply(_ update: SessionUpdate) {
+        loaded = true
+        for event in update.events { apply(event) }
+        streaming = update.streaming
+    }
+
+    mutating func apply(_ event: Event) {
+        let at = Timestamp.date(event.at) ?? updatedAt ?? .now
+        updatedAt = at
+        switch event.body {
+        case .sessionCreated(let repo, _, let branch, let provider, let accountId, let model, let mode, let parent, let task, _, _):
+            self.repo = repo
+            self.branch = branch
+            self.provider = provider
+            self.accountId = accountId
+            self.model = model
+            self.mode = mode
+            self.parent = parent
+            self.task = task
+        case .branchCheckedOut(let branch):
+            self.branch = branch
+        case .sessionStatusChanged(let status):
+            self.status = status
+        case .turnStarted(let turnId):
+            turn = turnId
+            lastTool = nil
+            failure = nil
+        case .turnCompleted(let turnId), .turnInterrupted(let turnId):
+            endTurn(turnId)
+        case .turnFailed(let turnId, let error):
+            endTurn(turnId)
+            failure = error.message
+        case .itemAdded(let item):
+            switch item.body {
+            case .assistantMessage(let text): lastMessage = text
+            case .toolCall(let name, let input): lastTool = toolSummary(name: name, input: input)
+            default: break
+            }
+        case .approvalRequested(let id, let turnId, _, let summary, let routedTo, let reason):
+            approvals.append(Pending(
+                id: id, turnId: turnId, kind: .approval(summary: summary), routedTo: routedTo,
+                reason: reason, since: at))
+        case .approvalEscalated(let id, let reason, let note):
+            escalate(&approvals, id: id, reason: reason, note: note, at: at)
+        case .approvalResolved(let id, _, _):
+            approvals.removeAll { $0.id == id }
+        case .questionAsked(let id, let turnId, let text, let choices, let routedTo, let reason):
+            questions.append(Pending(
+                id: id, turnId: turnId, kind: .question(text: text, choices: choices),
+                routedTo: routedTo, reason: reason, since: at))
+        case .questionEscalated(let id, let reason, let note):
+            escalate(&questions, id: id, reason: reason, note: note, at: at)
+        case .questionAnswered(let id, _, _):
+            questions.removeAll { $0.id == id }
+        case .modelSwitched(let model):
+            self.model = model
+        case .accountSwitched(let accountId):
+            self.accountId = accountId
+        case .providerSwitched(let provider, let accountId, let model):
+            self.provider = provider
+            self.accountId = accountId
+            self.model = model
+        case .permissionModeChanged(let mode):
+            self.mode = mode
+        case .prLinked(let pr), .prUpdated(let pr):
+            if let index = prs.firstIndex(where: { $0.number == pr.number }) {
+                prs[index] = pr
+            } else {
+                prs.append(pr)
+            }
+        case .prUnlinked(let number):
+            prs.removeAll { $0.number == number }
+        case .childSpawned, .childReported, .unknown:
+            break
+        }
+    }
+
+    private mutating func endTurn(_ turnId: TurnId) {
+        if turn == turnId { turn = nil }
+        questions.removeAll { $0.turnId == turnId }
+    }
+
+    private func escalate(
+        _ list: inout [Pending], id: String, reason: EscalationReason, note: String?, at: Date
+    ) {
+        guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+        list[index].routedTo = .user
+        list[index].reason = reason
+        list[index].note = note
+        list[index].since = at
+    }
+
+    /// Requests the user must answer; the ones routed to a primary session are its to answer.
+    var forUser: [Pending] {
+        (approvals + questions).filter { $0.routedTo == .user }
+    }
+
+    var needsUser: Bool {
+        status == .needsYou || !forUser.isEmpty
+    }
+
+    var state: SessionState {
+        if !forUser.isEmpty { return .needsYou }
+        switch status {
+        case .running: return .running
+        case .waitingForCapacity: return .waiting
+        case .needsYou: return .needsYou
+        case .error: return .error
+        case .archived: return .archived
+        case .moved: return .moved
+        case .idle, .unknown: return .idle
+        }
+    }
+
+    /// The task label, else the branch, as the TUI names a session in a project; `nil` until
+    /// the session's creation is known.
+    var title: String? {
+        task ?? branch
+    }
+
+    /// What the session is doing now, or the last thing it said.
+    var activity: String {
+        if let request = forUser.first {
+            switch request.kind {
+            case .approval(let summary): return summary
+            case .question(let text, _): return text
+            }
+        }
+        switch state {
+        case .running:
+            if let item = streaming.last, let text = item.body.text, !text.isEmpty {
+                return firstLine(text)
+            }
+            return lastTool ?? "Working…"
+        case .waiting: return "Waiting for a free slot"
+        case .error: return failure.map { "Turn failed: \(firstLine($0))" } ?? "Error"
+        case .archived: return "Archived"
+        case .moved: return "Moved to another host"
+        case .needsYou: return "Needs you"
+        case .idle: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
+        }
+    }
+}
+
+extension ItemBody {
+    /// The text of a message, reasoning or tool output.
+    var text: String? {
+        switch self {
+        case .userMessage(let text), .assistantMessage(let text), .reasoning(let text): text
+        case .toolResult(_, let output, _): output
+        case .toolCall, .unknown: nil
+        }
+    }
+}
+
+/// A tool call as one line: its name and the first telling string of its input, as the TUI
+/// shows it (crates/herder-tui/src/views/transcript.rs).
+func toolSummary(name: String, input: Json) -> String {
+    let keys = ["command", "file_path", "path", "pattern", "url", "query", "description", "prompt"]
+    let object = (try? JSONSerialization.jsonObject(with: Data(input.utf8))) as? [String: Any]
+    if let value = keys.lazy.compactMap({ object?[$0] as? String }).first {
+        return "\(name) \(firstLine(value))"
+    }
+    return name
+}
+
+func firstLine(_ text: String) -> String {
+    text.split(whereSeparator: \.isNewline).first.map(String.init)?
+        .trimmingCharacters(in: .whitespaces) ?? ""
+}
+
+enum Timestamp {
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    nonisolated(unsafe) private static let whole = ISO8601DateFormatter()
+
+    /// Parses an RFC 3339 timestamp, with or without fractional seconds.
+    static func date(_ text: String) -> Date? {
+        fractional.date(from: text) ?? whole.date(from: text)
+    }
+
+    /// How long ago, compactly: "now", "5m", "2h", "3d".
+    static func age(_ date: Date?, now: Date) -> String {
+        guard let date else { return "" }
+        let seconds = Int(now.timeIntervalSince(date))
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(seconds / 60)m"
+        case ..<86400: return "\(seconds / 3600)h"
+        default: return "\(seconds / 86400)d"
+        }
+    }
+
+    /// How long until, as the TUI writes it: "5d 3h", "2h 13m", "40m".
+    static func until(_ date: Date?, now: Date) -> String {
+        guard let date else { return "" }
+        let minutes = max(0, Int(date.timeIntervalSince(now)) / 60)
+        let (days, hours) = (minutes / 1440, minutes % 1440 / 60)
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes % 60)m" }
+        return "\(minutes)m"
+    }
+}
