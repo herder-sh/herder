@@ -529,7 +529,8 @@ impl Session {
                     Tone::Info,
                 ))
             }
-            EventBody::Unknown => None,
+            // Shown from the session list's title (P2.19).
+            EventBody::TitleChanged { .. } | EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }

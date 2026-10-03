@@ -457,7 +457,8 @@ impl Session {
                 self.prs.retain(|pr| pr.number != *number);
                 Some(notice(format!("pull request #{number} unlinked")))
             }
-            EventBody::Unknown => None,
+            // Shown from the session list's title.
+            EventBody::TitleChanged { .. } | EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }

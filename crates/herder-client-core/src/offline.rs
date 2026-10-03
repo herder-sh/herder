@@ -114,6 +114,7 @@ mod tests {
                 status: SessionStatus::Idle,
                 parent: None,
                 task: None,
+                title: None,
                 project_id: None,
                 account_id: AccountId::new("a"),
                 children_need_you: 0,

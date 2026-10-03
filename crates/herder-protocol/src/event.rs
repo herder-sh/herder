@@ -234,6 +234,13 @@ pub enum EventBody {
         /// Number of the pull request in the session's repository.
         number: u64,
     },
+    /// The session's title changed; `by` names the user for a `user` title.
+    TitleChanged {
+        /// New title, as [`crate::clean_title`] returns it.
+        title: String,
+        /// Who chose it.
+        source: TitleSource,
+    },
     /// An event type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -264,6 +271,16 @@ pub enum SessionStatus {
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
     Unknown,
+}
+
+/// Who chose a session's title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    /// The daemon's automatic titler; a later automatic title may replace it.
+    Auto,
+    /// A user, by renaming the session; the automatic titler leaves it alone.
+    User,
 }
 
 /// Why a turn failed.

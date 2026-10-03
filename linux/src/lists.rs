@@ -474,6 +474,7 @@ pub mod tests {
             status: SessionStatus::Idle,
             parent: None,
             task: None,
+            title: None,
             project_id: project.map(ProjectId::new),
             account_id: AccountId::new("claude-main"),
             children_need_you: 0,

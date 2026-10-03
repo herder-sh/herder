@@ -106,6 +106,9 @@ pub struct SessionSummary {
     /// Short label of the session's task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// The session's current title; absent until it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Seq of the session's latest event on the host; the vault is caught up once it holds it.
     pub head_seq: Seq,
     /// `at` of the session's latest event.

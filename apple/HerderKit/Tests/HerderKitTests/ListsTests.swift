@@ -10,7 +10,7 @@ func machine(
         hostId: hostId, name: name, addresses: [], fingerprint: "", connection: .connected, role: .owner,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, task: nil,
-                        projectId: nil, accountId: "main", childrenNeedYou: 0)
+                        title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0)
         },
         hosts: hosts, projects: projects, accounts: [], failover: FailoverSettings(pin: false), terminals: [],
         resources: nil, sessionUsage: [:])
