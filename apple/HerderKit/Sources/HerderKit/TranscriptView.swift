@@ -5,28 +5,35 @@ import SwiftUI
 struct TranscriptBlockView: View {
     let block: TranscriptBlock
     let fleet: Fleet
-    let hostId: HostId
+    let key: SessionKey
     /// Opens a child session; `nil` pushes it.
     let open: ((SessionKey) -> Void)?
+    private var hostId: HostId { key.hostId }
 
     var body: some View {
         switch block {
-        case .user(_, let text, let queued):
-            VStack(alignment: .trailing, spacing: 4) {
+        case .user(_, let text, let outgoing):
+            VStack(alignment: .trailing, spacing: 6) {
                 Text(text)
                     .font(.body)
                     .foregroundStyle(Theme.onBubble)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(Theme.bubble.opacity(queued ? 0.5 : 1), in: .rect(cornerRadius: 18))
-                if queued {
-                    Label("Queued behind the turn", systemImage: "clock")
-                        .font(.caption).foregroundStyle(Theme.tertiary)
+                    .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.55), in: .rect(cornerRadius: 18))
+                if let outgoing {
+                    DeliveryLine(outgoing: outgoing, running: fleet.sessions[key]?.turn != nil) {
+                        Task { await fleet.sendNow(key) }
+                    } retry: {
+                        fleet.discard(outgoing, from: key)
+                        Task { await fleet.submit(outgoing.text, to: key) }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
+        case .working(let since, let waiting):
+            WorkingLine(since: since, waiting: waiting) { Task { await fleet.interrupt(key) } }
         case .assistant(_, let text, let streaming):
             MarkdownText(text: text, streaming: streaming)
         case .reasoning(_, let text, let streaming):
@@ -247,5 +254,81 @@ private struct ChildrenCard: View {
         .frame(minHeight: 44)
         .background(Theme.raised, in: .rect(cornerRadius: Theme.corner - 2))
         .contentShape(.rect)
+    }
+}
+
+/// Where a message from this device is: on its way, with the daemon (queued behind a running
+/// turn, which "Send now" interrupts), or refused.
+private struct DeliveryLine: View {
+    let outgoing: Outgoing
+    let running: Bool
+    let sendNow: () -> Void
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            switch outgoing.state {
+            case .sending:
+                ProgressView().controlSize(.mini).tint(Theme.tertiary)
+                Text("Sending…")
+            case .delivered where running:
+                Image(systemName: "clock")
+                Text("Queued behind the turn")
+                Button("Send now", action: sendNow)
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Theme.raised, in: .capsule)
+                    .help("Stop the running turn so this message runs now")
+            case .delivered:
+                Image(systemName: "checkmark")
+                Text("Delivered")
+            case .failed(let reason):
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
+                Text("Not sent: \(reason)").foregroundStyle(Theme.failure).lineLimit(2)
+                Button("Retry", action: retry)
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(Theme.tertiary)
+    }
+}
+
+/// The agent at work, with how long the turn has run, or the wait for it to take a message.
+private struct WorkingLine: View {
+    let since: Date?
+    let waiting: Bool
+    let stop: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 10) {
+                StatusGlyph(state: waiting ? .waiting : .running, size: 7)
+                Text(waiting ? "Waiting for the agent to take it…" : "Working…")
+                    .foregroundStyle(Theme.secondary)
+                if let since {
+                    Text(Duration.seconds(max(0, context.date.timeIntervalSince(since)))
+                        .formatted(.time(pattern: .minuteSecond)))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.tertiary)
+                }
+                Spacer()
+                if !waiting {
+                    Button("Stop", action: stop)
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Theme.raised, in: .capsule)
+                }
+            }
+            .font(.footnote)
+        }
     }
 }

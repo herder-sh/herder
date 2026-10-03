@@ -30,6 +30,7 @@ struct FleetTests {
         #expect(machine.name == "fake-host")
         #expect(fleet.machines.map(\.hostId) == [machine.hostId])
         #expect(await eventually { fleet.machines.first?.connection == .connected })
+        #expect(fleet.connectionLog[machine.hostId]?.last?.state == .connected)
         #expect(await eventually { fleet.machines.first?.role == .owner })
     }
 
@@ -104,6 +105,6 @@ struct FleetTests {
             return Transcript.blocks(model).contains { $0 == .assistant(id: $0.id, text: "Hello, world.", streaming: false) }
         })
         let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
-        #expect(blocks.contains { if case .user(_, "Say hello.", false) = $0 { true } else { false } })
+        #expect(blocks.contains { if case .user(_, "Say hello.", nil) = $0 { true } else { false } })
     }
 }

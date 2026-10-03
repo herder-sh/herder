@@ -55,8 +55,10 @@ struct SessionModel {
     var updatedAt: Date?
     /// The transcript: completed items, events worth a line, and spawned children, in order.
     var log: [LogEntry] = []
-    /// Prompts sent while a turn ran, until the session takes them.
-    var queued: [String] = []
+    /// What the user sent from this device, until the session takes it as a user message.
+    var outbox: [Outgoing] = []
+    /// When the running turn started.
+    var turnStartedAt: Date?
 
     init(key: SessionKey) {
         self.key = key
@@ -88,6 +90,7 @@ struct SessionModel {
             self.status = status
         case .turnStarted(let turnId):
             turn = turnId
+            turnStartedAt = at
             lastTool = nil
             failure = nil
         case .turnCompleted(let turnId), .turnInterrupted(let turnId):
@@ -161,8 +164,8 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if case .userMessage(let text) = item.body, let index = queued.firstIndex(of: text) {
-                queued.remove(at: index)
+            if case .userMessage(let text) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+                outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
         case .turnInterrupted: notice("Turn interrupted")
@@ -363,4 +366,18 @@ extension PermissionMode {
         case .fullAccess: "Full access"
         }
     }
+}
+
+/// A prompt sent from this device, shown until the session takes it.
+struct Outgoing: Hashable, Identifiable {
+    enum State: Hashable {
+        case sending
+        /// The daemon has it; it runs when the session is free.
+        case delivered
+        case failed(String)
+    }
+
+    let id = UUID()
+    let text: String
+    var state: State = .sending
 }

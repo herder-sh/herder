@@ -21,7 +21,10 @@ struct ToolCall: Hashable, Identifiable {
 
 /// A block of a session's transcript, as the session view shows it.
 enum TranscriptBlock: Hashable, Identifiable {
-    case user(id: String, text: String, queued: Bool)
+    /// A user message; `outgoing` while it is on its way from this device.
+    case user(id: String, text: String, outgoing: Outgoing?)
+    /// The agent is working, or about to, since the date.
+    case working(since: Date?, waiting: Bool)
     case assistant(id: String, text: String, streaming: Bool)
     case reasoning(id: String, text: String, streaming: Bool)
     case tools(id: String, calls: [ToolCall])
@@ -32,6 +35,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         switch self {
         case .user(let id, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
+        case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
         }
     }
@@ -71,7 +75,7 @@ enum Transcript {
                 }
             case .userMessage(let text):
                 flushCalls(); flushChildren()
-                blocks.append(.user(id: item.id, text: text, queued: false))
+                blocks.append(.user(id: item.id, text: text, outgoing: nil))
             case .assistantMessage(let text):
                 flushCalls(); flushChildren()
                 blocks.append(.assistant(id: item.id, text: text, streaming: streaming))
@@ -97,8 +101,17 @@ enum Transcript {
         for item in model.streaming { add(item, streaming: true) }
         flushCalls()
         flushChildren()
-        for (index, text) in model.queued.enumerated() {
-            blocks.append(.user(id: "queued-\(index)", text: text, queued: true))
+        // The turn running now, then what waits behind it; or, idle, what was sent and the wait
+        // for the agent to take it.
+        let streamingVisible = model.streaming.contains { $0.body.text?.isEmpty == false }
+        if model.turn != nil && !streamingVisible {
+            blocks.append(.working(since: model.turnStartedAt, waiting: false))
+        }
+        for outgoing in model.outbox {
+            blocks.append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
+        }
+        if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {
+            blocks.append(.working(since: nil, waiting: true))
         }
         return blocks
     }

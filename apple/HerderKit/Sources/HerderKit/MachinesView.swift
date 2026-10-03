@@ -13,7 +13,9 @@ struct MachinesView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
                 ForEach(fleet.lists.machines) { machine in
-                    MachineCard(machine: machine) { sheet = .machineSettings(hostId: machine.hostId) }
+                    MachineCard(machine: machine, since: fleet.connectionLog[machine.hostId]?.last?.at) {
+                        sheet = .machineSettings(hostId: machine.hostId)
+                    }
                         .contextMenu {
                             Button("Settings…", systemImage: "gearshape") { sheet = .machineSettings(hostId: machine.hostId) }
                             Button("Rename…", systemImage: "pencil") { renaming = machine }
@@ -86,6 +88,8 @@ private struct RenameField: View {
 
 struct MachineCard: View {
     let machine: MachineSummary
+    /// When the connection reached its current state, since the app opened.
+    var since: Date?
     let settings: () -> Void
 
     var body: some View {
@@ -100,6 +104,11 @@ struct MachineCard: View {
                         HStack(spacing: 5) {
                             ConnectionMark(state: machine.connection)
                             Text(machine.connection.label).lineLimit(2)
+                            if let since {
+                                TimelineView(.periodic(from: .now, by: 30)) { context in
+                                    Text("· \(machine.connected ? "for" : "since") \(Timestamp.age(since, now: context.date) == "now" ? "a moment" : Timestamp.age(since, now: context.date))")
+                                }
+                            }
                             if machine.role == .owner { Text("· Owner") }
                             if machine.role == .member { Text("· Member") }
                             if !machine.hosts.isEmpty { Text("· Vault") }

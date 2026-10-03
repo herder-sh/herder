@@ -48,13 +48,26 @@ struct TranscriptTests {
         #expect(notices == ["Question: Which?", "Answered: Blue", "Model switched to haiku", "Turn failed: boom"])
     }
 
-    @Test func aQueuedPromptLeavesOnceTheSessionTakesIt() {
+    @Test func aSentPromptShowsWhereItIsUntilTheSessionTakesIt() {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
-        model.queued = ["next"]
-        #expect(Transcript.blocks(model).last == .user(id: "queued-0", text: "next", queued: true))
+        let outgoing = Outgoing(text: "next", state: .delivered)
+        model.outbox = [outgoing]
+        // Running: the turn's progress, then the message waiting behind it.
+        let running = Transcript.blocks(model)
+        #expect(running.suffix(2) == [.working(since: model.turnStartedAt, waiting: false),
+                                      .user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing)])
+        // Idle: the message, then the wait for the agent to take it.
+        model.apply(script.event(.turnCompleted(turnId: "t1")))
+        #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
         model.apply(script.event(item("u2", .userMessage(text: "next"), turn: "t2")))
-        #expect(model.queued.isEmpty)
+        #expect(model.outbox.isEmpty)
+    }
+
+    @Test func claudeSessionsStartOnOpus() {
+        #expect(ModelCatalog.defaultModel("claude") == "claude-opus-5-5")
+        #expect(ModelCatalog.name("claude-opus-5-5", provider: "claude") == "Claude Opus 5.5")
+        #expect(ModelCatalog.defaultModel("codex") == "")
     }
 
     @Test func streamingItemsFollowTheLog() {

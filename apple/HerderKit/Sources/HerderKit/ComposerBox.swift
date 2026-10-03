@@ -6,10 +6,12 @@ import SwiftUI
 struct ComposerBox<Footer: View>: View {
     @Binding var text: String
     let placeholder: String
-    /// "claude · opus", or the provider alone on its default model.
-    let modelLabel: String
-    /// Models to offer: the ones used on this machine with this provider.
-    let models: [String]
+    /// The provider whose models the menu offers.
+    let provider: Provider?
+    /// The model in use, by id; `""` for the provider's default.
+    let model: String
+    /// Models used on this machine with this provider, offered after the catalog's.
+    let usedModels: [String]
     /// Offers "Default model" first, for a session not created yet.
     var offersDefault = false
     let providers: [Provider]
@@ -48,12 +50,16 @@ struct ComposerBox<Footer: View>: View {
                             }
                         }
                         Section("Model") {
-                            if offersDefault { Button("Default model") { setModel("") } }
-                            ForEach(models, id: \.self) { model in Button(model) { setModel(model) } }
+                            ForEach(menuModels, id: \.self) { id in
+                                Button { setModel(id) } label: {
+                                    let name = ModelCatalog.name(id, provider: provider)
+                                    if id == model { Label(name, systemImage: "checkmark") } else { Text(name) }
+                                }
+                            }
                             Button("Other…") { otherModel = true }
                         }
                     } label: {
-                        MenuLabel(symbol: "sparkle", text: modelLabel)
+                        MenuLabel(symbol: "sparkle", text: ModelCatalog.name(model, provider: provider))
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     Divider().frame(height: 16).overlay(Theme.stroke)
@@ -105,6 +111,14 @@ struct ComposerBox<Footer: View>: View {
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The catalog's models, then the ones used here, then the provider's default for a draft.
+    private var menuModels: [String] {
+        var ids = ModelCatalog.models(provider ?? "").map(\.id)
+        for id in usedModels + [model] where !id.isEmpty && !ids.contains(id) { ids.append(id) }
+        if offersDefault { ids.append("") }
+        return ids
+    }
 }
 
 /// A menu's label in the composer: icon, text and a chevron.

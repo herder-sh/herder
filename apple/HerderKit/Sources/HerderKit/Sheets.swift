@@ -182,8 +182,18 @@ struct ProjectPicker: View {
                     Field(label: "Machine") {
                         ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
                     }
-                    Field(label: "Repository", hint: "An absolute path to a git repository on the machine.") {
-                        InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                    Field(label: "Repository", hint: isLocal
+                          ? "A git repository on this Mac."
+                          : "An absolute path to a git repository on the machine. Browsing remote folders needs P0.10.") {
+                        HStack(spacing: 8) {
+                            InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                            #if os(macOS)
+                            if isLocal {
+                                ActionButton(title: "Browse…", style: .secondary) { browse() }
+                                    .frame(width: 120)
+                            }
+                            #endif
+                        }
                     }
                     HStack {
                         Spacer()
@@ -238,6 +248,23 @@ struct ProjectPicker: View {
         picked(Draft(hostId: machine.hostId, projectId: projectId))
         dismiss()
     }
+
+    /// Whether the chosen machine is this device, whose folders the system panel can show.
+    private var isLocal: Bool {
+        let addresses = machines.first { $0.hostId == hostId }?.addresses ?? []
+        return addresses.contains { $0.hasPrefix("127.") || $0.hasPrefix("localhost") || $0.hasPrefix("[::1]") }
+    }
+
+    #if os(macOS)
+    private func browse() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Repository"
+        if panel.runModal() == .OK, let url = panel.url { repo = url.path }
+    }
+    #endif
 
     private var pathReady: Bool { !hostId.isEmpty && repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") }
 
@@ -328,6 +355,22 @@ struct MachineSettingsSheet: View {
                         .frame(width: 120)
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == machine.name)
                     }
+                }
+                Field(label: "Connection history", hint: "Since the app opened.") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array((fleet.connectionLog[hostId] ?? []).reversed().enumerated()), id: \.offset) { _, change in
+                            HStack(spacing: 10) {
+                                ConnectionMark(state: change.state)
+                                Text(change.at.formatted(date: .omitted, time: .standard))
+                                    .monospacedDigit().foregroundStyle(Theme.tertiary)
+                                Text(change.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                Spacer()
+                            }
+                            .font(.footnote)
+                        }
+                    }
+                    .padding(12)
+                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
                 Field(label: "Machine") {
                     VStack(alignment: .leading, spacing: 10) {

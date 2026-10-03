@@ -13,6 +13,8 @@ public final class Fleet {
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
+    /// Each machine's connection changes since the app opened, oldest first.
+    private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
 
     public init(client: Client) {
         self.client = client
@@ -39,6 +41,12 @@ public final class Fleet {
 
     private func update(_ machines: [Machine]) {
         self.machines = machines
+        for machine in machines {
+            var log = connectionLog[machine.hostId] ?? []
+            guard log.last?.state != machine.connection else { continue }
+            log.append(ConnectionChange(at: .now, state: machine.connection))
+            connectionLog[machine.hostId] = Array(log.suffix(100))
+        }
         let listed = Set(machines.flatMap { machine in
             machine.sessions.map { SessionKey(hostId: machine.hostId, sessionId: $0.sessionId) }
         })
@@ -132,11 +140,22 @@ public final class Fleet {
                        about: key)
             return
         }
-        sessions[key]?.queued.append(text)
+        let outgoing = Outgoing(text: text)
+        sessions[key]?.outbox.append(outgoing)
         await send(.sendPrompt(sessionId: key.sessionId, text: text), about: key)
-        if refusals[key] != nil, let index = sessions[key]?.queued.firstIndex(of: text) {
-            sessions[key]?.queued.remove(at: index)
+        if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
+            sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }
+    }
+
+    /// Runs a queued prompt now: interrupts the turn, so the daemon starts the queue.
+    func sendNow(_ key: SessionKey) async {
+        await interrupt(key)
+    }
+
+    /// Drops a prompt that failed to send.
+    func discard(_ outgoing: Outgoing, from key: SessionKey) {
+        sessions[key]?.outbox.removeAll { $0.id == outgoing.id }
     }
 
     func interrupt(_ key: SessionKey) async {
@@ -233,4 +252,10 @@ public enum Profile {
             at: support.appendingPathComponent("herder", isDirectory: true),
             client: "herder-\(platform)/\(version ?? "dev")")
     }
+}
+
+/// A machine's connection changing state.
+struct ConnectionChange: Hashable {
+    let at: Date
+    let state: ConnectionState
 }

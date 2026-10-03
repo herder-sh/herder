@@ -26,7 +26,7 @@ struct SessionView: View {
                             .frame(maxWidth: .infinity).padding(40)
                     }
                     ForEach(blocks) { block in
-                        TranscriptBlockView(block: block, fleet: fleet, hostId: key.hostId, open: open)
+                        TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                     }
                 }
                 .frame(maxWidth: 760)
@@ -173,8 +173,9 @@ private struct Composer: View {
             ComposerBox(
                 text: $text,
                 placeholder: placeholder,
-                modelLabel: "\(model.provider ?? "") · \(model.model ?? "default")",
-                models: fleet.models(on: key.hostId, provider: model.provider),
+                provider: model.provider,
+                model: model.model ?? "",
+                usedModels: fleet.models(on: key.hostId, provider: model.provider),
                 providers: Array(Set(accounts.map(\.provider))).sorted(),
                 mode: model.mode,
                 running: model.turn != nil,
@@ -302,14 +303,15 @@ struct DraftSessionView: View {
             ComposerBox(
                 text: $text,
                 placeholder: "Ask for changes, or describe what to build",
-                modelLabel: model.isEmpty ? "\(provider) · default" : "\(provider) · \(model)",
-                models: fleet.models(on: hostId, provider: provider),
+                provider: provider,
+                model: model,
+                usedModels: fleet.models(on: hostId, provider: provider),
                 offersDefault: true,
                 providers: Array(Set(machine?.accounts.map(\.provider) ?? [])).sorted(),
                 mode: mode,
                 running: false,
                 setModel: { model = $0 },
-                setProvider: { provider = $0; model = "" },
+                setProvider: { provider = $0; model = ModelCatalog.defaultModel($0) },
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}
@@ -334,6 +336,7 @@ struct DraftSessionView: View {
         .onAppear {
             hostId = draft.hostId
             provider = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: nil)?.provider ?? ""
+            model = ModelCatalog.defaultModel(provider)
             mode = ModePreference.mode(for: draft)
         }
     }
