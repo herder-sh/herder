@@ -8,6 +8,9 @@ struct SessionView: View {
     let key: SessionKey
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
+    @State private var forking = false
+    @State private var completedFork: SessionKey?
+    @State private var pushedFork: SessionKey?
     @State private var switching = false
     @State private var showsTerminal = false
     @State private var showsPRs = false
@@ -60,6 +63,18 @@ struct SessionView: View {
             }
         }
         .onChange(of: key) { showsTerminal = false }
+        .sheet(isPresented: $forking, onDismiss: {
+            guard let key = completedFork else { return }
+            completedFork = nil
+            if let open { open(key) } else { pushedFork = key }
+        }) {
+            ForkSessionSheet(fleet: fleet, key: key) { completedFork = $0 }
+        }
+        .navigationDestination(isPresented: Binding(
+            get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }
+        )) {
+            if let key = pushedFork { SessionView(fleet: fleet, key: key) }
+        }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
         .alert("Link a pull request", isPresented: $linking) {
             TextField("123, #123 or a link", text: $typedPR)
@@ -92,6 +107,10 @@ struct SessionView: View {
                     }
                 }
                 .font(.footnote.weight(.medium))
+                if let origin = fleet.forkOrigins[key] {
+                    Text("Forked from \(origin.sessionId) on \(origin.hostId)")
+                        .font(.caption).foregroundStyle(Theme.secondary).textSelection(.enabled)
+                }
                 if let branch = model?.branch {
                     Text(branch).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).textSelection(.enabled)
                 }
@@ -128,21 +147,25 @@ struct SessionView: View {
             if fleet.archiving.contains(key) {
                 ArchivingLabel()
             }
-            if let model, model.state != .archived {
+            if let model {
                 Menu {
-                    if model.turn != nil {
-                        Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
+                    Button("Fork Session…", systemImage: "arrow.triangle.branch") { forking = true }
+                        .disabled(!model.loaded || model.parent != nil)
+                    if model.state != .archived {
+                        if model.turn != nil {
+                            Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
+                        }
+                        Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
+                        Button("Link Pull Request…", systemImage: "link") { linking = true }
+                        Divider()
+                        Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
+                            .disabled(fleet.archiving.contains(key))
                     }
-                    Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
-                    Button("Link Pull Request…", systemImage: "link") { linking = true }
-                    Divider()
-                    Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
-                        .disabled(fleet.archiving.contains(key))
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(Theme.secondary)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 44, height: 44)
                         .background(Theme.raised, in: .rect(cornerRadius: 8))
                 }
                 .menuStyle(.button)
@@ -171,7 +194,7 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model, switching: $switching)
+                Composer(fleet: fleet, key: key, model: model, switching: $switching, forking: $forking)
             }
         }
         .frame(maxWidth: 784)
@@ -224,6 +247,7 @@ private struct Composer: View {
     let key: SessionKey
     let model: SessionModel
     @Binding var switching: Bool
+    @Binding var forking: Bool
     @State private var text = ""
     @State private var images: [Herder.Image] = []
 
@@ -259,7 +283,12 @@ private struct Composer: View {
                 send: send,
                 stop: { Task { await fleet.interrupt(key) } }
             ) {
-                Label(machine?.name ?? "", systemImage: "desktopcomputer")
+                Button { forking = true } label: {
+                    Label(machine?.name ?? "Machine", systemImage: "desktopcomputer")
+                }
+                .buttonStyle(.plain)
+                .help("Fork this session onto a machine")
+                .disabled(!model.loaded || model.parent != nil)
                 FooterItem(symbol: "person.crop.circle", text: account?.label ?? model.accountId ?? "") {
                     ForEach(accounts.filter { $0.provider == model.provider }, id: \.accountId) { other in
                         Button(other.label) { Task { await fleet.switchSession(key, to: other, model: "") } }

@@ -10,6 +10,8 @@ public final class Fleet {
     public let client: Client
     public private(set) var machines: [Machine]
     private(set) var sessions: [SessionKey: SessionModel] = [:]
+    /// Provenance returned by forks made on this device during this app run.
+    var forkOrigins: [SessionKey: ForkOrigin] = [:]
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
     /// Sessions whose archive the machine is working on.
