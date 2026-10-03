@@ -49,7 +49,7 @@ struct ChildRef: Hashable {
 }
 
 enum Transcript {
-    /// The session's transcript: completed entries, then what is streaming, then queued prompts.
+    /// The session's transcript: completed entries, streaming content, and pending or failed sends.
     /// Consecutive tool calls and their results group into one block.
     static func blocks(_ model: SessionModel) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
@@ -71,6 +71,7 @@ enum Transcript {
             switch item.body {
             case .toolCall(let name, let input):
                 flushChildren()
+                if callsTurn != item.turnId { flushCalls() }
                 if calls.isEmpty { callsTurn = item.turnId }
                 calls.append(toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId))
             case .toolResult(let callId, let output, let isError):
@@ -112,7 +113,7 @@ enum Transcript {
             blocks.append(.working(since: model.turnStartedAt, waiting: false))
         }
         // Messages waiting behind the running turn show above the composer, not here.
-        for outgoing in model.outbox where !queued(model).contains(outgoing) {
+        for outgoing in model.outbox where model.turn == nil || outgoing.state != .delivered {
             blocks.append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
         }
         if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {

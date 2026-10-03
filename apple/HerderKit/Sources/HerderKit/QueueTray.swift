@@ -20,6 +20,10 @@ struct QueueTray: View {
                         .frame(height: 24)
                         .background(Theme.raised, in: .capsule)
                 }
+                #if os(iOS)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
                 .buttonStyle(.plain)
                 .help("Stop the running turn so the queue runs now")
             }

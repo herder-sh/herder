@@ -33,6 +33,25 @@ struct TranscriptTests {
         #expect(calls[1].kind == .edit)
     }
 
+    @Test func toolGroupsStaySeparateAcrossTurnsWithReusedIds() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("c1", .toolCall(name: "Bash", input: "{}")),
+            item("r1", .toolResult(callId: "c1", output: "first", isError: false)),
+            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "t2"),
+            item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
+            item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2"),
+            .turnCompleted(turnId: "t2"),
+        ])
+        let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
+            if case .tools(_, let calls) = block { return calls }
+            return nil
+        }
+        #expect(groups.count == 2)
+        #expect(groups.map { $0.map(\.output) } == [["first"], ["second"]])
+    }
+
     @Test func eventsBecomeNoticesWordedAsInTheTUI() {
         var script = Script()
         let model = script.model([
