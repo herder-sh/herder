@@ -21,4 +21,4 @@ expression: terminal.backend()
 "│                               │┌ message · queues behind the turn ──────────────────────────────┐ "
 "│                               ││ Write a prompt…                                                │ "
 "└───────────────────────────────┘└──────────────────────────────────────────────────── i to write ┘ "
-" 2 waiting on you · I inbox  ● box connected                                        ? help  q quit  "
+" 2 waiting on you · I inbox  ? help  q quit                                        ● box connected  "

@@ -1,0 +1,40 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|  PROMPT   enter send  shift+enter newline  / commands  @ mention              * box  * m2  ~ vault |
+|  NAVIGATE   / commands  @ mention  esc navigate                                                    |
+
+ 0   0..1   fg=#1c1c1c bg=#ffffff
+ 0   1..9   fg=#ffffff bg=#2f5bb7 BOLD
+ 0   9..11  fg=#1c1c1c bg=#ffffff
+ 0  11..16  fg=#1c1c1c bg=#ffffff BOLD
+ 0  16..21  fg=#6b6f7a bg=#ffffff
+ 0  21..23  fg=#1c1c1c bg=#ffffff
+ 0  23..34  fg=#1c1c1c bg=#ffffff BOLD
+ 0  34..42  fg=#6b6f7a bg=#ffffff
+ 0  42..44  fg=#1c1c1c bg=#ffffff
+ 0  44..45  fg=#1c1c1c bg=#ffffff BOLD
+ 0  45..54  fg=#6b6f7a bg=#ffffff
+ 0  54..56  fg=#1c1c1c bg=#ffffff
+ 0  56..57  fg=#1c1c1c bg=#ffffff BOLD
+ 0  57..65  fg=#6b6f7a bg=#ffffff
+ 0  65..79  fg=#1c1c1c bg=#ffffff
+ 0  79..80  fg=#3f7d1f bg=#ffffff
+ 0  80..86  fg=#1c1c1c bg=#ffffff
+ 0  86..87  fg=#3f7d1f bg=#ffffff
+ 0  87..92  fg=#1c1c1c bg=#ffffff
+ 0  92..93  fg=#a86b00 bg=#ffffff
+ 0  93..100 fg=#1c1c1c bg=#ffffff
+ 1   0..1   fg=#1c1c1c bg=#ffffff
+ 1   1..11  fg=#ffffff bg=#4a6fa5 BOLD
+ 1  11..13  fg=#1c1c1c bg=#ffffff
+ 1  13..14  fg=#1c1c1c bg=#ffffff BOLD
+ 1  14..23  fg=#6b6f7a bg=#ffffff
+ 1  23..25  fg=#1c1c1c bg=#ffffff
+ 1  25..26  fg=#1c1c1c bg=#ffffff BOLD
+ 1  26..34  fg=#6b6f7a bg=#ffffff
+ 1  34..36  fg=#1c1c1c bg=#ffffff
+ 1  36..39  fg=#1c1c1c bg=#ffffff BOLD
+ 1  39..48  fg=#6b6f7a bg=#ffffff
+ 1  48..100 fg=#1c1c1c bg=#ffffff

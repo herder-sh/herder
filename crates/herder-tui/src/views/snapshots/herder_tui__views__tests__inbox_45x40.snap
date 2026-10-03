@@ -1,6 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-expression: "render(app, width, height).backend()"
+expression: terminal.backend()
 ---
 " < back  herder                  inbox 2  +  "
 "┌ inbox - 2 waiting on you ────────────────┐ "
@@ -41,4 +41,4 @@ expression: "render(app, width, height).backend()"
 "│                                          │ "
 "└/n - 1-9 - Enter answer - l open - < back ┘ "
 " 1 8080   2 3000   > answer   l open         "
-" 2 waiting - I  * box                ? help  "
+" 2 waiting - I  ? help                * box  "

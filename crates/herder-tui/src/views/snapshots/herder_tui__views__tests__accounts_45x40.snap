@@ -41,4 +41,4 @@ expression: terminal.backend()
 "│ = true per account, [failover] pin).     │ "
 "└───── n add  r reconnect  Esc close ──────┘ "
 " n add   esc close                           "
-" * box  x laptop                     ? help  "
+" ? help                     * box  x laptop  "

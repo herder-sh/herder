@@ -146,7 +146,7 @@ pub(super) fn all(frame: &mut Frame, area: Rect, app: &App, compact: bool, hits:
                 ),
             ];
             if let Some(session) = app.sessions.get(*key) {
-                let (label, style) = super::sessions::badge(session.status);
+                let (label, style) = super::sessions::badge(app.ui(), session.status);
                 heading.push(Span::raw("  "));
                 heading.push(Span::styled(label, style));
             }

@@ -1,0 +1,49 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|behind the dialog: what it covers dims       |
+|behind the dialog: what it covers dims       |
+|┌ go to ─────────────────────────────── esc ┐|
+|│                                           │|
+|│  the body                                 │|
+|│  goes here                                │|
+|│                                           │|
+|│  enter open  esc close                    │|
+|│                                           │|
+|└───────────────────────────────────────────┘|
+|behind the dialog: what it covers dims       |
+|behind the dialog: what it covers dims       |
+
+ 0   0..45  fg=DarkGray bg=Reset
+ 1   0..45  fg=DarkGray bg=Reset
+ 2   0..2   fg=DarkGray bg=Reset
+ 2   2..7   fg=Reset bg=Reset BOLD
+ 2   7..45  fg=DarkGray bg=Reset
+ 3   0..1   fg=DarkGray bg=Reset
+ 3   1..44  fg=Reset bg=Reset
+ 3  44..45  fg=DarkGray bg=Reset
+ 4   0..1   fg=DarkGray bg=Reset
+ 4   1..44  fg=Reset bg=Reset
+ 4  44..45  fg=DarkGray bg=Reset
+ 5   0..1   fg=DarkGray bg=Reset
+ 5   1..44  fg=Reset bg=Reset
+ 5  44..45  fg=DarkGray bg=Reset
+ 6   0..1   fg=DarkGray bg=Reset
+ 6   1..44  fg=Reset bg=Reset
+ 6  44..45  fg=DarkGray bg=Reset
+ 7   0..1   fg=DarkGray bg=Reset
+ 7   1..3   fg=Reset bg=Reset
+ 7   3..8   fg=Reset bg=Reset BOLD
+ 7   8..13  fg=DarkGray bg=Reset
+ 7  13..15  fg=Reset bg=Reset
+ 7  15..18  fg=Reset bg=Reset BOLD
+ 7  18..24  fg=DarkGray bg=Reset
+ 7  24..44  fg=Reset bg=Reset
+ 7  44..45  fg=DarkGray bg=Reset
+ 8   0..1   fg=DarkGray bg=Reset
+ 8   1..44  fg=Reset bg=Reset
+ 8  44..45  fg=DarkGray bg=Reset
+ 9   0..45  fg=DarkGray bg=Reset
+10   0..45  fg=DarkGray bg=Reset
+11   0..45  fg=DarkGray bg=Reset

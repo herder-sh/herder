@@ -21,7 +21,6 @@ mod bar;
 mod compose;
 #[cfg(test)]
 mod fake;
-mod glyphs;
 mod inbox;
 mod machines;
 mod mouse;
@@ -32,6 +31,7 @@ mod session;
 mod settings;
 mod switch;
 mod terminal;
+pub mod ui;
 mod views;
 
 use std::collections::HashMap;
@@ -46,10 +46,31 @@ use tokio::task::JoinHandle;
 use app::{App, Effect, Msg};
 use session::SessionKey;
 use settings::Settings;
+use ui::theme::{Mode, Theme};
 
 /// How long the screen may sit unchanged before it is repainted from scratch, in case the
 /// terminal lost track of it: cheap when nothing changed, as mosh then sends nothing.
 const IDLE_REPAINT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The theme `tui.json` chose, else the one the terminal suits; with why a chosen theme did
+/// not load.
+fn theme(config_dir: &std::path::Path) -> (Theme, Option<String>) {
+    let look = settings::look(config_dir);
+    let env = |key| std::env::var(key).ok();
+    let colorterm = env("COLORTERM");
+    let mode = look
+        .mode
+        .unwrap_or_else(|| Mode::detect(env("COLORFGBG").as_deref()));
+    let name = Theme::choose(look.theme.as_deref(), colorterm.as_deref());
+    match Theme::load(name, mode, config_dir) {
+        Ok(theme) => (theme, None),
+        Err(err) => {
+            let fallback = Theme::choose(None, colorterm.as_deref());
+            let theme = Theme::load(fallback, mode, config_dir).unwrap_or_else(|_| Theme::ansi());
+            (theme, Some(format!("{err:#}")))
+        }
+    }
+}
 
 /// Opens the TUI on this device's profile and runs it until the user quits.
 pub fn run() -> Result<()> {
@@ -61,9 +82,12 @@ pub fn run() -> Result<()> {
 
 async fn run_in(config_dir: PathBuf) -> Result<()> {
     let settings = settings::load(&config_dir);
+    let (theme, notice) = theme(&config_dir);
     let mut app = App {
         mouse: settings.mouse,
         glyphs: settings.glyphs,
+        theme,
+        notice,
         ..App::default()
     };
     let client = Client::open(

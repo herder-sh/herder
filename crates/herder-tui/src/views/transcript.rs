@@ -31,7 +31,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
     };
     // On a narrow screen, the header names the machine and the session.
     if !compact {
-        let (label, style) = super::sessions::badge(session.status);
+        let (label, style) = super::sessions::badge(app.ui(), session.status);
         block = block.title(Line::from(vec![
             Span::raw(" "),
             Span::styled(session.title(), super::bold()),

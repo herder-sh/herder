@@ -1,0 +1,15 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|search    docs                               |
+|                                             |
+|model     opus                               |
+
+ 0   0..6   fg=Cyan bg=Reset BOLD
+ 0   6..10  fg=Reset bg=Reset
+ 0  10..11  fg=Reset bg=Reset REVERSED
+ 0  11..45  fg=Reset bg=Reset
+ 1   0..45  fg=Reset bg=Reset
+ 2   0..5   fg=DarkGray bg=Reset
+ 2   5..45  fg=Reset bg=Reset

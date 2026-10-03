@@ -27,7 +27,7 @@ fn key(code: KeyCode) -> Msg {
 }
 
 /// `s2` of [`fake::tree`] mid-turn: a prompt, some tool work, and an answer streaming.
-fn mid_turn() -> App {
+pub(super) fn mid_turn() -> App {
     let mut app = fake::tree();
     let events = vec![
         added(
