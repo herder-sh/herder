@@ -135,6 +135,8 @@ pub(super) fn herd() -> App {
         .insert(herder_protocol::SessionId::new("s2"), fake::session_usage());
     let mut app = App {
         theme: crate::ui::theme::Theme::herder(crate::ui::theme::Mode::Dark),
+        // Times the screen shows are counted from a clock that stands still.
+        clock: Some(herder_protocol::Timestamp::UNIX_EPOCH),
         ..App::default()
     };
     app.update(Msg::Machines(machines));
