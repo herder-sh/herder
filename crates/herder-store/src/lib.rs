@@ -428,6 +428,19 @@ impl Store {
         Ok(())
     }
 
+    /// Text accepted under an agent delivery key, even after its queue entry was discarded.
+    pub fn agent_message_text(
+        &self,
+        recipient: &SessionId,
+        sender: &SessionId,
+        message_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT text FROM agent_message_receipts WHERE recipient = ?1 AND sender = ?2 AND message_id = ?3",
+            params![recipient.as_str(), sender.as_str(), message_id], |row| row.get(0),
+        ).optional()?)
+    }
+
     /// The prompts queued in `session`, oldest first.
     pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
         let mut stmt = self.conn.prepare_cached(
@@ -472,6 +485,10 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for (position, prompt) in prompts.iter().enumerate() {
+            if let Some(message) = &prompt.agent_message {
+                tx.execute("INSERT OR IGNORE INTO agent_message_receipts (recipient, sender, message_id, text)
+                    VALUES (?1, ?2, ?3, ?4)", params![session.as_str(), message.sender_session_id.as_str(), message.message_id, prompt.text])?;
+            }
             insert.execute(params![
                 session.as_str(),
                 clamp(position),

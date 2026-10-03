@@ -618,7 +618,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
@@ -635,7 +635,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
-             ALTER TABLE queued_prompts DROP COLUMN attachments; PRAGMA user_version = 4;",
+             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
@@ -666,7 +666,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
-             DROP TABLE native_sessions; PRAGMA user_version = 2;",
+             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
@@ -692,7 +692,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN task;
              ALTER TABLE sessions DROP COLUMN title;
              ALTER TABLE sessions DROP COLUMN title_source;
-             PRAGMA user_version = 1;",
+             DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
@@ -1032,7 +1032,7 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
             "ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
-         PRAGMA user_version = 8;",
+         DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 8;",
         )
         .unwrap();
     drop(connection);
@@ -1092,12 +1092,18 @@ fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
         retry: false,
         retry_at: None,
     };
+    let mut other = queued.clone();
+    other.agent_message.as_mut().unwrap().sender_session_id = SessionId::new("other-sender");
+    other.text = "Other payload".into();
     store
-        .set_queued_prompts(&session, &[queued.clone()])
+        .set_queued_prompts(&session, &[queued.clone(), other.clone()])
         .unwrap();
     drop(store);
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.queued_prompts(&session).unwrap(), [queued]);
+    assert_eq!(
+        store.queued_prompts(&session).unwrap(),
+        [queued, other.clone()]
+    );
     let item = Item {
         agent_message: Some(metadata.clone()),
         parent_call_id: None,
@@ -1112,8 +1118,23 @@ fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
         .append(new_event(&session, 1, EventBody::ItemAdded { item }))
         .unwrap();
     drop(store);
-    let store = Store::open(&path).unwrap();
-    assert!(store.queued_prompts(&session).unwrap().is_empty());
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.queued_prompts(&session).unwrap(), [other]);
+    store.set_queued_prompts(&session, &[]).unwrap();
+    assert_eq!(
+        store
+            .agent_message_text(&session, &SessionId::new("other-sender"), "message-1")
+            .unwrap()
+            .as_deref(),
+        Some("Other payload")
+    );
+    assert_eq!(
+        store
+            .agent_message_text(&session, &SessionId::new("sender"), "message-1")
+            .unwrap()
+            .as_deref(),
+        Some("Hello")
+    );
     let events = store.read_since(&session, 1, 10).unwrap();
     let EventBody::ItemAdded { item } = &events[0].body else {
         panic!("missing prompt")

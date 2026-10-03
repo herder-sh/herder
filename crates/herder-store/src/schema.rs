@@ -123,7 +123,16 @@ ALTER TABLE sessions ADD COLUMN title_source TEXT;
 const V9: &str = "ALTER TABLE queued_prompts ADD COLUMN retry_at TEXT;";
 
 /// Persist authenticated agent provenance while a prompt waits for its turn.
-const V10: &str = "ALTER TABLE queued_prompts ADD COLUMN agent_message TEXT;";
+const V10: &str = "
+ALTER TABLE queued_prompts ADD COLUMN agent_message TEXT;
+CREATE TABLE agent_message_receipts (
+    recipient TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (recipient, sender, message_id)
+) STRICT;
+";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {

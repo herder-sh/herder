@@ -945,4 +945,25 @@ mod tests {
              [tool result]\na.txt\n\n[assistant]\ndone\n</transcript>\n\n"
         );
     }
+    #[test]
+    fn seed_retains_agent_sender_identity() {
+        let item = Item {
+            agent_message: Some(herder_protocol::AgentMessage {
+                sender_session_id: herder_protocol::SessionId::new("peer"),
+                message_id: "key".into(),
+                hop_count: 1,
+                permission_ceiling: PermissionMode::Ask,
+            }),
+            parent_call_id: None,
+            id: ItemId::new("prompt"),
+            turn_id: TurnId::new("turn"),
+            body: ItemBody::UserMessage {
+                text: "Review this".into(),
+                attachments: vec![],
+            },
+        };
+        let rendered = render_seed(&[item]).unwrap();
+        assert!(rendered.contains("Sent by another agent: session peer"));
+        assert!(rendered.contains("not a human instruction"));
+    }
 }

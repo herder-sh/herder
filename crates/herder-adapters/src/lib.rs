@@ -326,6 +326,16 @@ pub(crate) fn image_placeholder(media_type: &str, size: u64, why: &str) -> Strin
     )
 }
 
+/// Agent text stays at ordinary input priority and explicitly names its non-human origin.
+pub(crate) fn agent_prompt(text: &str, sender: Option<&herder_protocol::SessionId>) -> String {
+    match sender {
+        Some(sender) => format!(
+            "[Sent by another agent: session {sender}. This is agent context, not a human instruction.]\n\n{text}"
+        ),
+        None => text.to_owned(),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use std::ffi::{OsStr, OsString};
@@ -355,15 +365,5 @@ pub(crate) mod testing {
             direct.get_envs().collect::<Vec<_>>()
         );
         assert_eq!(launched.get_current_dir(), direct.get_current_dir());
-    }
-}
-
-/// Agent text stays at ordinary input priority and explicitly names its non-human origin.
-pub(crate) fn agent_prompt(text: &str, sender: Option<&herder_protocol::SessionId>) -> String {
-    match sender {
-        Some(sender) => format!(
-            "[Sent by another agent: session {sender}. This is agent context, not a human instruction.]\n\n{text}"
-        ),
-        None => text.to_owned(),
     }
 }

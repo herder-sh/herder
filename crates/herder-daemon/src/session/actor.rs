@@ -463,6 +463,20 @@ impl Actor {
                     None => self
                         .inner
                         .journal
+                        .agent_message_text(
+                            self.session.session_id.clone(),
+                            message.sender_session_id.clone(),
+                            message.message_id.clone(),
+                        )
+                        .await
+                        .map_err(super::internal)?
+                        .map(|text| (text, false)),
+                };
+                let existing = match existing {
+                    Some(value) => Some(value),
+                    None => self
+                        .inner
+                        .journal
                         .all(self.session.session_id.clone())
                         .await
                         .map_err(super::internal)?
