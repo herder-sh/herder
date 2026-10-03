@@ -1,0 +1,35 @@
+import Herder
+import SwiftUI
+
+/// Sender identity is durable daemon metadata, never inferred from message text.
+struct AgentMessageSource: View {
+    let message: AgentMessage
+    let fleet: Fleet
+    let hostId: HostId
+    let open: ((SessionKey) -> Void)?
+
+    private var source: SessionKey { SessionKey(hostId: hostId, sessionId: message.senderSessionId) }
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 3) {
+            Label("Sent by another agent", systemImage: "bubble.left.and.bubble.right")
+                .font(.caption).foregroundStyle(Theme.secondary)
+            if let open {
+                Button { open(source) } label: { senderLabel }.buttonStyle(.plain)
+            } else {
+                NavigationLink(value: source) { senderLabel }.buttonStyle(.plain)
+            }
+        }
+        .help("Sender session: \(message.senderSessionId)")
+    }
+
+    private var senderLabel: some View {
+        HStack(spacing: 4) {
+            Text(fleet.sessions[source]?.title ?? message.senderSessionId)
+                .lineLimit(1).truncationMode(.middle)
+            Image(systemName: "arrow.up.right")
+        }
+        .font(.caption).foregroundStyle(Theme.tertiary)
+        .accessibilityLabel("Open sender session \(message.senderSessionId)")
+    }
+}
