@@ -325,6 +325,16 @@ impl App {
     ) -> Vec<Effect> {
         match (sent, result) {
             (Sent::Ask(host), result) => {
+                if let (
+                    Ok(CommandResult::VaultLink {
+                        volume: Some(volume),
+                        ..
+                    }),
+                    Some(panel),
+                ) = (&result, &mut self.machine_panel)
+                {
+                    panel.volumes.insert(host.clone(), volume.clone());
+                }
                 let known = match result {
                     Ok(CommandResult::VaultLink { is_vault: true, .. }) => Known::Vault,
                     Ok(CommandResult::VaultLink {
@@ -496,6 +506,7 @@ mod tests {
             let result = Ok(CommandResult::VaultLink {
                 is_vault: host_id.as_str() == "v",
                 vault: None,
+                volume: None,
             });
             app.update(Msg::Sent { origin, result });
         }

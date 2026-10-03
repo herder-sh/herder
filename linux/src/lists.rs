@@ -603,12 +603,14 @@ pub mod tests {
                 host_name: "devbox".to_owned(),
                 online: true,
                 last_seen: Timestamp::now(),
+                usage: None,
             },
             FleetHost {
                 host_id: HostId::new("laptop"),
                 host_name: "laptop".to_owned(),
                 online: false,
                 last_seen: Timestamp::now() - std::time::Duration::from_secs(2 * 3600 + 5 * 60),
+                usage: None,
             },
         ];
         let mut summaries = HashMap::new();

@@ -12,9 +12,9 @@
 //! has the keys; `e` or a tap expands one. Rows are built here, wrapped to the pane, so the
 //! pane knows how many there are to scroll.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use herder_protocol::{Attachment, ErrorClass, Item, ItemBody, ItemId, SessionId};
+use herder_protocol::{Attachment, AttachmentId, ErrorClass, Item, ItemBody, ItemId, SessionId};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -425,7 +425,8 @@ impl<'a> Builder<'a> {
         if !images.is_empty() && !text.is_empty() {
             self.push(Row::panel(ui, bar, vec![]));
         }
-        for row in badge::chip_rows(image_chips(ui, images), room) {
+        let chips = image_chips(ui, images, &self.session.not_backed_up);
+        for row in badge::chip_rows(chips, room) {
             self.push(Row::panel(ui, bar, row.spans));
         }
         if self.padded {
@@ -598,16 +599,24 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
 
 /// A prompt's images as chips, `image 1 · 340 KB`. The terminal shows no images: `o` opens
 /// them with the desktop's viewer, `w` saves them; the apps fetch and show them inline.
-fn image_chips(ui: Ui, images: &[Attachment]) -> Vec<Span<'static>> {
+fn image_chips(
+    ui: Ui,
+    images: &[Attachment],
+    not_backed_up: &HashSet<AttachmentId>,
+) -> Vec<Span<'static>> {
     images
         .iter()
         .zip(1..)
         .map(|(image, n)| {
-            let size = crate::attach::size(image.size);
+            let (fact, style) = if not_backed_up.contains(&image.attachment_id) {
+                ("not backed up".to_owned(), ui.muted())
+            } else {
+                (crate::attach::size(image.size), ui.text())
+            };
             badge::chip(
                 ui,
-                &format!("image {n}{}{size}", ui.glyphs.separator),
-                ui.text(),
+                &format!("image {n}{}{fact}", ui.glyphs.separator),
+                style,
             )
         })
         .collect()

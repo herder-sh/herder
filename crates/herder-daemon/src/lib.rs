@@ -223,7 +223,7 @@ pub async fn serve(
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
             link: Some(Arc::clone(&link)),
-            vault: false,
+            vault: None,
         },
         shutdown.clone(),
     ));
@@ -287,6 +287,7 @@ mod tests {
             projects: Default::default(),
             mode: config::Mode::Host,
             vault: None,
+            retention: Default::default(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({
