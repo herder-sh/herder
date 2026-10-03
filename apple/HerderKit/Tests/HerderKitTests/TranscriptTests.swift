@@ -52,6 +52,39 @@ struct TranscriptTests {
         #expect(groups.map { $0.map(\.output) } == [["first"], ["second"]])
     }
 
+    @Test func resultsAttachAcrossApprovalNoticesAndProseDuringStreamingAndReplay() {
+        var script = Script()
+        var model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("c1", .toolCall(name: "Bash", input: "{}")),
+            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "c1", summary: "Run command?", routedTo: .user, reason: nil),
+            .approvalResolved(approvalId: "a1", decision: .allow, answeredBy: .user),
+            item("a", .assistantMessage(text: "Waiting for the command.")),
+        ])
+        let result = Item(id: "r1", turnId: "t1", body: .toolResult(callId: "c1", output: "partial", isError: false))
+        model.apply(SessionUpdate(events: [], streaming: [result]))
+        guard case .tools(_, let streamingCalls) = Transcript.blocks(model)[0] else {
+            Issue.record("missing tool group")
+            return
+        }
+        #expect(streamingCalls[0].output == "partial")
+        #expect(streamingCalls[0].outcome == .running)
+        model.apply(SessionUpdate(events: [
+            script.event(item("r1", .toolResult(callId: "c1", output: "failed", isError: true))),
+            script.event(.turnCompleted(turnId: "t1")),
+            script.event(.turnStarted(turnId: "t2")),
+            script.event(item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2")),
+            script.event(item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2")),
+            script.event(.turnCompleted(turnId: "t2")),
+        ], streaming: []))
+        let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
+            if case .tools(_, let calls) = block { return calls }
+            return nil
+        }
+        #expect(groups.map { $0.map(\.output) } == [["failed"], ["second"]])
+        #expect(groups.map { $0.map(\.outcome) } == [[.failed], [.ok]])
+    }
+
     @Test func eventsBecomeNoticesWordedAsInTheTUI() {
         var script = Script()
         let model = script.model([

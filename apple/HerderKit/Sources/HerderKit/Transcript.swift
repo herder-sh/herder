@@ -55,10 +55,14 @@ enum Transcript {
         var blocks: [TranscriptBlock] = []
         var calls: [ToolCall] = []
         var callsTurn = ""
+        var completedGroups: [TurnId: [ItemId: Int]] = [:]
         var children: [ChildRef] = []
 
         func flushCalls() {
-            if let first = calls.first { blocks.append(.tools(id: "tools-\(callsTurn)/\(first.id)", calls: calls)) }
+            if let first = calls.first {
+                for call in calls { completedGroups[callsTurn, default: [:]][call.id] = blocks.count }
+                blocks.append(.tools(id: "tools-\(callsTurn)/\(first.id)", calls: calls))
+            }
             calls = []
         }
         func flushChildren() {
@@ -75,8 +79,14 @@ enum Transcript {
                 if calls.isEmpty { callsTurn = item.turnId }
                 calls.append(toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId))
             case .toolResult(let callId, let output, let isError):
-                if let index = calls.lastIndex(where: { $0.id == callId }) {
+                if callsTurn == item.turnId, let index = calls.lastIndex(where: { $0.id == callId }) {
                     calls[index].attach(output: output, isError: isError, streaming: streaming)
+                } else if let blockIndex = completedGroups[item.turnId]?[callId],
+                          case .tools(let id, var group) = blocks[blockIndex],
+                          let index = group.lastIndex(where: { $0.id == callId }) {
+                    // Approval notices and agent prose can separate a call from its result.
+                    group[index].attach(output: output, isError: isError, streaming: streaming)
+                    blocks[blockIndex] = .tools(id: id, calls: group)
                 }
             case .userMessage(let text, let attachments):
                 flushCalls(); flushChildren()
