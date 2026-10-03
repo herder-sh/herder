@@ -93,6 +93,16 @@ public final class Fleet {
         await send(.answerQuestion(sessionId: key.sessionId, questionId: request.requestId, answer: answer), about: key)
     }
 
+    /// The provider new sessions start on: the project's default account's, else Claude when the
+    /// machine has a Claude account, else the first there is.
+    func defaultProvider(on hostId: HostId, projectId: String?) -> Provider? {
+        guard let machine = machines.first(where: { $0.hostId == hostId }) else { return nil }
+        let preferred = machine.projects.first { $0.projectId == projectId }?.defaultAccount
+        if let account = machine.accounts.first(where: { $0.accountId == preferred }) { return account.provider }
+        if machine.accounts.contains(where: { $0.provider == "claude" }) { return "claude" }
+        return machine.accounts.first?.provider
+    }
+
     /// The account a new session runs on, so nobody has to pick one: the project's default
     /// account when it fits the provider, else the provider's account with the most room left.
     func defaultAccount(on hostId: HostId, projectId: String?, provider: Provider?) -> Account? {

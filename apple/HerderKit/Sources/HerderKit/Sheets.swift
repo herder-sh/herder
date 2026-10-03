@@ -356,15 +356,25 @@ struct MachineSettingsSheet: View {
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == machine.name)
                     }
                 }
-                Field(label: "Connection history", hint: "Since the app opened.") {
+                Field(label: "Connection", hint: "Since the app opened. Round-trip times need the client core to report them (proposed in P0.11).") {
+                    let log = fleet.connectionLog[hostId] ?? []
+                    let health = ConnectionHealth(log: log, now: .now)
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array((fleet.connectionLog[hostId] ?? []).reversed().enumerated()), id: \.offset) { _, change in
+                        HStack(spacing: 18) {
+                            stat("Up for", health.currentUp.map(Self.duration) ?? "—")
+                            stat("Reconnects", "\(health.reconnects)")
+                            stat("Disconnected", Self.duration(health.down))
+                        }
+                        .padding(.bottom, 4)
+                        ForEach(Array(log.enumerated().reversed()), id: \.offset) { index, change in
                             HStack(spacing: 10) {
                                 ConnectionMark(state: change.state)
                                 Text(change.at.formatted(date: .omitted, time: .standard))
                                     .monospacedDigit().foregroundStyle(Theme.tertiary)
                                 Text(change.state.label).foregroundStyle(Theme.text).lineLimit(2)
                                 Spacer()
+                                Text(Self.duration((index + 1 < log.count ? log[index + 1].at : .now).timeIntervalSince(change.at)))
+                                    .monospacedDigit().foregroundStyle(Theme.tertiary)
                             }
                             .font(.footnote)
                         }
@@ -438,6 +448,42 @@ struct MachineSettingsSheet: View {
         } catch {
             self.error = describe(error)
         }
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.headline.monospacedDigit()).foregroundStyle(Theme.text)
+            Text(label).font(.caption).foregroundStyle(Theme.tertiary)
+        }
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        Duration.seconds(max(0, seconds)).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2))
+    }
+}
+
+/// A machine's connection over its log: how long it has been up, how often it came back, and
+/// how long it was down.
+struct ConnectionHealth {
+    let currentUp: TimeInterval?
+    let reconnects: Int
+    let down: TimeInterval
+
+    init(log: [ConnectionChange], now: Date) {
+        var reconnects = 0
+        var down: TimeInterval = 0
+        var connectedOnce = false
+        for (index, change) in log.enumerated() {
+            let end = index + 1 < log.count ? log[index + 1].at : now
+            if case .disconnected = change.state { down += end.timeIntervalSince(change.at) }
+            if change.state == .connected {
+                if connectedOnce { reconnects += 1 }
+                connectedOnce = true
+            }
+        }
+        self.reconnects = reconnects
+        self.down = down
+        currentUp = log.last.flatMap { $0.state == .connected ? now.timeIntervalSince($0.at) : nil }
     }
 }
 

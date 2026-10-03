@@ -10,6 +10,9 @@ struct SessionView: View {
     var open: ((SessionKey) -> Void)?
     @State private var switching = false
     @State private var showsTerminal = false
+    @State private var showsPRs = false
+    @AppStorage("listHidden") private var listHidden = false
+    @AppStorage("inspectorShown") private var inspectorShown = false
     @State private var linking = false
     @State private var typedPR = ""
 
@@ -19,9 +22,6 @@ struct SessionView: View {
         let blocks = model.map(Transcript.blocks) ?? []
         VStack(spacing: 0) {
             header(model, summary)
-            if let model, !model.prs.isEmpty {
-                PRStrip(fleet: fleet, key: key, prs: model.prs)
-            }
             Rectangle().fill(Theme.stroke).frame(height: 1)
             if showsTerminal {
                 TerminalPane(fleet: fleet, key: key)
@@ -50,6 +50,15 @@ struct SessionView: View {
             }
         }
         .background(Theme.background)
+        .overlay(alignment: .trailing) { EmptyView() }
+        .safeAreaInset(edge: .trailing, spacing: 0) {
+            if inspectorShown {
+                HStack(spacing: 0) {
+                    Rectangle().fill(Theme.stroke).frame(width: 1)
+                    SessionInspector(fleet: fleet, key: key).frame(width: 300)
+                }
+            }
+        }
         .onChange(of: key) { showsTerminal = false }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
         .alert("Link a pull request", isPresented: $linking) {
@@ -88,16 +97,34 @@ struct SessionView: View {
                 }
             }
             Spacer()
-            if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
-                Picker("View", selection: $showsTerminal) {
-                    Image(systemName: "text.bubble").tag(false).help("Chat")
-                    Image(systemName: "terminal").tag(true).help("Terminal")
+            HStack(spacing: 6) {
+            if let model, !model.prs.isEmpty {
+                HeaderButton(symbol: "arrow.triangle.pull", title: model.prs.count == 1 ? "#\(model.prs[0].number)" : "\(model.prs.count) PRs",
+                             tint: model.prs.sorted { $0.state.rank < $1.state.rank }.first?.state.color ?? Theme.secondary) {
+                    showsPRs.toggle()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .keyboardShortcut("`", modifiers: .command)
+                .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
+                    PRStrip(fleet: fleet, key: key, prs: model.prs)
+                        .frame(width: 520)
+                        .background(Theme.surface)
+                        .preferredColorScheme(.dark)
+                }
             }
+            if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
+                HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal", title: showsTerminal ? "Chat" : "Terminal",
+                             selected: showsTerminal) { showsTerminal.toggle() }
+                    .keyboardShortcut("`", modifiers: .command)
+                    .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
+            }
+            HeaderButton(symbol: "info.circle", title: nil, selected: inspectorShown) { inspectorShown.toggle() }
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                .help("Events and statistics (⌥⌘I)")
+            #if os(macOS)
+            HeaderButton(symbol: listHidden ? "sidebar.squares.left" : "rectangle.expand.vertical",
+                         title: nil) { listHidden.toggle() }
+                .keyboardShortcut("\\", modifiers: .command)
+                .help(listHidden ? "Show the session list (⌘\\)" : "Give the session the whole width (⌘\\)")
+            #endif
             if let model, model.state != .archived {
                 Menu {
                     if model.turn != nil {
@@ -118,6 +145,7 @@ struct SessionView: View {
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
+            }
             }
         }
         .padding(.horizontal, 20)
@@ -309,6 +337,8 @@ struct DraftSessionView: View {
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
     @State private var error: String?
+    /// The first message while the session is being created.
+    @State private var starting: String?
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
     /// Machines the draft can run on: the connected ones with the project, or any for a path.
@@ -326,6 +356,20 @@ struct DraftSessionView: View {
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
+            if let starting {
+                VStack(alignment: .trailing, spacing: 10) {
+                    Text(starting)
+                        .foregroundStyle(Theme.onBubble)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Theme.bubble, in: .rect(cornerRadius: 18))
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(Theme.secondary)
+                        Text("Starting a session on \(machine?.name ?? "the machine")…").foregroundStyle(Theme.secondary)
+                    }
+                    .font(.footnote)
+                }
+                .frame(maxWidth: 760, alignment: .trailing)
+            } else {
             Text("What should we build in \(machine?.name ?? "")/\(place)?")
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(Theme.text)
@@ -354,6 +398,7 @@ struct DraftSessionView: View {
                 Label("From the default branch", systemImage: "arrow.triangle.branch")
             }
             .frame(maxWidth: 760)
+            }
             if let error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
             }
@@ -365,7 +410,7 @@ struct DraftSessionView: View {
         .background(Theme.background)
         .onAppear {
             hostId = draft.hostId
-            provider = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: nil)?.provider ?? ""
+            provider = fleet.defaultProvider(on: hostId, projectId: draft.projectId) ?? ""
             model = ModelCatalog.defaultModel(provider)
             mode = ModePreference.mode(for: draft)
         }
@@ -379,6 +424,8 @@ struct DraftSessionView: View {
             return
         }
         ModePreference.remember(mode, for: draft)
+        starting = prompt
+        defer { starting = nil }
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.repo, projectId: draft.projectId, accountId: account.accountId,
@@ -411,5 +458,30 @@ enum ModePreference {
         case .fullAccess: "full_access"
         }
         UserDefaults.standard.set(value, forKey: key(draft))
+    }
+}
+
+/// A header button: an icon with an optional label, filled while its mode is on.
+struct HeaderButton: View {
+    let symbol: String
+    let title: String?
+    var tint: Color = Theme.secondary
+    var selected = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                if let title { Text(title).lineLimit(1) }
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(selected ? Theme.onPrimary : tint)
+            .padding(.horizontal, title == nil ? 0 : 10)
+            .frame(minWidth: 30, minHeight: 30)
+            .background(selected ? Theme.primary : Theme.raised, in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }
