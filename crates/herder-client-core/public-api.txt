@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 2;
+pub const CLIENT_API_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -25,6 +25,7 @@ pub struct Machine {
     pub addresses: Vec<String>,
     pub fingerprint: String,
     pub connection: ConnectionState,
+    pub quality: ConnectionQuality,
     pub role: Option<Role>,
     pub sessions: Vec<SessionHead>,
     pub hosts: Vec<FleetHost>,
@@ -41,6 +42,17 @@ pub enum ConnectionState {
     Connecting,
     Connected,
     Disconnected { error: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionQuality {
+    pub connected_since: Option<Timestamp>,
+    pub reconnects: u32,
+    pub last_rtt_ms: Option<u32>,
+    pub average_rtt_ms: Option<u32>,
+    pub min_rtt_ms: Option<u32>,
+    pub max_rtt_ms: Option<u32>,
+    pub missed_pongs: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

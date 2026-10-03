@@ -668,6 +668,25 @@ fn the_machines_panel_shows_connections_and_fingerprints() {
 }
 
 #[test]
+fn the_machines_panel_shows_connection_quality() {
+    let mut app = fake::tree();
+    app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());
+    let mut machines = app.machines.clone();
+    machines[0].quality = herder_client_core::ConnectionQuality {
+        connected_since: Some(herder_protocol::Timestamp::from_second(200).unwrap()),
+        reconnects: 1,
+        last_rtt_ms: Some(12),
+        average_rtt_ms: Some(14),
+        min_rtt_ms: Some(9),
+        max_rtt_ms: Some(31),
+        missed_pongs: 2,
+    };
+    app.update(Msg::Machines(machines));
+    press(&mut app, KeyCode::Char('m'));
+    insta::assert_snapshot!(render(&mut app, 90, 20).backend());
+}
+
+#[test]
 fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();

@@ -6,12 +6,14 @@
 //!  fleet · 2 machines
 //!
 //! ▶ ● box     owner   10.0.0.4:7447              cpu  23%  mem  41%  3/6 turns
-//!     9f2c…41ab · 3 accounts · 5 sessions
+//!     9f2c…41ab · 3 accounts · 5 sessions · 12 ms
 //!   ✗ laptop  member  laptop.lan:7447
 //!     01de…77c0 · connection refused
 //!
 //!  box
 //!  state        connected
+//!  link         up 2m · 1 reconnect · 0 missed pongs
+//!  latency      12 ms · avg 14 ms · 9–31 ms
 //!  cpu          23% of 8 cores
 //! ```
 
@@ -69,7 +71,8 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
     }
     let selected = panel.selected(&app.machines);
     let width = usize::from(area.width.saturating_sub(3)).saturating_sub(LABEL);
-    let mut details = selected.map_or_else(Vec::new, |at| details(ui, &app.machines[at], width));
+    let mut details =
+        selected.map_or_else(Vec::new, |at| details(ui, app, &app.machines[at], width));
     match &panel.edit {
         Some(PanelEdit::Rename(name)) => {
             // The name being typed replaces the details' heading.
@@ -177,6 +180,9 @@ fn row<'a>(ui: Ui, app: &App, machine: &Machine, compact: bool) -> Row<'a> {
             ui.muted(),
         ));
         facts.push(Span::styled(count(sessions, "session"), ui.muted()));
+        if let Some(rtt) = machine.quality.last_rtt_ms {
+            facts.push(Span::styled(format!("{rtt} ms"), ui.muted()));
+        }
     } else {
         facts.push(Span::styled(state, style));
     }
@@ -204,11 +210,17 @@ fn short(ui: Ui, fingerprint: &str) -> String {
 }
 
 /// The selected machine in full: its name, then each fact, the values `width` wide.
-fn details(ui: Ui, machine: &Machine, width: usize) -> Vec<Line<'static>> {
+fn details(ui: Ui, app: &App, machine: &Machine, width: usize) -> Vec<Line<'static>> {
     let (_, style, state) = connection(ui, machine);
     let role = machine.role.map_or("not known until connected", role_name);
     let mut lines = vec![Line::styled(machine.name.clone(), ui.strong())];
     lines.extend(field(ui, "state", &state, style, width));
+    if let Some(link) = link(app, machine) {
+        lines.extend(field(ui, "link", &link, ui.text(), width));
+    }
+    if let Some(latency) = latency(machine) {
+        lines.extend(field(ui, "latency", &latency, ui.text(), width));
+    }
     lines.extend(field(ui, "role", role, ui.text(), width));
     let accounts = machine
         .accounts
@@ -242,6 +254,42 @@ fn details(ui: Ui, machine: &Machine, width: usize) -> Vec<Line<'static>> {
         width,
     ));
     lines
+}
+
+/// How long the connection has been up, and how often this client lost it or a pong; `None`
+/// before the first connection.
+fn link(app: &App, machine: &Machine) -> Option<String> {
+    let quality = &machine.quality;
+    if quality.connected_since.is_none() && quality.reconnects == 0 && quality.missed_pongs == 0 {
+        return None;
+    }
+    let plural = |n: u32, one: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {one}s"),
+    };
+    let mut parts = Vec::new();
+    if let Some(since) = quality.connected_since {
+        let up = app.now().as_second() - since.as_second();
+        parts.push(format!("up {}", super::inbox::ago(up)));
+    }
+    parts.push(plural(quality.reconnects, "reconnect"));
+    parts.push(plural(quality.missed_pongs, "missed pong"));
+    Some(parts.join(" · "))
+}
+
+/// The latest round trip, and the mean and range of the recent ones; `None` before the first.
+fn latency(machine: &Machine) -> Option<String> {
+    let quality = &machine.quality;
+    let last = quality.last_rtt_ms?;
+    let mut latency = format!("{last} ms");
+    if let (Some(average), Some(min), Some(max)) = (
+        quality.average_rtt_ms,
+        quality.min_rtt_ms,
+        quality.max_rtt_ms,
+    ) {
+        latency.push_str(&format!(" · avg {average} ms · {min}–{max} ms"));
+    }
+    Some(latency)
 }
 
 /// A label and its value, the value wrapped `width` wide under itself; a word longer than a

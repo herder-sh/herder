@@ -61,6 +61,12 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     assert_eq!(machine.name, "fake-host");
     let host = machine.host_id;
     block_on(client.synced(host.clone())).unwrap();
+    // The connection's first ping goes out as soon as it is up; its round trip comes through.
+    let changes = client.changes();
+    while client.machines()[0].quality.last_rtt_ms.is_none() {
+        assert!(block_on(changes.next()));
+    }
+    assert!(client.machines()[0].quality.connected_since.is_some());
 
     let created = block_on(client.send(
         host.clone(),

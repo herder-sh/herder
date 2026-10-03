@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionState, Machine, NewAccount, PairingUri, SessionUpdate, TerminalEvent,
+    ConnectionQuality, ConnectionState, Machine, NewAccount, PairingUri, SessionUpdate,
+    TerminalEvent,
 };
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
@@ -78,6 +79,7 @@ pub struct Machine {
     pub addresses: Vec<String>,
     pub fingerprint: String,
     pub connection: ConnectionState,
+    pub quality: ConnectionQuality,
     pub role: Option<Role>,
     pub sessions: Vec<SessionHead>,
     pub hosts: Vec<FleetHost>,
@@ -94,6 +96,17 @@ pub enum ConnectionState {
     Connecting,
     Connected,
     Disconnected { error: String },
+}
+
+#[uniffi::remote(Record)]
+pub struct ConnectionQuality {
+    pub connected_since: Option<Timestamp>,
+    pub reconnects: u32,
+    pub last_rtt_ms: Option<u32>,
+    pub average_rtt_ms: Option<u32>,
+    pub min_rtt_ms: Option<u32>,
+    pub max_rtt_ms: Option<u32>,
+    pub missed_pongs: u32,
 }
 
 #[uniffi::remote(Record)]

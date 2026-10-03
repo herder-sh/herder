@@ -194,7 +194,7 @@ fn wrap(out: &mut Vec<Line<'static>>, text: &str, style: Style, width: usize) {
 }
 
 /// How long ago, `seconds` back, in its largest unit or two: `12s`, `2m`, `1h 5m`.
-fn ago(seconds: i64) -> String {
+pub(super) fn ago(seconds: i64) -> String {
     if seconds < 60 {
         format!("{}s", seconds.max(0))
     } else {

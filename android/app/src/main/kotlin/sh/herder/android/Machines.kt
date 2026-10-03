@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import sh.herder.ffi.CiStatus
 import sh.herder.ffi.Client
+import sh.herder.ffi.ConnectionQuality
 import sh.herder.ffi.ConnectionState
 import sh.herder.ffi.Event
 import sh.herder.ffi.EventBody
@@ -121,6 +122,15 @@ internal fun machine(
     addresses = emptyList(),
     fingerprint = "",
     connection = connection,
+    quality = ConnectionQuality(
+        connectedSince = null,
+        reconnects = 0u,
+        lastRttMs = null,
+        averageRttMs = null,
+        minRttMs = null,
+        maxRttMs = null,
+        missedPongs = 0u,
+    ),
     role = null,
     sessions = sessions,
     hosts = emptyList(),
