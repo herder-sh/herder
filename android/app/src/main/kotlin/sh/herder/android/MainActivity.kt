@@ -18,6 +18,8 @@ import sh.herder.android.ui.HerderTheme
 import sh.herder.android.ui.MachinesScreen
 import sh.herder.android.ui.SessionScreen
 import sh.herder.ffi.Client
+import sh.herder.ffi.CommandBody
+import sh.herder.ffi.CommandResult
 import sh.herder.ffi.HerderException
 
 class MainActivity : ComponentActivity() {
@@ -108,5 +110,15 @@ private fun LiveSession(
         onOpen = onOpen,
         onBack = onBack,
         compact = compact,
+        fetchAttachment = { id ->
+            try {
+                when (val result = client.send(key.hostId, CommandBody.GetAttachment(key.sessionId, id))) {
+                    is CommandResult.Attachment -> result.data
+                    else -> null
+                }
+            } catch (_: HerderException) {
+                null
+            }
+        },
     )
 }
