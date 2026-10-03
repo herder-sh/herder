@@ -228,6 +228,7 @@ pub async fn serve(
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
             recovery,
+            vault: false,
         },
         shutdown.clone(),
     ));
