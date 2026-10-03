@@ -2,6 +2,5 @@
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
 {"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Building."}}}}
-{"sleep_ms": 200}
 {"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "fatal", "message": "claude was killed by a signal"}}}
 {"emit": {"type": "exited", "error": {"class": "fatal", "message": "claude was killed by a signal"}}}

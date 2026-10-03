@@ -1,8 +1,7 @@
-# Two prompts: the second arrives while the first turn streams, and runs after it.
+# Two prompts: the second arrives while the first turn runs, and runs after it.
 {"emit": {"type": "model_changed", "model": "fake-model-1"}}
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
-{"sleep_ms": 100}
 {"emit": {"type": "item_started", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
 {"emit": {"type": "item_delta", "item_id": "item-1", "text": "One."}}
 {"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "One."}}}}
