@@ -271,6 +271,18 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
+    /// Update an existing account's label and config directory; owners only. The id and
+    /// provider stay fixed. Directory changes require all sessions on this daemon archived.
+    /// Omit config_dir to use the provider's default login. Answered with applied and accounts.
+    SetAccountSettings {
+        /// Account to configure.
+        account_id: AccountId,
+        /// Display label (non-empty).
+        label: String,
+        /// Config directory on the host; never credentials.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_dir: Option<String>,
+    },
     /// List a folder on the host, to pick a repository; owners only. Answered with
     /// `directory`. It changes nothing, so a resend is answered afresh.
     ListDirectory {

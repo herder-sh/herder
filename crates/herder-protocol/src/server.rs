@@ -287,6 +287,9 @@ pub struct Account {
     pub provider: Provider,
     /// Display label chosen by the owner.
     pub label: String,
+    /// Config directory on the host; absent for the provider default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_dir: Option<String>,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
 }

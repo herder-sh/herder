@@ -806,6 +806,36 @@
           ]
         },
         {
+          "description": "Update an existing account's label and config directory; owners only. The id and\nprovider stay fixed. Directory changes require all sessions on this daemon archived.\nOmit config_dir to use the provider's default login. Answered with applied and accounts.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Account to configure.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "config_dir": {
+              "description": "Config directory on the host; never credentials.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "description": "Display label (non-empty).",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_account_settings"
+            }
+          },
+          "required": [
+            "type",
+            "account_id",
+            "label"
+          ]
+        },
+        {
           "description": "List a folder on the host, to pick a repository; owners only. Answered with\n`directory`. It changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {

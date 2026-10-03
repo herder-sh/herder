@@ -191,6 +191,35 @@ impl Logins {
         }
     }
 
+    pub(crate) async fn set_settings(
+        &self,
+        account_id: &AccountId,
+        label: &str,
+        config_dir: Option<&str>,
+    ) -> Result<(), ErrorInfo> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                "account settings are unavailable".into(),
+            )
+        })?;
+        inner
+            .sessions
+            .configure_account(account_id, |previous, may_change_directory| {
+                let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
+                config::set_account_settings(
+                    &inner.config_file,
+                    account_id,
+                    previous,
+                    label,
+                    config_dir,
+                    may_change_directory,
+                )
+                .map_err(|err| error(ErrorCode::BadRequest, format!("{err:#}")))
+            })
+            .await
+    }
+
     /// The login of `account`, in its config dir, which is created empty if it does not exist.
     /// `logging_in` are the accounts with a login running; the new id must be neither one of
     /// them nor an account already.
@@ -421,6 +450,7 @@ mod tests {
         home: tempfile::TempDir,
         logins: Logins,
         sessions: SessionManager,
+        hub: Arc<Hub>,
     }
 
     /// Status checks standing in for the providers' own: codex's answers with its exit status,
@@ -476,6 +506,7 @@ mod tests {
             home,
             logins,
             sessions,
+            hub,
         }
     }
 
@@ -705,5 +736,108 @@ mod tests {
         );
         assert!(line.contains("account codex-2 was not added"), "{line}");
         assert_eq!(f.sessions.accounts().len(), 1);
+    }
+    #[tokio::test]
+    async fn account_settings_refresh_runtime_and_reject_unknown_accounts() {
+        let f = fixture().await;
+        let outbox = Arc::new(crate::hub::Outbox::default());
+        f.hub.connect(&outbox, herder_protocol::Role::Owner);
+        let path = f.home.path().join("daemon.toml");
+        std::fs::write(
+            &path,
+            "[[accounts]]\nid = 'codex'\nprovider = 'codex'\nlabel = 'Codex'\n",
+        )
+        .unwrap();
+        f.logins
+            .set_settings(
+                &AccountId::new("codex"),
+                "Personal",
+                Some("/tmp/herder-personal"),
+            )
+            .await
+            .unwrap();
+        let account = f.sessions.accounts().remove(0);
+        assert_eq!(account.label, "Personal");
+        let Some(herder_protocol::ServerMessage::Accounts { accounts, .. }) = outbox.pop() else {
+            panic!("account metadata was not sent to the connected client");
+        };
+        assert_eq!(accounts, f.sessions.accounts());
+        assert_eq!(account.config_dir.as_deref(), Some("/tmp/herder-personal"));
+        assert_eq!(
+            f.logins
+                .set_settings(&AccountId::new("missing"), "Missing", None)
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+        assert_eq!(f.sessions.accounts().len(), 1);
+    }
+    #[tokio::test]
+    async fn live_sessions_block_directory_changes_but_not_labels() {
+        use herder_protocol::{EventBody, PermissionMode, SessionId, SessionStatus, Timestamp};
+        use herder_store::NewEvent;
+        let f = fixture().await;
+        let path = f.home.path().join("daemon.toml");
+        std::fs::write(
+            &path,
+            "[[accounts]]\nid = 'codex'\nprovider = 'codex'\nlabel = 'Codex'\n",
+        )
+        .unwrap();
+        let mut store = Store::open(f.home.path().join("herder.db")).unwrap();
+        let id = SessionId::new("live");
+        store
+            .append(NewEvent {
+                session_id: id.clone(),
+                at: Timestamp::now(),
+                by: None,
+                body: EventBody::SessionCreated {
+                    repo: "/test".into(),
+                    worktree: "/test-wt".into(),
+                    branch: "test".into(),
+                    provider: Provider::Codex,
+                    account_id: AccountId::new("codex"),
+                    model: "fake".into(),
+                    permission_mode: PermissionMode::Ask,
+                    parent: None,
+                    task: None,
+                    max_children: None,
+                    failover_pin: None,
+                },
+            })
+            .unwrap();
+        let account = AccountId::new("codex");
+        f.logins
+            .set_settings(&account, "Renamed", None)
+            .await
+            .unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            f.logins
+                .set_settings(&account, "Renamed", Some("/tmp/new-login"))
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(f.sessions.accounts()[0].config_dir, None);
+        store
+            .append(NewEvent {
+                session_id: id,
+                at: Timestamp::now(),
+                by: None,
+                body: EventBody::SessionStatusChanged {
+                    status: SessionStatus::Archived,
+                    retry_at: None,
+                },
+            })
+            .unwrap();
+        f.logins
+            .set_settings(&account, "Renamed", Some("/tmp/new-login"))
+            .await
+            .unwrap();
+        assert_eq!(
+            f.sessions.accounts()[0].config_dir.as_deref(),
+            Some("/tmp/new-login")
+        );
     }
 }

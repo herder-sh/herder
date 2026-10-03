@@ -646,6 +646,9 @@ fn append_account_with_env(
     account: &AccountConfig,
     env: impl Fn(&str) -> Option<OsString>,
 ) -> Result<()> {
+    let _write = CONFIG_WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let quote = |text: &str| toml::Value::String(text.to_owned()).to_string();
     let mut entry = format!(
         "[[accounts]]\nid = {}\nprovider = {}\nlabel = {}\n",
@@ -683,6 +686,59 @@ fn append_account_with_env(
     );
     write_atomically(path, text.as_bytes())
         .with_context(|| format!("writing config file {}", path.display()))
+}
+
+/// Update an account without reading its login files, validating the complete account list
+/// before replacing the daemon config. The caller serializes this with other account writes.
+pub(crate) fn set_account_settings(
+    path: &Path,
+    account_id: &AccountId,
+    previous: &AccountConfig,
+    label: &str,
+    config_dir: Option<&str>,
+    may_change_directory: bool,
+) -> Result<AccountConfig> {
+    let _write = CONFIG_WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    ensure!(!label.trim().is_empty(), "account label must not be empty");
+    let text = std::fs::read_to_string(path)?;
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    let table = doc
+        .get_mut("accounts")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|entries| {
+            entries.iter_mut().find(|entry| {
+                entry.get("id").and_then(toml_edit::Item::as_str) == Some(account_id.as_str())
+            })
+        })
+        .context("account no longer exists in the daemon config")?;
+    ensure!(
+        table.get("provider").and_then(toml_edit::Item::as_str) == Some(previous.provider.as_str()),
+        "account provider changed on disk; restart the daemon first"
+    );
+    table.insert("label", toml_edit::value(label.trim()));
+    match config_dir {
+        Some(dir) => {
+            table.insert("config_dir", toml_edit::value(dir));
+        }
+        None => {
+            table.remove("config_dir");
+        }
+    }
+    let text = doc.to_string();
+    let file: ConfigFile = toml::from_str(&text)?;
+    let accounts = resolve_accounts(file.accounts, &|key| std::env::var_os(key))?;
+    let account = accounts
+        .get(account_id)
+        .context("account disappeared from config")?
+        .clone();
+    ensure!(
+        may_change_directory || account.config_dir == previous.config_dir,
+        "archive all sessions on this machine before changing a login directory"
+    );
+    write_atomically(path, text.as_bytes())?;
+    Ok(account)
 }
 
 /// The `[projects]` table and `[[project]]` entries of the config file at `path`, resolved as
@@ -915,6 +971,9 @@ fn edit_config(
     path: &Path,
     edit: impl FnOnce(&mut toml_edit::DocumentMut, &dyn Fn(&str) -> Option<OsString>) -> Result<()>,
 ) -> Result<ProjectsConfig> {
+    let _write = CONFIG_WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let env = |key: &str| std::env::var_os(key);
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -1030,6 +1089,9 @@ fn resolve_accounts(
     }
     Ok(accounts)
 }
+
+// All daemon config mutations share this lock, including project edits and login completion.
+static CONFIG_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// What an account id may contain.
 pub(crate) const ID_RULE: &str = "must be letters, digits, '-', '_' or '.'";
@@ -1990,6 +2052,56 @@ mod tests {
             std::fs::read_dir(home.path()).unwrap().count(),
             1,
             "no temporary file is left behind"
+        );
+    }
+    #[test]
+    fn account_settings_preserve_config_and_reject_unsafe_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.toml");
+        let original = "# keep this comment\n[[accounts]]\nid = 'work'\nprovider = 'codex'\nlabel = 'Old'\n\n[[accounts]]\nid = 'other'\nprovider = 'codex'\nconfig_dir = '/tmp/herder-other'\n";
+        std::fs::write(&path, original).unwrap();
+        let id = AccountId::new("work");
+        let previous = AccountConfig {
+            provider: Provider::Codex,
+            label: "Old".into(),
+            config_dir: None,
+        };
+        let renamed = set_account_settings(&path, &id, &previous, " Work ", None, false).unwrap();
+        assert_eq!(renamed.label, "Work");
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# keep this comment")
+        );
+        let saved = std::fs::read_to_string(&path).unwrap();
+        for (id, label, directory, allowed) in [
+            ("work", "", None, true),
+            ("missing", "Work", None, true),
+            ("work", "Work", Some("relative"), true),
+            ("work", "Work", Some("/tmp/herder-other"), true),
+            ("work", "Work", Some("/tmp/herder-new"), false),
+        ] {
+            assert!(
+                set_account_settings(
+                    &path,
+                    &AccountId::new(id),
+                    &renamed,
+                    label,
+                    directory,
+                    allowed
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        }
+        let updated =
+            set_account_settings(&path, &id, &renamed, "Work", Some("/tmp/herder-new"), true)
+                .unwrap();
+        assert_eq!(updated.config_dir, Some(PathBuf::from("/tmp/herder-new")));
+        let loaded: ConfigFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            resolve_accounts(loaded.accounts, &|key| std::env::var_os(key)).unwrap()[&id],
+            updated
         );
     }
 }
