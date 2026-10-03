@@ -1436,3 +1436,54 @@ fn an_unchanged_frame_writes_nothing() {
     assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 100, 30));
     assert!(!super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap());
 }
+
+pub(super) fn limit_reset() -> App {
+    let mut app = fake::chat();
+    let key = app.open.clone().unwrap();
+    let turn_id = app.open_session().unwrap().turn.clone().unwrap();
+    let at = "2026-10-03T21:20:00Z".parse().unwrap();
+    let mut machines = app.machines.clone();
+    machines[0].accounts[0].usage[0].used_percent = 100.0;
+    machines[0].accounts[0].usage[0].resets_at = Some(at);
+    app.update(Msg::Machines(machines));
+    fake::feed(
+        &mut app,
+        key.host_id.as_str(),
+        key.session_id.as_str(),
+        fake::update(
+            key.session_id.as_str(),
+            100,
+            vec![
+                herder_protocol::EventBody::TurnFailed {
+                    turn_id,
+                    error: herder_protocol::TurnError {
+                        class: herder_protocol::ErrorClass::LimitReached,
+                        message: "5-hour limit reached".into(),
+                    },
+                },
+                herder_protocol::EventBody::SessionStatusChanged {
+                    status: herder_protocol::SessionStatus::WaitingForCapacity,
+                    retry_at: Some(at),
+                },
+            ],
+            Vec::new(),
+        ),
+    );
+    app
+}
+
+#[test]
+fn usage_reset_wait_shows_its_deadline() {
+    let app = limit_reset();
+    let lines = super::resources::lines(&app, true);
+    let shown = lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        shown.contains("waiting for limit reset") && shown.contains("21:20 UTC"),
+        "{shown}"
+    );
+    assert!(!shown.contains("waiting for capacity"), "{shown}");
+}

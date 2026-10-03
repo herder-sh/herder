@@ -207,11 +207,28 @@ pub(super) fn lines(app: &App, compact: bool) -> Vec<Line<'static>> {
     let usage = machine.and_then(|m| m.session_usage.get(&key.session_id));
     let mut lines = Vec::new();
     if session.status == SessionStatus::WaitingForCapacity {
-        lines.push(waiting(
-            ui,
-            machine.and_then(|m| m.resources.as_ref()),
-            compact,
-        ));
+        if let Some(at) = session.retry_at {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", ui.glyphs.state(State::Waiting)),
+                    Style::new().fg(ui.theme.state_waiting),
+                ),
+                Span::styled(
+                    format!(
+                        "waiting for limit reset{}{} UTC",
+                        ui.glyphs.separator,
+                        at.strftime("%H:%M")
+                    ),
+                    ui.text(),
+                ),
+            ]));
+        } else {
+            lines.push(waiting(
+                ui,
+                machine.and_then(|m| m.resources.as_ref()),
+                compact,
+            ));
+        }
     }
     if let Some(usage) = usage {
         usage_lines(ui, &mut lines, session, usage, compact);

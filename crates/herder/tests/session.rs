@@ -28,6 +28,10 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Starts a daemon on `dir` with one fake account, `work`, and returns a pairing link for it.
 async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
+    daemon_with_switches(dir, shutdown, false).await
+}
+
+async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching: bool) -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session.jsonl");
     std::fs::create_dir_all(dir.join("tls")).unwrap();
     let tls = Tls::load_or_create(&dir.join("tls"), "test-host").unwrap();
@@ -35,15 +39,28 @@ async fn daemon(dir: &Path, shutdown: CancellationToken) -> String {
     let hub = Arc::new(Hub::default());
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
-    adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
-    let accounts = Accounts::from([(
+    adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script.clone())));
+    let mut accounts = Accounts::from([(
         AccountId::new("work"),
         AccountConfig {
-            provider: fake,
+            provider: fake.clone(),
             label: "Work".into(),
             config_dir: Some(dir.join("account")),
         },
     )]);
+    if switching {
+        adapters.register(Provider::Codex, Arc::new(FakeAdapter::new(script)));
+        for (id, provider) in [("backup", fake.clone()), ("codex", Provider::Codex)] {
+            accounts.insert(
+                AccountId::new(id),
+                AccountConfig {
+                    provider,
+                    label: id.into(),
+                    config_dir: Some(dir.join(id)),
+                },
+            );
+        }
+    }
     let turns = AtomicU64::new(0);
     let setup = Setup {
         store: Store::open(dir.join("herder.db")).unwrap(),
@@ -209,5 +226,70 @@ async fn a_script_runs_a_session_from_new_to_archive() {
     let usage = herder(&home, &["session", "wait"], "").await;
     assert_eq!(usage.status.code(), Some(64));
 
+    shutdown.cancel();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_switch_uses_account_provider_and_model_commands() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let shutdown = CancellationToken::new();
+    let link = daemon_with_switches(&tmp.path().join("daemon"), shutdown.clone(), true).await;
+    let repo = repo(&tmp.path().join("repo"));
+    assert!(
+        herder(&home, &["connect", &link], "")
+            .await
+            .status
+            .success()
+    );
+    let created = session(&home, &["new", "--repo", &repo, "--account", "Work"], "", 0).await;
+    let id = created["session_id"].as_str().unwrap();
+    session(
+        &home,
+        &["switch", id, "--account", "backup", "--model", "opus"],
+        "",
+        0,
+    )
+    .await;
+    let view = session(&home, &["status", id], "", 0).await;
+    assert_eq!(view["account_id"], "backup");
+    assert_eq!(view["model"], "opus");
+    session(
+        &home,
+        &["switch", id, "--provider", "codex", "--model", "gpt-test"],
+        "",
+        0,
+    )
+    .await;
+    let view = session(&home, &["status", id], "", 0).await;
+    assert_eq!(view["account_id"], "codex");
+    assert_eq!(view["provider"], "codex");
+    assert_eq!(view["model"], "gpt-test");
+    session(&home, &["switch", id, "--model", "next-model"], "", 0).await;
+    assert_eq!(
+        session(&home, &["status", id], "", 0).await["model"],
+        "next-model"
+    );
+    let missing = herder(&home, &["session", "switch", id], "").await;
+    assert_eq!(missing.status.code(), Some(64));
+    let mismatch = herder(
+        &home,
+        &[
+            "session",
+            "switch",
+            id,
+            "--account",
+            "backup",
+            "--provider",
+            "codex",
+        ],
+        "",
+    )
+    .await;
+    assert_eq!(mismatch.status.code(), Some(1));
+    assert_eq!(
+        session(&home, &["status", id], "", 0).await["account_id"],
+        "codex"
+    );
     shutdown.cancel();
 }

@@ -387,6 +387,18 @@ impl Inner {
         self.limits.hit(account_id, windows, Timestamp::now());
     }
 
+    /// Latest future reset among exhausted windows; unknown reset times need user action.
+    pub(super) fn limit_reset(&self, account_id: &AccountId) -> Option<Timestamp> {
+        self.usage
+            .all()
+            .get(account_id)?
+            .iter()
+            .filter(|window| window.used_percent >= 100.0)
+            .filter_map(|window| window.resets_at)
+            .filter(|at| *at > Timestamp::now())
+            .max()
+    }
+
     /// The available account of `provider` with the most room left, other than `except`.
     pub(super) fn available_account(
         &self,

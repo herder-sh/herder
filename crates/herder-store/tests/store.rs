@@ -167,7 +167,7 @@ fn fold(events: &[Event]) -> Projections {
         s.last_seq = event.seq;
         s.updated_at = event.at;
         match &event.body {
-            EventBody::SessionStatusChanged { status } => s.status = *status,
+            EventBody::SessionStatusChanged { status, .. } => s.status = *status,
             EventBody::ModelSwitched { model } => s.model = model.clone(),
             EventBody::AccountSwitched { account_id } => s.account_id = account_id.clone(),
             EventBody::ProviderSwitched {
@@ -241,6 +241,7 @@ fn append_assigns_seqs_and_updates_projections() {
 
     let bodies = [
         EventBody::SessionStatusChanged {
+            retry_at: None,
             status: SessionStatus::Running,
         },
         EventBody::ModelSwitched {
@@ -429,6 +430,7 @@ fn branches_are_per_session_and_outlive_a_status_change() {
         .append(new_event(&a, 2, checked_out("fix/login")))
         .unwrap();
     let archived = EventBody::SessionStatusChanged {
+        retry_at: None,
         status: SessionStatus::Archived,
     };
     store.append(new_event(&a, 3, archived)).unwrap();
@@ -474,6 +476,7 @@ fn append_rejects_invalid_events_without_writing() {
         Err(Error::Encode(_))
     ));
     let unknown_status = EventBody::SessionStatusChanged {
+        retry_at: None,
         status: SessionStatus::Unknown,
     };
     assert!(matches!(
@@ -591,11 +594,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     store
         .append(new_event(
             &s,
@@ -613,11 +616,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN retry_at; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -629,11 +632,12 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
+             ALTER TABLE queued_prompts DROP COLUMN retry_at;
              ALTER TABLE queued_prompts DROP COLUMN attachments; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -664,7 +668,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -690,7 +694,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 8);
+    assert_eq!(version(&path), 9);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -711,13 +715,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 9)
+        .pragma_update(None, "user_version", 10)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 9,
-            supported: 8
+            found: 10,
+            supported: 9
         })
     ));
 }
@@ -731,7 +735,10 @@ fn body_strategy() -> impl Strategy<Value = EventBody> {
             Just(SessionStatus::Running),
             Just(SessionStatus::NeedsYou),
         ]
-        .prop_map(|status| EventBody::SessionStatusChanged { status }),
+        .prop_map(|status| EventBody::SessionStatusChanged {
+            status,
+            retry_at: None
+        }),
         (1u64..4).prop_map(|n| EventBody::PrLinked {
             pr: pr(n, PrState::Open)
         }),
@@ -953,6 +960,7 @@ fn queued_prompts_survive_a_reopen_in_order() {
         text: text.into(),
         attachments: Vec::new(),
         retry,
+        retry_at: retry.then(|| "2026-10-03T21:20:00Z".parse().unwrap()),
     };
     let with_image = QueuedPrompt {
         attachments: vec![Attachment {
@@ -1007,4 +1015,27 @@ fn native_sessions_survive_a_reopen_and_the_latest_wins() {
         Some(native("home", "b"))
     );
     assert_eq!(store.native_session(&s2).unwrap(), None);
+}
+
+#[test]
+fn v8_queue_migration_preserves_prompts_with_no_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    drop(Store::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE queued_prompts DROP COLUMN retry_at;
+         INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
+         VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
+         PRAGMA user_version = 8;",
+        )
+        .unwrap();
+    drop(connection);
+    let store = Store::open(&path).unwrap();
+    let prompts = store.queued_prompts(&SessionId::new("s1")).unwrap();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].text, "continue");
+    assert!(prompts[0].retry);
+    assert_eq!(prompts[0].retry_at, None);
 }

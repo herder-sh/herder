@@ -171,7 +171,7 @@ impl View {
             .iter()
             .rev()
             .find_map(|event| match &event.body {
-                EventBody::SessionStatusChanged { status } => Some(*status),
+                EventBody::SessionStatusChanged { status, .. } => Some(*status),
                 _ => None,
             })
     }
@@ -267,7 +267,7 @@ fn describe(events: &[Event], alice: &UserId) -> Vec<String> {
         .map(|event| {
             let what = match &event.body {
                 EventBody::SessionCreated { .. } => "session_created".to_owned(),
-                EventBody::SessionStatusChanged { status } => format!("status {status:?}"),
+                EventBody::SessionStatusChanged { status, .. } => format!("status {status:?}"),
                 EventBody::TurnStarted { .. } => "turn_started".to_owned(),
                 EventBody::TurnCompleted { .. } => "turn_completed".to_owned(),
                 EventBody::ItemAdded { item } => match &item.body {

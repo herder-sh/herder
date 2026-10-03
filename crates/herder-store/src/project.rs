@@ -44,7 +44,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             add_branch(tx, id, branch, event.seq)?;
         }
         EventBody::BranchCheckedOut { branch } => add_branch(tx, id, branch, event.seq)?,
-        EventBody::SessionStatusChanged { status } => {
+        EventBody::SessionStatusChanged { status, .. } => {
             tx.prepare_cached("UPDATE sessions SET status = ?2 WHERE session_id = ?1")?
                 .execute(params![id, tag(status)?])?;
         }

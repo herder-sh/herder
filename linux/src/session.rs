@@ -262,7 +262,7 @@ impl Session {
                 self.task.clone_from(task);
                 None
             }
-            EventBody::SessionStatusChanged { status } => {
+            EventBody::SessionStatusChanged { status, .. } => {
                 self.status = *status;
                 None
             }

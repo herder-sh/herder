@@ -426,7 +426,7 @@ fn clones(root: &Path, hosts: &[&Path]) {
 
 fn status(journal: &[Event]) -> Option<SessionStatus> {
     journal.iter().rev().find_map(|event| match event.body {
-        EventBody::SessionStatusChanged { status } => Some(status),
+        EventBody::SessionStatusChanged { status, .. } => Some(status),
         _ => None,
     })
 }
@@ -482,6 +482,7 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
         matches!(
             body,
             EventBody::SessionStatusChanged {
+                retry_at: None,
                 status: SessionStatus::Idle
             }
         )
@@ -682,6 +683,7 @@ async fn a_session_of_a_dead_host_goes_on_on_another_and_stays_read_only_on_the_
             matches!(
                 body,
                 EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::Moved
                 }
             )

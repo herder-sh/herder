@@ -124,8 +124,10 @@ pub struct QueuedPrompt {
     pub text: String,
     /// Images it carries, kept by the daemon apart from the store.
     pub attachments: Vec<Attachment>,
-    /// Whether it retries a turn that hit a limit, on the account failover moved to.
+    /// Whether another immediate failover retry is disabled for this prompt.
     pub retry: bool,
+    /// Earliest time to retry after a usage limit; ordinary prompts have no deadline.
+    pub retry_at: Option<Timestamp>,
 }
 
 /// The vendor CLI's own session behind a herder session, as its adapter reported it.
@@ -410,7 +412,7 @@ impl Store {
     /// The prompts queued in `session`, oldest first.
     pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT by, text, attachments, retry FROM queued_prompts WHERE session_id = ?1
+            "SELECT by, text, attachments, retry, retry_at FROM queued_prompts WHERE session_id = ?1
              ORDER BY position",
         )?;
         let rows = stmt.query_map([session.as_str()], |row| {
@@ -422,6 +424,7 @@ impl Store {
                     rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(err))
                 })?,
                 retry: row.get(3)?,
+                retry_at: row.get(4)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -439,8 +442,8 @@ impl Store {
         tx.prepare_cached("DELETE FROM queued_prompts WHERE session_id = ?1")?
             .execute([session.as_str()])?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry, retry_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?;
         for (position, prompt) in prompts.iter().enumerate() {
             insert.execute(params![
@@ -450,6 +453,7 @@ impl Store {
                 prompt.text,
                 serde_json::to_string(&prompt.attachments)?,
                 prompt.retry,
+                prompt.retry_at,
             ])?;
         }
         drop(insert);

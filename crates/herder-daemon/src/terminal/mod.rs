@@ -427,6 +427,7 @@ impl EventSink for KillOnArchive {
     fn event(&self, event: &Event) {
         if let EventBody::SessionStatusChanged {
             status: SessionStatus::Archived,
+            ..
         } = event.body
         {
             self.terminals.close_session(&event.session_id);

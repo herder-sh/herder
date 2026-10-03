@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -118,6 +118,9 @@ const V8: &str = "
 ALTER TABLE sessions ADD COLUMN title TEXT;
 ALTER TABLE sessions ADD COLUMN title_source TEXT;
 ";
+
+/// A queued retry waits until the account's reported usage reset, across daemon restarts.
+const V9: &str = "ALTER TABLE queued_prompts ADD COLUMN retry_at TEXT;";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {

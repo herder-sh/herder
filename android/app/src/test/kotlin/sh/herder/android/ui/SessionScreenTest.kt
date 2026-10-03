@@ -109,7 +109,7 @@ class SessionScreenTest {
         session = session.applied(
             updateOf(
                 100, 60,
-                EventBody.SessionStatusChanged(SessionStatus.RUNNING),
+                EventBody.SessionStatusChanged(SessionStatus.RUNNING, null),
                 EventBody.TurnStarted("t2"),
                 added("j1", "t2", ItemBody.UserMessage("Remove the old build output too.", emptyList())),
                 streaming = listOf(Item("j2", "t2", ItemBody.AssistantMessage("Removing it"))),
@@ -141,7 +141,7 @@ class SessionScreenTest {
                 toolResult("j4", "t2", "j3", "removed 1 directory"),
                 added("j5", "t2", ItemBody.AssistantMessage("Removed `target/`.")),
                 EventBody.TurnCompleted("t2"),
-                EventBody.SessionStatusChanged(SessionStatus.IDLE),
+                EventBody.SessionStatusChanged(SessionStatus.IDLE, null),
             ),
         )
         compose.onNodeWithText("△ allowed Bash · by you").assertIsDisplayed()

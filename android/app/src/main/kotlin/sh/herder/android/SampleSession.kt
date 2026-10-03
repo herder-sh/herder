@@ -77,7 +77,7 @@ internal fun sampleCreated(): EventBody = created("/srv/app", "herder/api").let 
 internal fun firstTurn(): SessionUpdate = updateOf(
     1, 0,
     sampleCreated(),
-    EventBody.SessionStatusChanged(SessionStatus.RUNNING),
+    EventBody.SessionStatusChanged(SessionStatus.RUNNING, null),
     EventBody.TurnStarted("t1"),
     added("i1", "t1", ItemBody.UserMessage("Add a health endpoint and test it.", emptyList())),
     added("i2", "t1", ItemBody.Reasoning("Where the router lives\nThe routes are built in src/api.rs.")),
@@ -103,7 +103,7 @@ internal fun firstTurn(): SessionUpdate = updateOf(
         ),
     ),
     EventBody.TurnCompleted("t1"),
-    EventBody.SessionStatusChanged(SessionStatus.IDLE),
+    EventBody.SessionStatusChanged(SessionStatus.IDLE, null),
 )
 
 /** The sample session with its second turn at [stage]. */
@@ -111,7 +111,7 @@ internal fun sampleSession(stage: Stage): Session {
     var session = Session().applied(firstTurn())
     val second = updateOf(
         100, 60,
-        EventBody.SessionStatusChanged(SessionStatus.RUNNING),
+        EventBody.SessionStatusChanged(SessionStatus.RUNNING, null),
         EventBody.TurnStarted("t2"),
         added("j1", "t2", ItemBody.UserMessage("Remove the old build output too.", emptyList())),
         toolCall("j2", "t2", "Bash", """{"command":"rm -rf /srv/wt/api/target/"}"""),
@@ -146,7 +146,7 @@ internal fun sampleSession(stage: Stage): Session {
                 EventBody.ApprovalResolved("a1", sh.herder.ffi.ApprovalOutcome.DENY, sh.herder.ffi.Answerer.User),
                 added("j4", "t2", ItemBody.AssistantMessage("Left `target/` in place.")),
                 EventBody.TurnCompleted("t2"),
-                EventBody.SessionStatusChanged(SessionStatus.IDLE),
+                EventBody.SessionStatusChanged(SessionStatus.IDLE, null),
                 EventBody.ProviderSwitched("codex", "codex-work", "gpt-5"),
                 EventBody.PermissionModeChanged(PermissionMode.AUTO_EDIT),
                 EventBody.PrLinked(

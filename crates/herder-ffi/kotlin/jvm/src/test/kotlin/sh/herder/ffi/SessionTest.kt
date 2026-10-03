@@ -61,7 +61,7 @@ class SessionTest {
                     client.send(host, CommandBody.SendPrompt(sessionId, "Say hello.", emptyList())),
                 )
                 val events = mutableListOf<EventBody>()
-                while (EventBody.SessionStatusChanged(SessionStatus.IDLE) !in events ||
+                while (EventBody.SessionStatusChanged(SessionStatus.IDLE, null) !in events ||
                     events.none { it is EventBody.TurnCompleted }
                 ) {
                     val update = subscription.next() ?: fail("the subscription ended")

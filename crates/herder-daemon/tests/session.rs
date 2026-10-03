@@ -299,7 +299,7 @@ impl Daemon {
 
     async fn until_status(&mut self, status: SessionStatus) -> Vec<Event> {
         self.events_until(
-            |body| matches!(body, EventBody::SessionStatusChanged { status: s } if *s == status),
+            |body| matches!(body, EventBody::SessionStatusChanged { status: s, .. } if *s == status),
         )
         .await
     }
@@ -361,7 +361,7 @@ fn describe(events: &[Event]) -> Vec<String> {
         .map(|event| {
             let what = match &event.body {
                 EventBody::SessionCreated { .. } => "session_created".to_owned(),
-                EventBody::SessionStatusChanged { status } => format!("status {status:?}"),
+                EventBody::SessionStatusChanged { status, .. } => format!("status {status:?}"),
                 EventBody::TurnStarted { turn_id } => format!("turn_started {turn_id}"),
                 EventBody::TurnCompleted { turn_id } => format!("turn_completed {turn_id}"),
                 EventBody::TurnInterrupted { turn_id } => format!("turn_interrupted {turn_id}"),
@@ -2814,6 +2814,7 @@ async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends
             && matches!(
                 e.body,
                 EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::Running
                 }
             )
@@ -2825,6 +2826,7 @@ async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends
             event.session_id == second
                 && event.body
                     == EventBody::SessionStatusChanged {
+                        retry_at: None,
                         status: SessionStatus::Idle,
                     }
         })
@@ -3047,8 +3049,14 @@ impl Switching {
 
     /// Waits for `session_id` to settle on `status`; returns its whole journal.
     async fn settled(&mut self, session_id: &SessionId, status: SessionStatus) -> Vec<Event> {
-        self.until(|body| *body == EventBody::SessionStatusChanged { status })
-            .await;
+        self.until(|body| {
+            *body
+                == EventBody::SessionStatusChanged {
+                    status,
+                    retry_at: None,
+                }
+        })
+        .await;
         self.manager.read_since(session_id, 0, 1000).await.unwrap()
     }
 }
@@ -4136,4 +4144,246 @@ async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_r
     let error = daemon.manager.handle(alice(), unarchive).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict, "{error:?}");
     daemon.stop().await;
+}
+
+struct ResetUsage(Timestamp);
+impl Probe for ResetUsage {
+    fn read(&self, _: StartRequest) -> ProbeFuture {
+        let at = self.0;
+        Box::pin(async move {
+            Ok(vec![UsageWindow {
+                window: "five_hour".into(),
+                used_percent: 100.0,
+                resets_at: Some(at),
+            }])
+        })
+    }
+}
+
+async fn wait_for_limit(daemon: &mut Daemon, dir: &Path) -> (SessionId, Timestamp) {
+    let at = Timestamp::now() + Duration::from_secs(3600);
+    let probe: Arc<dyn Probe> = Arc::new(ResetUsage(at));
+    daemon
+        .manager
+        .track_usage(usage::Config {
+            probes: Probes::from([(fake(), probe)]),
+            dir: dir.join("usage"),
+            interval: Duration::from_secs(86400),
+            fresh: Duration::from_secs(86400),
+        })
+        .unwrap();
+    daemon.next_accounts().await;
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Refactor the parser.")
+        .await;
+    let events = daemon
+        .events_until(|body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    retry_at: Some(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    assert!(events.iter().any(|event| event.body
+        == EventBody::SessionStatusChanged {
+            status: SessionStatus::WaitingForCapacity,
+            retry_at: Some(at),
+        }));
+    assert_eq!(
+        Store::open(dir.join("herder.db"))
+            .unwrap()
+            .queued_prompts(&session)
+            .unwrap()[0]
+            .retry_at,
+        Some(at)
+    );
+    (session, at)
+}
+
+#[tokio::test]
+async fn limit_reset_retries_at_the_deadline_and_releases_capacity() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open_scripts(
+        dir.path(),
+        &["failover_limit.jsonl", "failover_retry.jsonl"],
+        Default::default(),
+    )
+    .await;
+    let host = FakeHost::new(8 * GIB);
+    let admission = admit(&daemon, 1, &host);
+    let (session, _) = wait_for_limit(&mut daemon, dir.path()).await;
+    assert_eq!(admission.resources().running_turns, 0);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(3590)).await;
+    assert_eq!(
+        daemon.starts.lock().unwrap().len(),
+        1,
+        "must not retry early"
+    );
+    tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::time::resume();
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap().len(), 2);
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|e| matches!(e.body, EventBody::TurnStarted { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        Store::open(dir.path().join("herder.db"))
+            .unwrap()
+            .queued_prompts(&session)
+            .unwrap()
+            .is_empty()
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn limit_reset_wait_survives_a_restart_without_usage_in_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "failover_limit.jsonl", turns.clone()).await;
+    let (session, at) = wait_for_limit(&mut daemon, dir.path()).await;
+    daemon.stop().await;
+    let mut daemon = Daemon::open(dir.path(), "failover_retry.jsonl", turns).await;
+    daemon.manager.resume().await.unwrap();
+    daemon
+        .events_until(|body| {
+            matches!(body,
+        EventBody::SessionStatusChanged { retry_at: Some(reset), .. } if *reset == at)
+        })
+        .await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(3590)).await;
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::time::resume();
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap().len(), 1);
+    daemon.stop().await;
+    let daemon = Daemon::open(dir.path(), "failover_retry.jsonl", Default::default()).await;
+    daemon.manager.resume().await.unwrap();
+    assert!(
+        Store::open(dir.path().join("herder.db"))
+            .unwrap()
+            .queued_prompts(&session)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn user_prompt_replaces_the_scheduled_limit_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open_scripts(
+        dir.path(),
+        &["failover_limit.jsonl", "second.jsonl"],
+        Default::default(),
+    )
+    .await;
+    let (session, _) = wait_for_limit(&mut daemon, dir.path()).await;
+    daemon.prompt(bob(), &session, "Second.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(3601)).await;
+    tokio::time::resume();
+    let prompts: Vec<_> = daemon
+        .journal(&session)
+        .await
+        .into_iter()
+        .filter_map(|event| match event.body {
+            EventBody::ItemAdded {
+                item:
+                    Item {
+                        body: ItemBody::UserMessage { text, .. },
+                        ..
+                    },
+            } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, ["Refactor the parser.", "Second."]);
+    assert!(
+        Store::open(dir.path().join("herder.db"))
+            .unwrap()
+            .queued_prompts(&session)
+            .unwrap()
+            .is_empty()
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn successful_switches_cancel_limit_waits_and_invalid_switches_keep_them() {
+    for kind in ["model", "account", "interrupt"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut daemon = Daemon::open(dir.path(), "failover_limit.jsonl", Default::default()).await;
+        let (session, at) = wait_for_limit(&mut daemon, dir.path()).await;
+        assert!(
+            daemon
+                .manager
+                .handle(alice(), switch_account(&session, "missing"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            Store::open(dir.path().join("herder.db"))
+                .unwrap()
+                .queued_prompts(&session)
+                .unwrap()[0]
+                .retry_at,
+            Some(at)
+        );
+        let command = match kind {
+            "model" => CommandBody::SetModel {
+                session_id: session.clone(),
+                model: "new".into(),
+            },
+            "account" => {
+                assert!(daemon.manager.add_account(
+                    AccountId::new("another"),
+                    AccountConfig {
+                        provider: fake(),
+                        label: "Another".into(),
+                        config_dir: None,
+                    }
+                ));
+                switch_account(&session, "another")
+            }
+            _ => CommandBody::Interrupt {
+                session_id: session.clone(),
+            },
+        };
+        daemon.manager.handle(alice(), command).await.unwrap();
+        assert!(
+            Store::open(dir.path().join("herder.db"))
+                .unwrap()
+                .queued_prompts(&session)
+                .unwrap()
+                .is_empty()
+        );
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3601)).await;
+        tokio::time::resume();
+        assert_eq!(daemon.starts.lock().unwrap().len(), 1);
+        daemon.stop().await;
+    }
 }

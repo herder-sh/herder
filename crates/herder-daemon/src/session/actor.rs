@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Image, Item,
-    ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionId, SessionStatus, TurnError,
-    TurnId, UserId,
+    ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionId, SessionStatus, Timestamp,
+    TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -126,8 +126,9 @@ struct Prompt {
     text: String,
     /// The images it carries, kept apart ([`attachments`]).
     attachments: Vec<Attachment>,
-    /// Whether it retries a turn that hit a limit, on the account failover moved to.
+    /// Whether another immediate failover retry is disabled for this prompt.
     retry: bool,
+    retry_at: Option<Timestamp>,
 }
 
 /// The setup command running in the worktree, as the tool call `call_id` of the turn `turn_id`.
@@ -179,6 +180,8 @@ pub(super) struct Actor {
     needs_setup: bool,
     /// The queue as last saved to the store.
     saved: Vec<QueuedPrompt>,
+    /// Monotonic deadline derived once from the persisted wall-clock reset.
+    retry_deadline: Option<Instant>,
 }
 
 enum Next {
@@ -190,6 +193,7 @@ enum Next {
     SetUp(Result<Outcome, oneshot::error::RecvError>),
     /// A request routed to the primary session ran out of time.
     Overdue,
+    LimitReset,
     Stop,
 }
 
@@ -211,6 +215,7 @@ impl Actor {
             setup: None,
             needs_setup: false,
             saved: Vec::new(),
+            retry_deadline: None,
         }
     }
 
@@ -232,6 +237,7 @@ impl Actor {
                         text: prompt.text.clone(),
                         attachments: prompt.attachments.clone(),
                         retry: prompt.retry,
+                        retry_at: prompt.retry_at,
                     })
                     .collect();
                 self.saved = saved;
@@ -243,8 +249,12 @@ impl Actor {
             SessionStatus::Archived | SessionStatus::Moved
         ) {
             self.queue.clear();
+            self.retry_deadline = None;
         }
         self.save_queue().await;
+        if let Some(at) = self.queue.front().and_then(|prompt| prompt.retry_at) {
+            self.arm_retry(at).await;
+        }
         self.start_next().await;
     }
 
@@ -258,6 +268,7 @@ impl Actor {
                 text: prompt.text.clone(),
                 attachments: prompt.attachments.clone(),
                 retry: prompt.retry,
+                retry_at: prompt.retry_at,
             })
             .collect();
         if queue == self.saved {
@@ -283,6 +294,13 @@ impl Actor {
         self.restore().await;
         loop {
             let next = {
+                let reset = self.retry_deadline;
+                let limit_reset = async {
+                    match reset {
+                        Some(at) => tokio::time::sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                };
                 let deadline = self.next_deadline();
                 let overdue = async {
                     match deadline {
@@ -317,6 +335,7 @@ impl Actor {
                     permit = admitted => Next::Admitted(permit),
                     outcome = set_up => Next::SetUp(outcome),
                     () = overdue => Next::Overdue,
+                    () = limit_reset => Next::LimitReset,
                 }
             };
             match next {
@@ -342,6 +361,21 @@ impl Actor {
                     }
                 }
                 Next::Overdue => self.escalate_overdue().await,
+                Next::LimitReset => {
+                    self.retry_deadline = None;
+                    if let Some(prompt) = self.queue.front_mut() {
+                        prompt.retry_at = None;
+                        // A reset is a fresh opportunity, including reactive failover.
+                        prompt.retry = false;
+                    }
+                    self.save_queue().await;
+                    self.log(EventBody::SessionStatusChanged {
+                        status: SessionStatus::WaitingForCapacity,
+                        retry_at: None,
+                    })
+                    .await;
+                    self.start_next().await;
+                }
                 Next::SetUp(outcome) => self.set_up_ended(outcome).await,
                 Next::Stop => {
                     self.save_queue().await;
@@ -395,17 +429,20 @@ impl Actor {
                 queued,
             } => {
                 let attachments = self.keep(images).await?;
+                self.cancel_retry(false).await;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
                     by,
                     text,
                     attachments,
                     retry: false,
+                    retry_at: None,
                 });
                 if let Some(queued) = queued {
                     let _ = queued.send(busy);
                 }
             }
+            Request::Interrupt if self.retry_deadline.is_some() => self.cancel_retry(true).await,
             Request::Interrupt => match (&self.turn, &self.adapter, &self.setup) {
                 (_, _, Some(setup)) => setup.cancel.cancel(),
                 (Some(_), Some(adapter), _) => {
@@ -429,6 +466,7 @@ impl Actor {
                     .map_err(super::internal)?;
                     self.session.model = model;
                 }
+                self.cancel_retry(true).await;
             }
             Request::SetPermissionMode { mode } => {
                 if mode != self.session.permission_mode {
@@ -467,7 +505,10 @@ impl Actor {
                     .map_err(super::internal)?;
             }
             Request::Archive { force } => self.archive(by, force).await?,
-            Request::Switch { account_id, to } => self.switch(by, account_id, to).await?,
+            Request::Switch { account_id, to } => {
+                self.switch(by, account_id, to).await?;
+                self.cancel_retry(true).await;
+            }
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::MovedAway => self.moved_away().await,
             Request::FromPrimary { .. } | Request::Unarchive => {}
@@ -915,12 +956,19 @@ impl Actor {
             mcp.revoke(&self.session.session_id);
         }
         let status = SessionStatus::Archived;
-        self.record(by, EventBody::SessionStatusChanged { status })
-            .await
-            .map_err(super::internal)?;
+        self.record(
+            by,
+            EventBody::SessionStatusChanged {
+                status,
+                retry_at: None,
+            },
+        )
+        .await
+        .map_err(super::internal)?;
         self.session.status = status;
         // Prompts waiting for capacity can never run now.
         self.queue.clear();
+        self.retry_deadline = None;
         self.waiting = None;
         self.permit = None;
         Ok(())
@@ -976,9 +1024,15 @@ impl Actor {
                 .await;
         }
         let status = SessionStatus::Idle;
-        self.record(by, EventBody::SessionStatusChanged { status })
-            .await
-            .map_err(super::internal)?;
+        self.record(
+            by,
+            EventBody::SessionStatusChanged {
+                status,
+                retry_at: None,
+            },
+        )
+        .await
+        .map_err(super::internal)?;
         self.session.status = status;
         Ok(())
     }
@@ -1010,6 +1064,7 @@ impl Actor {
             mcp.revoke(&self.session.session_id);
         }
         self.queue.clear();
+        self.retry_deadline = None;
         self.prompt = None;
         self.waiting = None;
         self.permit = None;
@@ -1171,6 +1226,9 @@ impl Actor {
     /// when it is not running; `waiting_for_capacity` while the host has no room.
     async fn start_next(&mut self) {
         while self.turn.is_none() && self.setup.is_none() && !self.queue.is_empty() {
+            if self.retry_deadline.is_some() {
+                return;
+            }
             if self.needs_setup && self.adapter.is_none() {
                 match self
                     .inner
@@ -1196,6 +1254,7 @@ impl Actor {
                 text,
                 attachments,
                 retry,
+                retry_at,
             } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
@@ -1240,6 +1299,7 @@ impl Actor {
                 text,
                 attachments,
                 retry,
+                retry_at,
             });
             self.last_reply = None;
         }
@@ -1350,6 +1410,7 @@ impl Actor {
         })
         .await;
         self.queue.clear();
+        self.retry_deadline = None;
         self.set_status(SessionStatus::Error).await;
         self.report(turn_id, summary).await;
     }
@@ -1658,6 +1719,7 @@ impl Actor {
                     .await;
                     self.session.model = model;
                 }
+                self.cancel_retry(true).await;
             }
             AdapterEvent::PermissionModeChanged { mode } => {
                 if mode != self.session.permission_mode {
@@ -1723,19 +1785,79 @@ impl Actor {
         }
     }
 
-    /// The running turn hit the account's limit: fails over to the next eligible account and
-    /// retries the turn's prompt there, unless the session is pinned, the turn was a retry
-    /// already, or no account is eligible; then the session needs the user.
+    /// Restore a durable wall-clock deadline into the runtime's monotonic clock.
+    async fn arm_retry(&mut self, at: Timestamp) {
+        let delay = at.duration_since(Timestamp::now());
+        let delay = Duration::try_from(delay).unwrap_or_default();
+        self.retry_deadline = Some(Instant::now() + delay);
+        self.log(EventBody::SessionStatusChanged {
+            status: SessionStatus::WaitingForCapacity,
+            retry_at: Some(at),
+        })
+        .await;
+        self.session.status = SessionStatus::WaitingForCapacity;
+    }
+
+    /// A new user action replaces the scheduled retry, preserving other queued prompts.
+    async fn cancel_retry(&mut self, settle: bool) {
+        if self.retry_deadline.take().is_some() {
+            self.queue.pop_front();
+            self.save_queue().await;
+            if settle {
+                self.set_status(SessionStatus::Idle).await;
+            } else {
+                self.log(EventBody::SessionStatusChanged {
+                    status: SessionStatus::WaitingForCapacity,
+                    retry_at: None,
+                })
+                .await;
+            }
+        }
+    }
+
     async fn limit_reached(&mut self, turn_id: TurnId, error: TurnError) {
         let failing = self.session.account_id.clone();
         self.inner.limit_hit(&failing);
-        let prompt = self.prompt.take().filter(|prompt| !prompt.retry);
+        let prompt = self.prompt.take();
         let target = match prompt {
-            Some(_) if !self.pinned().await => self
+            Some(ref prompt) if !prompt.retry && !self.pinned().await => self
                 .inner
                 .available_account(&self.session.provider, Some(&failing)),
             _ => None,
         };
+        if target.is_none()
+            && let Some(prompt) = prompt.clone()
+            && let Some(at) = self.inner.limit_reset(&failing)
+        {
+            self.void_requests().await;
+            self.log(EventBody::TurnFailed {
+                turn_id: turn_id.clone(),
+                error,
+            })
+            .await;
+            self.record_branches().await;
+            self.checkpoint(&turn_id).await;
+            self.turn = None;
+            self.permit = None;
+            self.waiting = None;
+            if let Some(adapter) = self.adapter.take() {
+                let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
+            }
+            self.queue.push_front(Prompt {
+                retry: true,
+                retry_at: Some(at),
+                ..prompt
+            });
+            self.save_queue().await;
+            // Do not promise an automatic retry unless it was stored.
+            if self.saved.first().and_then(|prompt| prompt.retry_at) == Some(at) {
+                self.arm_retry(at).await;
+            } else {
+                self.queue.pop_front();
+                self.set_status(SessionStatus::NeedsYou).await;
+            }
+            return;
+        }
         let (Some(prompt), Some(account_id)) = (prompt, target) else {
             let summary = failed(&error);
             let body = EventBody::TurnFailed {
@@ -1898,7 +2020,11 @@ impl Actor {
 
     async fn set_status(&mut self, status: SessionStatus) {
         if status != self.session.status {
-            self.log(EventBody::SessionStatusChanged { status }).await;
+            self.log(EventBody::SessionStatusChanged {
+                status,
+                retry_at: None,
+            })
+            .await;
             self.session.status = status;
         }
     }
@@ -1988,7 +2114,14 @@ pub(super) async fn close_abandoned_turn(
     };
     if status != session.status {
         journal
-            .record(id.clone(), None, EventBody::SessionStatusChanged { status })
+            .record(
+                id.clone(),
+                None,
+                EventBody::SessionStatusChanged {
+                    status,
+                    retry_at: None,
+                },
+            )
             .await?;
     }
     if let (Some(parent), Some((turn_id, summary))) = (&session.parent, report) {
