@@ -64,6 +64,21 @@ pub enum Msg {
     TerminalEnded(terminal::Ended),
     /// Time passed: an armed leader may lapse.
     Tick(std::time::Instant),
+    /// An image for the prompt loaded, from an `@path` `word` of its text if any; or why it
+    /// could not.
+    Attached {
+        /// The word it was named by, to take out of the text.
+        word: Option<String>,
+        /// The image, or why it could not be attached.
+        result: Result<herder_protocol::Image, String>,
+    },
+    /// A folder's folders and images, as typed after an `@`.
+    Listed {
+        /// The folder, as typed.
+        dir: String,
+        /// Its entries.
+        entries: Vec<crate::attach::Entry>,
+    },
 }
 
 /// Something the event loop does for the app.
@@ -110,6 +125,24 @@ pub enum Effect {
     Save,
     /// Put text on the clipboard, through the terminal (OSC 52).
     Copy(String),
+    /// Load an image for the prompt; it comes back as [`Msg::Attached`] with `word`.
+    Attach {
+        /// Where it comes from.
+        source: crate::attach::Source,
+        /// The `@path` word of the prompt that named it.
+        word: Option<String>,
+    },
+    /// List a folder for the `@` popup; it comes back as [`Msg::Listed`].
+    List(String),
+    /// Show a transcript's image with the desktop's viewer (`open`), or save it to a file.
+    Image {
+        /// Its file name.
+        name: String,
+        /// Its bytes.
+        data: Vec<u8>,
+        /// Open it, rather than only save it.
+        open: bool,
+    },
 }
 
 /// Which pane keys go to.
@@ -395,8 +428,13 @@ impl App {
                     && !self.paste_pairing(&text)
                     && !self.paste_inbox(&text)
                 {
-                    self.paste(&text);
+                    return self.paste(&text);
                 }
+                Vec::new()
+            }
+            Msg::Attached { word, result } => self.attached(word, result),
+            Msg::Listed { dir, entries } => {
+                self.compose.listing = Some((dir, entries));
                 Vec::new()
             }
             Msg::Sent { origin, result } => {
@@ -407,8 +445,7 @@ impl App {
                 {
                     self.notice = Some(error.clone());
                 }
-                self.sent(origin, result);
-                Vec::new()
+                self.sent(origin, result)
             }
             Msg::Notice(text) => {
                 self.notice = Some(text);

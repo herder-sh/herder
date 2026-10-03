@@ -498,9 +498,42 @@ fn a_prompts_images_show_under_it() {
             },
         ),
     ]);
-    let screen = render(&mut app, 100, 20).backend().to_string();
-    assert!(screen.contains("image · png · 12 KB"), "{screen}");
-    assert!(screen.contains("image · jpeg · 1.5 MB"), "{screen}");
+    let terminal = render(&mut app, 100, 20);
+    let screen = terminal.backend().to_string();
+    assert!(screen.contains("image 1 · 12 KB"), "{screen}");
+    assert!(screen.contains("image 2 · 1.5 MB"), "{screen}");
+    insta::assert_snapshot!(terminal.backend());
+    // The status bar offers to open or save them.
+    app.focus = Focus::Transcript;
+    let screen = render(&mut app, 160, 20).backend().to_string();
+    assert!(screen.contains("o open images"), "{screen}");
+}
+
+#[test]
+fn the_prompt_shows_its_images_as_chips() {
+    let mut app = open_s2(vec![]);
+    app.focus = Focus::Composer;
+    let image = |bytes: usize| herder_protocol::Image {
+        media_type: "image/png".into(),
+        data: herder_protocol::Bytes(vec![0; bytes]),
+    };
+    app.update(Msg::Attached {
+        word: None,
+        result: Ok(image(340 * 1024)),
+    });
+    app.update(Msg::Attached {
+        word: None,
+        result: Ok(image(1_258_291)),
+    });
+    // A third still loading.
+    app.compose.loading = 1;
+    fake::type_text(&mut app, "why does the sidebar overlap here?");
+    for width in [45, 100] {
+        let terminal = render(&mut app, width, 20);
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("340 KB"), "{screen}");
+        insta::assert_snapshot!(format!("prompt_chips_{width}"), terminal.backend());
+    }
 }
 
 #[test]

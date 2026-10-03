@@ -4,6 +4,8 @@ expression: dump(&buffer)
 ---
 |  PROMPT   NAVIGATE   APPROVAL          |
 |  queued   open   merged   draft        |
+|  image 1 · 340 KB   image 2 · 1.2 MB   |
+|  image 3 · loading…                    |
 
  0   0..1   fg=#e6e6e6 bg=#111216
  0   1..9   fg=#111216 bg=#7aa2f7 BOLD
@@ -21,3 +23,11 @@ expression: dump(&buffer)
  1  25..26  fg=#e6e6e6 bg=#111216
  1  26..33  fg=#7f8492 bg=#21242c
  1  33..40  fg=#e6e6e6 bg=#111216
+ 2   0..1   fg=#e6e6e6 bg=#111216
+ 2   1..19  fg=#e6e6e6 bg=#21242c
+ 2  19..20  fg=#e6e6e6 bg=#111216
+ 2  20..38  fg=#e6e6e6 bg=#21242c
+ 2  38..40  fg=#e6e6e6 bg=#111216
+ 3   0..1   fg=#e6e6e6 bg=#111216
+ 3   1..21  fg=#7f8492 bg=#21242c
+ 3  21..40  fg=#e6e6e6 bg=#111216

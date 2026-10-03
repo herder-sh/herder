@@ -1,5 +1,7 @@
 //! The open session's transcript as the user moves through it: the item cursor `[` / `]`
-//! walks, what `e` (or a tap) expanded, and what `/thinking` and `/details` hide.
+//! walks, what `e` (or a tap) expanded, and what `/thinking` and `/details` hide. `o` opens a
+//! prompt's images with the desktop's viewer and `w` saves them: the prompt's under the
+//! cursor, else the latest one's.
 //!
 //! OpenCode expands a tool call with a click only; the item cursor reaches every foldable
 //! thing from the keyboard too.
@@ -27,6 +29,10 @@ pub enum ChatAct {
     Copy,
     /// Stop the running turn.
     Stop,
+    /// Open the images of the prompt under the cursor, or the latest prompt's.
+    OpenImages,
+    /// Save those images to files.
+    SaveImages,
 }
 
 /// The transcript's cursor and folds.
@@ -116,6 +122,8 @@ impl App {
                     None => Vec::new(),
                 };
             }
+            ChatAct::OpenImages => return self.fetch_images(true),
+            ChatAct::SaveImages => return self.fetch_images(false),
             ChatAct::Stop => {
                 if let Some(key) = &self.open
                     && let Some(session) = self.sessions.get(key)
@@ -133,6 +141,62 @@ impl App {
             }
         }
         Vec::new()
+    }
+
+    /// Fetches the images of the prompt under the cursor, else of the latest prompt that has
+    /// any, to `open` or only save once they arrive.
+    fn fetch_images(&mut self, open: bool) -> Vec<Effect> {
+        let Some((key, session)) = self.open.as_ref().zip(self.open_session()) else {
+            return Vec::new();
+        };
+        let images = |item: &Item| match &item.body {
+            ItemBody::UserMessage { attachments, .. } if !attachments.is_empty() => {
+                Some(attachments.clone())
+            }
+            _ => None,
+        };
+        let items = || {
+            session
+                .entries
+                .iter()
+                .rev()
+                .filter_map(|entry| match entry {
+                    Entry::Item(item) => Some(item),
+                    _ => None,
+                })
+        };
+        let found = match &self.chat.cursor {
+            Some(cursor) => items().find(|item| item.id == *cursor).and_then(images),
+            None => items().find_map(images),
+        };
+        let Some(attachments) = found else {
+            self.notice = Some("no images here".to_owned());
+            return Vec::new();
+        };
+        let count = attachments.len();
+        let effects = attachments
+            .into_iter()
+            .map(|image| Effect::Send {
+                host_id: key.host_id.clone(),
+                command: CommandBody::GetAttachment {
+                    session_id: key.session_id.clone(),
+                    attachment_id: image.attachment_id.clone(),
+                },
+                origin: Origin::Image {
+                    key: key.clone(),
+                    name: format!(
+                        "herder-{}.{}",
+                        image.attachment_id,
+                        crate::attach::extension(&image.media_type)
+                    ),
+                    open,
+                },
+            })
+            .collect();
+        let images = if count == 1 { "image" } else { "images" };
+        let doing = if open { "opening" } else { "saving" };
+        self.notice = Some(format!("{doing} {count} {images}…"));
+        effects
     }
 
     /// The text of the open session's item `id`, as copied: a message's text, or a tool

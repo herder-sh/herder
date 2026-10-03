@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, PermissionMode, SessionStatus,
+    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, Image, MAX_PROMPT_IMAGE_BYTES,
+    PermissionMode, SessionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -16,6 +17,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
+use crate::attach::{self, Source};
 use crate::prompt::Recall;
 use crate::session::{MODES, SessionKey, mode_name};
 
@@ -56,6 +58,10 @@ pub enum Act {
     Confirm,
     /// Show the pending request at full height, or back at its usual.
     Full,
+    /// Ctrl-V: attach the clipboard's image to the prompt.
+    PasteImage,
+    /// Take the prompt's last image off.
+    Unattach,
 }
 
 /// What a command was sent for, so its answer lands in the right place.
@@ -67,6 +73,12 @@ pub enum Origin {
     Prompt(SessionKey, String),
     /// The new-session dialog's create.
     NewSession(HostId),
+    /// Fetching a transcript's image: its file name, and whether to open it or only save it.
+    Image {
+        key: SessionKey,
+        name: String,
+        open: bool,
+    },
 }
 
 /// The composer and overlays, and what the daemon last said about each session.
@@ -98,6 +110,14 @@ pub struct Compose {
     pub button: usize,
     /// Whether the pending request shows at full height.
     pub full: bool,
+    /// The images the prompt carries, in the order they were attached.
+    pub images: Vec<Image>,
+    /// Images being loaded.
+    pub loading: usize,
+    /// Send the prompt once the images being loaded are in.
+    pub send_loaded: bool,
+    /// The folder the `@` popup lists, as typed, with its entries.
+    pub listing: Option<(String, Vec<attach::Entry>)>,
 }
 
 impl Default for Compose {
@@ -116,6 +136,10 @@ impl Default for Compose {
             pastes: Vec::new(),
             button: 0,
             full: false,
+            images: Vec::new(),
+            loading: 0,
+            send_loaded: false,
+            listing: None,
         }
     }
 }
@@ -131,6 +155,8 @@ impl Compose {
     pub fn clear(&mut self) {
         self.editor = editor("Write a prompt…");
         self.pastes.clear();
+        self.images.clear();
+        self.send_loaded = false;
         self.recall = None;
         self.popup = 0;
         self.popup_hidden = None;
@@ -217,7 +243,11 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
         KeyCode::Up if row == 0 => compose(Act::Recall(1)),
         KeyCode::Down if row == last && app.compose.recall.is_some() => compose(Act::Recall(-1)),
         KeyCode::Esc => compose(Act::Leave),
-        // Leaves without Esc, which a phone keyboard may lack.
+        KeyCode::Char('v') if ctrl => compose(Act::PasteImage),
+        // Takes the last image off, then leaves without Esc, which a phone keyboard may lack.
+        KeyCode::Backspace if app.compose.editor.is_empty() && !app.compose.images.is_empty() => {
+            compose(Act::Unattach)
+        }
         KeyCode::Backspace if app.compose.editor.is_empty() => compose(Act::Leave),
         KeyCode::Enter if key.modifiers.is_empty() => compose(Act::Submit),
         KeyCode::Enter => compose(Act::Newline),
@@ -253,14 +283,11 @@ impl App {
                 self.edit(key);
                 self.compose.popup = 0;
                 self.compose.recall = None;
+                return self.list_wanted();
             }
             Act::Newline => self.compose.editor.insert_newline(),
             Act::Completion(step) => self.move_completion(isize::from(step)),
-            Act::Complete => {
-                if self.accept_completion() {
-                    return self.submit();
-                }
-            }
+            Act::Complete => return self.accept_completion(),
             Act::HidePopup => {
                 self.compose.popup_hidden = Some(self.compose.editor.lines().join("\n"));
             }
@@ -290,26 +317,152 @@ impl App {
             Act::Choose(index) => return self.choose(index),
             Act::Palette => self.open_palette(),
             Act::NewSession => self.new_session(),
+            Act::PasteImage => return self.attach(Source::Clipboard, None),
+            Act::Unattach => {
+                self.compose.images.pop();
+            }
         }
         Vec::new()
     }
 
-    /// Inserts pasted text into the editor that has the keys.
-    pub(crate) fn paste(&mut self, text: &str) {
-        if self.paste_new_session(text) {
+    /// Loads an image for the prompt, named by `word` of its text if any.
+    pub(crate) fn attach(&mut self, source: Source, word: Option<String>) -> Vec<Effect> {
+        self.compose.loading += 1;
+        vec![Effect::Attach { source, word }]
+    }
+
+    /// Folds in an image loaded for the prompt: it joins the prompt and the `@path` word that
+    /// named it leaves the text; the prompt goes out if it waited on it. Why it could not
+    /// load shows under the prompt.
+    pub(crate) fn attached(
+        &mut self,
+        word: Option<String>,
+        result: Result<Image, String>,
+    ) -> Vec<Effect> {
+        self.compose.loading = self.compose.loading.saturating_sub(1);
+        let carried: usize = self.compose.images.iter().map(|i| i.data.0.len()).sum();
+        let result = result.and_then(|image| {
+            if carried + image.data.0.len() > MAX_PROMPT_IMAGE_BYTES {
+                Err(format!(
+                    "over {} of images in one prompt",
+                    attach::size(MAX_PROMPT_IMAGE_BYTES as u64)
+                ))
+            } else {
+                Ok(image)
+            }
+        });
+        let error = match result {
+            Ok(image) => {
+                self.compose.images.push(image);
+                if let Some(word) = word {
+                    self.unword(&word);
+                }
+                None
+            }
+            Err(error) => Some(error),
+        };
+        if let Some(key) = self.open.clone() {
+            match error {
+                Some(error) => {
+                    self.compose.send_loaded = false;
+                    self.compose.errors.insert(key, error);
+                }
+                None => {
+                    self.compose.errors.remove(&key);
+                }
+            }
+        }
+        if self.compose.loading == 0 && std::mem::take(&mut self.compose.send_loaded) {
+            return self.submit();
+        }
+        Vec::new()
+    }
+
+    /// Takes the word `word` out of the prompt's text, with a space next to it.
+    fn unword(&mut self, word: &str) {
+        let text = text(&self.compose.editor);
+        let Some(at) = text.match_indices(word).map(|(at, _)| at).find(|&at| {
+            let end = at + word.len();
+            text[..at]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace)
+                && text[end..].chars().next().is_none_or(char::is_whitespace)
+        }) else {
             return;
+        };
+        let mut end = at + word.len();
+        let mut start = at;
+        if text[end..].starts_with(' ') {
+            end += 1;
+        } else if text[..start].ends_with(' ') {
+            start -= 1;
+        }
+        let pastes = std::mem::take(&mut self.compose.pastes);
+        let images = std::mem::take(&mut self.compose.images);
+        self.compose
+            .set_text(&format!("{}{}", &text[..start], &text[end..]));
+        self.compose.pastes = pastes;
+        self.compose.images = images;
+    }
+
+    /// The `@path` words of `text` that name images, each once.
+    fn image_words(text: &str) -> Vec<String> {
+        let mut words: Vec<String> = Vec::new();
+        for word in text.split_whitespace() {
+            if let Some(path) = word.strip_prefix('@')
+                && attach::is_image_path(path)
+                && !words.iter().any(|known| known == word)
+            {
+                words.push(word.to_owned());
+            }
+        }
+        words
+    }
+
+    /// Inserts pasted text into the editor that has the keys. In the prompt, dropped image
+    /// files attach; so does the clipboard's image when a terminal pastes it as nothing.
+    pub(crate) fn paste(&mut self, text: &str) -> Vec<Effect> {
+        if self.paste_new_session(text) {
+            return Vec::new();
         }
         if let Some(palette) = &mut self.compose.palette {
             palette.search.insert_str(text.replace(['\r', '\n'], " "));
             palette.selected = 0;
         } else if self.focus == Focus::Composer {
+            if text.is_empty() {
+                return self.attach(Source::Clipboard, None);
+            }
+            if let Some(paths) = attach::dropped_paths(text) {
+                return paths
+                    .into_iter()
+                    .flat_map(|path| self.attach(Source::File(path), None))
+                    .collect();
+            }
             self.paste_prompt(text);
+            return self.list_wanted();
         }
+        Vec::new()
     }
 
     /// Folds in the daemon's answer to a command sent for `origin`.
-    pub(crate) fn sent(&mut self, origin: Origin, result: Result<CommandResult, String>) {
+    pub(crate) fn sent(
+        &mut self,
+        origin: Origin,
+        result: Result<CommandResult, String>,
+    ) -> Vec<Effect> {
         match origin {
+            Origin::Image { key, name, open } => match result {
+                Ok(CommandResult::Attachment { data, .. }) => {
+                    return vec![Effect::Image {
+                        name,
+                        data: data.0,
+                        open,
+                    }];
+                }
+                Ok(_) => self.session_result(key, Some("the machine sent no image".to_owned())),
+                Err(error) => self.session_result(key, Some(error)),
+            },
             Origin::Session(key) => self.session_result(key, result.err()),
             Origin::Prompt(key, text) => {
                 if result.is_err()
@@ -338,6 +491,7 @@ impl App {
                 }
             },
         }
+        Vec::new()
     }
 
     /// Opens the session created from the dialog once its machine lists it.
@@ -373,7 +527,7 @@ impl App {
         self.compose.editor.input(key);
     }
 
-    fn submit(&mut self) -> Vec<Effect> {
+    pub(crate) fn submit(&mut self) -> Vec<Effect> {
         let Some(key) = self.open.clone() else {
             return Vec::new();
         };
@@ -382,7 +536,28 @@ impl App {
         }
         let typed = text(&self.compose.editor);
         if typed.trim().is_empty() {
+            // Providers take no image without a word of text.
+            if !self.compose.images.is_empty() {
+                let error = "write a line to go with the image".to_owned();
+                self.compose.errors.insert(key, error);
+            }
             return Vec::new();
+        }
+        // The prompt waits for its images: the ones loading, and those its `@path`s name.
+        if self.compose.loading > 0 {
+            self.compose.send_loaded = true;
+            return Vec::new();
+        }
+        let words = Self::image_words(&typed);
+        if !words.is_empty() {
+            self.compose.send_loaded = true;
+            return words
+                .into_iter()
+                .flat_map(|word| {
+                    let path = word.trim_start_matches('@').to_owned();
+                    self.attach(Source::File(path), Some(word))
+                })
+                .collect();
         }
         // A `/command` runs; `//` sends a literal `/`.
         if typed.starts_with('/') && !typed.starts_with("//") {
@@ -403,6 +578,7 @@ impl App {
             .filter(|_| typed.starts_with("//"))
             .unwrap_or(&typed);
         let prompt = self.expand_pastes(typed);
+        let images = std::mem::take(&mut self.compose.images);
         self.compose.clear();
         let Some(session) = self.sessions.get_mut(&key) else {
             return Vec::new();
@@ -410,6 +586,8 @@ impl App {
         let session_id = session.id.clone();
         // A pending question takes the composer's text as its answer.
         if let Some(question) = session.questions.first() {
+            // An answer is text: the images stay for the next prompt.
+            self.compose.images = images;
             let command = CommandBody::AnswerQuestion {
                 session_id,
                 question_id: question.id.clone(),
@@ -424,14 +602,16 @@ impl App {
         let command = CommandBody::SendPrompt {
             session_id,
             text: prompt.clone(),
-            images: Vec::new(),
+            images,
         };
         vec![send(&key, command, Origin::Prompt(key.clone(), prompt))]
     }
 
     fn ctrl_c(&mut self) -> Vec<Effect> {
         // Clears what is being written first.
-        if self.focus == Focus::Composer && !self.compose.editor.is_empty() {
+        if self.focus == Focus::Composer
+            && (!self.compose.editor.is_empty() || !self.compose.images.is_empty())
+        {
             self.compose.clear();
             return Vec::new();
         }
@@ -599,6 +779,280 @@ mod tests {
             press(&mut app, KeyCode::Esc);
         }
         app
+    }
+
+    fn image(bytes: usize) -> Image {
+        Image {
+            media_type: "image/png".into(),
+            data: herder_protocol::Bytes(vec![0; bytes]),
+        }
+    }
+
+    /// `s2` open, writing in its prompt.
+    fn writing() -> App {
+        let mut app = open_s2(vec![]);
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(app.focus, Focus::Composer);
+        app
+    }
+
+    fn prompt(text: &str, images: Vec<Image>) -> Effect {
+        send(
+            &key("h1", "s2"),
+            CommandBody::SendPrompt {
+                session_id: SessionId::new("s2"),
+                text: text.into(),
+                images,
+            },
+            Origin::Prompt(key("h1", "s2"), text.into()),
+        )
+    }
+
+    fn error(app: &App) -> Option<&str> {
+        app.compose.errors.get(&key("h1", "s2")).map(String::as_str)
+    }
+
+    #[test]
+    fn ctrl_v_attaches_the_clipboards_image_and_the_prompt_carries_it() {
+        let mut app = writing();
+        let effects = press_with(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(
+            effects,
+            [Effect::Attach {
+                source: Source::Clipboard,
+                word: None,
+            }]
+        );
+        assert_eq!(app.compose.loading, 1);
+        type_text(&mut app, "what is off here?");
+        // Sent before the image is in, the prompt waits for it.
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let effects = app.update(Msg::Attached {
+            word: None,
+            result: Ok(image(10)),
+        });
+        assert_eq!(effects, [prompt("what is off here?", vec![image(10)])]);
+        assert!(app.compose.images.is_empty());
+        assert_eq!(app.compose.loading, 0);
+
+        // A terminal that pastes an image as nothing attaches it too.
+        let effects = app.update(Msg::Paste(String::new()));
+        assert!(
+            matches!(
+                &effects[..],
+                [Effect::Attach {
+                    source: Source::Clipboard,
+                    ..
+                }]
+            ),
+            "{effects:?}"
+        );
+        // Without a clipboard, as over SSH, it says what to do instead.
+        let reason = "no clipboard here; attach a file with @path";
+        app.update(Msg::Attached {
+            word: None,
+            result: Err(reason.into()),
+        });
+        assert_eq!(error(&app), Some(reason));
+        assert!(app.compose.images.is_empty());
+    }
+
+    #[test]
+    fn an_at_path_to_an_image_attaches_before_the_prompt_goes() {
+        let mut app = writing();
+        type_text(&mut app, "compare @shots/a.png with @b.PNG please");
+        let effects = press(&mut app, KeyCode::Enter);
+        let attach = |path: &str| Effect::Attach {
+            source: Source::File(path.into()),
+            word: Some(format!("@{path}")),
+        };
+        assert_eq!(effects, [attach("shots/a.png"), attach("b.PNG")]);
+        let loaded = |app: &mut App, word: &str, bytes| {
+            app.update(Msg::Attached {
+                word: Some(word.into()),
+                result: Ok(image(bytes)),
+            })
+        };
+        assert_eq!(loaded(&mut app, "@shots/a.png", 1), []);
+        assert_eq!(text(&app.compose.editor), "compare with @b.PNG please");
+        let effects = loaded(&mut app, "@b.PNG", 2);
+        assert_eq!(
+            effects,
+            [prompt("compare with please", vec![image(1), image(2)])]
+        );
+    }
+
+    #[test]
+    fn an_image_that_cannot_attach_says_why_and_keeps_the_prompt() {
+        let mut app = writing();
+        type_text(&mut app, "see @gone.png");
+        press(&mut app, KeyCode::Enter);
+        let effects = app.update(Msg::Attached {
+            word: Some("@gone.png".into()),
+            result: Err("gone.png: no such file".into()),
+        });
+        assert_eq!(effects, []);
+        assert_eq!(error(&app), Some("gone.png: no such file"));
+        assert_eq!(text(&app.compose.editor), "see @gone.png");
+        assert!(!app.compose.send_loaded);
+    }
+
+    #[test]
+    fn a_prompts_images_stay_under_the_cap_and_need_a_line_of_text() {
+        let mut app = writing();
+        let six_mb = 6 * 1024 * 1024;
+        for _ in 0..2 {
+            app.compose(Act::PasteImage);
+            app.update(Msg::Attached {
+                word: None,
+                result: Ok(image(six_mb)),
+            });
+        }
+        assert_eq!(app.compose.images.len(), 1);
+        assert_eq!(error(&app), Some("over 10 MB of images in one prompt"));
+        // An image alone is not sent: providers want a word with it.
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        assert_eq!(error(&app), Some("write a line to go with the image"));
+        // Backspace on the empty prompt takes the image off, then leaves.
+        press(&mut app, KeyCode::Backspace);
+        assert!(app.compose.images.is_empty());
+        assert_eq!(app.focus, Focus::Composer);
+        press(&mut app, KeyCode::Backspace);
+        assert_eq!(app.focus, Focus::Transcript);
+    }
+
+    #[test]
+    fn dropped_image_files_attach_and_other_paths_paste_as_text() {
+        let mut app = writing();
+        let effects = app.update(Msg::Paste("'/home/ann/Screen Shot.png' /tmp/b.jpg".into()));
+        let file = |path: &str| Effect::Attach {
+            source: Source::File(path.into()),
+            word: None,
+        };
+        assert_eq!(
+            effects,
+            [file("/home/ann/Screen Shot.png"), file("/tmp/b.jpg")]
+        );
+        assert_eq!(app.compose.loading, 2);
+        app.update(Msg::Paste("/tmp/notes.txt".into()));
+        assert_eq!(text(&app.compose.editor), "/tmp/notes.txt");
+    }
+
+    #[test]
+    fn at_completes_folders_and_images_and_picking_an_image_attaches_it() {
+        let mut app = writing();
+        type_text(&mut app, "look ");
+        let effects = press(&mut app, KeyCode::Char('@'));
+        assert_eq!(effects, [Effect::List(String::new())]);
+        let entry = |name: &str, is_dir| crate::attach::Entry {
+            name: name.into(),
+            is_dir,
+        };
+        app.update(Msg::Listed {
+            dir: String::new(),
+            entries: vec![
+                entry(".git", true),
+                entry("docs", true),
+                entry("shot.png", false),
+            ],
+        });
+        type_text(&mut app, "s");
+        let labels: Vec<String> = app.completions().into_iter().map(|c| c.label).collect();
+        // The task children by branch, then this machine's files: names starting `s` first.
+        assert_eq!(
+            labels,
+            [
+                "@herder/api-docs",
+                "@herder/api-tests",
+                "@shot.png",
+                "@docs/"
+            ]
+        );
+        // A folder completes and lists.
+        app.compose.popup = 3;
+        let effects = press(&mut app, KeyCode::Tab);
+        assert_eq!(effects, [Effect::List("docs/".into())]);
+        assert_eq!(text(&app.compose.editor), "look @docs/");
+        app.update(Msg::Listed {
+            dir: "docs/".into(),
+            entries: vec![entry("mock.webp", false)],
+        });
+        // An image attaches in place of its word.
+        let effects = press(&mut app, KeyCode::Enter);
+        assert_eq!(
+            effects,
+            [Effect::Attach {
+                source: Source::File("docs/mock.webp".into()),
+                word: None,
+            }]
+        );
+        assert_eq!(text(&app.compose.editor), "look ");
+    }
+
+    #[test]
+    fn o_and_w_fetch_a_prompts_images_to_open_or_save() {
+        let attachment = |id: &str, media_type: &str| herder_protocol::Attachment {
+            attachment_id: herder_protocol::AttachmentId::new(id),
+            media_type: media_type.into(),
+            size: 10,
+        };
+        let message = |id: &str, attachments| {
+            added(
+                id,
+                ItemBody::UserMessage {
+                    text: "this".into(),
+                    attachments,
+                },
+            )
+        };
+        let mut app = open_s2(vec![
+            message("i1", vec![attachment("01A", "image/png")]),
+            message("i2", vec![attachment("01B", "image/jpeg")]),
+            message("i3", Vec::new()),
+        ]);
+        assert_eq!(app.focus, Focus::Transcript);
+        let fetch = |id: &str, name: &str, open| Effect::Send {
+            host_id: key("h1", "s2").host_id,
+            command: CommandBody::GetAttachment {
+                session_id: SessionId::new("s2"),
+                attachment_id: herder_protocol::AttachmentId::new(id),
+            },
+            origin: Origin::Image {
+                key: key("h1", "s2"),
+                name: name.into(),
+                open,
+            },
+        };
+        // Without a cursor, the latest prompt with images.
+        let effects = press(&mut app, KeyCode::Char('o'));
+        assert_eq!(effects, [fetch("01B", "herder-01B.jpg", true)]);
+        // The image arrives and opens.
+        let effects = app.update(Msg::Sent {
+            origin: Origin::Image {
+                key: key("h1", "s2"),
+                name: "herder-01B.jpg".into(),
+                open: true,
+            },
+            result: Ok(CommandResult::Attachment {
+                media_type: "image/jpeg".into(),
+                data: herder_protocol::Bytes(vec![1, 2]),
+            }),
+        });
+        assert_eq!(
+            effects,
+            [Effect::Image {
+                name: "herder-01B.jpg".into(),
+                data: vec![1, 2],
+                open: true,
+            }]
+        );
+        // With one, the prompt under it; w only saves.
+        app.chat.cursor = Some(herder_protocol::ItemId::new("i1"));
+        let effects = press(&mut app, KeyCode::Char('w'));
+        assert_eq!(effects, [fetch("01A", "herder-01A.png", false)]);
+        app.chat.cursor = Some(herder_protocol::ItemId::new("i3"));
+        assert_eq!(press(&mut app, KeyCode::Char('o')), []);
+        assert_eq!(app.notice.as_deref(), Some("no images here"));
     }
 
     #[test]

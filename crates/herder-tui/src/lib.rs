@@ -16,6 +16,7 @@ mod account_screen;
 mod accounts;
 mod action;
 mod app;
+mod attach;
 mod backend;
 mod bar;
 mod chat;
@@ -192,6 +193,21 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                         }
                     }
                     Effect::Copy(text) => copy(&text),
+                    Effect::Attach { source, word } => {
+                        let tx = tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = attach::load(&source);
+                            let _ = tx.send(Msg::Attached { word, result });
+                        });
+                    }
+                    Effect::List(dir) => {
+                        let tx = tx.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let entries = attach::list(&dir);
+                            let _ = tx.send(Msg::Listed { dir, entries });
+                        });
+                    }
+                    Effect::Image { name, data, open } => image(name, data, open, tx.clone()),
                 }
             }
             next = rx.try_recv().ok();
@@ -342,19 +358,53 @@ fn send(
     });
 }
 
+/// The desktop's opener: `open` on macOS, else `xdg-open`.
+const OPENER: &str = if cfg!(target_os = "macos") {
+    "open"
+} else {
+    "xdg-open"
+};
+
+/// Whether there is a desktop to open things on; there is none over SSH.
+fn desktop() -> bool {
+    cfg!(target_os = "macos")
+        || ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()))
+}
+
+/// Saves a transcript's image as `name` and, with `open`, shows it with the desktop's
+/// viewer. An image to open goes to the temporary directory, unless there is no desktop to
+/// show it on: then it is saved, as one to keep is, and the notice says where.
+fn image(name: String, data: Vec<u8>, open: bool, tx: mpsc::UnboundedSender<Msg>) {
+    tokio::task::spawn_blocking(move || {
+        let view = open && desktop();
+        let dir = if view {
+            std::env::temp_dir().join("herder-images")
+        } else {
+            attach::save_dir()
+        };
+        let saved = std::fs::create_dir_all(&dir)
+            .map_err(|err| format!("saving {name}: {err}"))
+            .and_then(|()| attach::save(&dir, &name, &data));
+        match saved {
+            Ok(path) if view => open_url(path.display().to_string(), tx),
+            Ok(path) => {
+                let why = if open { "no desktop to show it; " } else { "" };
+                let _ = tx.send(Msg::Notice(format!("{why}saved {}", path.display())));
+            }
+            Err(err) => {
+                let _ = tx.send(Msg::Notice(err));
+            }
+        }
+    });
+}
+
 /// Opens `url` with the desktop's opener; where there is none, as over SSH, the notice shows
 /// the URL to copy instead.
 fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let desktop = cfg!(target_os = "macos")
-        || ["DISPLAY", "WAYLAND_DISPLAY"]
-            .iter()
-            .any(|var| std::env::var_os(var).is_some_and(|value| !value.is_empty()));
-    if !desktop {
+    let opener = OPENER;
+    if !desktop() {
         let _ = tx.send(Msg::Notice(url));
         return;
     }
