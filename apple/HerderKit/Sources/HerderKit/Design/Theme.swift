@@ -7,28 +7,28 @@ import AppKit
 #endif
 
 /// herder's palette and type. Light is e-ink: grey paper, pure greyscale, one muted teal spent
-/// on "needs you". Dark is high contrast: black, white type, Okabe-Ito status colours that
-/// colour-blind users can tell apart.
+/// on "needs you". Dark follows the T3 Nightly reference: soft charcoal surfaces,
+/// neutral chat bubbles, off-white text, and blue activity accents.
 enum Theme {
-    static let background = Color(light: 0xE6E6E4, dark: 0x000000)
-    static let surface = Color(light: 0xEDEDEB, dark: 0x121212)
+    static let background = Color(light: 0xE6E6E4, dark: 0x0A0A0A)
+    static let surface = Color(light: 0xEDEDEB, dark: 0x141414)
     /// Code blocks, chips, secondary buttons.
-    static let raised = Color(light: 0xDADAD8, dark: 0x1F1F1F)
-    static let stroke = Color(light: 0xC9C9C7, dark: 0x3A3A3A)
+    static let raised = Color(light: 0xDADAD8, dark: 0x1A1A1A)
+    static let stroke = Color(light: 0xC9C9C7, dark: 0x252525)
 
-    static let text = Color(light: 0x1C1C1C, dark: 0xFFFFFF)
-    static let secondary = Color(light: 0x6A6A6A, dark: 0xB3B3B3)
-    static let tertiary = Color(light: 0x8C8C8A, dark: 0x8A8A8A)
+    static let text = Color(light: 0x1C1C1C, dark: 0xF7F7F7)
+    static let secondary = Color(light: 0x6A6A6A, dark: 0xD1D1D1)
+    static let tertiary = Color(light: 0x8C8C8A, dark: 0x939393)
 
     /// The primary button: ink on paper.
-    static let primary = Color(light: 0x1C1C1C, dark: 0xFFFFFF)
-    static let onPrimary = Color(light: 0xE6E6E4, dark: 0x000000)
-    static let bubble = Color(light: 0x333333, dark: 0xFFFFFF)
-    static let onBubble = Color(light: 0xECECEA, dark: 0x000000)
+    static let primary = Color(light: 0x1C1C1C, dark: 0xF7F7F7)
+    static let onPrimary = Color(light: 0xE6E6E4, dark: 0x141414)
+    static let bubble = Color(light: 0x333333, dark: 0x1A1A1A)
+    static let onBubble = Color(light: 0xECECEA, dark: 0xF7F7F7)
 
     /// Attention: approvals, questions, anything waiting on the user.
     static let accent = Color(light: 0x2E7D7A, dark: 0xE69F00)
-    static let running = Color(light: 0x1C1C1C, dark: 0x56B4E9)
+    static let running = Color(light: 0x1C1C1C, dark: 0x5382EE)
     static let waiting = Color(light: 0x8C8C8A, dark: 0x999999)
     static let idle = Color(light: 0xB6B6B4, dark: 0x666666)
     static let failure = Color(light: 0x5A5A58, dark: 0xD55E00)
