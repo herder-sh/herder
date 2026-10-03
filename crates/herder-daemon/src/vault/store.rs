@@ -236,6 +236,17 @@ impl VaultStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every device that ever replicated here as `host`.
+    pub fn devices_of(&self, host: &HostId) -> Result<Vec<DeviceId>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT device_id FROM hosts WHERE host_id = ?1")?;
+        let rows = stmt.query_map([host.as_str()], |row| {
+            Ok(DeviceId::new(row.get::<_, String>(0)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Records that the host replicating from `device` was last heard from `at`.
     pub fn seen(&mut self, device: &DeviceId, at: Timestamp) -> Result<()> {
         self.conn
@@ -855,6 +866,8 @@ mod tests {
         );
         let seen: Timestamp = "2027-01-15T09:00:00Z".parse().unwrap();
         store.seen(&d2, seen).unwrap();
+        assert_eq!(store.devices_of(&h1).unwrap(), [d1.clone(), d2.clone()]);
+        assert!(store.devices_of(&h2).unwrap().is_empty());
         assert_eq!(store.host_devices().unwrap(), [d1, d2]);
         let hosts = store.hosts().unwrap();
         assert_eq!(hosts.len(), 1);

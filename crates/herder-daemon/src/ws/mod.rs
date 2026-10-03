@@ -13,7 +13,7 @@ mod tls;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use herder_protocol::{
@@ -37,6 +37,7 @@ use crate::hub::Outbox;
 use crate::login::{Logins, NewAccount};
 use crate::session::SessionManager;
 use crate::terminal::Terminals;
+use crate::vault::Link;
 use commands::Commands;
 
 /// Who a connection acts as.
@@ -146,6 +147,8 @@ struct Shared<B> {
     logins: Logins,
     commands: Commands,
     host: Host,
+    /// The host's link to its vault, which answers the vault link commands; a vault has none.
+    link: OnceLock<Arc<Link>>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -217,6 +220,13 @@ impl<B: Backend> Shared<B> {
             CommandBody::TerminalInput { terminal_id, data } => {
                 terminals.input(&terminal_id, outbox, data.0).await?;
             }
+            command @ (CommandBody::GetVaultLink
+            | CommandBody::LinkVault { .. }
+            | CommandBody::UnlinkVault)
+                if let Some(link) = self.link.get() =>
+            {
+                return link.command(command).await;
+            }
             command => return self.backend.command(identity, command_id, command).await,
         }
         Ok(CommandResult::Applied)
@@ -245,8 +255,17 @@ impl<B: Backend> Server<B> {
                 logins,
                 commands: Commands::default(),
                 host,
+                link: OnceLock::new(),
             }),
         }
+    }
+
+    /// Answers the vault link commands with `link`; once per server.
+    pub fn link_vault(&self, link: Arc<Link>) -> anyhow::Result<()> {
+        self.shared
+            .link
+            .set(link)
+            .map_err(|_| anyhow::anyhow!("the vault is linked already"))
     }
 
     /// Serves one client whose handshakes are done and whose first text frame, `first`, was
