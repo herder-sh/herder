@@ -78,6 +78,12 @@ struct DesktopShell: View {
             } actions: {
                 PaneButton(title: "Add Machine", symbol: "plus") { sheet = .pair }
             }
+        case .vault:
+            Pane(title: "Vault", subtitle: "Replicated hosts and their sessions", switcher: switcher) {
+                VaultView(fleet: fleet)
+            } actions: {
+                EmptyView()
+            }
         }
     }
 
@@ -221,6 +227,7 @@ struct Switcher {
         Button("Home", systemImage: "tray.full") { go(.home) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
+        if !fleet.vaults.isEmpty { Button("Vault", systemImage: "archivebox") { go(.vault) } }
         Divider()
         ForEach(fleet.lists.projects) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -294,6 +301,9 @@ struct Sidebar: View {
                        selected: item == .pullRequests) { select(.pullRequests) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
+            if !fleet.vaults.isEmpty {
+                SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
+            }
 
             HStack {
                 SectionHeading(title: "Projects")
@@ -368,6 +378,7 @@ private struct SidebarRail: View {
             rail("tray.full", "Home", .home, badge: lists.requests.count)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
+            if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in
                 rail("shippingbox", project.name, .project(project.id), badge: 0)
             }
