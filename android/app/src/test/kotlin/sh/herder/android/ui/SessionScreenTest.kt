@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -24,6 +25,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.junit.Assert.assertTrue
 import sh.herder.android.Profile
 import sh.herder.android.SampleKey
 import sh.herder.android.SampleStart
@@ -32,7 +34,9 @@ import sh.herder.android.Stage
 import sh.herder.android.Summary
 import sh.herder.android.added
 import sh.herder.android.firstTurn
+import sh.herder.android.sampleImageSession
 import sh.herder.android.sampleMachine
+import sh.herder.android.samplePng
 import sh.herder.android.sampleSession
 import sh.herder.android.toolCall
 import sh.herder.android.toolResult
@@ -43,6 +47,7 @@ import sh.herder.ffi.ApprovalDecision
 import sh.herder.ffi.ApprovalOutcome
 import sh.herder.ffi.CommandBody
 import sh.herder.ffi.EventBody
+import sh.herder.ffi.Image
 import sh.herder.ffi.Item
 import sh.herder.ffi.ItemBody
 import sh.herder.ffi.Machine
@@ -70,10 +75,22 @@ class SessionScreenTest {
     private val clock = { SampleStart.plusSeconds(90) }
     private val s2 = SampleKey.sessionId
 
-    private fun show(session: Session, machine: Machine = sampleMachine(SessionStatus.IDLE), recorder: Recorder = Recorder()): Recorder {
+    private fun show(
+        session: Session,
+        machine: Machine = sampleMachine(SessionStatus.IDLE),
+        recorder: Recorder = Recorder(),
+        pickImages: (() -> List<Image>)? = null,
+        fetchAttachment: (suspend (String) -> ByteArray?)? = null,
+        initialImages: List<Image> = emptyList(),
+    ): Recorder {
         compose.setContent {
             HerderTheme {
-                SessionScreen(SampleKey, session, machine, listOf("opus", "sonnet"), recorder.send, {}, {}, clock)
+                SessionScreen(
+                    SampleKey, session, machine, listOf("opus", "sonnet"), recorder.send, {}, {}, clock,
+                    fetchAttachment = fetchAttachment,
+                    pickImages = pickImages,
+                    initialImages = initialImages,
+                )
             }
         }
         return recorder
@@ -268,5 +285,54 @@ class SessionScreenTest {
     fun anEmptySessionSaysHowToStart() {
         show(Session().applied(SessionUpdate(emptyList(), emptyList())))
         compose.onNodeWithText("Nothing here yet. Write a prompt to start.").assertIsDisplayed()
+    }
+
+    @Test
+    fun attachingAnImageSendsItWithThePrompt() {
+        val png = samplePng()
+        val image = Image("image/png", png)
+        val recorder = show(
+            Session().applied(firstTurn()),
+            pickImages = { listOf(image) },
+        )
+        compose.onNodeWithContentDescription("Attach photo").performClick()
+        compose.onNodeWithContentDescription("Pending image 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Remove image 1").assertIsDisplayed()
+        composer().performTextInput("Look at this screenshot")
+        compose.onNodeWithContentDescription("Send").performClick()
+        val sent = recorder.sent.single() as CommandBody.SendPrompt
+        assertEquals(s2, sent.sessionId)
+        assertEquals("Look at this screenshot", sent.text)
+        assertEquals(1, sent.images.size)
+        assertEquals("image/png", sent.images[0].mediaType)
+        assertTrue(sent.images[0].data.contentEquals(png))
+        compose.onNodeWithContentDescription("Image 1").assertIsDisplayed()
+        compose.onNodeWithText("QUEUED").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPendingImageCanBeRemoved() {
+        show(Session().applied(firstTurn()), initialImages = listOf(Image("image/png", samplePng())))
+        compose.onNodeWithContentDescription("Pending image 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Remove image 1").performClick()
+        compose.onAllNodes(hasContentDescription("Pending image 1")).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun aTranscriptImageOpensFullSize() {
+        val png = samplePng()
+        show(sampleImageSession(), fetchAttachment = { png })
+        compose.onNodeWithContentDescription("Image 1").performClick()
+        compose.onNodeWithContentDescription("Full-size image").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Close image").performClick()
+        compose.onAllNodes(hasContentDescription("Full-size image")).assertCountEquals(0)
+    }
+
+    @Test
+    fun aMissingImageIsAQuietPlaceholder() {
+        show(sampleImageSession())
+        compose.onNodeWithContentDescription("Missing image 1").assertIsDisplayed()
+        compose.onAllNodes(hasContentDescription("Image 1")).assertCountEquals(0)
     }
 }
