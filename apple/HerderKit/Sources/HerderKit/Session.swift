@@ -171,7 +171,7 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if item.parentCallId == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+            if item.parentCallId == nil, item.agentMessage == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
                 outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
@@ -259,7 +259,11 @@ struct SessionModel {
         case .turnFailed(_, let error): return "Turn failed: \(firstLine(error.message))"
         case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
-            case .userMessage(let text, _): return "Prompt: \(firstLine(text))"
+            case .userMessage(let text, _):
+                if let sender = item.agentMessage?.senderSessionId {
+                    return "From agent \(sender): \(firstLine(text))"
+                }
+                return "Prompt: \(firstLine(text))"
             case .assistantMessage(let text): return "Reply: \(firstLine(text))"
             case .reasoning: return "Thinking"
             case .toolCall(let name, let input): return "Tool: \(toolSummary(name: name, input: input))"
