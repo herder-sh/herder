@@ -47,6 +47,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: >-
           UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown
           UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_NSCameraUsageDescription: herder scans the QR code that herder pair prints, to pair with a machine.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: >-
           herder connects to the machines you pair with, which may be on your local network.
     scheme:
