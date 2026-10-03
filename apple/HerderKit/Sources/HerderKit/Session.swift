@@ -105,7 +105,7 @@ struct SessionModel {
         case .turnFailed(let turnId, let error):
             endTurn(turnId)
             failure = error.message
-        case .itemAdded(let item):
+        case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
             case .assistantMessage(let text): lastMessage = text
             case .toolCall(let name, let input): lastTool = toolSummary(name: name, input: input)
@@ -145,7 +145,7 @@ struct SessionModel {
             }
         case .prUnlinked(let number):
             prs.removeAll { $0.number == number }
-        case .childSpawned, .childReported, .titleChanged, .unknown:
+        case .itemAdded, .childSpawned, .childReported, .titleChanged, .unknown:
             break
         }
     }
@@ -171,7 +171,7 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+            if item.parentCallId == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
                 outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
@@ -230,7 +230,7 @@ struct SessionModel {
             if case .turnCompleted = event.body { stats.completed += 1 }
             if case .turnInterrupted = event.body { stats.interrupted += 1 }
             if case .turnFailed = event.body { stats.failed += 1 }
-        case .itemAdded(let item):
+        case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
             case .userMessage: stats.prompts += 1
             case .assistantMessage: stats.replies += 1
@@ -257,7 +257,7 @@ struct SessionModel {
         case .turnCompleted: return "Turn completed"
         case .turnInterrupted: return "Turn interrupted"
         case .turnFailed(_, let error): return "Turn failed: \(firstLine(error.message))"
-        case .itemAdded(let item):
+        case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
             case .userMessage(let text, _): return "Prompt: \(firstLine(text))"
             case .assistantMessage(let text): return "Reply: \(firstLine(text))"
@@ -266,6 +266,7 @@ struct SessionModel {
             case .toolResult(_, _, let isError): return isError ? "Tool failed" : "Tool finished"
             case .unknown: return "Item"
             }
+        case .itemAdded: return "Sub-agent activity"
         case .approvalRequested(_, _, _, let summary, _, _): return "Approval asked: \(summary)"
         case .approvalEscalated: return "Approval escalated to you"
         case .approvalResolved(_, let decision, _): return "Approval \(decision)"
@@ -339,7 +340,7 @@ struct SessionModel {
         }
         switch state {
         case .running:
-            if let item = streaming.last, let text = item.body.text, !text.isEmpty {
+            if let item = streaming.last(where: { $0.parentCallId == nil }), let text = item.body.text, !text.isEmpty {
                 return firstLine(text)
             }
             return lastTool ?? "Working…"
