@@ -21,6 +21,7 @@ use tracing::{debug, info, warn};
 
 use super::store::{self, Outcome};
 use super::{BUILD, Shared, blocking};
+use crate::auth::DeviceRole;
 use crate::ws::{self, Ws};
 
 /// Time a peer gets for the TLS and WebSocket handshakes, and again for its hello.
@@ -100,20 +101,22 @@ async fn serve(
         Ok(_) => return fail(ws, bad("the first message must be a hello")).await,
         Err(err) => return fail(ws, bad(&format!("invalid message: {err}"))).await,
     };
-    let identity =
-        match shared
-            .auth
-            .authenticate(device, hello.pairing_code.as_deref(), &hello.build, cancel)
-        {
-            Ok(identity) => identity,
-            Err(error) => {
-                let error = ReplicationError {
-                    code: ReplicationErrorCode::Forbidden,
-                    message: error.message,
-                };
-                return fail(ws, error).await;
-            }
-        };
+    let identity = match shared.auth.authenticate(
+        device,
+        hello.pairing_code.as_deref(),
+        &hello.build,
+        DeviceRole::Host,
+        cancel,
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            let error = ReplicationError {
+                code: ReplicationErrorCode::Forbidden,
+                message: error.message,
+            };
+            return fail(ws, error).await;
+        }
+    };
     if hello.replication_version != REPLICATION_VERSION {
         send(ws, hello_message(Vec::new())).await?;
         bail!(

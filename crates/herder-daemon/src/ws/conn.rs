@@ -132,17 +132,19 @@ async fn read<B: Backend>(
             ),
         );
     }
-    let identity =
-        match shared
-            .auth
-            .authenticate(device, hello.pairing_code.as_deref(), &hello.client, cancel)
-        {
-            Ok(identity) => identity,
-            Err(error) => {
-                outbox.push(ServerMessage::Error { error });
-                bail!("device {device} refused");
-            }
-        };
+    let identity = match shared.auth.authenticate(
+        device,
+        hello.pairing_code.as_deref(),
+        &hello.client,
+        auth::DeviceRole::Client,
+        cancel,
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            outbox.push(ServerMessage::Error { error });
+            bail!("device {device} refused");
+        }
+    };
     info!(
         client = %hello.client,
         user_id = %identity.user_id,
