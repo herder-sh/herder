@@ -129,7 +129,7 @@ class SessionScreenTest {
                 EventBody.SessionStatusChanged(SessionStatus.RUNNING, null),
                 EventBody.TurnStarted("t2"),
                 added("j1", "t2", ItemBody.UserMessage("Remove the old build output too.", emptyList())),
-                streaming = listOf(Item("j2", "t2", ItemBody.AssistantMessage("Removing it"))),
+                streaming = listOf(Item(null, "j2", "t2", ItemBody.AssistantMessage("Removing it"))),
             ),
         )
         compose.onAllNodesWithText("QUEUED").assertCountEquals(0)
