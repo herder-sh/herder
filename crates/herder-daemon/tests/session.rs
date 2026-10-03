@@ -63,7 +63,11 @@ struct Recording {
     adapter: Box<dyn Adapter>,
     starts: Arc<Mutex<Vec<StartRequest>>>,
     commands: Arc<Mutex<Vec<AdapterCommand>>>,
+    /// Held by a test, keeps the daemon's commands from reaching the CLI until released.
+    gate: Gate,
 }
+
+type Gate = Arc<tokio::sync::Mutex<()>>;
 
 impl Adapter for Recording {
     fn accepts_images(&self) -> bool {
@@ -73,13 +77,14 @@ impl Adapter for Recording {
     fn start(&self, request: StartRequest) -> StartFuture {
         self.starts.lock().unwrap().push(request.clone());
         let started = self.adapter.start(request);
-        let commands = self.commands.clone();
+        let (commands, gate) = (self.commands.clone(), self.gate.clone());
         Box::pin(async move {
             let mut session = started.await?;
             let (tx, mut rx) = mpsc::unbounded_channel();
             let fake = std::mem::replace(&mut session.commands, tx);
             tokio::spawn(async move {
                 while let Some(command) = rx.recv().await {
+                    drop(gate.lock().await);
                     commands.lock().unwrap().push(command.clone());
                     if fake.send(command).is_err() {
                         return;
@@ -144,6 +149,7 @@ struct Daemon {
     starts: Arc<Mutex<Vec<StartRequest>>>,
     /// Every command the adapter received, across starts.
     commands: Arc<Mutex<Vec<AdapterCommand>>>,
+    gate: Gate,
     shutdown: CancellationToken,
 }
 
@@ -155,25 +161,29 @@ impl Daemon {
             adapter: Box::new(FakeAdapter::new(fixture(script))),
             starts: Default::default(),
             commands: Default::default(),
+            gate: Default::default(),
         };
         let (starts, commands) = (recording.starts.clone(), recording.commands.clone());
-        Self::open_with(dir, Arc::new(recording), starts, commands, turns).await
+        let gate = recording.gate.clone();
+        Self::open_with(dir, Arc::new(recording), starts, commands, gate, turns).await
     }
 
     /// Opens a manager whose CLI starts play `scripts`, one per start, in order.
     async fn open_scripts(dir: &Path, scripts: &[&str], turns: Arc<AtomicU64>) -> Self {
         let scripted = Scripted::new(scripts);
         let (starts, commands) = (scripted.starts.clone(), scripted.commands.clone());
-        Self::open_with(dir, scripted, starts, commands, turns).await
+        let gate = scripted.gate.clone();
+        Self::open_with(dir, scripted, starts, commands, gate, turns).await
     }
 
     /// Opens a manager running the fake provider's sessions on `adapter`, which records into
-    /// `starts` and `commands`.
+    /// `starts` and `commands` and holds commands while `gate` is held.
     async fn open_with(
         dir: &Path,
         adapter: Arc<dyn Adapter>,
         starts: Arc<Mutex<Vec<StartRequest>>>,
         commands: Arc<Mutex<Vec<AdapterCommand>>>,
+        gate: Gate,
         turns: Arc<AtomicU64>,
     ) -> Self {
         let (tx, seen) = mpsc::unbounded_channel();
@@ -214,8 +224,15 @@ impl Daemon {
             log: Vec::new(),
             starts,
             commands,
+            gate,
             shutdown,
         }
+    }
+
+    /// Holds the daemon's commands back from the CLI until the guard drops, so a test knows
+    /// what it sends meanwhile arrives while the turn is still open.
+    async fn hold(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.gate.clone().lock_owned().await
     }
 
     async fn create(&self) -> SessionId {
@@ -256,6 +273,11 @@ impl Daemon {
 
     /// Published durable events up to and including the first `done` accepts.
     async fn events_until(&mut self, done: impl Fn(&EventBody) -> bool) -> Vec<Event> {
+        self.until_event(|event| done(&event.body)).await
+    }
+
+    /// Published durable events up to and including the first `done` accepts.
+    async fn until_event(&mut self, done: impl Fn(&Event) -> bool) -> Vec<Event> {
         let mut events = Vec::new();
         loop {
             let seen = tokio::time::timeout(Duration::from_secs(5), self.seen.recv())
@@ -263,7 +285,7 @@ impl Daemon {
                 .unwrap_or_else(|_| panic!("timed out; got {:#?}", describe(&events)))
                 .unwrap();
             if let Seen::Event(event) = &seen {
-                let stop = done(&event.body);
+                let stop = done(event);
                 events.push(event.clone());
                 self.log.push(seen);
                 if stop {
@@ -407,8 +429,10 @@ async fn two_clients_prompting_one_session_share_one_ordered_history() {
     let session = daemon.create().await;
 
     // Bob's prompt arrives while Alice's turn is still running: it is queued, not refused.
+    let held = daemon.hold().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.prompt(bob(), &session, "Second.").await;
+    drop(held);
 
     let mut published = daemon.until_status(SessionStatus::Idle).await;
     let history = vec![
@@ -441,8 +465,10 @@ async fn streaming_items_publish_a_snapshot_then_deltas() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "two_prompts.jsonl", Default::default()).await;
     let session = daemon.create().await;
+    let held = daemon.hold().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.prompt(alice(), &session, "Second.").await;
+    drop(held);
     daemon.until_status(SessionStatus::Idle).await;
 
     // The new list follows the stored `session_created`.
@@ -759,6 +785,9 @@ async fn needs_you_holds_until_the_last_of_several_approvals_is_answered() {
 
     let first = daemon.answer(alice(), &session, "approval-1", ApprovalDecision::Allow);
     assert_eq!(first.await, Ok(CommandResult::Applied));
+    daemon
+        .events_until(|body| matches!(body, EventBody::ItemAdded { item } if matches!(item.body, ItemBody::ToolResult { .. })))
+        .await;
     let second = daemon.answer(bob(), &session, "approval-2", ApprovalDecision::Deny);
     assert_eq!(second.await, Ok(CommandResult::Applied));
     daemon.until_status(SessionStatus::Idle).await;
@@ -1282,6 +1311,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
         adapter: Box::new(FakeAdapter::new(fixture("first.jsonl"))),
         starts: Default::default(),
         commands: Default::default(),
+        gate: Default::default(),
     };
     let (claude, codex) = (recording(), recording());
     let (claude_starts, codex_starts) = (claude.starts.clone(), codex.starts.clone());
@@ -1736,6 +1766,7 @@ struct Scripted {
     play: fn(PathBuf) -> Box<dyn Adapter>,
     starts: Arc<Mutex<Vec<StartRequest>>>,
     commands: Arc<Mutex<Vec<AdapterCommand>>>,
+    gate: Gate,
 }
 
 impl Scripted {
@@ -1757,6 +1788,7 @@ impl Scripted {
             play,
             starts: Default::default(),
             commands: Default::default(),
+            gate: Default::default(),
         })
     }
 
@@ -1781,6 +1813,7 @@ impl Adapter for Scripted {
             adapter: (self.play)(script),
             starts: self.starts.clone(),
             commands: self.commands.clone(),
+            gate: self.gate.clone(),
         }
         .start(request)
     }
@@ -2698,7 +2731,16 @@ async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends
             )
     });
     assert!(interrupted < admitted, "{:#?}", describe(&events));
-    daemon.until_status(SessionStatus::Idle).await;
+    // The first session's own `idle` may come before or after this.
+    daemon
+        .until_event(|event| {
+            event.session_id == second
+                && event.body
+                    == EventBody::SessionStatusChanged {
+                        status: SessionStatus::Idle,
+                    }
+        })
+        .await;
     assert_eq!(
         describe(&daemon.journal(&second).await),
         [
@@ -3326,14 +3368,17 @@ fn turn_error(events: &[Event]) -> TurnError {
 async fn a_new_worktree_runs_its_setup_command_once_before_the_first_turn() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "after_setup.jsonl", Default::default()).await;
-    set_up_with(
-        &daemon,
-        "echo ran >> .setup-runs; echo ready; echo warn >&2",
-        Duration::from_secs(60),
+    // Ends only once the test lets it, so the prompt surely arrives while it runs.
+    let go = dir.path().join("go");
+    let command = format!(
+        "until [ -e '{}' ]; do sleep 0.01; done; echo ran >> .setup-runs; echo ready; echo warn >&2",
+        go.display()
     );
+    set_up_with(&daemon, &command, Duration::from_secs(60));
     let session = daemon.create().await;
     // Sent while the setup runs: it waits for it.
     daemon.prompt(alice(), &session, "First.").await;
+    std::fs::write(&go, "").unwrap();
     daemon.until_status(SessionStatus::Idle).await;
     daemon.prompt(alice(), &session, "Second.").await;
     daemon.until_status(SessionStatus::Idle).await;
@@ -3371,10 +3416,7 @@ async fn a_new_worktree_runs_its_setup_command_once_before_the_first_turn() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(
-        call,
-        serde_json::json!({ "command": "echo ran >> .setup-runs; echo ready; echo warn >&2" })
-    );
+    assert_eq!(call, serde_json::json!({ "command": command }));
     let worktree = daemon.manager.worktree(&session).await.unwrap();
     assert_eq!(
         std::fs::read_to_string(worktree.join(".setup-runs")).unwrap(),
@@ -3531,12 +3573,11 @@ async fn an_agent_oom_killed_in_its_scope_fails_clearly_and_restarts_seeded() {
     let limit = scopes.limits(false).memory_max / (1024 * 1024);
     daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
     let session = daemon.create().await;
-    daemon.prompt(alice(), &session, "First.").await;
-    daemon
-        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
-        .await;
     // Queued behind the turn the kill ends: it must not go to the dying CLI.
+    let held = daemon.hold().await;
+    daemon.prompt(alice(), &session, "First.").await;
     daemon.prompt(alice(), &session, "Second.").await;
+    drop(held);
     daemon.until_status(SessionStatus::Idle).await;
 
     let journal = daemon.journal(&session).await;
@@ -3766,6 +3807,7 @@ async fn images_that_are_not_images_or_go_to_a_cli_without_images_are_refused() 
         adapter: Box::new(blind),
         starts: Default::default(),
         commands: Default::default(),
+        gate: Default::default(),
     };
     let (starts, commands) = (recording.starts.clone(), recording.commands.clone());
     let daemon = Daemon::open_with(
@@ -3773,6 +3815,7 @@ async fn images_that_are_not_images_or_go_to_a_cli_without_images_are_refused() 
         Arc::new(recording),
         starts,
         commands,
+        Default::default(),
         Default::default(),
     )
     .await;

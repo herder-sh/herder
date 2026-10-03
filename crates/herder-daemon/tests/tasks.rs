@@ -347,14 +347,8 @@ impl Daemon {
 
     /// Whether `session_id` was ever `needs_you`.
     async fn ever_needed_you(&self, session_id: &SessionId) -> bool {
-        self.journal(session_id).await.iter().any(|event| {
-            matches!(
-                event.body,
-                EventBody::SessionStatusChanged {
-                    status: SessionStatus::NeedsYou
-                }
-            )
-        })
+        let journal = self.journal(session_id).await;
+        journal.iter().any(|event| needs_you(&event.body))
     }
 
     /// Alice answers through a client, as any user can.
@@ -903,6 +897,14 @@ async fn a_child_turn_cut_short_by_a_restart_is_reported() {
 }
 
 /// The child's last journaled event matching `matching`.
+/// Whether `body` sets the session `needs_you`.
+fn needs_you(body: &EventBody) -> bool {
+    *body
+        == EventBody::SessionStatusChanged {
+            status: SessionStatus::NeedsYou,
+        }
+}
+
 fn last<T>(journal: &[Event], matching: impl Fn(&Event) -> Option<T>) -> T {
     journal
         .iter()
@@ -1079,6 +1081,8 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
             (Route::User, Some(EscalationReason::ExceedsAuthority)),
             "{prompt}"
         );
+        // Journaled after the request it settles on.
+        daemon.until(&child, needs_you).await;
         assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
         // Lists show it on the child and rolled up on its primary.
         let heads = daemon.manager.sessions().await.unwrap();
@@ -1210,6 +1214,7 @@ async fn a_request_the_primary_leaves_unanswered_goes_to_the_user() {
             )
         })
         .await;
+    daemon.until(&child, needs_you).await;
     assert_eq!(daemon.status(&child).await, SessionStatus::NeedsYou);
     assert_eq!(
         daemon.notifier.taken(),
