@@ -232,7 +232,6 @@ impl Link {
             host: self.setup.host.clone(),
             sessions: self.setup.sessions.clone(),
             changed: Arc::clone(&self.setup.changed),
-            data_dir: self.setup.data_dir.clone(),
         })
     }
 
