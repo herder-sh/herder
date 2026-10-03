@@ -1,13 +1,24 @@
-//! The main window: the machines in a sidebar, each with its connection state, and a content
-//! pane for the selected machine.
+//! The main window: the machines in a sidebar, each with its connection state and a vault's
+//! hosts under it, online or offline; and the sessions of the selected one, or of all, grouped
+//! by project or by machine ([`crate::lists`]). Narrow, the sidebar and the list are pages of
+//! one stack and rows show less, as the TUI's compact rows do.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::glib;
-use herder_client_core::{ConnectionState, Machine};
-use herder_protocol::HostId;
+use gtk::{gio, glib};
+use herder_client_core::{ConnectionState, Machine, SessionUpdate};
+use herder_protocol::{CiStatus, Mergeable, PrState, PullRequest, ReviewStatus, SessionStatus};
+
+use crate::lists::{self, Grouping, Lists, Scope, SessionKey, Summary};
+
+/// Most PRs a row names; the rest are counted.
+const ROW_PRS: usize = 2;
+
+/// Pixels a child row is indented per level.
+const INDENT: i32 = 18;
 
 /// The main window and the widgets it redraws. Cheap to clone: every field is shared.
 #[derive(Clone)]
@@ -20,9 +31,24 @@ pub struct MainWindow {
     list: gtk::ListBox,
     error: adw::StatusPage,
     content: adw::NavigationPage,
-    placeholder: adw::StatusPage,
-    machines: Rc<RefCell<Vec<Machine>>>,
-    selected: Rc<RefCell<Option<HostId>>>,
+    /// `sessions` or `empty`.
+    content_stack: gtk::Stack,
+    /// The groups of the session list.
+    groups: gtk::Box,
+    by_machine: gtk::ToggleButton,
+    state: Rc<RefCell<State>>,
+}
+
+/// What the window shows, as of the last change.
+#[derive(Default)]
+struct State {
+    machines: Vec<Machine>,
+    summaries: HashMap<SessionKey, Summary>,
+    /// What each sidebar row selects, in row order.
+    scopes: Vec<Scope>,
+    scope: Scope,
+    grouping: Grouping,
+    compact: bool,
 }
 
 impl MainWindow {
@@ -66,13 +92,42 @@ impl MainWindow {
         sidebar_view.add_top_bar(&sidebar_header);
         sidebar_view.set_content(Some(&sidebar));
 
-        let placeholder = adw::StatusPage::builder()
-            .icon_name("computer-symbolic")
-            .title("Select a machine")
+        let by_machine = gtk::ToggleButton::builder()
+            .icon_name("network-server-symbolic")
+            .tooltip_text("Group by machine")
             .build();
+        let content_header = adw::HeaderBar::new();
+        content_header.pack_end(&by_machine);
+        let groups = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_top(12)
+            .margin_bottom(12)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let no_sessions = adw::StatusPage::builder()
+            .icon_name("computer-symbolic")
+            .title("No sessions")
+            .build();
+        let content_stack = gtk::Stack::new();
+        content_stack.add_named(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(
+                    &adw::Clamp::builder()
+                        .maximum_size(900)
+                        .child(&groups)
+                        .build(),
+                )
+                .build(),
+            Some("sessions"),
+        );
+        content_stack.add_named(&no_sessions, Some("empty"));
+        content_stack.set_visible_child_name("empty");
         let content_view = adw::ToolbarView::new();
-        content_view.add_top_bar(&adw::HeaderBar::new());
-        content_view.set_content(Some(&placeholder));
+        content_view.add_top_bar(&content_header);
+        content_view.set_content(Some(&content_stack));
         let content = adw::NavigationPage::builder()
             .title("Sessions")
             .tag("sessions")
@@ -94,15 +149,22 @@ impl MainWindow {
             .title("herder")
             .default_width(960)
             .default_height(640)
+            .width_request(360)
+            .height_request(294)
             .content(&split)
             .build();
+        window.add_action(&gio::PropertyAction::new(
+            "group-by-machine",
+            &by_machine,
+            "active",
+        ));
         let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
             600.0,
             adw::LengthUnit::Sp,
         ));
         narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
-        window.add_breakpoint(narrow);
+        window.add_breakpoint(narrow.clone());
         window.set_application(app);
 
         let this = Self {
@@ -113,9 +175,10 @@ impl MainWindow {
             list,
             error,
             content,
-            placeholder,
-            machines: Rc::default(),
-            selected: Rc::default(),
+            content_stack,
+            groups,
+            by_machine,
+            state: Rc::default(),
         };
         let selected = this.clone();
         this.list.connect_row_selected(move |_, row| {
@@ -123,6 +186,22 @@ impl MainWindow {
                 selected.select(row.index());
             }
         });
+        // Only the user's pick opens the list on a narrow window; a redraw's does not.
+        let shown = this.split.clone();
+        this.list
+            .connect_row_activated(move |_, _| shown.set_show_content(true));
+        let grouped = this.clone();
+        this.by_machine.connect_toggled(move |button| {
+            grouped.set_grouping(if button.is_active() {
+                Grouping::Machines
+            } else {
+                Grouping::Projects
+            });
+        });
+        let compact = this.clone();
+        narrow.connect_apply(move |_| compact.set_compact(true));
+        let wide = this.clone();
+        narrow.connect_unapply(move |_| wide.set_compact(false));
         this
     }
 
@@ -130,36 +209,91 @@ impl MainWindow {
         self.window.present();
     }
 
-    /// Redraws the sidebar from the client's machines, keeping the selection.
+    /// Redraws from the client's machines, keeping the selection, and drops what the
+    /// subscriptions said of sessions no longer listed.
     pub fn show_machines(&self, machines: &[Machine]) {
-        *self.machines.borrow_mut() = machines.to_vec();
+        let listed: HashSet<SessionKey> = lists::keys(machines);
+        {
+            let mut state = self.state.borrow_mut();
+            state.machines = machines.to_vec();
+            state.summaries.retain(|key, _| listed.contains(key));
+        }
         self.sidebar_title.set_subtitle(&summary(machines));
-        let selected = self.selected.borrow().clone();
+        let scope = self.state.borrow().scope.clone();
         // Rebuilding the rows fires `row-selected` with none; the selection is restored below.
         self.list.remove_all();
-        for machine in machines {
-            let (mark, state) = connection(&machine.connection);
-            let icon = gtk::Image::from_icon_name("media-record-symbolic");
-            icon.add_css_class(mark);
-            icon.set_tooltip_text(Some(&state));
+        let mut scopes = Vec::new();
+        if !machines.is_empty() {
             let row = adw::ActionRow::builder()
-                .title(machine.name.as_str())
-                .subtitle(state.as_str())
-                .use_markup(false)
+                .title("All machines")
+                .subtitle(lists::sessions(listed.len()))
                 .build();
-            row.add_prefix(&icon);
+            row.add_prefix(&gtk::Image::from_icon_name("view-list-symbolic"));
             self.list.append(&row);
+            scopes.push(Scope::All);
+        }
+        for machine in machines {
+            let state = lists::connection(&machine.connection);
+            let subtitle = format!("{state} · {}", lists::sessions(machine.sessions.len()));
+            let mark = mark(&machine.connection);
+            self.list
+                .append(&sidebar_row(&machine.name, &subtitle, mark, 0));
+            scopes.push(Scope::Machine(machine.host_id.clone()));
+            for host in &machine.hosts {
+                let count = machine
+                    .sessions
+                    .iter()
+                    .filter(|head| head.host_id.as_ref() == Some(&host.host_id))
+                    .count();
+                let subtitle = format!("{} · {}", lists::host_state(host), lists::sessions(count));
+                let mark = if host.online { "success" } else { "error" };
+                self.list
+                    .append(&sidebar_row(&host.host_name, &subtitle, mark, 1));
+                scopes.push(Scope::Host {
+                    vault: machine.host_id.clone(),
+                    host: host.host_id.clone(),
+                });
+            }
         }
         self.sidebar
             .set_visible_child_name(if machines.is_empty() { "empty" } else { "list" });
-        let index = selected.and_then(|host_id| {
-            machines
-                .iter()
-                .position(|machine| machine.host_id == host_id)
-        });
+        // A machine or host gone from the list falls back to all machines.
+        let index = scopes
+            .iter()
+            .position(|known| *known == scope)
+            .or((!scopes.is_empty()).then_some(0));
+        self.state.borrow_mut().scopes = scopes;
         match index.and_then(|index| self.list.row_at_index(i32::try_from(index).ok()?)) {
             Some(row) => self.list.select_row(Some(&row)),
-            None => self.unselect(),
+            None => {
+                self.state.borrow_mut().scope = Scope::All;
+                self.content.set_title("Sessions");
+                self.show_sessions();
+            }
+        }
+    }
+
+    /// Folds in an update of `key`'s session, redrawing the list if it shows the change.
+    pub fn apply(&self, key: &SessionKey, update: &SessionUpdate) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            // An update can outrun the machine list that drops its session.
+            let listed = state.machines.iter().any(|machine| {
+                machine.host_id == key.host_id
+                    && machine
+                        .sessions
+                        .iter()
+                        .any(|head| head.session_id == key.session_id)
+            });
+            listed
+                && state
+                    .summaries
+                    .entry(key.clone())
+                    .or_default()
+                    .apply(update)
+        };
+        if changed {
+            self.show_sessions();
         }
     }
 
@@ -172,38 +306,213 @@ impl MainWindow {
     }
 
     fn select(&self, index: i32) {
-        let machines = self.machines.borrow();
-        let Some(machine) = usize::try_from(index)
-            .ok()
-            .and_then(|index| machines.get(index))
-        else {
-            return;
+        let title = {
+            let mut state = self.state.borrow_mut();
+            let Some(scope) = usize::try_from(index)
+                .ok()
+                .and_then(|index| state.scopes.get(index))
+                .cloned()
+            else {
+                return;
+            };
+            let title = scope_title(&state.machines, &scope);
+            state.scope = scope;
+            title
         };
-        *self.selected.borrow_mut() = Some(machine.host_id.clone());
-        self.content.set_title(&machine.name);
-        self.placeholder
-            .set_icon_name(Some("network-server-symbolic"));
-        self.placeholder.set_title(&machine.name);
-        self.placeholder
-            .set_description(Some(&glib::markup_escape_text(&sessions(machine))));
-        self.split.set_show_content(true);
+        self.content.set_title(&title);
+        self.show_sessions();
     }
 
-    fn unselect(&self) {
-        *self.selected.borrow_mut() = None;
-        self.content.set_title("Sessions");
-        self.placeholder.set_icon_name(Some("computer-symbolic"));
-        self.placeholder.set_title("Select a machine");
-        self.placeholder.set_description(None);
+    fn set_grouping(&self, grouping: Grouping) {
+        self.state.borrow_mut().grouping = grouping;
+        self.show_sessions();
+    }
+
+    fn set_compact(&self, compact: bool) {
+        self.state.borrow_mut().compact = compact;
+        self.show_sessions();
+    }
+
+    /// Redraws the session list.
+    fn show_sessions(&self) {
+        let state = self.state.borrow();
+        let lists = Lists {
+            machines: &state.machines,
+            summaries: &state.summaries,
+            compact: state.compact,
+        };
+        let groups = lists.groups(&state.scope, state.grouping);
+        while let Some(child) = self.groups.first_child() {
+            self.groups.remove(&child);
+        }
+        for group in &groups {
+            let widget = adw::PreferencesGroup::builder()
+                .title(glib::markup_escape_text(&group.title))
+                .description(glib::markup_escape_text(&group.description))
+                .build();
+            for row in &group.rows {
+                widget.add(&session_row(row, state.compact));
+            }
+            self.groups.append(&widget);
+        }
+        let any = groups.iter().any(|group| !group.rows.is_empty());
+        self.content_stack
+            .set_visible_child_name(if any { "sessions" } else { "empty" });
     }
 }
 
-/// A connection's style class for its mark, and its words.
-pub fn connection(state: &ConnectionState) -> (&'static str, String) {
+/// A sidebar row: a coloured mark, the name and its state; `depth` 1 for a vault's host.
+fn sidebar_row(name: &str, subtitle: &str, mark: &str, depth: i32) -> adw::ActionRow {
+    let icon = gtk::Image::from_icon_name("media-record-symbolic");
+    icon.add_css_class(mark);
+    icon.set_margin_start(depth * INDENT);
+    // Before the title: the builder may set it first, parsing it as markup.
+    let row = adw::ActionRow::new();
+    row.set_use_markup(false);
+    row.set_title(name);
+    row.set_subtitle(subtitle);
+    row.add_prefix(&icon);
+    row
+}
+
+/// A session's row: its status, title and where it runs; its task's child count, how many
+/// children need the user, and its PRs.
+fn session_row(row: &lists::SessionRow, compact: bool) -> adw::ActionRow {
+    let mut subtitle = row.place.clone().unwrap_or_default();
+    if let Some(to) = &row.moved_to {
+        if !subtitle.is_empty() {
+            subtitle.push_str(" · ");
+        }
+        subtitle.push_str(&format!("moved to {to}"));
+    }
+    // Before the title: the builder may set it first, parsing it as markup.
+    let widget = adw::ActionRow::new();
+    widget.set_use_markup(false);
+    widget.set_title(&row.title);
+    widget.set_subtitle(&subtitle);
+    if row.depth > 0 {
+        let indent = i32::try_from(row.depth).unwrap_or(i32::MAX / INDENT);
+        widget.add_prefix(
+            &gtk::Box::builder()
+                .width_request(indent.saturating_mul(INDENT))
+                .build(),
+        );
+    }
+    let (label, class) = status(row.status);
+    let status = gtk::Label::builder()
+        .label(if compact { glyph(row.status) } else { label })
+        .tooltip_text(label)
+        .xalign(0.0)
+        .width_chars(if compact { 1 } else { 9 })
+        .build();
+    for class in class {
+        status.add_css_class(class);
+    }
+    widget.add_prefix(&status);
+
+    if row.children > 0 {
+        let children = gtk::Label::new(Some(&format!("({})", row.children)));
+        children.set_tooltip_text(Some(&format!("{} in the task", row.children)));
+        children.add_css_class("dim-label");
+        widget.add_suffix(&children);
+    }
+    if row.need_you > 0 {
+        let waiting = gtk::Label::new(Some(&format!("!{}", row.need_you)));
+        waiting.set_tooltip_text(Some(&format!("{} need you", row.need_you)));
+        waiting.add_css_class("accent");
+        waiting.add_css_class("heading");
+        widget.add_suffix(&waiting);
+    }
+    let named = if compact { 1 } else { ROW_PRS };
+    for pr in row.prs.iter().take(named) {
+        widget.add_suffix(&pr_badge(pr));
+    }
+    if let Some(more) = row.prs.len().checked_sub(named).filter(|more| *more > 0) {
+        let more = gtk::Label::new(Some(&format!("+{more}")));
+        more.add_css_class("dim-label");
+        widget.add_suffix(&more);
+    }
+    widget
+}
+
+/// A PR: its number in its state's colour, then for a live one its checks and a `!` for a
+/// conflict or requested changes.
+fn pr_badge(pr: &PullRequest) -> gtk::Label {
+    let mut text = format!("#{}", pr.number);
+    if matches!(pr.state, PrState::Open | PrState::Draft) {
+        text.push_str(match pr.ci {
+            CiStatus::Passing => " ✓",
+            CiStatus::Failing => " ✗",
+            CiStatus::Pending => " …",
+            CiStatus::None => "",
+        });
+        if pr.mergeable == Mergeable::Conflicting || pr.review == ReviewStatus::ChangesRequested {
+            text.push('!');
+        }
+    }
+    let badge = gtk::Label::new(Some(&text));
+    badge.set_tooltip_text(Some(&pr.title));
+    badge.add_css_class(match pr.state {
+        PrState::Open => "success",
+        PrState::Draft => "dim-label",
+        PrState::Merged => "accent",
+        PrState::Closed => "error",
+    });
+    badge
+}
+
+/// A status's label and style classes.
+fn status(status: SessionStatus) -> (&'static str, &'static [&'static str]) {
+    match status {
+        SessionStatus::Idle => ("idle", &["dim-label"]),
+        SessionStatus::Running => ("running", &["warning"]),
+        SessionStatus::WaitingForCapacity => ("waiting", &["accent"]),
+        SessionStatus::NeedsYou => ("needs you", &["accent", "heading"]),
+        SessionStatus::Error => ("error", &["error"]),
+        SessionStatus::Archived => ("archived", &["dim-label"]),
+        SessionStatus::Moved => ("moved", &["dim-label"]),
+        SessionStatus::Unknown => ("?", &["dim-label"]),
+    }
+}
+
+/// A status as one glyph, for compact rows.
+fn glyph(status: SessionStatus) -> &'static str {
+    match status {
+        SessionStatus::Idle => "·",
+        SessionStatus::Running => "●",
+        SessionStatus::WaitingForCapacity => "◌",
+        SessionStatus::NeedsYou => "!",
+        SessionStatus::Error => "✗",
+        SessionStatus::Archived => "▪",
+        SessionStatus::Moved => "→",
+        SessionStatus::Unknown => "?",
+    }
+}
+
+/// The content page's title for `scope`.
+fn scope_title(machines: &[Machine], scope: &Scope) -> String {
+    match scope {
+        Scope::All => "All machines".to_owned(),
+        Scope::Machine(host_id) => machines
+            .iter()
+            .find(|machine| machine.host_id == *host_id)
+            .map(|machine| machine.name.clone())
+            .unwrap_or_default(),
+        Scope::Host { vault, host } => machines
+            .iter()
+            .find(|machine| machine.host_id == *vault)
+            .and_then(|machine| machine.hosts.iter().find(|h| h.host_id == *host))
+            .map(|host| host.host_name.clone())
+            .unwrap_or_default(),
+    }
+}
+
+/// A connection's style class, for its mark.
+fn mark(state: &ConnectionState) -> &'static str {
     match state {
-        ConnectionState::Connected => ("success", "connected".to_owned()),
-        ConnectionState::Connecting => ("warning", "connecting".to_owned()),
-        ConnectionState::Disconnected { error } => ("error", error.clone()),
+        ConnectionState::Connected => "success",
+        ConnectionState::Connecting => "warning",
+        ConnectionState::Disconnected { .. } => "error",
     }
 }
 
@@ -220,112 +529,144 @@ pub fn summary(machines: &[Machine]) -> String {
     }
 }
 
-fn sessions(machine: &Machine) -> String {
-    match machine.sessions.len() {
-        1 => "1 session".to_owned(),
-        count => format!("{count} sessions"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use herder_protocol::{HostId, Role};
+    use herder_protocol::{EventBody, SessionHead};
 
     use super::*;
+    use crate::lists::tests::{created, fleet, head, key, machine, pr, update};
 
-    fn machine(host: &str, name: &str, connection: ConnectionState) -> Machine {
-        Machine {
-            host_id: HostId::new(host),
-            name: name.to_owned(),
-            addresses: vec!["127.0.0.1:7447".to_owned()],
-            fingerprint: "ab".repeat(32),
-            connection,
-            role: Some(Role::Owner),
-            sessions: Vec::new(),
-            hosts: Vec::new(),
-            projects: Vec::new(),
-            accounts: Vec::new(),
-            failover: Default::default(),
-            terminals: Vec::new(),
-            resources: None,
-            session_usage: Default::default(),
-        }
-    }
-
-    fn rows(window: &MainWindow) -> Vec<(String, String)> {
+    /// Every `adw::ActionRow` under `widget`, as title and subtitle.
+    fn rows(widget: &gtk::Widget) -> Vec<(String, String)> {
         let mut rows = Vec::new();
-        let mut child = window.list.first_child();
+        let mut child = widget.first_child();
         while let Some(widget) = child {
             if let Some(row) = widget.downcast_ref::<adw::ActionRow>() {
                 rows.push((
                     row.title().into(),
                     row.subtitle().unwrap_or_default().into(),
                 ));
+            } else {
+                rows.extend(self::rows(&widget));
             }
             child = widget.next_sibling();
         }
         rows
     }
 
+    /// The text of every label among `title`'s row's prefixes and suffixes.
+    fn badges(window: &MainWindow, title: &str) -> Vec<String> {
+        fn find(widget: &gtk::Widget, title: &str) -> Option<adw::ActionRow> {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(row) = widget.downcast_ref::<adw::ActionRow>()
+                    && row.title() == title
+                {
+                    return Some(row.clone());
+                }
+                if let Some(row) = find(&widget, title) {
+                    return Some(row);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        fn labels(widget: &gtk::Widget, out: &mut Vec<String>) {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                match widget.downcast_ref::<gtk::Label>() {
+                    Some(label) if label.get_visible() => out.push(label.label().into()),
+                    _ => labels(&widget, out),
+                }
+                child = widget.next_sibling();
+            }
+        }
+        let row = find(window.groups.upcast_ref(), title).expect("the row is shown");
+        let subtitle = row.subtitle().unwrap_or_default();
+        let mut out = Vec::new();
+        labels(row.upcast_ref(), &mut out);
+        out.retain(|text| !text.is_empty() && text != title && *text != subtitle);
+        out
+    }
+
+    fn group_titles(window: &MainWindow) -> Vec<String> {
+        let mut titles = Vec::new();
+        let mut child = window.groups.first_child();
+        while let Some(widget) = child {
+            if let Some(group) = widget.downcast_ref::<adw::PreferencesGroup>() {
+                titles.push(group.title().into());
+            }
+            child = widget.next_sibling();
+        }
+        titles
+    }
+
+    fn select(window: &MainWindow, index: i32) {
+        let row = window.list.row_at_index(index).expect("a sidebar row");
+        window.list.select_row(Some(&row));
+    }
+
     #[test]
     fn summary_counts_connected_machines() {
-        let up = machine("h1", "box", ConnectionState::Connected);
-        let down = machine(
-            "h2",
-            "laptop",
-            ConnectionState::Disconnected {
-                error: "connection refused".to_owned(),
-            },
-        );
+        let up = machine("h1", "box", Vec::new());
+        let mut down = machine("h2", "laptop", Vec::new());
+        down.connection = ConnectionState::Disconnected {
+            error: "connection refused".to_owned(),
+        };
         assert_eq!(summary(&[]), "");
         assert_eq!(summary(std::slice::from_ref(&up)), "all connected");
         assert_eq!(summary(&[up, down]), "1 of 2 connected");
     }
 
     #[gtk::test]
-    fn the_window_shows_each_machine_with_its_connection() {
+    fn the_sidebar_lists_machines_and_a_vaults_hosts_with_their_state() {
         adw::init().expect("libadwaita initializes");
         let window = MainWindow::new(None);
         assert_eq!(
             window.sidebar.visible_child_name().as_deref(),
             Some("empty")
         );
-
-        window.show_machines(&[
-            machine("h1", "box <1>", ConnectionState::Connected),
-            machine("h2", "laptop", ConnectionState::Connecting),
-            machine(
-                "h3",
-                "nas",
-                ConnectionState::Disconnected {
-                    error: "connection refused".to_owned(),
-                },
-            ),
-        ]);
+        let (mut machines, _) = fleet();
+        machines[1].name = "nas <1>".to_owned();
+        machines[1].connection = ConnectionState::Disconnected {
+            error: "connection refused".to_owned(),
+        };
+        window.show_machines(&machines);
         assert_eq!(window.sidebar.visible_child_name().as_deref(), Some("list"));
-        assert_eq!(window.sidebar_title.subtitle(), "1 of 3 connected");
+        assert_eq!(window.sidebar_title.subtitle(), "2 of 3 connected");
         assert_eq!(
-            rows(&window),
+            rows(window.list.upcast_ref()),
             [
-                ("box <1>".to_owned(), "connected".to_owned()),
-                ("laptop".to_owned(), "connecting".to_owned()),
-                ("nas".to_owned(), "connection refused".to_owned()),
+                ("All machines", "7 sessions"),
+                ("box", "connected · 4 sessions"),
+                ("nas <1>", "connection refused · 1 session"),
+                ("vault", "connected · 2 sessions"),
+                ("devbox", "online · 1 session"),
+                ("laptop", "offline · 2h 5m ago · 1 session"),
             ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
         );
+        assert_eq!(window.content.title(), "All machines");
 
         // The selection follows its machine across redraws.
-        let row = window.list.row_at_index(1).expect("a second row");
-        window.list.select_row(Some(&row));
-        assert_eq!(window.content.title(), "laptop");
-        window.show_machines(&[machine("h2", "laptop", ConnectionState::Connected)]);
+        select(&window, 2);
+        assert_eq!(window.content.title(), "nas <1>");
+        window.show_machines(&machines[1..]);
+        assert_eq!(window.list.selected_row().map(|row| row.index()), Some(1));
+        assert_eq!(window.content.title(), "nas <1>");
+        // Gone, it falls back to all machines.
+        window.show_machines(&machines[2..]);
         assert_eq!(window.list.selected_row().map(|row| row.index()), Some(0));
-        assert_eq!(window.content.title(), "laptop");
+        assert_eq!(window.content.title(), "All machines");
         window.show_machines(&[]);
         assert_eq!(
             window.sidebar.visible_child_name().as_deref(),
             Some("empty")
         );
-        assert_eq!(window.content.title(), "Sessions");
+        assert_eq!(
+            window.content_stack.visible_child_name().as_deref(),
+            Some("empty")
+        );
 
         window.show_error("bad <profile>");
         assert_eq!(
@@ -335,6 +676,112 @@ mod tests {
         assert_eq!(
             window.error.description().as_deref(),
             Some("bad &lt;profile&gt;")
+        );
+    }
+
+    #[gtk::test]
+    fn the_session_list_groups_by_project_or_machine_and_follows_the_selection() {
+        adw::init().expect("libadwaita initializes");
+        let window = MainWindow::new(None);
+        let (machines, summaries) = fleet();
+        window.show_machines(&machines);
+        assert_eq!(
+            window.content_stack.visible_child_name().as_deref(),
+            Some("sessions")
+        );
+        // Until a session's first update, it shows its id and has no project.
+        assert_eq!(group_titles(&window), ["App", "web", "No project yet"]);
+        for (key, summary) in &summaries {
+            let mut events = vec![created(&summary.repo, &summary.branch)];
+            if *key == crate::lists::tests::key("h1", "s2") {
+                events.push(EventBody::PrLinked {
+                    pr: pr(12, PrState::Open, CiStatus::Passing),
+                });
+            }
+            window.apply(key, &update(key.session_id.as_str(), events));
+        }
+        assert_eq!(group_titles(&window), ["App", "scratch", "web"]);
+        assert_eq!(
+            rows(window.groups.upcast_ref())[..4],
+            [
+                ("herder/api", "box"),
+                ("write the tests", "box"),
+                ("document it", "box"),
+                ("herder/fix-login", "nas"),
+            ]
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        );
+        assert_eq!(
+            badges(&window, "herder/api"),
+            ["running", "(2)", "!1", "#12 ✓"]
+        );
+        assert_eq!(badges(&window, "write the tests"), ["needs you"]);
+
+        window.by_machine.set_active(true);
+        assert_eq!(group_titles(&window), ["box", "nas", "devbox", "laptop"]);
+        select(&window, 5);
+        assert_eq!(group_titles(&window), ["laptop"]);
+        assert_eq!(
+            rows(window.groups.upcast_ref()),
+            [("web · herder/docs".to_owned(), String::new())]
+        );
+        window.by_machine.set_active(false);
+        assert_eq!(group_titles(&window), ["web"]);
+        assert_eq!(
+            rows(window.groups.upcast_ref()),
+            [("herder/docs".to_owned(), "laptop · offline".to_owned())]
+        );
+
+        // Narrow, rows show a glyph and the branch's last part.
+        select(&window, 1);
+        window.set_compact(true);
+        assert_eq!(badges(&window, "api"), ["●", "(2)", "!1", "#12 ✓"]);
+    }
+
+    #[gtk::test]
+    fn the_list_follows_live_changes() {
+        adw::init().expect("libadwaita initializes");
+        let window = MainWindow::new(None);
+        let lone = |status| {
+            vec![machine(
+                "h1",
+                "box",
+                vec![SessionHead {
+                    status,
+                    ..head("s1", Some("github.com/org/app"))
+                }],
+            )]
+        };
+        window.show_machines(&lone(SessionStatus::Idle));
+        let s1 = key("h1", "s1");
+        window.apply(&s1, &update("s1", vec![created("/srv/app", "herder/a")]));
+        assert_eq!(badges(&window, "herder/a"), ["idle"]);
+
+        window.show_machines(&lone(SessionStatus::NeedsYou));
+        assert_eq!(badges(&window, "herder/a"), ["needs you"]);
+        window.apply(
+            &s1,
+            &update(
+                "s1",
+                vec![
+                    EventBody::BranchCheckedOut {
+                        branch: "herder/b".to_owned(),
+                    },
+                    EventBody::PrLinked {
+                        pr: pr(3, PrState::Draft, CiStatus::Failing),
+                    },
+                ],
+            ),
+        );
+        assert_eq!(badges(&window, "herder/b"), ["needs you", "#3 ✗"]);
+
+        // A session no longer listed is dropped, and an update that outruns its listing too.
+        window.show_machines(&[machine("h1", "box", Vec::new())]);
+        window.apply(&s1, &update("s1", vec![created("/srv/app", "herder/c")]));
+        assert!(window.state.borrow().summaries.is_empty());
+        assert_eq!(
+            window.content_stack.visible_child_name().as_deref(),
+            Some("empty")
         );
     }
 
