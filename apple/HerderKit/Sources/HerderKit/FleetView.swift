@@ -21,6 +21,9 @@ struct FleetView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
+            #if os(macOS)
+            .toolbarBackground(Theme.background, for: .windowToolbar)
+            #endif
         }
         .tint(Theme.text)
         .sheet(isPresented: $pairing) {
@@ -40,10 +43,15 @@ struct MachineList: View {
             NavigationLink(value: machine.hostId) {
                 MachineRow(machine: machine)
             }
+            #if os(iOS)
             .listRowBackground(Theme.surface)
+            #endif
         }
+        #if os(iOS)
+        // The Mac keeps the native sidebar material.
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        #endif
         .overlay {
             if fleet.machines.isEmpty {
                 ContentUnavailableView {
