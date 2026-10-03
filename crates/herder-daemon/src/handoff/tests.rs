@@ -6,6 +6,7 @@ use super::*;
 
 fn item(id: String, turn: usize, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new(format!("turn-{turn}")),

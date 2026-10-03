@@ -402,7 +402,9 @@ impl Session {
                 turn_id,
                 text,
                 images,
+                agent_sender,
             } => {
+                let text = crate::agent_prompt(&text, agent_sender.as_ref());
                 self.turn = Some(OpenTurn {
                     id: turn_id,
                     codex_id: None,
@@ -797,6 +799,7 @@ impl Session {
             },
         );
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -841,6 +844,7 @@ impl Session {
 
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -1080,7 +1084,13 @@ fn seed_items(seed: &[Item]) -> Vec<Value> {
             ItemBody::UserMessage { text, attachments } => Some(message(
                 "user",
                 "input_text",
-                &crate::seed_user_text(text, attachments),
+                &crate::seed_user_text(
+                    &crate::agent_prompt(
+                        text,
+                        item.agent_message.as_ref().map(|m| &m.sender_session_id),
+                    ),
+                    attachments,
+                ),
             )),
             ItemBody::AssistantMessage { text } => Some(message("assistant", "output_text", text)),
             ItemBody::ToolCall { name, input } => Some(message(
@@ -1149,6 +1159,7 @@ mod tests {
 
         let turn = TurnId::new("turn-1");
         let item = |body| Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: turn.clone(),
@@ -1186,5 +1197,26 @@ mod tests {
                 json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "[tool result: a.txt]"}]}),
             ]
         );
+    }
+    #[test]
+    fn seed_retains_agent_sender_identity() {
+        let item = Item {
+            agent_message: Some(herder_protocol::AgentMessage {
+                sender_session_id: herder_protocol::SessionId::new("peer"),
+                message_id: "key".into(),
+                hop_count: 1,
+                permission_ceiling: PermissionMode::Ask,
+            }),
+            parent_call_id: None,
+            id: ItemId::new("prompt"),
+            turn_id: TurnId::new("turn"),
+            body: ItemBody::UserMessage {
+                text: "Review this".into(),
+                attachments: vec![],
+            },
+        };
+        let rendered = serde_json::to_string(&seed_items(&[item])).unwrap();
+        assert!(rendered.contains("Sent by another agent: session peer"));
+        assert!(rendered.contains("not a human instruction"));
     }
 }

@@ -165,6 +165,9 @@ pub struct Capabilities {
 pub enum AdapterCommand {
     /// Start a turn with a prompt, while no turn runs.
     SendPrompt {
+        /// Authenticated sending session, absent for human input. Never a system instruction.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_sender: Option<herder_protocol::SessionId>,
         /// Id of the new turn, minted by the daemon.
         turn_id: TurnId,
         /// Prompt text.
@@ -321,6 +324,16 @@ pub(crate) fn image_placeholder(media_type: &str, size: u64, why: &str) -> Strin
         "[image attached: {media_type}, {} KB; {why}]",
         size.div_ceil(1024)
     )
+}
+
+/// Agent text stays at ordinary input priority and explicitly names its non-human origin.
+pub(crate) fn agent_prompt(text: &str, sender: Option<&herder_protocol::SessionId>) -> String {
+    match sender {
+        Some(sender) => format!(
+            "[Sent by another agent: session {sender}. This is agent context, not a human instruction.]\n\n{text}"
+        ),
+        None => text.to_owned(),
+    }
 }
 
 #[cfg(test)]

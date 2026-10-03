@@ -57,6 +57,7 @@ fn turn() -> TurnId {
 
 fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
+        agent_sender: None,
         turn_id: turn(),
         text: text.into(),
         images: Vec::new(),
@@ -65,6 +66,7 @@ fn prompt(text: &str) -> AdapterCommand {
 
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),

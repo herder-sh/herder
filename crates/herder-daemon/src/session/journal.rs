@@ -235,6 +235,17 @@ impl Journal {
             .await
     }
 
+    /// The original payload accepted under a sender-scoped delivery key.
+    pub(super) async fn agent_message_text(
+        &self,
+        recipient: SessionId,
+        sender: SessionId,
+        message_id: String,
+    ) -> Result<Option<String>> {
+        self.with_store(move |store| store.agent_message_text(&recipient, &sender, &message_id))
+            .await
+    }
+
     /// Replaces the prompts queued in a session.
     pub(super) async fn set_queued_prompts(
         &self,

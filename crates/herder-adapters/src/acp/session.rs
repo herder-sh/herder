@@ -213,7 +213,13 @@ fn render_seed(seed: &[Item]) -> Option<String> {
         .filter_map(|item| match &item.body {
             ItemBody::UserMessage { text, attachments } => Some(format!(
                 "[user]\n{}",
-                crate::seed_user_text(text, attachments)
+                crate::seed_user_text(
+                    &crate::agent_prompt(
+                        text,
+                        item.agent_message.as_ref().map(|m| &m.sender_session_id)
+                    ),
+                    attachments
+                )
             )),
             ItemBody::AssistantMessage { text } => Some(format!("[assistant]\n{text}")),
             ItemBody::ToolCall { name, input } => Some(format!("[tool call: {name}]\n{input}")),
@@ -413,7 +419,15 @@ impl Session {
                 turn_id,
                 text,
                 images,
-            } => self.prompt(turn_id, text, images).await,
+                agent_sender,
+            } => {
+                self.prompt(
+                    turn_id,
+                    crate::agent_prompt(&text, agent_sender.as_ref()),
+                    images,
+                )
+                .await
+            }
             AdapterCommand::Interrupt => self.interrupt().await,
             AdapterCommand::SetModel { model } => self.set_model(model).await,
             AdapterCommand::SetPermissionMode { mode } => {
@@ -625,6 +639,7 @@ impl Session {
                 }
             };
             let item = Item {
+                agent_message: None,
                 parent_call_id: None,
                 id: id.clone(),
                 turn_id: turn.id.clone(),
@@ -659,6 +674,7 @@ impl Session {
             ItemBody::AssistantMessage { text: text.text }
         };
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id: text.id,
             turn_id: turn.id.clone(),
@@ -736,6 +752,7 @@ impl Session {
         };
         tool.called = true;
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id: tool.id.clone(),
             turn_id: turn.id.clone(),
@@ -764,6 +781,7 @@ impl Session {
         };
         tool.finished = true;
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id,
             turn_id: turn.id.clone(),
@@ -878,6 +896,7 @@ mod tests {
 
         let turn = TurnId::new("t");
         let item = |id: &str, body| Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: turn.clone(),
@@ -925,5 +944,26 @@ mod tests {
              <transcript>\n[user]\nhi\n[image attached: image/png, 2 KB; not part of this replay]\n\n[tool call: bash]\n{\"command\":\"ls\"}\n\n\
              [tool result]\na.txt\n\n[assistant]\ndone\n</transcript>\n\n"
         );
+    }
+    #[test]
+    fn seed_retains_agent_sender_identity() {
+        let item = Item {
+            agent_message: Some(herder_protocol::AgentMessage {
+                sender_session_id: herder_protocol::SessionId::new("peer"),
+                message_id: "key".into(),
+                hop_count: 1,
+                permission_ceiling: PermissionMode::Ask,
+            }),
+            parent_call_id: None,
+            id: ItemId::new("prompt"),
+            turn_id: TurnId::new("turn"),
+            body: ItemBody::UserMessage {
+                text: "Review this".into(),
+                attachments: vec![],
+            },
+        };
+        let rendered = render_seed(&[item]).unwrap();
+        assert!(rendered.contains("Sent by another agent: session peer"));
+        assert!(rendered.contains("not a human instruction"));
     }
 }

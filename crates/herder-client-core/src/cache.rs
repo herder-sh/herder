@@ -108,6 +108,7 @@ mod tests {
 
     fn item(id: &str, turn: &str, text: &str) -> Item {
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),

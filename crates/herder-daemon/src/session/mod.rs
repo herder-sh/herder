@@ -1461,14 +1461,44 @@ impl SessionManager {
     /// Sends `session_id` a prompt from its primary's agent; returns whether it waits behind a
     /// running turn.
     async fn prompt(&self, session_id: &SessionId, text: String) -> Result<bool, ErrorInfo> {
-        let (queued, busy) = oneshot::channel();
-        let request = Request::SendPrompt {
-            text,
-            images: Vec::new(),
-            queued: Some(queued),
-        };
-        self.send(session_id.clone(), None, request).await?;
-        busy.await
+        let child = self
+            .inner
+            .journal
+            .session(session_id.clone())
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| error(ErrorCode::NotFound, "session does not exist"))?;
+        let caller = child
+            .parent
+            .ok_or_else(|| error(ErrorCode::Forbidden, "not a child session"))?;
+        let message = self
+            .agent_message(&caller, ulid::Ulid::new().to_string())
+            .await?;
+        Ok(self
+            .deliver_agent_message(session_id, text, message)
+            .await?
+            .queued)
+    }
+
+    async fn deliver_agent_message(
+        &self,
+        session_id: &SessionId,
+        text: String,
+        message: herder_protocol::AgentMessage,
+    ) -> Result<herder_tasktools::SendSessionOutput, ErrorInfo> {
+        let (done, response) = oneshot::channel();
+        self.send(
+            session_id.clone(),
+            None,
+            Request::SendAgentMessage {
+                text,
+                message,
+                done,
+            },
+        )
+        .await?;
+        response
+            .await
             .map_err(|_| error(ErrorCode::Internal, "the session stopped"))
     }
 

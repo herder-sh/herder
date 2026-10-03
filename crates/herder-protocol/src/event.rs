@@ -313,9 +313,25 @@ pub enum ErrorClass {
     Fatal,
 }
 
+/// Durable provenance for a message sent by another session on this host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentMessage {
+    /// Session authenticated by the caller's MCP token, never supplied by its prompt.
+    pub sender_session_id: SessionId,
+    /// Caller-chosen stable delivery key, scoped to sender and destination.
+    pub message_id: String,
+    /// Trusted relay depth; a human-origin turn starts at zero.
+    pub hop_count: u32,
+    /// Maximum permissions this message may exercise, retained while queued.
+    pub permission_ceiling: PermissionMode,
+}
+
 /// One entry of the transcript.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
+    /// Authenticated agent sender of a prompt. Only the daemon sets this; absent for humans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_message: Option<AgentMessage>,
     /// Spawning tool call for provider-native sub-agent content, in the same turn.
     /// None identifies the main conversation. This ancestry survives journal replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]

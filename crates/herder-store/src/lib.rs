@@ -118,6 +118,8 @@ pub struct Session {
 /// A prompt waiting for its session's next turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueuedPrompt {
+    /// Agent sender and delivery key; absent for human prompts.
+    pub agent_message: Option<herder_protocol::AgentMessage>,
     /// User who sent it; `None` when the primary session's agent did.
     pub by: Option<UserId>,
     /// Prompt text.
@@ -224,6 +226,23 @@ impl Store {
             event_type,
             body.to_string(),
         ])?;
+        // Moving an agent prompt from queue to journal is atomic: replay/dedup cannot lose
+        // it in the crash window between queue removal and writing its transcript item.
+        if let EventBody::ItemAdded { item } = &stored.body
+            && matches!(item.body, herder_protocol::ItemBody::UserMessage { .. })
+            && let Some(message) = &item.agent_message
+        {
+            tx.execute(
+                "DELETE FROM queued_prompts WHERE session_id = ?1
+                AND json_extract(agent_message, '$.sender_session_id') = ?2
+                AND json_extract(agent_message, '$.message_id') = ?3",
+                params![
+                    stored.session_id.as_str(),
+                    message.sender_session_id.as_str(),
+                    message.message_id
+                ],
+            )?;
+        }
         project::apply(&tx, &stored)?;
         tx.commit()?;
         Ok(stored)
@@ -409,15 +428,35 @@ impl Store {
         Ok(())
     }
 
+    /// Text accepted under an agent delivery key, even after its queue entry was discarded.
+    pub fn agent_message_text(
+        &self,
+        recipient: &SessionId,
+        sender: &SessionId,
+        message_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT text FROM agent_message_receipts WHERE recipient = ?1 AND sender = ?2 AND message_id = ?3",
+            params![recipient.as_str(), sender.as_str(), message_id], |row| row.get(0),
+        ).optional()?)
+    }
+
     /// The prompts queued in `session`, oldest first.
     pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT by, text, attachments, retry, retry_at FROM queued_prompts WHERE session_id = ?1
+            "SELECT by, text, attachments, retry, retry_at, agent_message FROM queued_prompts WHERE session_id = ?1
              ORDER BY position",
         )?;
         let rows = stmt.query_map([session.as_str()], |row| {
             let attachments: String = row.get(2)?;
+            let agent_json: Option<String> = row.get(5)?;
             Ok(QueuedPrompt {
+                agent_message: agent_json
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()
+                    .map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+                    })?,
                 by: row.get::<_, Option<String>>(0)?.map(UserId::new),
                 text: row.get(1)?,
                 attachments: serde_json::from_str(&attachments).map_err(|err| {
@@ -442,10 +481,14 @@ impl Store {
         tx.prepare_cached("DELETE FROM queued_prompts WHERE session_id = ?1")?
             .execute([session.as_str()])?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry, retry_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry, retry_at, agent_message)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for (position, prompt) in prompts.iter().enumerate() {
+            if let Some(message) = &prompt.agent_message {
+                tx.execute("INSERT OR IGNORE INTO agent_message_receipts (recipient, sender, message_id, text)
+                    VALUES (?1, ?2, ?3, ?4)", params![session.as_str(), message.sender_session_id.as_str(), message.message_id, prompt.text])?;
+            }
             insert.execute(params![
                 session.as_str(),
                 clamp(position),
@@ -454,6 +497,11 @@ impl Store {
                 serde_json::to_string(&prompt.attachments)?,
                 prompt.retry,
                 prompt.retry_at,
+                prompt
+                    .agent_message
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
             ])?;
         }
         drop(insert);

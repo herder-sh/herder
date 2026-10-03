@@ -93,6 +93,7 @@ async fn agent(
 ) {
     let reply = |turn_id: TurnId, text: String| {
         let item = Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(format!("reply-{turn_id}")),
             turn_id: turn_id.clone(),
@@ -125,6 +126,7 @@ async fn agent(
                     let command = command.trim_end_matches('.');
                     out.push(AdapterEvent::ItemCompleted {
                         item: Item {
+                            agent_message: None,
                             parent_call_id: None,
                             id: call.clone(),
                             turn_id: turn_id.clone(),
