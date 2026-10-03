@@ -1091,6 +1091,14 @@
           "description": "The session's status changed.",
           "type": "object",
           "properties": {
+            "retry_at": {
+              "description": "When a usage-limited turn is retried. Present only while waiting_for_capacity\nmeans waiting for an account's limit reset rather than host admission.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
             "status": {
               "description": "New status.",
               "$ref": "#/$defs/SessionStatus"
@@ -2339,7 +2347,7 @@
           "const": "running"
         },
         {
-          "description": "A prompt waits for the host to have capacity for another turn; the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+          "description": "A prompt waits for host capacity or its reported usage reset (retry_at); the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
           "type": "string",
           "const": "waiting_for_capacity"
         },

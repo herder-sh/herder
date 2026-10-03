@@ -201,7 +201,10 @@ async fn archiving_a_session_closes_its_terminals() {
         seq: 2,
         at: jiff::Timestamp::UNIX_EPOCH,
         by: None,
-        body: EventBody::SessionStatusChanged { status },
+        body: EventBody::SessionStatusChanged {
+            status,
+            retry_at: None,
+        },
     };
     sink.event(&status(SessionStatus::Idle));
     assert_eq!(f.terminals.list().len(), 1);

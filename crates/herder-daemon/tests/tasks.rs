@@ -339,7 +339,7 @@ impl Daemon {
             .iter()
             .rev()
             .find_map(|event| match event.body {
-                EventBody::SessionStatusChanged { status } => Some(status),
+                EventBody::SessionStatusChanged { status, .. } => Some(status),
                 _ => None,
             })
             .unwrap_or(SessionStatus::Idle)
@@ -713,6 +713,7 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
             matches!(
                 body,
                 EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::WaitingForCapacity
                 }
             )
@@ -901,6 +902,7 @@ async fn a_child_turn_cut_short_by_a_restart_is_reported() {
 fn needs_you(body: &EventBody) -> bool {
     *body
         == EventBody::SessionStatusChanged {
+            retry_at: None,
             status: SessionStatus::NeedsYou,
         }
 }

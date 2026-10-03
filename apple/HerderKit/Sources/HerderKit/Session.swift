@@ -93,7 +93,7 @@ struct SessionModel {
             self.task = task
         case .branchCheckedOut(let branch):
             self.branch = branch
-        case .sessionStatusChanged(let status):
+        case .sessionStatusChanged(let status, _):
             self.status = status
         case .turnStarted(let turnId):
             turn = turnId
@@ -252,7 +252,7 @@ struct SessionModel {
         case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _):
             return "Created on \(branch) · \(provider) \(model) · \(accountId)"
         case .branchCheckedOut(let branch): return "Checked out \(branch)"
-        case .sessionStatusChanged(let status): return "Status: \(status)"
+        case .sessionStatusChanged(let status, _): return "Status: \(status)"
         case .turnStarted: return "Turn started"
         case .turnCompleted: return "Turn completed"
         case .turnInterrupted: return "Turn interrupted"

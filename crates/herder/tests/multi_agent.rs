@@ -406,6 +406,7 @@ fn ever_needed_you(journal: &[Event]) -> bool {
         matches!(
             event.body,
             EventBody::SessionStatusChanged {
+                retry_at: None,
                 status: SessionStatus::NeedsYou
             }
         )
@@ -544,6 +545,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             matches!(
                 body,
                 EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::NeedsYou
                 }
             )

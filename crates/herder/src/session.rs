@@ -13,7 +13,7 @@ use herder_client_core::{Client, ConnectionState, Machine, SessionSubscription};
 use herder_protocol::{
     AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, CommandResult, Event, EventBody,
     ItemBody, PermissionMode, ProjectId, Provider, PullRequest, QuestionId, Route, Seq, SessionId,
-    SessionStatus, TurnError, TurnId,
+    SessionStatus, Timestamp, TurnError, TurnId,
 };
 use serde::Serialize;
 use tokio::time::Instant;
@@ -96,6 +96,20 @@ enum Command {
         /// free text.
         #[arg(long, num_args = 2, value_names = ["QUESTION", "ANSWER"], group = "reply")]
         answer: Option<Vec<String>>,
+    },
+    /// Switch a session's account, provider or model using the existing session commands.
+    Switch {
+        /// The session id.
+        session: String,
+        /// Target account id or label.
+        #[arg(long, required_unless_present_any = ["provider", "model"])]
+        account: Option<String>,
+        /// Target provider; chooses its account with the most reported quota left.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Target model.
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Wait until a session is idle (exit 0), needs you (2) or failed (3), or time out (4);
     /// print its status, its last turn's reply and what it asks.
@@ -306,6 +320,76 @@ impl Cli {
                     self.print_id(&session_id)?;
                 }
             }
+            Command::Switch {
+                session,
+                account,
+                provider,
+                model,
+            } => {
+                let session_id = SessionId::new(session);
+                let (_, view) = self.load(&session_id).await?;
+                let accounts = self.current().map(|m| m.accounts).unwrap_or_default();
+                let target = if let Some(account) = account {
+                    let id = self.account(Some(&account))?;
+                    accounts.iter().find(|a| Some(&a.account_id) == id.as_ref())
+                } else if let Some(provider) = &provider {
+                    accounts
+                        .iter()
+                        .filter(|a| a.provider.as_str() == provider)
+                        .min_by(|a, b| {
+                            let used = |a: &herder_protocol::Account| {
+                                a.usage
+                                    .iter()
+                                    .filter(|w| {
+                                        !w.resets_at.is_some_and(|at| at <= Timestamp::now())
+                                    })
+                                    .map(|w| w.used_percent)
+                                    .fold(0.0_f64, f64::max)
+                            };
+                            used(a)
+                                .total_cmp(&used(b))
+                                .then_with(|| a.account_id.as_str().cmp(b.account_id.as_str()))
+                        })
+                } else {
+                    None
+                };
+                if provider.is_some() && target.is_none() {
+                    bail!("the machine has no account for the requested provider");
+                }
+                let mut model = model;
+                if let Some(target) = target {
+                    if provider
+                        .as_deref()
+                        .is_some_and(|p| p != target.provider.as_str())
+                    {
+                        bail!("the account does not belong to the requested provider");
+                    }
+                    if view.provider.as_ref() == Some(&target.provider) {
+                        self.send(CommandBody::SwitchAccount {
+                            session_id: session_id.clone(),
+                            account_id: target.account_id.clone(),
+                        })
+                        .await?;
+                    } else {
+                        self.send(CommandBody::SwitchProvider {
+                            session_id: session_id.clone(),
+                            account_id: target.account_id.clone(),
+                            model: model.take(),
+                        })
+                        .await?;
+                    }
+                }
+                if let Some(model) = model {
+                    self.send(CommandBody::SetModel {
+                        session_id: session_id.clone(),
+                        model,
+                    })
+                    .await?;
+                }
+                if self.json {
+                    self.print_id(&session_id)?;
+                }
+            }
             Command::Wait { session, timeout } => {
                 let deadline = timeout.map(|secs| Instant::now() + Duration::from_secs(secs));
                 return self.wait(&SessionId::new(session), deadline).await;
@@ -425,10 +509,11 @@ impl Cli {
         text: String,
     ) -> Result<()> {
         let starts = view.turn.is_none()
-            && matches!(
-                view.status,
-                SessionStatus::Idle | SessionStatus::NeedsYou | SessionStatus::Error
-            );
+            && (view.retry_at.is_some()
+                || matches!(
+                    view.status,
+                    SessionStatus::Idle | SessionStatus::NeedsYou | SessionStatus::Error
+                ));
         let before = view.status_seq;
         self.send(CommandBody::SendPrompt {
             session_id: view.session_id.clone(),
@@ -456,7 +541,7 @@ impl Cli {
                 SessionStatus::NeedsYou => Some(NEEDS_YOU),
                 SessionStatus::Error => Some(ERROR),
                 SessionStatus::Archived | SessionStatus::Moved => {
-                    bail!("session {session_id} is {}", status_name(view.status))
+                    bail!("session {session_id} is {}", view.status_label())
                 }
                 _ => None,
             };
@@ -528,6 +613,9 @@ impl Cli {
 struct View {
     session_id: SessionId,
     status: SessionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_at: Option<Timestamp>,
+    provider: Option<Provider>,
     repo: String,
     branch: String,
     model: String,
@@ -578,6 +666,8 @@ impl View {
         Self {
             session_id,
             status: SessionStatus::Idle,
+            retry_at: None,
+            provider: None,
             repo: String::new(),
             branch: String::new(),
             model: String::new(),
@@ -609,6 +699,7 @@ impl View {
                 repo,
                 branch,
                 account_id,
+                provider,
                 model,
                 permission_mode,
                 parent,
@@ -618,14 +709,16 @@ impl View {
                 self.repo = repo;
                 self.branch = branch;
                 self.account_id = Some(account_id);
+                self.provider = Some(provider);
                 self.model = model;
                 self.permission_mode = Some(permission_mode);
                 self.parent = parent;
                 self.task = task;
             }
             EventBody::BranchCheckedOut { branch } => self.branch = branch,
-            EventBody::SessionStatusChanged { status } => {
+            EventBody::SessionStatusChanged { status, retry_at } => {
                 self.status = status;
+                self.retry_at = retry_at;
                 self.status_seq = event.seq;
             }
             EventBody::TurnStarted { turn_id } => {
@@ -689,7 +782,16 @@ impl View {
             EventBody::QuestionAnswered { question_id, .. } => {
                 self.questions.retain(|q| q.question_id != question_id);
             }
-            EventBody::ModelSwitched { model } | EventBody::ProviderSwitched { model, .. } => {
+            EventBody::ProviderSwitched {
+                provider,
+                account_id,
+                model,
+            } => {
+                self.provider = Some(provider);
+                self.account_id = Some(account_id);
+                self.model = model;
+            }
+            EventBody::ModelSwitched { model } => {
                 self.model = model;
             }
             EventBody::AccountSwitched { account_id } => self.account_id = Some(account_id),
@@ -736,9 +838,19 @@ impl View {
         }
     }
 
+    fn status_label(&self) -> String {
+        match self
+            .retry_at
+            .filter(|_| self.status == SessionStatus::WaitingForCapacity)
+        {
+            Some(at) => format!("waiting for limit reset · {} UTC", at.strftime("%H:%M")),
+            None => status_name(self.status),
+        }
+    }
+
     /// What `wait` prints: the status, the last reply, what the session asks.
     fn report(&self) -> String {
-        let mut out = format!("{}\n", status_name(self.status));
+        let mut out = format!("{}\n", self.status_label());
         if let Some(error) = &self.last_error {
             out.push_str(&format!("turn failed: {}\n", error.message));
         }
@@ -756,7 +868,7 @@ impl View {
     fn describe(&self) -> String {
         let mut lines = vec![
             ("session", self.session_id.to_string()),
-            ("status", status_name(self.status)),
+            ("status", self.status_label()),
             ("repo", self.repo.clone()),
             ("branch", self.branch.clone()),
             ("model", self.model.clone()),
@@ -831,7 +943,7 @@ fn table(views: &[View]) -> String {
             let prs = view.prs.iter().map(pr_short).collect::<Vec<_>>().join(", ");
             [
                 view.session_id.to_string(),
-                status_name(view.status),
+                view.status_label(),
                 view.branch.clone(),
                 view.repo.clone(),
                 prs,
@@ -979,5 +1091,39 @@ mod tests {
             },
         )]);
         assert!(view.questions.is_empty());
+    }
+
+    #[test]
+    fn limit_wait_reports_the_deadline_until_the_next_status() {
+        let mut view = View::new(SessionId::new("s1"));
+        view.event(event(
+            1,
+            EventBody::SessionStatusChanged {
+                status: SessionStatus::WaitingForCapacity,
+                retry_at: Some("2026-10-03T21:20:00Z".parse().unwrap()),
+            },
+        ));
+        assert!(
+            view.describe()
+                .contains("waiting for limit reset · 21:20 UTC")
+        );
+        assert_eq!(
+            serde_json::to_value(&view).unwrap()["retry_at"],
+            "2026-10-03T21:20:00Z"
+        );
+        view.event(event(
+            2,
+            EventBody::SessionStatusChanged {
+                status: SessionStatus::Running,
+                retry_at: None,
+            },
+        ));
+        assert!(!view.describe().contains("limit reset"));
+        assert!(
+            serde_json::to_value(&view)
+                .unwrap()
+                .get("retry_at")
+                .is_none()
+        );
     }
 }

@@ -74,7 +74,10 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
 }
 
 pub fn status(status: SessionStatus) -> EventBody {
-    EventBody::SessionStatusChanged { status }
+    EventBody::SessionStatusChanged {
+        status,
+        retry_at: None,
+    }
 }
 
 pub fn item(id: &str, body: ItemBody) -> Item {

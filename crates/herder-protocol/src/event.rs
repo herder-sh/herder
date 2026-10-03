@@ -75,6 +75,10 @@ pub enum EventBody {
     SessionStatusChanged {
         /// New status.
         status: SessionStatus,
+        /// When a usage-limited turn is retried. Present only while waiting_for_capacity
+        /// means waiting for an account's limit reset rather than host admission.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_at: Option<Timestamp>,
     },
     /// The agent started working on a prompt.
     TurnStarted {
@@ -255,7 +259,7 @@ pub enum SessionStatus {
     Idle,
     /// The agent is working, or waiting for its primary session to answer an approval or question.
     Running,
-    /// A prompt waits for the host to have capacity for another turn; the turn starts, and the
+    /// A prompt waits for host capacity or its reported usage reset (retry_at); the turn starts, and the
     /// status becomes `running`, once it does. Survives a daemon restart, and the prompt keeps
     /// its place in the host's queue.
     WaitingForCapacity,

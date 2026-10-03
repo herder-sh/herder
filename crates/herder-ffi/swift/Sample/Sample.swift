@@ -62,7 +62,7 @@ struct Sample {
         func turnCompleted() -> Bool {
             events.contains { if case .turnCompleted = $0 { true } else { false } }
         }
-        while !(events.contains(.sessionStatusChanged(status: .idle)) && turnCompleted()) {
+        while !(events.contains(.sessionStatusChanged(status: .idle, retryAt: nil)) && turnCompleted()) {
             guard let update = await subscription.next() else {
                 throw Failure(description: "the subscription ended")
             }

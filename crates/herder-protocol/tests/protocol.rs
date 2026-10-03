@@ -574,7 +574,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
         SessionStatus::Archived,
         SessionStatus::Moved,
     ] {
-        messages.push(event(17, None, EventBody::SessionStatusChanged { status }));
+        messages.push(event(
+            17,
+            None,
+            EventBody::SessionStatusChanged {
+                status,
+                retry_at: None,
+            },
+        ));
     }
     for class in [
         ErrorClass::LimitReached,
@@ -1806,4 +1813,21 @@ fn vault_messages_carry_no_events_or_commands() {
     ] {
         assert!(!defs.contains_key(absent), "vault schema has {absent}");
     }
+}
+
+#[test]
+fn status_retry_deadline_is_optional_and_round_trips() {
+    let old = serde_json::json!({"type":"session_status_changed","status":"waiting_for_capacity"});
+    let body: EventBody = serde_json::from_value(old.clone()).unwrap();
+    assert_eq!(serde_json::to_value(body).unwrap(), old);
+    let scheduled = EventBody::SessionStatusChanged {
+        status: SessionStatus::WaitingForCapacity,
+        retry_at: Some("2026-10-03T21:20:00Z".parse().unwrap()),
+    };
+    let json = serde_json::to_value(&scheduled).unwrap();
+    assert_eq!(json["retry_at"], "2026-10-03T21:20:00Z");
+    assert_eq!(
+        serde_json::from_value::<EventBody>(json).unwrap(),
+        scheduled
+    );
 }

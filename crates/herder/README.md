@@ -41,3 +41,16 @@ mode, else `ask`.
 Exit codes: 0 done, 1 failed (the reason is on stderr), 64 usage error. `wait` also exits 2
 when the session needs you (an approval, a question, or a failed turn), 3 when it is in error,
 and 4 when `--timeout` passed first.
+
+Switch a session with `herder session switch <id> --account <id-or-label>`,
+`--provider <provider>`, or `--model <model>`. A provider switch picks its account
+with the most reported quota left; `--account` can choose one explicitly, and
+`--model` can accompany either switch. These use the existing switch commands;
+a running turn must finish or be interrupted before changing accounts.
+
+After a usage limit with no failover target, sessions with a known future reset
+wait automatically. `session status`, `wait`, and `list` show “waiting for limit
+reset” and the time in UTC; JSON retains `waiting_for_capacity` and adds
+`retry_at`. The queued retry survives a daemon restart. Sending a prompt,
+successfully switching account/provider/model, or interrupting cancels that retry.
+Unknown reset times still need user action.

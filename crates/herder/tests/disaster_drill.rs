@@ -518,7 +518,7 @@ impl Client {
 
     fn status(&self) -> Option<SessionStatus> {
         self.events.iter().rev().find_map(|event| match event.body {
-            EventBody::SessionStatusChanged { status } => Some(status),
+            EventBody::SessionStatusChanged { status, .. } => Some(status),
             _ => None,
         })
     }
@@ -757,6 +757,7 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
             matches!(
                 body,
                 EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::Moved
                 }
             )

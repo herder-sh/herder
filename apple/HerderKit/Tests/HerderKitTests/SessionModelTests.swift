@@ -34,7 +34,7 @@ func created(task: String? = nil, parent: SessionId? = nil, branch: String = "he
 struct SessionModelTests {
     @Test func statusComesFromStatusEvents() {
         var script = Script()
-        let model = script.model([created(), .sessionStatusChanged(status: .running), .turnStarted(turnId: "t1")])
+        let model = script.model([created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1")])
         #expect(model.state == .running)
         #expect(model.title == "herder/abc")
         #expect(model.turn == "t1")
@@ -43,7 +43,7 @@ struct SessionModelTests {
     @Test func anApprovalForTheUserNeedsThemUntilResolved() {
         var script = Script()
         var model = script.model([
-            created(), .sessionStatusChanged(status: .running), .turnStarted(turnId: "t1"),
+            created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
             .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "i1", summary: "Bash: ls", routedTo: .user, reason: nil),
         ])
         #expect(model.state == .needsYou)
@@ -55,7 +55,7 @@ struct SessionModelTests {
     @Test func aRequestForThePrimaryNeedsTheUserOnlyOnceEscalated() {
         var script = Script()
         var model = script.model([
-            created(task: "Write tests", parent: "01P"), .sessionStatusChanged(status: .running),
+            created(task: "Write tests", parent: "01P"), .sessionStatusChanged(status: .running, retryAt: nil),
             .turnStarted(turnId: "t1"),
             .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: ["A", "B"], routedTo: .primary, reason: nil),
         ])
@@ -71,7 +71,7 @@ struct SessionModelTests {
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
             .questionAsked(questionId: "q1", turnId: "t1", text: "Which?", choices: [], routedTo: .user, reason: nil),
-            .turnInterrupted(turnId: "t1"), .sessionStatusChanged(status: .idle),
+            .turnInterrupted(turnId: "t1"), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
         #expect(model.questions.isEmpty)
         #expect(model.turn == nil)
@@ -83,7 +83,7 @@ struct SessionModelTests {
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
             .turnFailed(turnId: "t1", error: TurnError(class: .limitReached, message: "usage limit reached\nretry later")),
-            .sessionStatusChanged(status: .error),
+            .sessionStatusChanged(status: .error, retryAt: nil),
         ])
         #expect(model.activity == "Turn failed: usage limit reached")
     }
@@ -106,7 +106,7 @@ struct SessionModelTests {
             created(), .turnStarted(turnId: "t1"),
             .itemAdded(item: Item(id: "i1", turnId: "t1", body: .toolCall(name: "Bash", input: #"{"command":"ls -la"}"#))),
             .itemAdded(item: Item(id: "i2", turnId: "t1", body: .assistantMessage(text: "Done.\nMore detail."))),
-            .turnCompleted(turnId: "t1"), .sessionStatusChanged(status: .idle),
+            .turnCompleted(turnId: "t1"), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
         #expect(model.lastTool == "Bash ls -la")
         #expect(model.activity == "Done.")

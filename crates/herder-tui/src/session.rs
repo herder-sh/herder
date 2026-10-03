@@ -40,6 +40,8 @@ pub struct Session {
     pub task: Option<String>,
     /// Latest status.
     pub status: SessionStatus,
+    /// Reported usage reset for a scheduled retry.
+    pub retry_at: Option<Timestamp>,
     /// Completed transcript entries, oldest first.
     pub entries: Vec<Entry>,
     /// Items streaming now, with their text so far.
@@ -195,6 +197,7 @@ impl Session {
             parent: None,
             task: None,
             status: SessionStatus::Idle,
+            retry_at: None,
             entries: Vec::new(),
             streaming: Vec::new(),
             account_id: None,
@@ -305,8 +308,9 @@ impl Session {
                 self.task = task;
                 None
             }
-            EventBody::SessionStatusChanged { status } => {
+            EventBody::SessionStatusChanged { status, retry_at } => {
                 self.status = status;
+                self.retry_at = retry_at;
                 None
             }
             EventBody::BranchCheckedOut { branch } => {

@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 37] = [
+const SCENES: [Scene; 38] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -258,6 +258,9 @@ const SCENES: [Scene; 37] = [
         fake::with_resources(&mut app, fake::host_resources(4), false);
         press(&mut app, KeyCode::Char('m'));
         app_buffer(app, theme, width, height)
+    }),
+    ("limit-reset", |theme, _, width, height| {
+        app_buffer(super::tests::limit_reset(), theme, width, height)
     }),
     ("resources", |theme, _, width, height| {
         let mut app = super::tests::mid_turn();
@@ -567,4 +570,56 @@ fn app_buffer_ref(app: &mut App, theme: &Theme, width: u16, height: u16) -> Buff
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| super::draw(frame, app)).unwrap();
     terminal.backend().buffer().clone()
+}
+
+/// ANSI frames replayed by vhs for the limit-reset PR's short interaction recording.
+#[test]
+#[ignore = "run for the limit-reset PR with HERDER_FRAMES"]
+fn limit_reset_frames() {
+    let out = std::env::var_os("HERDER_FRAMES").expect("set HERDER_FRAMES");
+    let out = Path::new(&out);
+    std::fs::create_dir_all(out).unwrap();
+    let theme = Theme::herder(Mode::Dark);
+    let mut app = super::tests::limit_reset();
+    for (index, text) in ["", "Continue with a smaller change."].iter().enumerate() {
+        if !text.is_empty() {
+            fake::type_text(&mut app, text);
+        }
+        let buffer = app_buffer_ref(&mut app, &theme, 100, 30);
+        std::fs::write(
+            out.join(format!("limit-{index}.ansi")),
+            ansi(&buffer, &theme),
+        )
+        .unwrap();
+    }
+    press(&mut app, KeyCode::Enter);
+    let key = app.open.clone().unwrap();
+    fake::feed(
+        &mut app,
+        key.host_id.as_str(),
+        key.session_id.as_str(),
+        fake::update(
+            key.session_id.as_str(),
+            102,
+            vec![
+                fake::status(herder_protocol::SessionStatus::Running),
+                herder_protocol::EventBody::TurnStarted {
+                    turn_id: herder_protocol::TurnId::new("retry"),
+                },
+                herder_protocol::EventBody::ItemAdded {
+                    item: herder_protocol::Item {
+                        id: herder_protocol::ItemId::new("replacement"),
+                        turn_id: herder_protocol::TurnId::new("retry"),
+                        body: herder_protocol::ItemBody::UserMessage {
+                            text: "Continue with a smaller change.".into(),
+                            attachments: Vec::new(),
+                        },
+                    },
+                },
+            ],
+            Vec::new(),
+        ),
+    );
+    let buffer = app_buffer_ref(&mut app, &theme, 100, 30);
+    std::fs::write(out.join("limit-2.ansi"), ansi(&buffer, &theme)).unwrap();
 }

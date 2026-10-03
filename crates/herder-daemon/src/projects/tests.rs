@@ -587,6 +587,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
             at: jiff::Timestamp::now(),
             by: None,
             body: herder_protocol::EventBody::SessionStatusChanged {
+                retry_at: None,
                 status: herder_protocol::SessionStatus::Archived,
             },
         })

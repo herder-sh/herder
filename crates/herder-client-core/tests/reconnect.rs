@@ -362,6 +362,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
             && view.events.last().is_some_and(|event| {
                 event.body
                     == EventBody::SessionStatusChanged {
+                        retry_at: None,
                         status: SessionStatus::Idle,
                     }
             })
@@ -1289,6 +1290,7 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
             && view.events.last().is_some_and(|event| {
                 event.body
                     == EventBody::SessionStatusChanged {
+                        retry_at: None,
                         status: SessionStatus::Idle,
                     }
             })

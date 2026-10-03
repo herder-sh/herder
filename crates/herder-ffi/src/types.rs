@@ -169,6 +169,7 @@ pub enum EventBody {
     },
     SessionStatusChanged {
         status: SessionStatus,
+        retry_at: Option<Timestamp>,
     },
     TurnStarted {
         turn_id: TurnId,

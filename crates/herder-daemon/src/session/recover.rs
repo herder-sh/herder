@@ -114,7 +114,7 @@ impl SessionManager {
                     account_id,
                     ..
                 } => (provider, current) = (to.clone(), account_id.clone()),
-                EventBody::SessionStatusChanged { status: to } => status = *to,
+                EventBody::SessionStatusChanged { status: to, .. } => status = *to,
                 _ => {}
             }
         }

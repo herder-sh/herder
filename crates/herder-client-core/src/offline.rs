@@ -125,6 +125,7 @@ mod tests {
                 at: Timestamp::UNIX_EPOCH,
                 by: None,
                 body: EventBody::SessionStatusChanged {
+                    retry_at: None,
                     status: SessionStatus::Idle,
                 },
             }]],
