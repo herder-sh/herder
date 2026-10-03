@@ -18,7 +18,7 @@ struct ForkTests {
         let original = try await fleet.createSession(
             on: host.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
             mode: .ask, prompt: "hello")
-        #expect(await eventually { fleet.sessions[original]?.loaded == true && fleet.sessions[original]?.turn == nil })
+        #expect(await eventually { fleet.sessions[original]?.lastMessage != nil && fleet.sessions[original]?.turn == nil })
         let originalBranch = fleet.sessions[original]?.branch
         let originalStatus = fleet.sessions[original]?.status
         let flow = ForkSessionModel()
