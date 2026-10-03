@@ -1,0 +1,17 @@
+# Four turns, for titles: one after the first prompt, refreshed once after the third turn.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "One."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Second."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Two."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Third."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Three."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-4", "text": "Fourth."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-4"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-4", "turn_id": "turn-4", "body": {"type": "assistant_message", "text": "Four."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-4"}}

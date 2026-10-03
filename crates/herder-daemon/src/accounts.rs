@@ -16,7 +16,7 @@ use herder_adapters::claude::ClaudeAdapter;
 use herder_adapters::codex::CodexAdapter;
 use herder_protocol::{Account, Provider};
 
-use crate::session::{Accounts, Adapters};
+use crate::session::{Accounts, Adapters, TitleCli, TitleClis};
 use crate::usage::{Probe, Probes, Windows};
 
 /// Every provider herder can run sessions on.
@@ -89,6 +89,27 @@ pub fn probes(binaries: &HashMap<Provider, PathBuf>) -> Probes {
         probes.insert(provider.clone(), probe);
     }
     probes
+}
+
+/// The CLI each provider that can title sessions titles them with ([`crate::session::titles`]),
+/// the same binary as its adapter.
+pub fn title_clis(binaries: &HashMap<Provider, PathBuf>) -> TitleClis {
+    let program = |provider: &Provider, name: &str| {
+        binaries
+            .get(provider)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(name))
+    };
+    TitleClis::from([
+        (
+            Provider::Claude,
+            TitleCli::claude(program(&Provider::Claude, "claude")),
+        ),
+        (
+            Provider::Codex,
+            TitleCli::codex(program(&Provider::Codex, "codex")),
+        ),
+    ])
 }
 
 /// `accounts` as clients see them, ordered by id, each with the windows `usage` holds for it;
@@ -205,6 +226,22 @@ mod tests {
         }
         assert!(adapters.get(&Provider::Gemini).is_none());
         assert!(super::adapter(&Provider::Gemini, None).is_none());
+    }
+
+    #[test]
+    fn claude_and_codex_title_with_the_configured_binary_and_a_small_model() {
+        let binaries = HashMap::from([(Provider::Codex, PathBuf::from("/opt/codex"))]);
+        let clis = title_clis(&binaries);
+        assert_eq!(clis.len(), 2);
+        let claude = &clis[&Provider::Claude];
+        assert_eq!(claude.program, Path::new("claude"));
+        assert_eq!(claude.model, "haiku");
+        assert_eq!(claude.config_dir_env, "CLAUDE_CONFIG_DIR");
+        assert!(claude.args.starts_with(&["-p".to_owned()]));
+        let codex = &clis[&Provider::Codex];
+        assert_eq!(codex.program, Path::new("/opt/codex"));
+        assert_eq!(codex.config_dir_env, "CODEX_HOME");
+        assert!(codex.args.starts_with(&["exec".to_owned()]));
     }
 
     #[test]
