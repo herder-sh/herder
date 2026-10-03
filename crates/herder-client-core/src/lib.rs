@@ -22,11 +22,21 @@
 //!
 //! Each machine has one supervisor task, the only thing that connects or retries. It tries
 //! the machine's addresses in order; after a failure or a lost connection it waits a capped,
-//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever.
-//! [`Client::wake`] cuts the wait short, for when an app returns to the foreground. A
+//! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever. A
 //! connection silent for 45 s, despite pings, counts as lost. [`Machine::connection`] says
 //! where it stands, and [`Client::synced`] waits until a connection is up and the daemon has
 //! sent its lists and the replay of every subscription.
+//!
+//! # App lifecycle
+//!
+//! An app calls [`Client::suspend`] when it goes to the background and [`Client::wake`] when
+//! it returns. Suspended, the client saves its offline cache and stops retrying lost
+//! connections; connections that are up stay up for as long as the OS lets the process run.
+//! Waking reconnects every disconnected machine at once and checks every connected one: a
+//! connection silent for longer than 45 s, as after a long suspension in which the OS may
+//! have killed the socket without either end noticing, is replaced right away; any other is
+//! pinged and replaced if the pong does not come back within 5 s. Subscriptions resume from
+//! the last seq held, so a suspension of any length shows no gap.
 //!
 //! # Resources
 //!
@@ -39,8 +49,19 @@
 //! The client caches, per session, every durable event it received and the items streaming
 //! now (built from snapshots and deltas). While a session has subscribers the daemon streams
 //! it; each new connection resumes it from the last seq held, and events are deduplicated by
-//! seq, so a reconnect never shows a gap or a duplicate. The cache is in memory: a new
-//! [`Client`] starts empty and replays each session from its start.
+//! seq, so a reconnect never shows a gap or a duplicate.
+//!
+//! # Offline cache
+//!
+//! What each machine last said is saved in `<config_dir>/cache/`, private to the user: the
+//! role, the session, fleet host, project and account lists, and every event of the 20 listed
+//! sessions with the newest events. A new [`Client`] starts from it, so [`Client::machines`]
+//! and a subscription's first update show the last known state at once, offline too; the
+//! subscription resumes after the cached events. Live data always wins: the cache is read only
+//! when a machine's supervisor starts, the daemon's lists replace the cached ones, and its
+//! events extend the cached ones by seq. The cache is saved every 30 s while something
+//! changed, when a connection ends, and on [`Client::suspend`]. Streaming items, terminals and
+//! resource figures are live only and never cached.
 //!
 //! # Commands
 //!
@@ -63,6 +84,7 @@
 
 pub mod auth;
 mod cache;
+mod offline;
 mod pairing;
 mod profile;
 mod supervisor;
@@ -89,7 +111,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 1;
+pub const CLIENT_API_VERSION: u32 = 2;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,6 +271,7 @@ impl Client {
             .map(|saved| {
                 Supervisor::start(
                     saved,
+                    config_dir.clone(),
                     client.clone(),
                     Arc::clone(&changed),
                     stop.child_token(),
@@ -314,6 +337,7 @@ impl Client {
         profile::save(&self.inner.config_dir, &all)?;
         let supervisor = Supervisor::start(
             saved,
+            self.inner.config_dir.clone(),
             self.inner.client.clone(),
             Arc::clone(&self.inner.changed),
             self.inner.stop.child_token(),
@@ -343,7 +367,7 @@ impl Client {
     }
 
     /// Unpairs a machine on this device: removes it from the profile, with this device's key
-    /// for it, and stops its connection; its subscriptions end. The daemon still lists the
+    /// for it, deletes its offline cache, and stops its connection; its subscriptions end. The daemon still lists the
     /// device until its owner revokes it.
     pub fn forget(&self, host_id: HostId) -> Result<(), Error> {
         let mut machines = self.lock();
@@ -356,7 +380,7 @@ impl Client {
         profile::save(&self.inner.config_dir, &all)?;
         machines.retain(|m| m.saved.host_id != host_id);
         drop(machines);
-        machine.stop();
+        machine.forget();
         self.inner.changed.send_modify(|version| *version += 1);
         Ok(())
     }
@@ -369,7 +393,21 @@ impl Client {
         self.machine(&host_id)?.synced().await
     }
 
-    /// Reconnects every disconnected machine now instead of after its backoff.
+    /// The app went to the background: saves the offline cache, blocking on the file system,
+    /// and stops retrying lost connections until [`Client::wake`]. Connections that are up are
+    /// kept.
+    pub fn suspend(&self) {
+        let machines = self.lock().clone();
+        for machine in machines {
+            machine.suspend();
+            machine.save();
+        }
+    }
+
+    /// The app is in the foreground: reconnects every disconnected machine now instead of
+    /// after its backoff, and resumes retrying after [`Client::suspend`]. Every connected
+    /// machine is checked: its connection is replaced at once if it was silent for longer than
+    /// 45 s, else pinged and replaced if the pong does not come back within 5 s.
     pub fn wake(&self) {
         for machine in self.lock().iter() {
             machine.wake();

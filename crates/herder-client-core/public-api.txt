@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 1;
+pub const CLIENT_API_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -75,6 +75,10 @@ impl Client {
 
 impl Client {
     pub async fn synced(&self, host_id: HostId) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn suspend(&self) {}
 }
 
 impl Client {

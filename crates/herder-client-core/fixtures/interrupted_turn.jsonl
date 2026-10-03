@@ -1,0 +1,8 @@
+# A turn that streams an item and then runs until another device interrupts it.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Looking."}}}}
+{"emit": {"type": "item_started", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
+{"emit": {"type": "item_delta", "item_id": "item-2", "text": "Half"}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "turn-1"}}

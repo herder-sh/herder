@@ -54,34 +54,39 @@ pub(crate) fn load(dir: &Path) -> Result<Vec<SavedMachine>, Error> {
 
 /// Replaces the saved machines in `dir` with `machines`.
 pub(crate) fn save(dir: &Path, machines: &[SavedMachine]) -> Result<(), Error> {
-    let failed = |what: &str, err: io::Error| Error::Local {
-        message: format!("{what} {}: {err}", dir.display()),
-    };
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|err| failed("creating", err))?;
     let json = serde_json::to_vec_pretty(&Profile {
         machines: machines.to_vec(),
     })
     .map_err(|err| Error::Local {
         message: format!("encoding the profile: {err}"),
     })?;
-    let tmp = dir.join(format!("{FILE}.tmp"));
+    write_private(dir, FILE, &json).map_err(|message| Error::Local {
+        message: format!("saving the profile: {message}"),
+    })
+}
+
+/// Replaces `dir/file` with `bytes` atomically, private to the user: mode 0600, in `dir`
+/// created with mode 0700 if missing.
+pub(crate) fn write_private(dir: &Path, file: &str, bytes: &[u8]) -> Result<(), String> {
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|err| format!("creating {}: {err}", dir.display()))?;
+    let tmp = dir.join(format!("{file}.tmp"));
     let write = || -> io::Result<()> {
-        let mut file = OpenOptions::new()
+        let mut out = OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .mode(0o600)
             .open(&tmp)?;
-        file.write_all(&json)?;
-        file.sync_all()?;
-        fs::rename(&tmp, dir.join(FILE))?;
+        out.write_all(bytes)?;
+        out.sync_all()?;
+        fs::rename(&tmp, dir.join(file))?;
         File::open(dir)?.sync_all()
     };
-    write().map_err(|err| failed("saving the profile in", err))
+    write().map_err(|err| format!("writing {}: {err}", dir.join(file).display()))
 }
 
 #[cfg(test)]
