@@ -83,4 +83,27 @@ struct FleetTests {
         #expect(await eventually { fleet.sessions[key]?.state == .archived })
         #expect(fleet.refusals[key] == nil)
     }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aFullTurnShowsInTheTranscript() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(link: daemon.link)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .fullAccess, prompt: "Say hello.")
+
+        #expect(await eventually {
+            guard let model = fleet.sessions[key] else { return false }
+            return Transcript.blocks(model).contains { $0 == .assistant(id: $0.id, text: "Hello, world.", streaming: false) }
+        })
+        let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
+        #expect(blocks.contains { if case .user(_, "Say hello.", false) = $0 { true } else { false } })
+    }
 }

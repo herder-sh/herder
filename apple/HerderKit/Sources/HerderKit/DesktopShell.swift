@@ -9,6 +9,8 @@ struct DesktopShell: View {
     @Binding var sheet: AppSheet?
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
+    @Binding var draft: Draft?
+    let opened: (SessionKey) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -28,16 +30,16 @@ struct DesktopShell: View {
         let lists = fleet.lists
         switch item {
         case .home:
-            ListAndSession(fleet: fleet, session: $session) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: "Home", subtitle: subtitle(lists)) {
                     HomeView(fleet: fleet, sheet: $sheet, selection: $session)
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: nil) }
+                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
                 }
             }
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
-            ListAndSession(fleet: fleet, session: $session) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "") {
                     ScrollView {
                         if let project {
@@ -47,7 +49,7 @@ struct DesktopShell: View {
                         }
                     }
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: id) }
+                    PaneButton(title: "New Session", symbol: "plus") { draft = Draft.inProject(id, fleet: fleet) }
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
@@ -73,6 +75,8 @@ struct DesktopShell: View {
 private struct ListAndSession<List: View>: View {
     let fleet: Fleet
     @Binding var session: SessionKey?
+    @Binding var draft: Draft?
+    let opened: (SessionKey) -> Void
     @ViewBuilder var list: List
 
     var body: some View {
@@ -83,9 +87,9 @@ private struct ListAndSession<List: View>: View {
                     Rectangle().fill(Theme.stroke).frame(width: 1)
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            } else if session != nil {
+            } else if session != nil || draft != nil {
                 VStack(alignment: .leading, spacing: 0) {
-                    Button { session = nil } label: {
+                    Button { session = nil; draft = nil } label: {
                         Label("Back", systemImage: "chevron.left")
                             .font(.body.weight(.medium))
                             .foregroundStyle(Theme.text)
@@ -103,8 +107,10 @@ private struct ListAndSession<List: View>: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let session {
-            SessionPlaceholder(fleet: fleet, key: session)
+        if let draft {
+            DraftSessionView(fleet: fleet, draft: draft, created: opened).id(draft.id)
+        } else if let session {
+            SessionView(fleet: fleet, key: session) { self.session = $0 }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
@@ -187,7 +193,7 @@ private struct Sidebar: View {
                 Spacer()
                 IconButton(symbol: "arrow.clockwise", help: "Reconnect") { fleet.wake() }
                     .keyboardShortcut("r")
-                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession(projectId: nil) }
+                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
                     .keyboardShortcut("n")
             }
             // Room for the window's traffic lights on the Mac.

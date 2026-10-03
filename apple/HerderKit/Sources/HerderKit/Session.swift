@@ -53,6 +53,10 @@ struct SessionModel {
     var lastTool: String?
     var streaming: [Item] = []
     var updatedAt: Date?
+    /// The transcript: completed items, events worth a line, and spawned children, in order.
+    var log: [LogEntry] = []
+    /// Prompts sent while a turn ran, until the session takes them.
+    var queued: [String] = []
 
     init(key: SessionKey) {
         self.key = key
@@ -65,6 +69,7 @@ struct SessionModel {
     }
 
     mutating func apply(_ event: Event) {
+        record(event)
         let at = Timestamp.date(event.at) ?? updatedAt ?? .now
         updatedAt = at
         switch event.body {
@@ -131,6 +136,75 @@ struct SessionModel {
         case .prUnlinked(let number):
             prs.removeAll { $0.number == number }
         case .childSpawned, .childReported, .unknown:
+            break
+        }
+    }
+
+    /// Adds an event to the transcript, worded as the TUI words it
+    /// (crates/herder-tui/src/views/transcript.rs); before `apply` changes the state, so an
+    /// answer can name the choice it picked.
+    private mutating func record(_ event: Event) {
+        func notice(_ text: String, _ tone: Notice.Tone = .info) {
+            log.append(.notice(Notice(id: event.seq, text: text, tone: tone)))
+        }
+        func asked(_ what: String, _ text: String, _ routedTo: Route, _ reason: EscalationReason?) {
+            switch (routedTo, reason) {
+            case (.primary, _): notice("\(what) for the primary session: \(text)")
+            case (.user, let reason?): notice("\(what) for you (\(reason.text.lowercased())): \(text)", .attention)
+            case (.user, nil): notice("\(what): \(text)", .attention)
+            }
+        }
+        func escalated(_ what: String, _ reason: EscalationReason, _ note: String?) {
+            notice("\(what) escalated to you: \(reason.text.lowercased())" + (note.map { "; the primary says: \($0)" } ?? ""),
+                   .attention)
+        }
+        switch event.body {
+        case .itemAdded(let item):
+            log.append(.item(item))
+            if case .userMessage(let text) = item.body, let index = queued.firstIndex(of: text) {
+                queued.remove(at: index)
+            }
+        case .branchCheckedOut(let branch): notice("Checked out \(branch)")
+        case .turnInterrupted: notice("Turn interrupted")
+        case .turnFailed(_, let error): notice("Turn failed: \(error.message)", .error)
+        case .approvalRequested(_, _, _, let summary, let routedTo, let reason):
+            asked("Approval", summary, routedTo, reason)
+        case .questionAsked(_, _, let text, _, let routedTo, let reason):
+            asked("Question", text, routedTo, reason)
+        case .approvalEscalated(_, let reason, let note): escalated("Approval", reason, note)
+        case .questionEscalated(_, let reason, let note): escalated("Question", reason, note)
+        case .approvalResolved(_, let decision, let answeredBy):
+            let what = switch decision {
+            case .allow: "Allowed"
+            case .deny: "Denied"
+            case .expired: "Approval expired"
+            }
+            notice(answeredBy == .user ? what : "\(what) by the primary session")
+        case .questionAnswered(let id, let answer, let answeredBy):
+            let text: String = switch answer {
+            case .text(let text): text
+            case .choice(let index):
+                questions.first { $0.id == id }.flatMap { pending -> String? in
+                    guard case .question(_, let choices) = pending.kind, Int(index) < choices.count else { return nil }
+                    return choices[Int(index)]
+                } ?? "choice \(index + 1)"
+            }
+            notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
+        case .childSpawned(let child, let task): log.append(.child(sessionId: child, task: task))
+        case .childReported(_, _, let summary): notice("Child reported: \(summary)")
+        case .modelSwitched(let model): notice("Model switched to \(model)")
+        case .accountSwitched(let accountId):
+            notice(event.by == nil
+                   ? "Failed over to account \(accountId): the last one hit its limit"
+                   : "Account switched to \(accountId)")
+        case .providerSwitched(let provider, let accountId, let model):
+            notice(event.by == nil
+                   ? "Failed over to \(provider) (\(model), account \(accountId)): the last one hit its limit"
+                   : "Switched to \(provider) (\(model), account \(accountId))")
+        case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
+        case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
+        case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
+        case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated, .unknown:
             break
         }
     }
@@ -262,5 +336,31 @@ enum Timestamp {
         if days > 0 { return "\(days)d \(hours)h" }
         if hours > 0 { return "\(hours)h \(minutes % 60)m" }
         return "\(minutes)m"
+    }
+}
+
+/// One line of a session's transcript.
+enum LogEntry: Hashable {
+    case item(Item)
+    case notice(Notice)
+    case child(sessionId: SessionId, task: String)
+}
+
+/// An event shown as a line of the transcript.
+struct Notice: Hashable {
+    enum Tone: Hashable { case info, attention, error }
+    let id: UInt64
+    let text: String
+    let tone: Tone
+}
+
+extension PermissionMode {
+    var label: String {
+        switch self {
+        case .readOnly: "Read only"
+        case .ask: "Ask"
+        case .autoEdit: "Auto edit"
+        case .fullAccess: "Full access"
+        }
     }
 }
