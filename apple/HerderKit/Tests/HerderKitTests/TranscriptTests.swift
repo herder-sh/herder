@@ -53,10 +53,9 @@ struct TranscriptTests {
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         let outgoing = Outgoing(text: "next", state: .delivered)
         model.outbox = [outgoing]
-        // Running: the turn's progress, then the message waiting behind it.
-        let running = Transcript.blocks(model)
-        #expect(running.suffix(2) == [.working(since: model.turnStartedAt, waiting: false),
-                                      .user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing)])
+        // Running: the turn's progress; the message waits in the tray above the composer.
+        #expect(Transcript.blocks(model).last == .working(since: model.turnStartedAt, waiting: false))
+        #expect(Transcript.queued(model) == [outgoing])
         // Idle: the message, then the wait for the agent to take it.
         model.apply(script.event(.turnCompleted(turnId: "t1")))
         #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
@@ -74,7 +73,7 @@ struct TranscriptTests {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         model.apply(SessionUpdate(events: [], streaming: [Item(id: "s", turnId: "t1", body: .assistantMessage(text: "Hel"))]))
-        #expect(Transcript.blocks(model).last == .assistant(id: "s", text: "Hel", streaming: true))
+        #expect(Transcript.blocks(model).last == .assistant(id: "t1/s", text: "Hel", streaming: true))
     }
 }
 
@@ -96,5 +95,32 @@ struct DefaultAccountTests {
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "claude")?.accountId == "busy")
         #expect(fleet.defaultAccount(on: "h", projectId: nil, provider: "claude")?.accountId == "idle")
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "codex")?.accountId == "gpt")
+    }
+
+    @Test func repliesOfDifferentTurnsKeepApartWhenTheAdapterReusesItemIds() {
+        var script = Script()
+        let model = script.model([
+            created(),
+            .turnStarted(turnId: "t1"),
+            item("u1", .userMessage(text: "asd", attachments: []), turn: "t1"),
+            item("item-2", .assistantMessage(text: "First."), turn: "t1"),
+            .turnCompleted(turnId: "t1"),
+            .turnStarted(turnId: "t2"),
+            item("u2", .userMessage(text: "asd", attachments: []), turn: "t2"),
+            item("item-2", .assistantMessage(text: "Second."), turn: "t2"),
+            .turnCompleted(turnId: "t2"),
+        ])
+        let blocks = Transcript.blocks(model)
+        #expect(Set(blocks.map(\.id)).count == blocks.count)
+        #expect(blocks.compactMap { if case .assistant(_, let text, _) = $0 { text } else { nil } } == ["First.", "Second."])
+    }
+
+    @Test func messagesQueuedBehindTheTurnLeaveTheTranscriptForTheTray() {
+        var script = Script()
+        var model = script.model([created(), .turnStarted(turnId: "t1")])
+        model.outbox = [Outgoing(text: "next", images: [], state: .delivered), Outgoing(text: "typing", images: [], state: .sending)]
+        let users = Transcript.blocks(model).compactMap { if case .user(_, let text, _, _) = $0 { text } else { nil } }
+        #expect(users == ["typing"])
+        #expect(Transcript.queued(model).map(\.text) == ["next"])
     }
 }
