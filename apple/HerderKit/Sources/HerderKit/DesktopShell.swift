@@ -9,11 +9,22 @@ struct DesktopShell: View {
     @Binding var sheet: AppSheet?
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
+    @Binding var draft: Draft?
+    let opened: (SessionKey) -> Void
+    @AppStorage("sidebarCollapsed") private var sidebarCollapsed = false
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet)
-                .frame(width: 236)
+            Group {
+                if sidebarCollapsed {
+                    SidebarRail(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed)
+                        .frame(width: 76)
+                } else {
+                    Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed)
+                        .frame(width: 228)
+                }
+            }
+            .background(Theme.surface)
             Rectangle().fill(Theme.stroke).frame(width: 1)
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -28,16 +39,16 @@ struct DesktopShell: View {
         let lists = fleet.lists
         switch item {
         case .home:
-            ListAndSession(fleet: fleet, session: $session) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: "Home", subtitle: subtitle(lists)) {
                     HomeView(fleet: fleet, sheet: $sheet, selection: $session)
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: nil) }
+                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
                 }
             }
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
-            ListAndSession(fleet: fleet, session: $session) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "") {
                     ScrollView {
                         if let project {
@@ -47,7 +58,7 @@ struct DesktopShell: View {
                         }
                     }
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession(projectId: id) }
+                    PaneButton(title: "New Session", symbol: "plus") { draft = Draft.inProject(id, fleet: fleet) }
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
@@ -73,19 +84,35 @@ struct DesktopShell: View {
 private struct ListAndSession<List: View>: View {
     let fleet: Fleet
     @Binding var session: SessionKey?
+    @Binding var draft: Draft?
+    let opened: (SessionKey) -> Void
     @ViewBuilder var list: List
+    @AppStorage("listHidden") private var listHidden = false
 
     var body: some View {
         GeometryReader { geometry in
             if geometry.size.width >= 820 {
                 HStack(spacing: 0) {
-                    list.frame(width: 440)
-                    Rectangle().fill(Theme.stroke).frame(width: 1)
+                    if !listHidden || (session == nil && draft == nil) {
+                        list.frame(width: 380)
+                        Rectangle().fill(Theme.stroke).frame(width: 1)
+                    }
                     detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(alignment: .topTrailing) {
+                            if session != nil || draft != nil {
+                                IconButton(symbol: listHidden ? "sidebar.squares.left" : "arrow.up.left.and.arrow.down.right",
+                                           help: listHidden ? "Show the session list" : "Hide the session list") {
+                                    listHidden.toggle()
+                                }
+                                .keyboardShortcut("\\", modifiers: .command)
+                                .padding(.top, 14)
+                                .padding(.trailing, 64)
+                            }
+                        }
                 }
-            } else if session != nil {
+            } else if session != nil || draft != nil {
                 VStack(alignment: .leading, spacing: 0) {
-                    Button { session = nil } label: {
+                    Button { session = nil; draft = nil } label: {
                         Label("Back", systemImage: "chevron.left")
                             .font(.body.weight(.medium))
                             .foregroundStyle(Theme.text)
@@ -103,8 +130,10 @@ private struct ListAndSession<List: View>: View {
     }
 
     @ViewBuilder private var detail: some View {
-        if let session {
-            SessionPlaceholder(fleet: fleet, key: session)
+        if let draft {
+            DraftSessionView(fleet: fleet, draft: draft, created: opened).id(draft.id)
+        } else if let session {
+            SessionView(fleet: fleet, key: session) { self.session = $0 }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
@@ -164,7 +193,7 @@ struct PaneButton: View {
 }
 
 /// The sidebar: sections, projects, and the machines' status at the bottom.
-private struct Sidebar: View {
+struct Sidebar: View {
     #if os(macOS)
     static let topBar: CGFloat = 52
     #else
@@ -174,6 +203,7 @@ private struct Sidebar: View {
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
     @Binding var sheet: AppSheet?
+    @Binding var collapsed: Bool
 
     private func select(_ next: SidebarItem) {
         if item != next { session = nil }
@@ -185,9 +215,11 @@ private struct Sidebar: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Spacer()
+                IconButton(symbol: "sidebar.left", help: "Collapse the sidebar") { collapsed = true }
+                    .keyboardShortcut("\\", modifiers: [.command, .shift])
                 IconButton(symbol: "arrow.clockwise", help: "Reconnect") { fleet.wake() }
                     .keyboardShortcut("r")
-                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession(projectId: nil) }
+                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
                     .keyboardShortcut("n")
             }
             // Room for the window's traffic lights on the Mac.
@@ -228,23 +260,77 @@ private struct Sidebar: View {
             Spacer(minLength: 0)
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(lists.machines) { machine in
-                    HStack(spacing: 8) {
-                        ConnectionMark(state: machine.connection)
-                        Text(machine.name).lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        if machine.running > 0 {
-                            Text("\(machine.running)").foregroundStyle(Theme.running)
+                    Button { sheet = .machineSettings(hostId: machine.hostId) } label: {
+                        HStack(spacing: 8) {
+                            ConnectionMark(state: machine.connection)
+                            Text(machine.name).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            if machine.running > 0 {
+                                Text("\(machine.running)").foregroundStyle(Theme.running)
+                            }
                         }
+                        .font(.footnote)
+                        .foregroundStyle(Theme.secondary)
+                        .contentShape(.rect)
                     }
-                    .font(.footnote)
-                    .foregroundStyle(Theme.secondary)
+                    .buttonStyle(.plain)
+                    .help("\(machine.name): \(machine.connection.label)")
                 }
             }
             .padding(14)
         }
         .padding(.horizontal, 8)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Theme.surface)
+    }
+}
+
+/// The sidebar collapsed to a rail of icons, leaving the room to the session.
+private struct SidebarRail: View {
+    let fleet: Fleet
+    @Binding var item: SidebarItem
+    @Binding var session: SessionKey?
+    @Binding var sheet: AppSheet?
+    @Binding var collapsed: Bool
+
+    var body: some View {
+        let lists = fleet.lists
+        VStack(spacing: 10) {
+            Spacer().frame(height: Sidebar.topBar - 8)
+            IconButton(symbol: "sidebar.left", help: "Expand the sidebar") { collapsed = false }
+                .keyboardShortcut("\\", modifiers: [.command, .shift])
+            IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
+                .keyboardShortcut("n")
+            Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
+            rail("tray.full", "Home", .home, badge: lists.requests.count)
+            rail("server.rack", "Machines", .machines, badge: 0)
+            ForEach(lists.projects) { project in
+                rail("shippingbox", project.name, .project(project.id), badge: 0)
+            }
+            Spacer()
+            ForEach(lists.machines) { machine in
+                ConnectionMark(state: machine.connection).help("\(machine.name): \(machine.connection.label)")
+            }
+        }
+        .padding(.bottom, 14)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func rail(_ symbol: String, _ title: String, _ target: SidebarItem, badge: Int) -> some View {
+        Button {
+            if item != target { session = nil }
+            item = target
+        } label: {
+            Image(systemName: symbol)
+                .foregroundStyle(item == target ? Theme.text : Theme.secondary)
+                .frame(width: 38, height: 34)
+                .background(item == target ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
+                .overlay(alignment: .topTrailing) {
+                    if badge > 0 { Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -4, y: 4) }
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(title)
     }
 }
 

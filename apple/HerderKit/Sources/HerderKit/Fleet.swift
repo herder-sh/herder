@@ -13,10 +13,17 @@ public final class Fleet {
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
+    /// Each machine's connection changes since the app opened, oldest first.
+    private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
 
     public init(client: Client) {
         self.client = client
         machines = client.machines()
+    }
+
+    /// Replaces the machines without a client change, for tests.
+    func setMachinesForTesting(_ machines: [Machine]) {
+        self.machines = machines
     }
 
     /// What the lists show now.
@@ -34,6 +41,12 @@ public final class Fleet {
 
     private func update(_ machines: [Machine]) {
         self.machines = machines
+        for machine in machines {
+            var log = connectionLog[machine.hostId] ?? []
+            guard log.last?.state != machine.connection else { continue }
+            log.append(ConnectionChange(at: .now, state: machine.connection))
+            connectionLog[machine.hostId] = Array(log.suffix(100))
+        }
         let listed = Set(machines.flatMap { machine in
             machine.sessions.map { SessionKey(hostId: machine.hostId, sessionId: $0.sessionId) }
         })
@@ -80,6 +93,24 @@ public final class Fleet {
         await send(.answerQuestion(sessionId: key.sessionId, questionId: request.requestId, answer: answer), about: key)
     }
 
+    /// The account a new session runs on, so nobody has to pick one: the project's default
+    /// account when it fits the provider, else the provider's account with the most room left.
+    func defaultAccount(on hostId: HostId, projectId: String?, provider: Provider?) -> Account? {
+        guard let machine = machines.first(where: { $0.hostId == hostId }) else { return nil }
+        let preferred = machine.projects.first { $0.projectId == projectId }?.defaultAccount
+        if let account = machine.accounts.first(where: { $0.accountId == preferred }),
+           provider == nil || account.provider == provider {
+            return account
+        }
+        return machine.accounts
+            .filter { provider == nil || $0.provider == provider }
+            .min { busiest($0) < busiest($1) }
+    }
+
+    private func busiest(_ account: Account) -> Double {
+        account.usage.map(\.usedPercent).max() ?? 0
+    }
+
     /// Creates a session, prompts it when a prompt is given, and returns it.
     func createSession(
         on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
@@ -98,6 +129,64 @@ public final class Fleet {
             await send(.sendPrompt(sessionId: sessionId, text: prompt), about: key)
         }
         return key
+    }
+
+    /// Sends what the user typed: the answer to the session's oldest question when one is
+    /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
+    func submit(_ text: String, to key: SessionKey) async {
+        guard let session = sessions[key] else { return }
+        if let question = session.questions.first {
+            await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
+                       about: key)
+            return
+        }
+        let outgoing = Outgoing(text: text)
+        sessions[key]?.outbox.append(outgoing)
+        await send(.sendPrompt(sessionId: key.sessionId, text: text), about: key)
+        if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
+            sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
+        }
+    }
+
+    /// Runs a queued prompt now: interrupts the turn, so the daemon starts the queue.
+    func sendNow(_ key: SessionKey) async {
+        await interrupt(key)
+    }
+
+    /// Drops a prompt that failed to send.
+    func discard(_ outgoing: Outgoing, from key: SessionKey) {
+        sessions[key]?.outbox.removeAll { $0.id == outgoing.id }
+    }
+
+    func interrupt(_ key: SessionKey) async {
+        await send(.interrupt(sessionId: key.sessionId), about: key)
+    }
+
+    func setMode(_ mode: PermissionMode, of key: SessionKey) async {
+        await send(.setPermissionMode(sessionId: key.sessionId, mode: mode), about: key)
+    }
+
+    /// Moves a session to an account, a model, or both, as the TUI's switch dialog does: the
+    /// same account only changes the model, another account of the same provider switches
+    /// account (then model), and another provider's account switches provider.
+    func switchSession(_ key: SessionKey, to account: Account, model: String) async {
+        guard let session = sessions[key] else { return }
+        let model = model.trimmingCharacters(in: .whitespaces)
+        if account.accountId == session.accountId {
+            guard !model.isEmpty, model != session.model else {
+                refusals[key] = "Already on this account: enter a new model."
+                return
+            }
+            await send(.setModel(sessionId: key.sessionId, model: model), about: key)
+        } else if account.provider == session.provider {
+            await send(.switchAccount(sessionId: key.sessionId, accountId: account.accountId), about: key)
+            if !model.isEmpty, refusals[key] == nil {
+                await send(.setModel(sessionId: key.sessionId, model: model), about: key)
+            }
+        } else {
+            await send(.switchProvider(sessionId: key.sessionId, accountId: account.accountId,
+                                       model: model.isEmpty ? nil : model), about: key)
+        }
     }
 
     func archive(_ key: SessionKey) async {
@@ -163,4 +252,10 @@ public enum Profile {
             at: support.appendingPathComponent("herder", isDirectory: true),
             client: "herder-\(platform)/\(version ?? "dev")")
     }
+}
+
+/// A machine's connection changing state.
+struct ConnectionChange: Hashable {
+    let at: Date
+    let state: ConnectionState
 }

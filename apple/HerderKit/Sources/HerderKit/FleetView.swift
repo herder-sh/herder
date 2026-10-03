@@ -13,6 +13,9 @@ struct FleetView: View {
     @State private var sheet: AppSheet?
     @State private var item: SidebarItem = .home
     @State private var session: SessionKey?
+    @State private var draft: Draft?
+    @State private var tab = 0
+    @State private var homePath: [SessionKey] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -27,37 +30,61 @@ struct FleetView: View {
         }
         .tint(Theme.text)
         .sheet(item: $sheet) { sheet in
-            sheet.view(fleet: fleet) { key in
-                // A new session opens where its project's sessions are listed.
-                if let project = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } }) {
-                    item = .project(project.id)
-                }
-                session = key
+            sheet.view(fleet: fleet) { draft = $0 }
+        }
+        #if os(iOS)
+        .fullScreenCover(item: Binding(get: { sizeClass == .compact ? draft : nil }, set: { draft = $0 })) { draft in
+            NavigationStack {
+                DraftSessionView(fleet: fleet, draft: draft) { opened($0) }
+                    .toolbar { Button("Cancel") { self.draft = nil } }
             }
         }
+        #endif
         .task { await fleet.follow() }
+        .onChange(of: draft) {
+            // A draft shows in a list's session pane; Machines has none.
+            if draft != nil {
+                session = nil
+                if item == .machines { item = .home }
+            }
+        }
+        .onChange(of: session) { if session != nil { draft = nil } }
     }
 
     private var shell: some View {
-        DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session)
+        DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
+    }
+
+    /// Shows a session just created from a draft: in its project's pane, or pushed on Home.
+    private func opened(_ key: SessionKey) {
+        draft = nil
+        if let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
+            item = .project(projectId)
+        }
+        session = key
+        tab = 0
+        homePath = [key]
     }
 
     #if os(iOS)
     private var tabs: some View {
-        TabView {
-            NavigationStack {
+        TabView(selection: $tab) {
+            NavigationStack(path: $homePath) {
                 HomeView(fleet: fleet, sheet: $sheet)
-                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession(projectId: nil) } }
+                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
             }
             .tabItem { Label("Home", systemImage: "tray.full") }
             .badge(fleet.lists.requests.count)
+            .tag(0)
             NavigationStack {
-                ProjectsView(fleet: fleet, sheet: $sheet, projects: fleet.lists.projects)
+                ProjectsView(fleet: fleet, sheet: $sheet, draft: $draft, projects: fleet.lists.projects)
                     .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
             }
             .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
+            .tag(1)
             NavigationStack { MachinesView(fleet: fleet, sheet: $sheet) }
                 .tabItem { Label("Machines", systemImage: "server.rack") }
+                .tag(2)
         }
     }
     #endif
@@ -100,7 +127,7 @@ struct HomeView: View {
         #if os(macOS)
         .navigationSubtitle(ConnectionLine.text(lists.machines))
         #endif
-        .navigationDestination(for: SessionKey.self) { SessionPlaceholder(fleet: fleet, key: $0) }
+        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 }
 
@@ -219,6 +246,7 @@ struct SessionLink: View {
 struct ProjectsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
+    @Binding var draft: Draft?
     let projects: [ProjectGroup]
     var title = "Projects"
 
@@ -253,7 +281,7 @@ struct ProjectsView: View {
                         Text(project.machines.joined(separator: ", ")).font(.caption).foregroundStyle(Theme.tertiary)
                         Spacer()
                         if let id = project.projectId {
-                            Button("New Session", systemImage: "plus") { sheet = .newSession(projectId: id) }
+                            Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
                                 .labelStyle(.iconOnly)
                             Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
                                 .labelStyle(.iconOnly)
@@ -274,29 +302,6 @@ struct ProjectsView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle(title)
-        .navigationDestination(for: SessionKey.self) { SessionPlaceholder(fleet: fleet, key: $0) }
-    }
-}
-
-/// Holds the session view's place until P7.3.
-struct SessionPlaceholder: View {
-    let fleet: Fleet
-    let key: SessionKey
-
-    var body: some View {
-        let session = fleet.sessions[key]
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                StatusGlyph(state: session?.state ?? .idle)
-                Text(session?.state.label ?? "").foregroundStyle(Theme.secondary)
-            }
-            Text(session?.activity ?? "").foregroundStyle(Theme.text)
-            Text(session?.branch ?? "").font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
-            Spacer()
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.background)
-        .navigationTitle(session?.title ?? "")
+        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 }

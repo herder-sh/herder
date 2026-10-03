@@ -9,8 +9,8 @@ import AppKit
 /// The sheets the app presents.
 enum AppSheet: Identifiable, Hashable {
     case pair
-    /// A new session, in this project when given.
-    case newSession(projectId: String?)
+    /// A new session: pick its project first.
+    case newSession
     /// A new project: a first session in a repository herder does not list yet.
     case newProject
     case projectSettings(projectId: String)
@@ -21,11 +21,11 @@ enum AppSheet: Identifiable, Hashable {
 
 extension AppSheet {
     @MainActor @ViewBuilder
-    func view(fleet: Fleet, opened: @escaping (SessionKey) -> Void) -> some View {
+    func view(fleet: Fleet, drafted: @escaping (Draft) -> Void) -> some View {
         switch self {
         case .pair: PairSheet(fleet: fleet)
-        case .newSession(let projectId): NewSessionSheet(fleet: fleet, projectId: projectId, newProject: false, opened: opened)
-        case .newProject: NewSessionSheet(fleet: fleet, projectId: nil, newProject: true, opened: opened)
+        case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
+        case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .projectSettings(let projectId): ProjectSettingsSheet(fleet: fleet, projectId: projectId)
         case .machineSettings(let hostId): MachineSettingsSheet(fleet: fleet, hostId: hostId)
         }
@@ -114,134 +114,188 @@ private func grouped(_ fingerprint: String) -> String {
     .joined(separator: " ")
 }
 
-/// Starts a session: on a machine, in one of its projects or any repository there, on one of
-/// its accounts, optionally with a first prompt.
-struct NewSessionSheet: View {
+/// A session about to start: where it runs. The chat opens empty, with its account, model
+/// and permissions preselected; the first prompt creates it.
+struct Draft: Hashable, Identifiable {
+    var hostId: HostId
+    /// The project to start in, or `nil` for `repo`.
+    var projectId: String?
+    var repo: String?
+    var id: String { "\(hostId)/\(projectId ?? repo ?? "")" }
+
+    /// A draft in a project, on the first connected machine that has it.
+    @MainActor
+    static func inProject(_ projectId: String, fleet: Fleet) -> Draft? {
+        fleet.machines.first { $0.connection == .connected && $0.projects.contains { $0.projectId == projectId } }
+            .map { Draft(hostId: $0.hostId, projectId: projectId) }
+    }
+}
+
+/// Picks where a new session runs, as a palette: one row per project, across machines, then a
+/// repository path on a machine for a new project. The chat opens on the machine the project
+/// was used on last; it can change there.
+struct ProjectPicker: View {
     let fleet: Fleet
-    let projectId: String?
     let newProject: Bool
-    let opened: (SessionKey) -> Void
+    let picked: (Draft) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var other = false
     @State private var hostId: HostId = ""
-    @State private var project: String = ""
     @State private var repo = ""
-    @State private var accountId: AccountId = ""
-    @State private var model = ""
-    @State private var mode: PermissionMode = .ask
-    @State private var prompt = ""
-    @State private var error: String?
+    @FocusState private var searching: Bool
 
     /// Machines that run sessions: connected, and not a vault.
     private var machines: [Machine] {
         fleet.machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
     }
 
-    private var machine: Machine? { machines.first { $0.hostId == hostId } }
-    private static let otherRepository = "\u{0}other"
+    /// Each project once, with the machines that have it.
+    private var projects: [(id: String, name: String, machines: [Machine])] {
+        var order: [String] = []
+        var groups: [String: (name: String, machines: [Machine])] = [:]
+        for machine in machines {
+            for project in machine.projects {
+                if groups[project.projectId] == nil { order.append(project.projectId) }
+                groups[project.projectId, default: (project.name, [])].machines.append(machine)
+            }
+        }
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return order.compactMap { id in groups[id].map { (id, $0.name, $0.machines) } }
+            .filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    /// The machine a project's newest session ran on, else the first that has it.
+    private func machine(for projectId: String, among candidates: [Machine]) -> Machine? {
+        let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
+            .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
+            .max { $0.1 < $1.1 }?.0
+        return candidates.first { $0.hostId == newest } ?? candidates.first
+    }
 
     var body: some View {
-        SheetScaffold(
-            title: newProject ? "New Project" : "New Session",
-            subtitle: newProject
-                ? "herder finds projects from the repositories its sessions run in. Start one in a repository on the machine."
-                : "Start an agent on a fresh worktree and branch."
-        ) {
-            if machines.isEmpty {
-                Text("No connected machine can run sessions.").foregroundStyle(Theme.secondary)
-            } else {
-                Field(label: "Machine") {
-                    ChoiceChips(options: machines.map { ($0.hostId, $0.name, $0.accounts.count == 1 ? "1 account" : "\($0.accounts.count) accounts") },
-                                selection: $hostId)
-                }
-                if let machine {
-                    if !newProject {
-                        Field(label: "Project") {
-                            ChoiceChips(
-                                options: machine.projects.map { ($0.projectId, $0.name, $0.paths.first ?? "") }
-                                    + [(Self.otherRepository, "Other repository…", "")],
-                                selection: $project)
-                        }
+        VStack(spacing: 0) {
+            if newProject || other {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("New project").font(.headline).foregroundStyle(Theme.text)
+                    Field(label: "Machine") {
+                        ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
                     }
-                    if newProject || project == Self.otherRepository {
-                        Field(label: "Repository", hint: "An absolute path to a git repository on \(machine.name).") {
+                    Field(label: "Repository", hint: isLocal
+                          ? "A git repository on this Mac."
+                          : "An absolute path to a git repository on the machine. Browsing remote folders needs P0.10.") {
+                        HStack(spacing: 8) {
                             InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                            #if os(macOS)
+                            if isLocal {
+                                ActionButton(title: "Browse…", style: .secondary) { browse() }
+                                    .frame(width: 120)
+                            }
+                            #endif
                         }
                     }
-                    Field(label: "Account") {
-                        if machine.accounts.isEmpty {
-                            Text("This machine has no accounts yet.").foregroundStyle(Theme.secondary)
-                        } else {
-                            ChoiceChips(options: machine.accounts.map { ($0.accountId, $0.label, $0.provider) },
-                                        selection: $accountId)
-                        }
-                    }
-                    Field(label: "Model", hint: "Blank uses the provider's default.") {
-                        InputBox(placeholder: "Provider's default", text: $model, mono: true)
-                    }
-                    Field(label: "Permissions") {
-                        ChoiceChips(options: [
-                            (PermissionMode.readOnly, "Read only", "No writes"),
-                            (.ask, "Ask", "Approve each change"),
-                            (.autoEdit, "Auto edit", "Edits without asking"),
-                            (.fullAccess, "Full access", "Everything"),
-                        ], selection: $mode)
-                    }
-                    Field(label: "First prompt", hint: "Optional; the session starts idle without one.") {
-                        InputBox(placeholder: "What should the agent do?", text: $prompt, lines: 3...8)
+                    HStack {
+                        Spacer()
+                        ActionButton(title: "Continue", style: .primary) { submitPath() }
+                            .frame(maxWidth: 160)
+                            .disabled(!pathReady)
+                            .opacity(pathReady ? 1 : 0.4)
+                            .keyboardShortcut(.defaultAction)
                     }
                 }
+                .padding(20)
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
+                    TextField("Start a session in…", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(.title3)
+                        .foregroundStyle(Theme.text)
+                        .focused($searching)
+                        .onSubmit {
+                            if let first = projects.first { pick(first.id, first.machines) }
+                        }
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 56)
+                Rectangle().fill(Theme.stroke).frame(height: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(projects, id: \.id) { project in
+                            PickRow(title: project.name, detail: project.machines.map(\.name).joined(separator: ", "),
+                                    symbol: "shippingbox") { pick(project.id, project.machines) }
+                        }
+                        PickRow(title: "Other repository…", detail: "", symbol: "folder.badge.plus") { other = true }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: 360)
             }
-            if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+        }
+        .frame(width: 520)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Theme.surface)
+        .preferredColorScheme(.dark)
+        .onAppear {
+            hostId = machines.first?.hostId ?? ""
+            searching = true
+        }
+    }
+
+    private func pick(_ projectId: String, _ candidates: [Machine]) {
+        guard let machine = machine(for: projectId, among: candidates) else { return }
+        picked(Draft(hostId: machine.hostId, projectId: projectId))
+        dismiss()
+    }
+
+    /// Whether the chosen machine is this device, whose folders the system panel can show.
+    private var isLocal: Bool {
+        let addresses = machines.first { $0.hostId == hostId }?.addresses ?? []
+        return addresses.contains { $0.hasPrefix("127.") || $0.hasPrefix("localhost") || $0.hasPrefix("[::1]") }
+    }
+
+    #if os(macOS)
+    private func browse() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Repository"
+        if panel.runModal() == .OK, let url = panel.url { repo = url.path }
+    }
+    #endif
+
+    private var pathReady: Bool { !hostId.isEmpty && repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") }
+
+    private func submitPath() {
+        picked(Draft(hostId: hostId, repo: repo.trimmingCharacters(in: .whitespaces)))
+        dismiss()
+    }
+}
+
+private struct PickRow: View {
+    let title: String
+    let detail: String
+    let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol).foregroundStyle(Theme.secondary).frame(width: 18)
+                Text(title).font(.body.weight(.medium)).foregroundStyle(Theme.text)
+                Spacer()
+                Text(detail).font(.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
-        } footer: {
-            Spacer()
-            ActionButton(title: newProject ? "Start Project" : "Start Session", style: .primary) { await start() }
-                .frame(maxWidth: 220)
-                .disabled(!ready)
-                .opacity(ready ? 1 : 0.4)
-                .keyboardShortcut(.defaultAction)
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
         }
-        .onAppear(perform: preselect)
-        .onChange(of: hostId) { preselectFor(machine) }
-    }
-
-    private var usesRepository: Bool { newProject || project == Self.otherRepository }
-
-    private var ready: Bool {
-        guard let machine, !machine.accounts.isEmpty, !accountId.isEmpty else { return false }
-        return usesRepository ? repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") : !project.isEmpty
-    }
-
-    private func preselect() {
-        let withProject = projectId.flatMap { id in machines.first { $0.projects.contains { $0.projectId == id } } }
-        hostId = (withProject ?? machines.first)?.hostId ?? ""
-        preselectFor(machine)
-    }
-
-    private func preselectFor(_ machine: Machine?) {
-        guard let machine else { return }
-        let projects = machine.projects
-        project = projects.first { $0.projectId == projectId }?.projectId ?? projects.first?.projectId ?? Self.otherRepository
-        let preferred = projects.first { $0.projectId == project }?.defaultAccount
-        accountId = machine.accounts.first { $0.accountId == preferred }?.accountId ?? machine.accounts.first?.accountId ?? ""
-    }
-
-    private func start() async {
-        do {
-            let key = try await fleet.createSession(
-                on: hostId,
-                repo: usesRepository ? repo.trimmingCharacters(in: .whitespaces) : nil,
-                projectId: usesRepository ? nil : project,
-                accountId: accountId,
-                model: model.trimmingCharacters(in: .whitespaces),
-                mode: mode,
-                prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines))
-            opened(key)
-            dismiss()
-        } catch {
-            self.error = describe(error)
-        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -301,6 +355,22 @@ struct MachineSettingsSheet: View {
                         .frame(width: 120)
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == machine.name)
                     }
+                }
+                Field(label: "Connection history", hint: "Since the app opened.") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array((fleet.connectionLog[hostId] ?? []).reversed().enumerated()), id: \.offset) { _, change in
+                            HStack(spacing: 10) {
+                                ConnectionMark(state: change.state)
+                                Text(change.at.formatted(date: .omitted, time: .standard))
+                                    .monospacedDigit().foregroundStyle(Theme.tertiary)
+                                Text(change.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                Spacer()
+                            }
+                            .font(.footnote)
+                        }
+                    }
+                    .padding(12)
+                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
                 Field(label: "Machine") {
                     VStack(alignment: .leading, spacing: 10) {
