@@ -4,7 +4,7 @@
 //! Journals are kept exactly as hosts stored them ([`JournalRecord`]), so event types newer
 //! than this build survive. The API is synchronous; the vault calls it from `spawn_blocking`.
 //!
-//! Copies are kept per host. A session recovered on another host keeps its id, so a second
+//! Copies are kept per host. A session another host took over keeps its id, so a second
 //! host replicating a session id is that host taking the session over: the copies other hosts
 //! hold are marked recovered ([`VaultStore::claim`]). They stay, and keep whatever their host
 //! sends when it returns, but the fleet shows only the current copy.
@@ -18,12 +18,14 @@
 //! not asked to send it again. A host and everything it replicated go only when an owner
 //! forgets it ([`VaultStore::forget`]).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use herder_protocol::{
     AccountId, AttachmentData, AttachmentId, Batch, Bytes, Cursor, DeviceId, HostId,
-    IMAGE_MEDIA_TYPES, Image, JournalRecord, MAX_BATCH_EVENTS, MAX_IMAGE_BYTES, RawEventBody,
-    RejectReason, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UserId,
+    HostReplication, IMAGE_MEDIA_TYPES, Image, JournalRecord, MAX_BATCH_EVENTS, MAX_IMAGE_BYTES,
+    RawEventBody, RejectReason, Seq, SessionHead, SessionId, SessionStatus, SessionSummary,
+    Timestamp, UserId, VaultStatus,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -375,6 +377,73 @@ impl VaultStore {
                 })
             })
             .collect())
+    }
+
+    /// What the vault holds, in total and of every host that ever replicated here, ordered by
+    /// host id. Lags are left out: the store does not know them.
+    pub fn status(&self) -> Result<VaultStatus> {
+        let mut hosts: BTreeMap<HostId, HostReplication> = self
+            .hosts()?
+            .into_iter()
+            .map(|host| {
+                let replication = HostReplication {
+                    host_id: host.host_id.clone(),
+                    sessions: 0,
+                    events: 0,
+                    last_event_at: None,
+                    lag_ms: None,
+                };
+                (host.host_id, replication)
+            })
+            .collect();
+        // Each session's event count and newest event, by its last seq: `at` is text, whose
+        // order is not the time's.
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT l.host_id, l.n, e.at FROM
+               (SELECT host_id, session_id, MAX(seq) AS seq, COUNT(*) AS n FROM events
+                GROUP BY host_id, session_id) l
+             JOIN events e
+               ON e.host_id = l.host_id AND e.session_id = l.session_id AND e.seq = l.seq",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                HostId::new(row.get::<_, String>(0)?),
+                row.get::<_, u64>(1)?,
+                row.get::<_, Timestamp>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (host, events, at) = row?;
+            if let Some(host) = hosts.get_mut(&host) {
+                host.events += events;
+                host.last_event_at = host.last_event_at.max(Some(at));
+            }
+        }
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT host_id, COUNT(*) FROM sessions s WHERE {CURRENT} GROUP BY host_id"
+        ))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((HostId::new(row.get::<_, String>(0)?), row.get::<_, u64>(1)?))
+        })?;
+        for row in rows {
+            let (host, sessions) = row?;
+            if let Some(host) = hosts.get_mut(&host) {
+                host.sessions = sessions;
+            }
+        }
+        let pages: u64 = self
+            .conn
+            .pragma_query_value(None, "page_count", |row| row.get(0))?;
+        let page_size: u64 = self
+            .conn
+            .pragma_query_value(None, "page_size", |row| row.get(0))?;
+        let hosts: Vec<HostReplication> = hosts.into_values().collect();
+        Ok(VaultStatus {
+            sessions: hosts.iter().map(|host| host.sessions).sum(),
+            events: hosts.iter().map(|host| host.events).sum(),
+            storage_bytes: pages * page_size,
+            hosts,
+        })
     }
 
     /// The host that has `session` now, if it is held here.
@@ -1068,6 +1137,72 @@ mod tests {
         store.append(&c, &journal(vec![event(1, created)])).unwrap();
         assert_eq!(store.host_of(&s1).unwrap(), Some(c));
         assert_eq!(store.fleet().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_status_counts_what_each_host_replicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (a, b, idle) = (HostId::new("a"), HostId::new("b"), HostId::new("idle"));
+        let paired = [
+            DeviceId::new("da"),
+            DeviceId::new("db"),
+            DeviceId::new("di"),
+        ];
+        for (device, host) in paired.iter().zip([&a, &b, &idle]) {
+            assert!(store.bind(device, host, host.as_str(), &paired).unwrap());
+        }
+        let at = |at: &str| -> Timestamp { at.parse().unwrap() };
+        let timed = |seq, when: &str| JournalRecord {
+            at: at(when),
+            ..record(seq, "x")
+        };
+        let journal = |id: &str, records| Batch {
+            session_id: SessionId::new(id),
+            events: records,
+        };
+        // A's newest event is the last of s1, though s2 is stored after it.
+        let s1 = vec![
+            timed(1, "2027-01-15T08:00:00Z"),
+            timed(2, "2027-01-15T09:00:00.5Z"),
+        ];
+        store.append(&a, &journal("s1", s1)).unwrap();
+        let s2 = vec![timed(1, "2027-01-15T08:30:00Z")];
+        store.append(&a, &journal("s2", s2)).unwrap();
+        for id in ["s1", "s2"] {
+            store
+                .put_summary(&a, &summary(id, None, SessionStatus::Idle))
+                .unwrap();
+        }
+        // B recovers s2: it counts for B, while A's copy stays held.
+        store.claim(&b, &SessionId::new("s2")).unwrap();
+        store
+            .put_summary(&b, &summary("s2", None, SessionStatus::Idle))
+            .unwrap();
+        let s2 = vec![
+            timed(1, "2027-01-15T08:30:00Z"),
+            timed(2, "2027-01-15T10:00:00Z"),
+        ];
+        store.append(&b, &journal("s2", s2)).unwrap();
+
+        let status = store.status().unwrap();
+        let replication = |host: &HostId, sessions, events, last: Option<&str>| HostReplication {
+            host_id: host.clone(),
+            sessions,
+            events,
+            last_event_at: last.map(at),
+            lag_ms: None,
+        };
+        assert_eq!(
+            status.hosts,
+            [
+                replication(&a, 1, 3, Some("2027-01-15T09:00:00.5Z")),
+                replication(&b, 1, 2, Some("2027-01-15T10:00:00Z")),
+                replication(&idle, 0, 0, None),
+            ]
+        );
+        assert_eq!((status.sessions, status.events), (2, 5));
+        assert!(status.storage_bytes > 0);
     }
 
     #[test]

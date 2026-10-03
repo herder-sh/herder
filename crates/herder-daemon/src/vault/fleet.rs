@@ -2,10 +2,11 @@
 //!
 //! Clients pair with the vault and connect to it as to a daemon, on the port hosts replicate
 //! to. They get the session list, and replay and follow each session's journal as its host
-//! replicates it, and the host list with each host's liveness, which the vault tells from its
-//! replication connection ([`Presence`]). `get_attachment` answers from the images hosts
-//! replicated; every other command on a session is refused as `read_only`: a session is
-//! driven on its host, which the error names.
+//! replicates it, the host list with each host's liveness, which the vault tells from its
+//! replication connection ([`Presence`]), and the vault's status: what it holds of each host
+//! and how far behind it is, at most every [`STATUS_INTERVAL`]. `get_attachment` answers from
+//! the images hosts replicated; every other command on a session is refused as `read_only`: a
+//! session is driven on its host, which the error names.
 //!
 //! Owners link hosts to the vault from a client: `pair_vault_host` mints a host-only code, as
 //! `herder pair --host` does, for the client to hand the host with `link_vault`, and
@@ -14,12 +15,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use herder_protocol::{
     Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
     Event, EventBody, FleetHost, HostId, HostUsage, IMAGE_NOT_BACKED_UP, Seq, SessionHead,
     SessionId, Timestamp, VaultVolume,
 };
+use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::VaultStore;
@@ -41,7 +45,12 @@ pub(crate) struct Fleet {
     listed: Arc<tokio::sync::Mutex<Vec<SessionHead>>>,
     /// Held while the host list is read and sent, so an older one never follows a newer one.
     sending_hosts: Arc<tokio::sync::Mutex<()>>,
+    /// Woken when what the vault holds changed, for [`Fleet::publish_status`].
+    status_changed: Arc<Notify>,
 }
+
+/// How often at most clients get the vault's status.
+pub(crate) const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl Fleet {
     pub(crate) fn new(store: Arc<Mutex<VaultStore>>, hub: Arc<Hub>, auth: Arc<Auth>) -> Self {
@@ -52,6 +61,7 @@ impl Fleet {
             presence: Arc::default(),
             listed: Arc::default(),
             sending_hosts: Arc::default(),
+            status_changed: Arc::default(),
         }
     }
 
@@ -71,9 +81,35 @@ impl Fleet {
         }
     }
 
+    /// Sends clients the vault's status whenever what it holds changed, at most every
+    /// [`STATUS_INTERVAL`], until `shutdown`; the first one at once.
+    pub(crate) async fn publish_status(&self, shutdown: CancellationToken) {
+        self.status_changed.notify_one();
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = self.status_changed.notified() => {}
+            }
+            match blocking(&self.store, |store| store.status()).await {
+                Ok(mut status) => {
+                    for host in &mut status.hosts {
+                        host.lag_ms = self.presence.lag_ms(&host.host_id);
+                    }
+                    self.hub.vault_status(status);
+                }
+                Err(err) => warn!("cannot read the vault's status: {err:#}"),
+            }
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep(STATUS_INTERVAL) => {}
+            }
+        }
+    }
+
     /// Sends clients the session list if anything in it but the head seqs changed, as a
-    /// daemon does.
+    /// daemon does; the vault's status follows.
     pub(crate) async fn refresh(&self) {
+        self.status_changed.notify_one();
         // Held while reading, so a slower refresh never sends an older list after a newer one.
         let mut listed = self.listed.lock().await;
         let heads = match self.heads().await {
@@ -95,8 +131,10 @@ impl Fleet {
         }
     }
 
-    /// Sends clients the host list with each host's liveness and usage now.
+    /// Sends clients the host list with each host's liveness and usage now; the vault's status
+    /// follows.
     pub(crate) async fn refresh_hosts(&self) {
+        self.status_changed.notify_one();
         let _sending = self.sending_hosts.lock().await;
         let hosts = match blocking(&self.store, |store| store.hosts()).await {
             Ok(hosts) => hosts,
@@ -356,6 +394,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::ComposeDown { session_id, .. }
         | CommandBody::OpenTerminal { session_id, .. } => Some(session_id),
         CommandBody::CreateSession { .. }
+        | CommandBody::ForkSession { .. }
         | CommandBody::ListDirectory { .. }
         | CommandBody::AddProject { .. }
         | CommandBody::SetProjectSettings { .. }
@@ -408,6 +447,8 @@ struct Seen {
     connections: usize,
     /// When any of them last received a frame.
     at: Timestamp,
+    /// The age of the newest event of the host's latest stored batch, when it was stored.
+    lag: Option<Duration>,
 }
 
 impl Presence {
@@ -416,6 +457,7 @@ impl Presence {
         let seen = hosts.entry(host.clone()).or_insert(Seen {
             connections: 0,
             at: Timestamp::now(),
+            lag: None,
         });
         seen.connections += 1;
         seen.at = Timestamp::now();
@@ -425,6 +467,21 @@ impl Presence {
         if let Some(seen) = self.lock().get_mut(host) {
             seen.at = Timestamp::now();
         }
+    }
+
+    /// Records that a batch of `host`'s whose newest event happened `at` was stored now.
+    pub(crate) fn stored(&self, host: &HostId, at: Timestamp) {
+        if let Some(seen) = self.lock().get_mut(host) {
+            // A host clock ahead of the vault's makes no lag.
+            let lag = Timestamp::now().duration_since(at);
+            seen.lag = Some(lag.try_into().unwrap_or(Duration::ZERO));
+        }
+    }
+
+    /// The lag of `host`'s latest stored batch ([`Presence::stored`]), in milliseconds.
+    pub(crate) fn lag_ms(&self, host: &HostId) -> Option<u64> {
+        let lag = self.lock().get(host)?.lag?;
+        Some(u64::try_from(lag.as_millis()).unwrap_or(u64::MAX))
     }
 
     /// Ends one of `host`'s connections; returns when it was last heard from.

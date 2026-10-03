@@ -222,7 +222,7 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
-            link: Some(Arc::clone(&link)),
+            sessions: Some(sessions.clone()),
             vault: None,
         },
         shutdown.clone(),

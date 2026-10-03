@@ -12,11 +12,11 @@ use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
     ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
-    EventBody, FailoverSettings, FleetHost, HostId, HostResources, HostUsage, Image, Item,
-    ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project,
-    ProjectId, Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead,
+    EventBody, FailoverSettings, FleetHost, HostId, HostReplication, HostResources, HostUsage,
+    Image, Item, ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure,
+    Project, ProjectId, Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead,
     SessionId, SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp,
-    TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultVolume,
+    TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -90,6 +90,10 @@ pub struct Machine {
     pub terminals: Vec<Terminal>,
     pub resources: Option<HostResources>,
     pub session_usage: HashMap<SessionId, SessionUsage>,
+    // Defaulted, so Swift and Kotlin code that builds a machine, as previews and tests do,
+    // need not name it.
+    #[uniffi(default = None)]
+    pub vault: Option<VaultStatus>,
 }
 
 #[uniffi::remote(Enum)]
@@ -452,6 +456,10 @@ pub enum CommandBody {
     RetitleSession {
         session_id: SessionId,
     },
+    ForkSession {
+        session_id: SessionId,
+        account_id: Option<AccountId>,
+    },
     SendPrompt {
         session_id: SessionId,
         text: String,
@@ -604,6 +612,12 @@ pub enum CommandResult {
         code: String,
         expires_at: Timestamp,
     },
+    SessionForked {
+        session_id: SessionId,
+        account_id: AccountId,
+        forked_from: SessionId,
+        from_host_id: HostId,
+    },
 }
 
 #[uniffi::remote(Record)]
@@ -660,6 +674,23 @@ pub struct HostUsage {
 pub struct VaultVolume {
     pub total_bytes: u64,
     pub used_bytes: u64,
+}
+
+#[uniffi::remote(Record)]
+pub struct VaultStatus {
+    pub sessions: u64,
+    pub events: u64,
+    pub storage_bytes: u64,
+    pub hosts: Vec<HostReplication>,
+}
+
+#[uniffi::remote(Record)]
+pub struct HostReplication {
+    pub host_id: HostId,
+    pub sessions: u64,
+    pub events: u64,
+    pub last_event_at: Option<Timestamp>,
+    pub lag_ms: Option<u64>,
 }
 
 #[uniffi::remote(Enum)]

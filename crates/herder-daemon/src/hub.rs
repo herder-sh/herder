@@ -19,8 +19,9 @@
 //!   for every session with something running ([`crate::resources`]).
 //! - the host's resources and turns whenever they change, sent to every client, and the latest
 //!   on connect ([`crate::resources::admission`]).
-//! - on a vault, the host list whenever a host's liveness changes, sent to every client, and
-//!   the latest on connect ([`crate::vault`]).
+//! - on a vault, the host list whenever a host's liveness changes, and the vault's status
+//!   whenever what it holds changes, sent to every client, and the latest of each on connect
+//!   ([`crate::vault`]).
 //!
 //! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
 //! its attached clients' outboxes with [`Outbox::terminal_output`].
@@ -32,6 +33,7 @@ use std::time::Duration;
 use herder_protocol::{
     Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
     Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    VaultStatus,
 };
 
 use crate::session::EventSink;
@@ -71,6 +73,8 @@ struct State {
     host: Option<HostResources>,
     /// A vault's latest host list; `None` on a daemon.
     fleet: Option<Vec<FleetHost>>,
+    /// A vault's latest status; `None` on a daemon.
+    vault: Option<VaultStatus>,
     /// The latest project list; `None` until discovery publishes its first.
     projects: Option<Vec<Project>>,
     /// How sessions fail over, sent with every account list.
@@ -206,6 +210,9 @@ impl Hub {
                 hosts: hosts.clone(),
             });
         }
+        if let Some(status) = &state.vault {
+            inner.push(ServerMessage::VaultStatus(status.clone()));
+        }
         for (session_id, usage) in &state.usage {
             inner.push(ServerMessage::SessionResources {
                 session_id: session_id.clone(),
@@ -254,6 +261,21 @@ impl Hub {
             hosts: hosts.clone(),
         };
         state.fleet = Some(hosts);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends a vault's status to every client, and to clients that connect later, unless it is
+    /// the one they have.
+    pub(crate) fn vault_status(&self, status: VaultStatus) {
+        let mut state = self.lock();
+        if state.vault.as_ref() == Some(&status) {
+            return;
+        }
+        let message = ServerMessage::VaultStatus(status.clone());
+        state.vault = Some(status);
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();

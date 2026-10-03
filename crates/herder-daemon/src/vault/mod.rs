@@ -18,8 +18,10 @@
 //! in the vault's hello. An owner links a host to a vault, or unlinks it, from a client while
 //! the host runs ([`Link`]).
 //!
-//! Another host can recover a session whose host died from the vault ([`recover`]); the vault
-//! then shows the session on that host, and the old host makes its copy read-only.
+//! Another host can fork any session the vault holds, whether its host is up or gone
+//! ([`fork`]); the fork is a new session of that host. A host that replicates a session id
+//! another host replicated before takes it over: the vault then shows the session on that
+//! host, and the old host makes its copy read-only.
 //!
 //! The vault keeps a host's images only up to the cap its hello gives, and drops archived
 //! sessions after its retention period; a host and its sessions go only when an owner forgets
@@ -28,8 +30,8 @@
 mod client;
 mod conn;
 mod fleet;
+pub mod fork;
 mod link;
-pub mod recover;
 mod replicator;
 mod retention;
 mod store;
@@ -80,16 +82,16 @@ struct Shared {
     liveness: Duration,
     /// How long archived sessions are kept.
     retention: Retention,
-    /// Hosts whose copy of a session another host just recovered; their connections drop.
+    /// Hosts whose copy of a session another host just took over; their connections drop.
     superseded: tokio::sync::broadcast::Sender<HostId>,
 }
 
 impl Shared {
-    /// Drops the connections of `hosts`, whose copies of a session another host recovered,
-    /// so they reconnect and stop the session ([`recover`]).
+    /// Drops the connections of `hosts`, whose copies of a session another host took over,
+    /// so they reconnect and stop the session.
     fn supersede(&self, hosts: Vec<HostId>) {
         for host in hosts {
-            info!(host_id = %host, "a session of this host was recovered on another host");
+            info!(host_id = %host, "another host took over a session of this host");
             // No receiver means the host is not connected.
             let _ = self.superseded.send(host);
         }
@@ -158,6 +160,11 @@ impl Server {
             Arc::clone(&self.shared),
             shutdown.child_token(),
         ));
+        tokio::spawn({
+            let fleet = self.shared.fleet.clone();
+            let shutdown = shutdown.clone();
+            async move { fleet.publish_status(shutdown).await }
+        });
         let flusher = tokio::spawn({
             let hub = Arc::clone(&self.shared.hub);
             let shutdown = shutdown.clone();
@@ -223,7 +230,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         auth::control::Daemon {
             fingerprint: fingerprint.clone(),
             listen: listener.local_addr()?,
-            link: None,
+            sessions: None,
             vault: Some(server.admin()),
         },
         shutdown.clone(),

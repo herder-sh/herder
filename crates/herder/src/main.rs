@@ -2,9 +2,9 @@
 
 mod connect;
 mod dev;
+mod fork;
 mod hook;
 mod pair;
-mod recover;
 mod service;
 mod session;
 mod update;
@@ -46,8 +46,8 @@ enum Command {
     },
     /// Create, prompt, wait on and archive sessions from scripts.
     Session(session::Args),
-    /// Take over a session whose host died, from the vault, on this host.
-    Recover(recover::Args),
+    /// Fork a session onto this host: its history goes on in a new session here.
+    Fork(fork::Args),
     /// Look after what the vault on this machine holds.
     Vault {
         #[command(subcommand)]
@@ -114,7 +114,7 @@ fn main() -> ExitCode {
         Some(Command::Pair(args)) => pair::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
-        Some(Command::Recover(args)) => recover::run(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Vault { command }) => vault::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Update {

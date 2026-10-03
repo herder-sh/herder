@@ -70,8 +70,11 @@ fn buttons(app: &App) -> Vec<Button> {
     if app.switch.is_some() {
         return vec![button("⏎", "switch", enter()), esc()];
     }
-    if app.recover.is_some() {
-        return vec![esc()];
+    if app.fork.is_some() {
+        if app.fork_targets().is_empty() {
+            return vec![esc()];
+        }
+        return vec![button("⏎", "fork", enter()), esc()];
     }
     if let Some(panel) = &app.machine_panel
         && panel.add.is_none()
@@ -105,9 +108,9 @@ fn buttons(app: &App) -> Vec<Button> {
             if selected
                 .as_ref()
                 .and_then(Row::session)
-                .is_some_and(|key| app.recoverable(key).is_some())
+                .is_some_and(|key| app.read_only(key).is_some_and(|(_, fork)| fork))
             {
-                buttons.push(button("R", "recover", Click::Act(Action::OpenRecover)));
+                buttons.push(button("F", "fork", Click::Act(Action::OpenFork)));
             }
             buttons.extend([
                 button("n", "new", char('n')),
@@ -148,8 +151,8 @@ fn session_buttons(app: &App) -> Vec<Button> {
     };
     let act = |act| Click::Act(Action::Compose(act));
     let mut buttons = Vec::new();
-    if app.recoverable(key).is_some() {
-        buttons.push(button("R", "recover", Click::Act(Action::OpenRecover)));
+    if app.read_only(key).is_some_and(|(_, fork)| fork) {
+        buttons.push(button("F", "fork", Click::Act(Action::OpenFork)));
     }
     if !session.approvals.is_empty() {
         buttons.push(button(

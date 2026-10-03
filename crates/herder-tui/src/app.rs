@@ -12,13 +12,13 @@ use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
 use crate::chat::Chat;
 use crate::compose::{Act, Compose, Origin};
+use crate::fork::Fork;
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::mouse::{Click, Hits};
 use crate::nav::Layout;
 use crate::projects::Grouping;
 use crate::prs::Prs;
-use crate::recover::Recover;
 use crate::session::{Session, SessionKey};
 use crate::switch::Switch;
 use crate::terminal::{self, Picker};
@@ -273,8 +273,8 @@ pub struct App {
     pub account_screen: Option<AccountScreen>,
     /// The switch dialog, while it is open.
     pub switch: Option<Switch>,
-    /// The recover dialog, while it is open.
-    pub recover: Option<Recover>,
+    /// The fork dialog, while it is open.
+    pub fork: Option<Fork>,
     /// How the session list groups sessions.
     pub grouping: Grouping,
     /// Whether the session list shows archived sessions, which it hides by default.
@@ -335,7 +335,7 @@ impl Default for App {
             inbox: Inbox::default(),
             account_screen: None,
             switch: None,
-            recover: None,
+            fork: None,
             grouping: Grouping::default(),
             show_archived: false,
             mouse: true,
@@ -506,8 +506,8 @@ impl App {
             Action::Switch(input) => return self.switch_input(input),
             Action::Group => self.toggle_grouping(),
             Action::ToggleArchived => self.show_archived = !self.show_archived,
-            Action::OpenRecover => self.open_recover(),
-            Action::Recover(input) => self.recover_input(input),
+            Action::OpenFork => self.open_fork(),
+            Action::Fork(input) => return self.fork_input(input),
             Action::Leader => self.arm_leader(std::time::Instant::now()),
             Action::GoTo => self.focus = Focus::Sessions,
             Action::Resume => {

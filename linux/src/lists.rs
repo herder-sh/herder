@@ -493,6 +493,7 @@ pub mod tests {
             terminals: Vec::new(),
             resources: None,
             session_usage: Default::default(),
+            vault: None,
         }
     }
 
