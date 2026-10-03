@@ -38,6 +38,7 @@ struct PairSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
     @State private var error: String?
+    @State private var scanning = false
 
     var body: some View {
         SheetScaffold(title: "Add Machine", subtitle: "Pair this device with a machine running herder.",
@@ -51,8 +52,12 @@ struct PairSheet: View {
                 .padding(12)
                 .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
             }
-            Field(label: "2 · Paste the link it prints") {
+            Field(label: scanLabel) {
                 VStack(alignment: .trailing, spacing: 8) {
+                    #if os(iOS)
+                    ActionButton(title: "Scan QR Code", style: .primary) { scanning = true }
+                        .accessibilityIdentifier("scan-pairing-code")
+                    #endif
                     InputBox(placeholder: "herder://pair?host=…&fp=…&code=…", text: $link, mono: true, lines: 3...5)
                         .accessibilityIdentifier("pairing-link")
                     Button("Paste", systemImage: "doc.on.clipboard") { link = Clipboard.string ?? link }
@@ -90,14 +95,25 @@ struct PairSheet: View {
                 .opacity(uri == nil ? 0.4 : 1)
                 .keyboardShortcut(.defaultAction)
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $scanning) { PairScanner { link = $0 } }
+        #endif
     }
 
+    #if os(iOS)
+    private let scanLabel = "2 · Scan the QR code it prints, or paste the link"
+    #else
+    private let scanLabel = "2 · Paste the link it prints"
+    #endif
     private var trimmed: String { link.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var uri: PairingUri? { try? parsePairingUri(link: trimmed) }
+    /// The link in what was pasted, which may be all of `herder pair`'s output.
+    private var found: String? { pairingLink(in: link) }
+    private var uri: PairingUri? { found.flatMap { try? parsePairingUri(link: $0) } }
 
     private func pair() async {
+        guard let found else { return }
         do {
-            try await fleet.pair(link: trimmed)
+            try await fleet.pair(link: found)
             dismiss()
         } catch {
             self.error = describe(error)

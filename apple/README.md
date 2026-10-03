@@ -60,7 +60,8 @@ TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -skipPackagePluginValidati
 A pairing code works once, so start a new fake daemon for each run.
 
 To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
-link it prints into **Add Machine**. For a real machine, run `herder pair` on it.
+link it prints into **Add Machine**. For a real machine, run `herder pair` on it: on iOS, scan
+the QR code it prints with **Scan QR Code**; on the Mac, paste the link (or all of its output).
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.
