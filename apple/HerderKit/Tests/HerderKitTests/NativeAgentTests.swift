@@ -98,6 +98,22 @@ struct NativeAgentTests {
         #expect(Transcript.blocks(model, parent: .init(turnId: "t1", callId: "a")).isEmpty)
     }
 
+    @Test func streamingResultStaysWorkingUntilItIsJournaled() {
+        var script = Script()
+        var model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
+        ])
+        let result = Item(parentCallId: nil, id: "result", turnId: "t1",
+                          body: .toolResult(callId: "a", output: "Partial", isError: false))
+        model.streaming = [result]
+        let reference = NativeAgent.ID(turnId: "t1", callId: "a")
+        #expect(NativeAgent.find(reference, in: model)?.outcome == .running)
+        model.streaming = []
+        model.apply(script.event(.itemAdded(item: result)))
+        #expect(NativeAgent.find(reference, in: model)?.outcome == .ok)
+    }
+
     @Test func interruptedAgentIsNotReportedAsCompleted() {
         var script = Script()
         let model = script.model([
@@ -108,5 +124,6 @@ struct NativeAgentTests {
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.outcome == .unknown)
         #expect(agent?.status == "Stopped without a result")
+        #expect(NativeAgent.summary(agent.map { [$0] } ?? []) == "1 stopped")
     }
 }

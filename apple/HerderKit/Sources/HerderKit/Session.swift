@@ -145,7 +145,7 @@ struct SessionModel {
             }
         case .prUnlinked(let number):
             prs.removeAll { $0.number == number }
-        case .childSpawned, .childReported, .titleChanged, .unknown:
+        case .itemAdded, .childSpawned, .childReported, .titleChanged, .unknown:
             break
         }
     }
@@ -266,6 +266,7 @@ struct SessionModel {
             case .toolResult(_, _, let isError): return isError ? "Tool failed" : "Tool finished"
             case .unknown: return "Item"
             }
+        case .itemAdded: return "Sub-agent activity"
         case .approvalRequested(_, _, _, let summary, _, _): return "Approval asked: \(summary)"
         case .approvalEscalated: return "Approval escalated to you"
         case .approvalResolved(_, let decision, _): return "Approval \(decision)"
