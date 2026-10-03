@@ -91,15 +91,13 @@ private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         output.metadataObjectTypes = [.qr]
         self.found = found
         // `startRunning` blocks until the camera is up: keep it off the main thread.
-        let session = session
-        await Task.detached { session.startRunning() }.value
+        await Task.detached { self.session.startRunning() }.value
         running = true
     }
 
     func stop() {
         found = nil
-        let session = session
-        Task.detached { session.stopRunning() }
+        Task.detached { self.session.stopRunning() }
     }
 
     nonisolated func metadataOutput(
