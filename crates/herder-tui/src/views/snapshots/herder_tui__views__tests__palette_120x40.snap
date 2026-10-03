@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◉ api  needs you                         "
+" herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◉ api                         needs you  "
 "                         │                                                   │ herder/api · box · ~/src/app             "
 " machines     by machine │                                                   │ claude-main · claude-opus · ask          "
 "  ◉ box                1 │                                                   │                                          "
@@ -14,7 +14,7 @@ expression: terminal.backend()
 " ─────────────────────── │                                                   │                                          "
 " attention     ┌ commands ─────────────────────────────────────────────────────────────────────── esc ┐                 "
 "  ◉ api · app ·│                                                                                      │                 "
-"  ✗ document it│  :   type a command                                                                  │                 "
+"  ✗ document it│  :   ▌type a command                                                                 │                 "
 "  ● write the t│                                                                                      │                 "
 "               │  suggested                                                                           │                 "
 "               │ ▶ stop                  interrupt the running turn                           ctrl+c  │                 "
@@ -35,7 +35,7 @@ expression: terminal.backend()
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
-"                         │  ┃  Write a prompt…                               │                                          "
+"                         │  ┃ ▌Write a prompt…                               │                                          "
 "                         │  ┃                                                │                                          "
 "                         │  ┃ claude-main · claude-opus · ask                │                                          "
 " ─────────────────────── │  ╹                                                │                                          "

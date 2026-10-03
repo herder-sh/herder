@@ -23,36 +23,61 @@ const CONTAINER_ROWS: usize = 3;
 /// The share of the last 10 seconds above which pressure shows in yellow.
 const PRESSURE_WARN: f64 = 10.0;
 
-/// The machine row's load figures: CPU, memory, the worst pressure and turns of the cap; in
-/// `compact` rows CPU and memory only.
+/// The machine row's load figures, each `label value`: CPU, memory, the worst pressure and
+/// turns of the cap; in `compact` rows CPU and memory only.
 pub(super) fn row(ui: Ui, machine: &Machine, compact: bool) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (label, value) in pairs(ui, machine)
+        .into_iter()
+        .take(if compact { 2 } else { usize::MAX })
+    {
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(format!("{label} "), ui.muted()));
+        spans.push(value);
+    }
+    spans
+}
+
+/// The machine's load as labels and values: CPU, memory, the worst pressure and turns of the
+/// cap, a value coloured when it holds turns back. None while it reports none.
+pub(super) fn pairs(ui: Ui, machine: &Machine) -> Vec<(&'static str, Span<'static>)> {
     let Some(host) = &machine.resources else {
         return Vec::new();
     };
-    let mut spans = vec![
-        Span::styled(format!("cpu {:>3.0}%  ", host.cpu_percent), ui.muted()),
-        Span::styled(format!("mem {:>3.0}%", memory_percent(host)), ui.muted()),
+    let mut pairs = vec![
+        (
+            "cpu",
+            Span::styled(format!("{:.0}%", host.cpu_percent), ui.text()),
+        ),
+        (
+            "mem",
+            Span::styled(format!("{:.0}%", memory_percent(host)), ui.text()),
+        ),
     ];
-    if !compact {
-        if let Some(pressure) = &host.pressure {
-            let worst = pressure
-                .cpu_some
-                .max(pressure.memory_some)
-                .max(pressure.io_some);
-            spans.push(Span::styled(
-                format!("  psi {worst:>3.0}%"),
-                warn_above(ui, worst, PRESSURE_WARN),
-            ));
-        }
-        let turns = format!("  {}/{} turns", host.running_turns, host.max_turns);
-        let style = if host.constraint.is_some() {
+    if let Some(pressure) = &host.pressure {
+        let worst = pressure
+            .cpu_some
+            .max(pressure.memory_some)
+            .max(pressure.io_some);
+        let style = if worst > PRESSURE_WARN {
             Style::new().fg(ui.theme.warning)
         } else {
-            ui.muted()
+            ui.text()
         };
-        spans.push(Span::styled(turns, style));
+        pairs.push(("psi", Span::styled(format!("{worst:.0}%"), style)));
     }
-    spans
+    let style = if host.constraint.is_some() {
+        Style::new().fg(ui.theme.warning)
+    } else {
+        ui.text()
+    };
+    pairs.push((
+        "turns",
+        Span::styled(format!("{}/{}", host.running_turns, host.max_turns), style),
+    ));
+    pairs
 }
 
 /// The machine details' resource fields: label, value and its style.

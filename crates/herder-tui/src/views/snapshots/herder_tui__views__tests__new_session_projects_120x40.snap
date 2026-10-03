@@ -17,7 +17,7 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                              "
 " attention      priority │   ┌ new session ──────────────────────────────────────── esc ┐                               "
 "  ◉ api · app · box      │   │                                                          │                               "
-"  ● guide · docs · box   │   │  search   type to filter                                 │                               "
+"  ● guide · docs · box   │   │  search   ▌type to filter                                │                               "
 "  ● cache · app · laptop │   │                                                          │                               "
 "  ● test the cache · app │   │  project                                                 │                               "
 "                         │   │ ▶ app  github.com/acme/app                 box · laptop  │                               "

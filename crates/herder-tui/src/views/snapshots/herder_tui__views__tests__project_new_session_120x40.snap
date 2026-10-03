@@ -18,7 +18,7 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                              "
 " attention      priority │   ┌ new session · app ────────────────────────────────── esc ┐                               "
 "  ◉ api · app · box      │   │                                                          │                               "
-"  ● cache · app · laptop │   │  search   type to filter                                 │                               "
+"  ● cache · app · laptop │   │  search   ▌type to filter                                │                               "
 "  ● test the cache · app │   │                                                          │                               "
 "  ● guide · docs · box   │   │  machine                                                 │                               "
 "                         │   │   ● box  /home/ann/src/app                         Main  │                               "

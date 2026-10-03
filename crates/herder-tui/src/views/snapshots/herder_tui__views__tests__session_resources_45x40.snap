@@ -36,7 +36,7 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-" |  Write a prompt...                        "
+" | |Write a prompt...                        "
 " |                                           "
 " | claude-main - claude-opus - ask           "
 " `-----------------------------------------  "

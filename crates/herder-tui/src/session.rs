@@ -220,32 +220,54 @@ impl Session {
         self.streaming = update.streaming;
     }
 
-    /// The name the session list shows: the task label, else the repo's name and branch.
+    /// The name the session list shows: the task label, else the repo's name and
+    /// [`Session::name`].
     pub fn title(&self) -> String {
-        if let Some(task) = &self.task {
-            return task.clone();
-        }
-        if !self.loaded {
-            return self.id.to_string();
+        self.titled(false)
+    }
+
+    /// [`Session::title`] with only a branch's last part, for narrow screens.
+    pub fn short_title(&self) -> String {
+        self.titled(true)
+    }
+
+    fn titled(&self, short: bool) -> String {
+        if self.task.is_some() || !self.loaded {
+            return self.name(short);
         }
         let repo = self.repo.rsplit('/').find(|part| !part.is_empty());
         match repo {
-            Some(repo) => format!("{repo} · {}", self.branch),
-            None => self.branch.clone(),
+            Some(repo) => format!("{repo} · {}", self.name(short)),
+            None => self.name(short),
         }
     }
 
-    /// [`Session::title`] with only the branch's last part, for narrow screens.
-    pub fn short_title(&self) -> String {
-        if self.task.is_some() || !self.loaded {
-            return self.title();
+    /// What the session is called under its repo: its task label; else its branch, without
+    /// herder's `herder/` prefix (with `short`, only the branch's last part); else, for the
+    /// branch herder made up from the session's id, a summary of its first prompt; the short
+    /// id only when there is nothing else.
+    pub fn name(&self, short: bool) -> String {
+        if let Some(task) = &self.task {
+            return task.clone();
         }
-        let branch = self.branch.rsplit('/').next().unwrap_or(&self.branch);
-        let repo = self.repo.rsplit('/').find(|part| !part.is_empty());
-        match repo {
-            Some(repo) => format!("{repo} · {branch}"),
-            None => branch.to_owned(),
+        let slug = slug(&self.id);
+        let branch = self.branch.strip_prefix("herder/").unwrap_or(&self.branch);
+        if !branch.is_empty() && branch != slug {
+            return match branch.rsplit('/').next() {
+                Some(last) if short => last.to_owned(),
+                _ => branch.to_owned(),
+            };
         }
+        self.entries
+            .iter()
+            .find_map(|entry| match entry {
+                Entry::Item(Item {
+                    body: ItemBody::UserMessage { text, .. },
+                    ..
+                }) => summary(text),
+                _ => None,
+            })
+            .unwrap_or(slug)
     }
 
     /// Whether the session waits on a user: its status says so, or an approval or question
@@ -626,6 +648,35 @@ pub const MODES: [PermissionMode; 4] = [
     PermissionMode::FullAccess,
 ];
 
+/// Characters a prompt's summary keeps.
+const SUMMARY: usize = 40;
+
+/// The short form of a session id that herder names its branches after: the id's last 8
+/// characters, lowercased, as the daemon's worktrees do.
+fn slug(id: &SessionId) -> String {
+    let id = id.as_str();
+    let start = id.char_indices().rev().nth(7).map_or(0, |(at, _)| at);
+    id[start..].to_lowercase()
+}
+
+/// A prompt's first line, cut at a word to about [`SUMMARY`] characters; `None` for a blank
+/// prompt.
+fn summary(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    if line.chars().count() <= SUMMARY {
+        return Some(line.to_owned());
+    }
+    let cut: String = line.chars().take(SUMMARY).collect();
+    let words = match cut.rfind(' ') {
+        Some(at) if at > SUMMARY / 2 => &cut[..at],
+        _ => cut.as_str(),
+    };
+    Some(format!(
+        "{}…",
+        words.trim_end_matches([',', '.', ':', ';', ' '])
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use herder_protocol::{TurnError, TurnId};
@@ -655,7 +706,8 @@ mod tests {
             ],
             vec![item("i2", assistant("Ha"))],
         ));
-        assert_eq!(session.title(), "app · herder/api");
+        // herder's own branch prefix says nothing.
+        assert_eq!(session.title(), "app · api");
         assert_eq!(session.status, SessionStatus::NeedsYou);
         assert_eq!(
             session.entries,
@@ -885,5 +937,33 @@ mod tests {
         );
         assert_eq!(session.account_id, Some(AccountId::new("claude-spare")));
         assert_eq!(session.provider, Some(herder_protocol::Provider::Claude));
+    }
+
+    #[test]
+    fn a_session_is_named_by_task_branch_first_prompt_then_id() {
+        let mut session = Session::new(SessionId::new("01JABCDEFGHJKMNPEQ3Z0KAE"));
+        session.loaded = true;
+        session.repo = "/home/ann/src/app".into();
+        // Only the id to go by: its short form, as herder's branches use.
+        assert_eq!(session.name(false), "eq3z0kae");
+        // The branch herder made up from the id says no more; the first prompt does.
+        session.branch = "herder/eq3z0kae".into();
+        session.entries.push(Entry::Item(item(
+            "i1",
+            ItemBody::UserMessage {
+                text: "\n  Fix the login redirect after the session expires, and test it\nthanks"
+                    .into(),
+                attachments: Vec::new(),
+            },
+        )));
+        assert_eq!(session.name(false), "Fix the login redirect after the…");
+        assert_eq!(session.title(), "app · Fix the login redirect after the…");
+        // A branch someone named, without herder's prefix; short, its last part.
+        session.branch = "herder/feature/login".into();
+        assert_eq!(session.name(false), "feature/login");
+        assert_eq!(session.name(true), "login");
+        // A task label wins.
+        session.task = Some("write tests".into());
+        assert_eq!(session.title(), "write tests");
     }
 }

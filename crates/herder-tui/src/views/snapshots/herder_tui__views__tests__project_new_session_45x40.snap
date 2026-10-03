@@ -18,7 +18,7 @@ expression: terminal.backend()
 "    | ! api                                  "
 "  new session - app                    esc   "
 "                                             "
-"   search   type to filter                   "
+"   search   |type to filter                  "
 "                                             "
 "   machine                                   "
 "    * box  /home/ann/src/app         Main    "

@@ -435,6 +435,25 @@ fn heading(
     }
 }
 
+/// A failure as the design draws one: the error marker, then the message muted, wrapped
+/// `width` wide under itself.
+fn failure(ui: crate::ui::Ui, text: &str, width: usize) -> Vec<Line<'static>> {
+    let options = textwrap::Options::new(width.max(8))
+        .initial_indent("  ")
+        .subsequent_indent("  ");
+    textwrap::wrap(text, options)
+        .into_iter()
+        .enumerate()
+        .map(|(at, line)| {
+            let marker = if at == 0 { ui.glyphs.check_fail } else { " " };
+            Line::from(vec![
+                Span::styled(marker, Style::new().fg(ui.theme.error)),
+                Span::styled(line.get(1..).unwrap_or_default().to_owned(), ui.muted()),
+            ])
+        })
+        .collect()
+}
+
 /// What an empty view says, muted and centred in `area`.
 fn nothing(frame: &mut Frame, area: Rect, ui: crate::ui::Ui, text: &str) {
     let line = Line::styled(text.to_owned(), ui.muted()).centered();

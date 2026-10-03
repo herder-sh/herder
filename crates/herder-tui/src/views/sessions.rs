@@ -65,7 +65,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
 
     // The tree takes what it needs and a blank row; attention the rest. When both do not
     // fit, attention gets up to half.
-    let tree_need = u16::try_from(rows.len() + 2).unwrap_or(u16::MAX);
+    let archived = u16::from(app.archived_count() > 0);
+    let tree_need = u16::try_from(rows.len() + 2).unwrap_or(u16::MAX) + archived;
     let attention_need = match attention.len() {
         0 => 0,
         n => u16::try_from(n + 2).unwrap_or(u16::MAX),
@@ -157,6 +158,39 @@ fn project_tree(
         Grouping::Projects => "projects",
         Grouping::Machines => "machines",
     };
+    let archived = app.archived_count();
+    // Under the tree, how many sessions are archived, and the switch that shows them.
+    let (area, archived_row) = if archived > 0 && area.height > 2 {
+        let [list, row, _] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+        (list, Some(row))
+    } else {
+        (area, None)
+    };
+    if let Some(row) = archived_row {
+        let text = Rect {
+            x: row.x + INSET,
+            width: row.width.saturating_sub(2 * INSET),
+            ..row
+        };
+        let toggle = if app.show_archived {
+            "H hide"
+        } else {
+            "H show"
+        };
+        let line = crate::ui::spread(
+            Line::from(Span::styled(format!("{archived} archived"), ui.muted())),
+            Line::from(Span::styled(toggle, ui.accent())),
+            usize::from(text.width),
+            ui.glyphs,
+        );
+        frame.render_widget(line, text);
+        hits.click(row, Click::Act(Action::ToggleArchived));
+    }
     let mut items = vec![Item::header(label).right(grouping)];
     items.extend(tree_items(app, rows, roomy, roomy));
     let selected = app.selected_index(rows).map(|at| at + 1);

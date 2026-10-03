@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " herder        inbox 0 « │ fleet · 1 machine                                                        "
 "                         │                                                                          "
-" machines     by machine │ ▶ ● box  owner  127.0.0.1:74…  cpu  42%  mem  62%  psi  12%  4/4 turns   "
+" machines     by machine │ ▶ ● box  owner  127.0.0.1:7447    cpu 42%  mem 62%  psi 12%  turns 4/4   "
 "  ◉ box                1 │     abab…abab · 0 accounts · 4 sessions                                  "
 "▶   ├ ◉ app · api        │                                                                          "
 "    │ ├ ● write the tes… │   box                                                                    "

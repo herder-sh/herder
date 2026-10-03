@@ -5,7 +5,7 @@ expression: terminal.backend()
 " fleet                               < back  "
 " ! 1 need you  x 1 error  * 1 running        "
 "                                             "
-"> * box  owner           cpu  42%  mem  62%  "
+"> * box  owner             cpu 42%  mem 62%  "
 "    abab...abab - 0 accounts - 4 sessions    "
 "                                             "
 "  box                                        "
