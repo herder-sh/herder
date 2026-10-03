@@ -17,6 +17,7 @@ mod accounts;
 mod action;
 mod app;
 mod backend;
+mod bar;
 mod compose;
 #[cfg(test)]
 mod fake;

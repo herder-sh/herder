@@ -253,7 +253,7 @@ impl App {
         Vec::new()
     }
 
-    fn click(&mut self, click: Click) -> Vec<Effect> {
+    pub(crate) fn click(&mut self, click: Click) -> Vec<Effect> {
         match click {
             Click::Nothing => Vec::new(),
             Click::Key(key) => match action::for_key(key, self) {

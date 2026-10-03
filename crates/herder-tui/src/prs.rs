@@ -85,6 +85,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<PrAction> {
         KeyCode::Char('L') => PrAction::StartLink,
         KeyCode::Char('k') | KeyCode::Up if list => PrAction::Move(-1),
         KeyCode::Char('j') | KeyCode::Down if list => PrAction::Move(1),
+        KeyCode::PageUp if list => PrAction::Move(-10),
+        KeyCode::PageDown if list => PrAction::Move(10),
         KeyCode::Char('g') | KeyCode::Home if list => PrAction::First,
         KeyCode::Char('G') | KeyCode::End if list => PrAction::Last,
         KeyCode::Enter | KeyCode::Char('o') if list => PrAction::Browse,

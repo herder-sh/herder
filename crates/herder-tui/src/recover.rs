@@ -32,6 +32,10 @@ pub enum Input {
     Up,
     /// Choose the next host.
     Down,
+    /// Choose the first host.
+    Top,
+    /// Choose the last host.
+    Bottom,
 }
 
 /// The action a key asks for while the dialog is open.
@@ -42,6 +46,8 @@ pub fn for_key(key: KeyEvent) -> Option<Action> {
         }
         KeyCode::Char('k') | KeyCode::Up => Input::Up,
         KeyCode::Char('j') | KeyCode::Down => Input::Down,
+        KeyCode::Home | KeyCode::PageUp => Input::Top,
+        KeyCode::End | KeyCode::PageDown => Input::Bottom,
         _ => return None,
     };
     Some(Action::Recover(input))
@@ -170,6 +176,8 @@ impl App {
             Input::Close => self.recover = None,
             Input::Up => dialog.selected = dialog.selected.saturating_sub(1),
             Input::Down => dialog.selected = (dialog.selected + 1).min(last),
+            Input::Top => dialog.selected = 0,
+            Input::Bottom => dialog.selected = last,
         }
     }
 }

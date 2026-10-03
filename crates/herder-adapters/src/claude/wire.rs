@@ -209,6 +209,13 @@ pub(super) struct CanUseTool {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Why Claude Code asks, when a check rather than the mode made it.
+    #[serde(default)]
+    pub decision_reason: Option<String>,
+    /// Set for a tool that needs a person's answer, not a permission, such as
+    /// `AskUserQuestion`.
+    #[serde(default)]
+    pub requires_user_interaction: bool,
 }
 
 /// The CLI's answer to a request from herder.

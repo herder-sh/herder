@@ -193,6 +193,10 @@ pub enum Input {
     Up,
     /// Select the next machine, or the next field.
     Down,
+    /// Select the first machine.
+    Top,
+    /// Select the last machine.
+    Bottom,
     /// Open the add dialog.
     Add,
     /// Open the add-account dialog for the selected machine.
@@ -277,6 +281,8 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('m' | 'q') => Input::Close,
             KeyCode::Char('k') | KeyCode::Up => Input::Up,
             KeyCode::Char('j') | KeyCode::Down => Input::Down,
+            KeyCode::Home | KeyCode::PageUp => Input::Top,
+            KeyCode::End | KeyCode::PageDown => Input::Bottom,
             KeyCode::Char('a') => Input::Add,
             KeyCode::Char('n') => Input::AddAccount,
             KeyCode::Char('e') => Input::Rename,
@@ -373,8 +379,13 @@ impl App {
                         None => panel.account = Some(AddAccount::new(host_id)),
                     }
                 }
-                Input::Up | Input::Down => {
-                    let step = if input == Input::Up { -1 } else { 1 };
+                Input::Up | Input::Down | Input::Top | Input::Bottom => {
+                    let step = match input {
+                        Input::Up => -1,
+                        Input::Down => 1,
+                        Input::Top => isize::MIN,
+                        _ => isize::MAX,
+                    };
                     if let Some(at) = panel.selected(&self.machines) {
                         let last = self.machines.len() - 1;
                         let at = at.saturating_add_signed(step).min(last);

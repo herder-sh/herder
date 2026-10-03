@@ -138,6 +138,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
         _ if !inbox => return None,
         KeyCode::Char('k') | KeyCode::Up => InboxAction::Move(-1),
         KeyCode::Char('j') | KeyCode::Down => InboxAction::Move(1),
+        KeyCode::PageUp => InboxAction::Move(-10),
+        KeyCode::PageDown => InboxAction::Move(10),
         KeyCode::Char('g') | KeyCode::Home => InboxAction::First,
         KeyCode::Char('G') | KeyCode::End => InboxAction::Last,
         KeyCode::Char('y') => InboxAction::Approve(ApprovalDecision::Allow),
