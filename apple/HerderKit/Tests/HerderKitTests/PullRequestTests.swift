@@ -137,3 +137,14 @@ struct RoundTwoTests {
         #expect(ConnectionState.explain("refused") == "refused")
     }
 }
+
+struct TypingTests {
+    @Test func shiftEnterContinuesListsAndEndsThemOnAnEmptyItem() {
+        #expect(ListContinuation.newline(after: "plain") == "plain\n")
+        #expect(ListContinuation.newline(after: "1. fix the build") == "1. fix the build\n2. ")
+        #expect(ListContinuation.newline(after: "intro\n9. ninth") == "intro\n9. ninth\n10. ")
+        #expect(ListContinuation.newline(after: "  - nested") == "  - nested\n  - ")
+        #expect(ListContinuation.newline(after: "1. one\n2. ") == "1. one\n")
+        #expect(ListContinuation.newline(after: "- ") == "")
+    }
+}
