@@ -30,6 +30,8 @@ herder-adapters.workspace = true
 herder-daemon.workspace = true
 herder-store.workspace = true
 jiff.workspace = true
+prettyplease.workspace = true
+syn.workspace = true
 tempfile.workspace = true
 
 [lints]

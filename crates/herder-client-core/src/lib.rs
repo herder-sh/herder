@@ -1,9 +1,14 @@
 //! Shared client core for the TUI and the native apps: paired machines, one connection
 //! supervisor per machine, a cache of what each daemon sent, and command dispatch.
 //!
-//! [`Client`] is the whole surface. It is built to get foreign-language bindings later, so
-//! every method takes and returns owned plain data (strings, protocol types, the records
-//! below) and streams are objects with an async `next`, never a Rust `Stream` or callback.
+//! [`Client`] is the whole surface. It is shaped for foreign-language bindings (UniFFI, for
+//! the Swift and Kotlin apps): every method takes and returns owned plain data (strings,
+//! protocol types, the records and enums below), and streams are objects with an async
+//! `next`, never a Rust `Stream`, generic or lifetime. [`auth`] is Rust-only plumbing for
+//! whatever else connects to a daemon as a device.
+//!
+//! The surface is versioned by [`CLIENT_API_VERSION`] and frozen: `API.md` beside this crate
+//! is the reviewed reference, and a test compares the surface with `public-api.txt`.
 //!
 //! # Machines
 //!
@@ -54,8 +59,11 @@
 //! Dropping the stream detaches. Terminals are owner-only; for a member both calls fail with
 //! [`Error::Rejected`] carrying `forbidden`.
 
+#![warn(missing_docs)]
+
 pub mod auth;
 mod cache;
+mod pairing;
 mod profile;
 mod supervisor;
 mod terminal;
@@ -72,10 +80,16 @@ use herder_protocol::{
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use auth::{DeviceKey, PairingUri};
+use auth::DeviceKey;
+pub use pairing::PairingUri;
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
 pub use terminal::{TerminalEvent, TerminalStream};
+
+/// The version of this crate's public API, `API.md`. It goes up by one with every change
+/// that can break a client: anything removed, renamed or changed in what is listed there.
+/// Additions keep it.
+pub const CLIENT_API_VERSION: u32 = 1;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,21 +109,36 @@ pub struct NewAccount {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The pairing link is not a valid `herder://pair` link.
-    #[error("{0}")]
-    InvalidLink(String),
+    #[error("{message}")]
+    InvalidLink {
+        /// What is wrong with it.
+        message: String,
+    },
     /// Pairing failed: no address answered, the certificate did not match, or the daemon
     /// refused the code.
-    #[error("pairing failed: {0}")]
-    Pairing(String),
+    #[error("pairing failed: {message}")]
+    Pairing {
+        /// Why.
+        message: String,
+    },
     /// No paired machine has this host id.
-    #[error("no paired machine {0}")]
-    UnknownMachine(HostId),
+    #[error("no paired machine {host_id}")]
+    UnknownMachine {
+        /// The host id asked for.
+        host_id: HostId,
+    },
     /// The daemon refused the command; nothing changed.
-    #[error("{}", .0.message)]
-    Rejected(ErrorInfo),
+    #[error("{}", .info.message)]
+    Rejected {
+        /// The daemon's error; `info.code` says why.
+        info: ErrorInfo,
+    },
     /// Something on this device failed: the profile file, a device key, or no async runtime.
-    #[error("{0}")]
-    Local(String),
+    #[error("{message}")]
+    Local {
+        /// What failed.
+        message: String,
+    },
     /// The client or the machine's supervisor stopped.
     #[error("the client is closed")]
     Closed,
@@ -200,14 +229,18 @@ impl Drop for Inner {
 }
 
 impl Client {
-    /// Opens the profile in `config_dir` and starts connecting to every saved machine.
+    /// Opens the profile in `config_dir`, a directory path, and starts connecting to every
+    /// saved machine.
     ///
     /// `client` names this client in daemon logs, e.g. `herder-tui/0.1.0`. Call within a tokio
     /// runtime, which runs the supervisors. One client per config dir at a time.
-    pub fn open(config_dir: PathBuf, client: String) -> Result<Self, Error> {
+    pub fn open(config_dir: String, client: String) -> Result<Self, Error> {
         if tokio::runtime::Handle::try_current().is_err() {
-            return Err(Error::Local("the client needs a tokio runtime".to_owned()));
+            return Err(Error::Local {
+                message: "the client needs a tokio runtime".to_owned(),
+            });
         }
+        let config_dir = PathBuf::from(config_dir);
         let saved = profile::load(&config_dir)?;
         let changed = Arc::new(watch::Sender::new(0));
         let stop = CancellationToken::new();
@@ -242,10 +275,10 @@ impl Client {
     ///
     /// Pairing a machine already paired replaces it, with a new device key.
     pub async fn pair(&self, link: String) -> Result<Machine, Error> {
-        let uri: PairingUri = link
-            .parse()
-            .map_err(|err: anyhow::Error| Error::InvalidLink(format!("{err:#}")))?;
-        let device = DeviceKey::generate().map_err(|err| Error::Local(format!("{err:#}")))?;
+        let uri: PairingUri = link.parse()?;
+        let device = DeviceKey::generate().map_err(|err| Error::Local {
+            message: format!("{err:#}"),
+        })?;
         let mut saved = SavedMachine {
             host_id: HostId::new(""),
             name: String::new(),
@@ -261,7 +294,7 @@ impl Client {
         };
         let (ws, hello) = supervisor::connect(&saved, &device, hello)
             .await
-            .map_err(Error::Pairing)?;
+            .map_err(|message| Error::Pairing { message })?;
         // The supervisor opens its own connection; this one only proved the code.
         drop(ws);
         saved.host_id = hello.host_id;
@@ -295,12 +328,12 @@ impl Client {
     }
 
     /// Shows a machine as `name` on this device from now on, and saves that.
-    pub fn rename(&self, host_id: &HostId, name: String) -> Result<(), Error> {
+    pub fn rename(&self, host_id: HostId, name: String) -> Result<(), Error> {
         let machines = self.lock();
-        let machine = find(&machines, host_id)?;
+        let machine = find(&machines, &host_id)?;
         let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
         for saved in &mut all {
-            if saved.host_id == *host_id {
+            if saved.host_id == host_id {
                 saved.name.clone_from(&name);
             }
         }
@@ -312,16 +345,16 @@ impl Client {
     /// Unpairs a machine on this device: removes it from the profile, with this device's key
     /// for it, and stops its connection; its subscriptions end. The daemon still lists the
     /// device until its owner revokes it.
-    pub fn forget(&self, host_id: &HostId) -> Result<(), Error> {
+    pub fn forget(&self, host_id: HostId) -> Result<(), Error> {
         let mut machines = self.lock();
-        let machine = find(&machines, host_id)?;
+        let machine = find(&machines, &host_id)?;
         let all: Vec<SavedMachine> = machines
             .iter()
-            .filter(|m| m.saved.host_id != *host_id)
+            .filter(|m| m.saved.host_id != host_id)
             .map(|m| m.saved())
             .collect();
         profile::save(&self.inner.config_dir, &all)?;
-        machines.retain(|m| m.saved.host_id != *host_id);
+        machines.retain(|m| m.saved.host_id != host_id);
         drop(machines);
         machine.stop();
         self.inner.changed.send_modify(|version| *version += 1);
@@ -332,8 +365,8 @@ impl Client {
     /// this client sent before the call: the session, account and terminal lists that follow
     /// each hello, and the replay of every session subscribed before. Projects arrive once the
     /// daemon has resolved them, which may be later.
-    pub async fn synced(&self, host_id: &HostId) -> Result<(), Error> {
-        self.machine(host_id)?.synced().await
+    pub async fn synced(&self, host_id: HostId) -> Result<(), Error> {
+        self.machine(&host_id)?.synced().await
     }
 
     /// Reconnects every disconnected machine now instead of after its backoff.
@@ -356,43 +389,43 @@ impl Client {
     /// reconnects. The daemon streams the session while any subscription to it is alive.
     pub fn subscribe_session(
         &self,
-        host_id: &HostId,
-        session_id: &SessionId,
+        host_id: HostId,
+        session_id: SessionId,
     ) -> Result<SessionSubscription, Error> {
-        let machine = self.machine(host_id)?;
-        Ok(SessionSubscription(Subscription::new(
-            machine,
-            session_id.clone(),
-        )))
+        let machine = self.machine(&host_id)?;
+        Ok(SessionSubscription(Subscription::new(machine, session_id)))
     }
 
     /// Sends a command to a machine and waits for the daemon's answer, however long it takes
     /// to connect. Dropping the future gives up; a command already sent may still apply.
     pub async fn send(
         &self,
-        host_id: &HostId,
+        host_id: HostId,
         command: CommandBody,
     ) -> Result<CommandResult, Error> {
-        let machine = self.machine(host_id)?;
+        let machine = self.machine(&host_id)?;
         let command = Command {
             id: new_command_id(),
             body: command,
         };
-        machine.send(command).await?.map_err(Error::Rejected)
+        machine
+            .send(command)
+            .await?
+            .map_err(|info| Error::Rejected { info })
     }
 
     /// Opens a shell of `cols` by `rows` in a session's worktree and streams it, however long
     /// it takes to connect; owners only.
     pub async fn open_terminal(
         &self,
-        host_id: &HostId,
-        session_id: &SessionId,
+        host_id: HostId,
+        session_id: SessionId,
         cols: u16,
         rows: u16,
     ) -> Result<TerminalStream, Error> {
-        self.machine(host_id)?
+        self.machine(&host_id)?
             .open_terminal(CommandBody::OpenTerminal {
-                session_id: session_id.clone(),
+                session_id,
                 cols,
                 rows,
             })
@@ -404,7 +437,7 @@ impl Client {
     /// account joins the machine's account list once the login exits successfully.
     pub async fn add_account(
         &self,
-        host_id: &HostId,
+        host_id: HostId,
         account: NewAccount,
         cols: u16,
         rows: u16,
@@ -415,7 +448,7 @@ impl Client {
             label,
             config_dir,
         } = account;
-        self.machine(host_id)?
+        self.machine(&host_id)?
             .open_terminal(CommandBody::AddAccount {
                 account_id,
                 provider,
@@ -432,12 +465,10 @@ impl Client {
     /// is dropped.
     pub async fn attach_terminal(
         &self,
-        host_id: &HostId,
-        terminal_id: &TerminalId,
+        host_id: HostId,
+        terminal_id: TerminalId,
     ) -> Result<TerminalStream, Error> {
-        self.machine(host_id)?
-            .attach_terminal(terminal_id.clone())
-            .await
+        self.machine(&host_id)?.attach_terminal(terminal_id).await
     }
 
     fn machine(&self, host_id: &HostId) -> Result<Arc<Supervisor>, Error> {
@@ -459,7 +490,9 @@ fn find(machines: &[Arc<Supervisor>], host_id: &HostId) -> Result<Arc<Supervisor
         .iter()
         .find(|machine| machine.saved.host_id == *host_id)
         .cloned()
-        .ok_or_else(|| Error::UnknownMachine(host_id.clone()))
+        .ok_or_else(|| Error::UnknownMachine {
+            host_id: host_id.clone(),
+        })
 }
 
 /// A stream of [`SessionUpdate`]s for one session; dropping it unsubscribes.
@@ -481,12 +514,12 @@ pub struct Changes {
 
 impl Changes {
     /// Waits until the machines changed since the previous call (or since [`Client::changes`]),
-    /// coalescing every change meanwhile; `None` once the client stops.
-    pub async fn next(&self) -> Option<()> {
+    /// coalescing every change meanwhile: `true` then, `false` once the client stops.
+    pub async fn next(&self) -> bool {
         let mut changed = self.changed.lock().await;
         tokio::select! {
-            () = self.stop.cancelled() => None,
-            changed = changed.changed() => changed.ok(),
+            () = self.stop.cancelled() => false,
+            changed = changed.changed() => changed.is_ok(),
         }
     }
 }

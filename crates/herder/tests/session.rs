@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};

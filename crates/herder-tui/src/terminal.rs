@@ -215,21 +215,21 @@ pub async fn attach(
         Target::New(session_id) => {
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
-                client.open_terminal(host_id, &session_id, cols, rows),
+                client.open_terminal(host_id.clone(), session_id, cols, rows),
             )
             .await
         }
         Target::Existing(terminal_id) => {
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
-                client.attach_terminal(host_id, &terminal_id),
+                client.attach_terminal(host_id.clone(), terminal_id),
             )
             .await
         }
         Target::Login(account) => {
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
-                client.add_account(host_id, account, cols, rows),
+                client.add_account(host_id.clone(), account, cols, rows),
             )
             .await
         }
@@ -310,7 +310,7 @@ async fn pipe(
     loop {
         tokio::select! {
             event = stream.next() => match event {
-                Some(TerminalEvent::Output(data)) => {
+                Some(TerminalEvent::Output { data }) => {
                     tail.push(&data);
                     if let Err(err) = write_all(stdout, &data) {
                         return Ended::Failed(format!("cannot write to the screen: {err}"));
@@ -349,7 +349,7 @@ async fn pipe(
 /// A failed open or attach, for the status line.
 fn failure(err: &Error) -> String {
     match err {
-        Error::Rejected(info) if info.code == ErrorCode::Forbidden => OWNER_ONLY.to_owned(),
+        Error::Rejected { info } if info.code == ErrorCode::Forbidden => OWNER_ONLY.to_owned(),
         err => format!("cannot attach: {err}"),
     }
 }
@@ -407,10 +407,12 @@ mod tests {
             Ended::Login("added account work".into()).notice(),
             "added account work"
         );
-        let forbidden = Error::Rejected(herder_protocol::ErrorInfo {
-            code: ErrorCode::Forbidden,
-            message: "owners only".into(),
-        });
+        let forbidden = Error::Rejected {
+            info: herder_protocol::ErrorInfo {
+                code: ErrorCode::Forbidden,
+                message: "owners only".into(),
+            },
+        };
         assert_eq!(failure(&forbidden), OWNER_ONLY);
     }
 }

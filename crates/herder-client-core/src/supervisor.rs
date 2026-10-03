@@ -149,8 +149,9 @@ impl Supervisor {
         changed: Arc<watch::Sender<u64>>,
         stop: CancellationToken,
     ) -> Result<Arc<Self>, Error> {
-        let device = DeviceKey::from_pem(&saved.device_key)
-            .map_err(|err| Error::Local(format!("the device key of {}: {err:#}", saved.name)))?;
+        let device = DeviceKey::from_pem(&saved.device_key).map_err(|err| Error::Local {
+            message: format!("the device key of {}: {err:#}", saved.name),
+        })?;
         let (ops, queue) = mpsc::unbounded_channel();
         let supervisor = Arc::new(Self {
             saved,
@@ -260,15 +261,15 @@ impl Supervisor {
             () = self.stop.cancelled() => return Err(Error::Closed),
             answer = answer => answer.map_err(|_| Error::Closed)?,
         };
-        match answer.map_err(Error::Rejected)? {
+        match answer.map_err(|info| Error::Rejected { info })? {
             CommandResult::TerminalOpened { terminal_id } => Ok(TerminalStream {
                 supervisor: Arc::clone(self),
                 terminal_id,
                 events: tokio::sync::Mutex::new(receiver),
             }),
-            other => Err(Error::Local(format!(
-                "the daemon answered a terminal open with {other:?}"
-            ))),
+            other => Err(Error::Local {
+                message: format!("the daemon answered a terminal open with {other:?}"),
+            }),
         }
     }
 
@@ -283,9 +284,9 @@ impl Supervisor {
         {
             let mut state = self.lock();
             if state.streams.contains_key(&terminal_id) {
-                return Err(Error::Local(format!(
-                    "terminal {terminal_id} is already attached on this client"
-                )));
+                return Err(Error::Local {
+                    message: format!("terminal {terminal_id} is already attached on this client"),
+                });
             }
             let attached = Attached {
                 events,
@@ -306,7 +307,7 @@ impl Supervisor {
             .map_err(|_| Error::Closed)?;
         tokio::select! {
             () = self.stop.cancelled() => Err(Error::Closed),
-            answer = answer => answer.map_err(|_| Error::Closed)?.map_err(Error::Rejected),
+            answer = answer => answer.map_err(|_| Error::Closed)?.map_err(|info| Error::Rejected { info }),
         }?;
         Ok(stream)
     }
@@ -920,7 +921,7 @@ async fn serve(
             }
             ServerMessage::TerminalOutput { terminal_id, data } => {
                 let opening = pending.iter().any(|command| command.open.is_some());
-                let event = TerminalEvent::Output(data.0);
+                let event = TerminalEvent::Output { data: data.0 };
                 supervisor.terminal_event(terminal_id, event, &mut early, opening);
                 None
             }

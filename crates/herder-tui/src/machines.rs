@@ -10,7 +10,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use herder_client_core::Machine;
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_protocol::HostId;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -143,7 +143,7 @@ impl Form {
         if !link.is_empty() {
             return link
                 .parse()
-                .map_err(|err: anyhow::Error| format!("{err:#}"));
+                .map_err(|err: herder_client_core::Error| err.to_string());
         }
         let host = self.host.trim();
         if host.is_empty() {

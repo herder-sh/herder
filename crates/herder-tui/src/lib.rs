@@ -55,7 +55,10 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         ..App::default()
     };
     let client = Client::open(
-        config_dir.clone(),
+        config_dir
+            .to_str()
+            .context("the config dir is not valid UTF-8")?
+            .to_owned(),
         format!("herder-tui/{}", env!("CARGO_PKG_VERSION")),
     )?;
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -101,12 +104,12 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                     Effect::OpenUrl(url) => open_url(url, tx.clone()),
                     Effect::Pair(link) => pair(&client, link, tx.clone()),
                     Effect::RenameMachine { host_id, name } => {
-                        if let Err(err) = client.rename(&host_id, name) {
+                        if let Err(err) = client.rename(host_id.clone(), name) {
                             let _ = tx.send(Msg::Notice(format!("renaming: {err}")));
                         }
                     }
                     Effect::ForgetMachine(host_id) => {
-                        if let Err(err) = client.forget(&host_id) {
+                        if let Err(err) = client.forget(host_id.clone()) {
                             let _ = tx.send(Msg::Notice(format!("forgetting: {err}")));
                         }
                     }
@@ -202,7 +205,7 @@ fn send(
     let client = client.clone();
     tokio::spawn(async move {
         let result = client
-            .send(&host_id, command)
+            .send(host_id.clone(), command)
             .await
             .map_err(|err| err.to_string());
         let _ = tx.send(Msg::Sent { origin, result });
@@ -271,7 +274,7 @@ fn forward_machines(client: &Client, tx: mpsc::UnboundedSender<Msg>) {
             if tx.send(Msg::Machines(client.machines())).is_err() {
                 return;
             }
-            if changes.next().await.is_none() {
+            if !changes.next().await {
                 return;
             }
         }
@@ -341,7 +344,9 @@ impl Subscriptions {
             if self.0.contains_key(&key) {
                 continue;
             }
-            let Ok(subscription) = client.subscribe_session(&key.host_id, &key.session_id) else {
+            let Ok(subscription) =
+                client.subscribe_session(key.host_id.clone(), key.session_id.clone())
+            else {
                 // The machine is gone; the next machine list drops the session.
                 continue;
             };

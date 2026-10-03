@@ -1,7 +1,7 @@
 //! The machines panel, the add-machine dialog and the add-account dialog, over the main
 //! screen.
 
-use herder_client_core::auth::PairingUri;
+use herder_client_core::PairingUri;
 use herder_client_core::{ConnectionState, Machine};
 use herder_protocol::Role;
 use ratatui::Frame;

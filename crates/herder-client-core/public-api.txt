@@ -1,0 +1,213 @@
+pub const CLIENT_API_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewAccount {
+    pub account_id: AccountId,
+    pub provider: Provider,
+    pub label: Option<String>,
+    pub config_dir: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    InvalidLink { message: String },
+    Pairing { message: String },
+    UnknownMachine { host_id: HostId },
+    Rejected { info: ErrorInfo },
+    Local { message: String },
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Machine {
+    pub host_id: HostId,
+    pub name: String,
+    pub addresses: Vec<String>,
+    pub fingerprint: String,
+    pub connection: ConnectionState,
+    pub role: Option<Role>,
+    pub sessions: Vec<SessionHead>,
+    pub hosts: Vec<FleetHost>,
+    pub projects: Vec<Project>,
+    pub accounts: Vec<Account>,
+    pub failover: FailoverSettings,
+    pub terminals: Vec<Terminal>,
+    pub resources: Option<HostResources>,
+    pub session_usage: HashMap<SessionId, SessionUsage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connecting,
+    Connected,
+    Disconnected { error: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionUpdate {
+    pub events: Vec<Event>,
+    pub streaming: Vec<Item>,
+}
+
+// opaque: private fields
+#[derive(Clone)]
+pub struct Client {}
+
+impl Client {
+    pub fn open(config_dir: String, client: String) -> Result<Self, Error> {}
+}
+
+impl Client {
+    pub fn machines(&self) -> Vec<Machine> {}
+}
+
+impl Client {
+    pub async fn pair(&self, link: String) -> Result<Machine, Error> {}
+}
+
+impl Client {
+    pub fn rename(&self, host_id: HostId, name: String) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn forget(&self, host_id: HostId) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub async fn synced(&self, host_id: HostId) -> Result<(), Error> {}
+}
+
+impl Client {
+    pub fn wake(&self) {}
+}
+
+impl Client {
+    pub fn changes(&self) -> Changes {}
+}
+
+impl Client {
+    pub fn subscribe_session(
+        &self,
+        host_id: HostId,
+        session_id: SessionId,
+    ) -> Result<SessionSubscription, Error> {}
+}
+
+impl Client {
+    pub async fn send(
+        &self,
+        host_id: HostId,
+        command: CommandBody,
+    ) -> Result<CommandResult, Error> {}
+}
+
+impl Client {
+    pub async fn open_terminal(
+        &self,
+        host_id: HostId,
+        session_id: SessionId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
+    pub async fn add_account(
+        &self,
+        host_id: HostId,
+        account: NewAccount,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
+    pub async fn attach_terminal(
+        &self,
+        host_id: HostId,
+        terminal_id: TerminalId,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+// opaque: private fields
+pub struct SessionSubscription {}
+
+impl SessionSubscription {
+    pub async fn next(&self) -> Option<SessionUpdate> {}
+}
+
+// opaque: private fields
+pub struct Changes {}
+
+impl Changes {
+    pub async fn next(&self) -> bool {}
+}
+
+// mod auth
+// opaque: private fields
+pub struct DeviceKey {}
+
+// mod auth
+impl DeviceKey {
+    pub fn generate() -> Result<Self> {}
+}
+
+// mod auth
+impl DeviceKey {
+    pub fn from_pem(pem: &str) -> Result<Self> {}
+}
+
+// mod auth
+impl DeviceKey {
+    pub fn to_pem(&self) -> &str {}
+}
+
+// mod auth
+impl DeviceKey {
+    pub fn fingerprint(&self) -> String {}
+}
+
+// mod auth
+pub fn client_config(
+    daemon_fingerprint: &str,
+    device: &DeviceKey,
+) -> Result<ClientConfig> {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairingUri {
+    pub hosts: Vec<String>,
+    pub fingerprint: String,
+    pub code: String,
+}
+
+impl fmt::Display for PairingUri {}
+
+impl FromStr for PairingUri {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalEvent {
+    Output { data: Vec<u8> },
+    Reattached,
+    Closed { exit_code: Option<i32> },
+}
+
+// opaque: private fields
+pub struct TerminalStream {}
+
+impl TerminalStream {
+    pub fn terminal_id(&self) -> TerminalId {}
+}
+
+impl TerminalStream {
+    pub async fn next(&self) -> Option<TerminalEvent> {}
+}
+
+impl TerminalStream {
+    pub fn input(&self, data: Vec<u8>) {}
+}
+
+impl TerminalStream {
+    pub fn resize(&self, cols: u16, rows: u16) {}
+}
+
+impl Drop for TerminalStream {}

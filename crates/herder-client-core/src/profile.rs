@@ -42,18 +42,21 @@ pub(crate) fn load(dir: &Path) -> Result<Vec<SavedMachine>, Error> {
     match fs::read(&path) {
         Ok(bytes) => serde_json::from_slice::<Profile>(&bytes)
             .map(|profile| profile.machines)
-            .map_err(|err| {
-                Error::Local(format!("{} is not a valid profile: {err}", path.display()))
+            .map_err(|err| Error::Local {
+                message: format!("{} is not a valid profile: {err}", path.display()),
             }),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(err) => Err(Error::Local(format!("reading {}: {err}", path.display()))),
+        Err(err) => Err(Error::Local {
+            message: format!("reading {}: {err}", path.display()),
+        }),
     }
 }
 
 /// Replaces the saved machines in `dir` with `machines`.
 pub(crate) fn save(dir: &Path, machines: &[SavedMachine]) -> Result<(), Error> {
-    let failed =
-        |what: &str, err: io::Error| Error::Local(format!("{what} {}: {err}", dir.display()));
+    let failed = |what: &str, err: io::Error| Error::Local {
+        message: format!("{what} {}: {err}", dir.display()),
+    };
     DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -62,7 +65,9 @@ pub(crate) fn save(dir: &Path, machines: &[SavedMachine]) -> Result<(), Error> {
     let json = serde_json::to_vec_pretty(&Profile {
         machines: machines.to_vec(),
     })
-    .map_err(|err| Error::Local(format!("encoding the profile: {err}")))?;
+    .map_err(|err| Error::Local {
+        message: format!("encoding the profile: {err}"),
+    })?;
     let tmp = dir.join(format!("{FILE}.tmp"));
     let write = || -> io::Result<()> {
         let mut file = OpenOptions::new()
@@ -102,6 +107,6 @@ mod tests {
         let mode = fs::metadata(dir.join(FILE)).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         fs::write(dir.join(FILE), "not json").unwrap();
-        assert!(matches!(load(&dir), Err(Error::Local(_))));
+        assert!(matches!(load(&dir), Err(Error::Local { .. })));
     }
 }

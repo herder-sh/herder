@@ -1,0 +1,147 @@
+# herder-client-core public API
+
+`CLIENT_API_VERSION = 1`
+
+This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
+(SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
+says what exists, why, and how it maps to foreign languages.
+
+## Stability
+
+- The surface is every public item reachable from the crate root. `public-api.txt` lists it
+  (signatures, fields, variants, derives; no docs or bodies), and the `public_api` test fails
+  when the code and the list differ.
+- A change that can break a client (anything removed, renamed, or changed in its fields,
+  variants, derives or signature) bumps `CLIENT_API_VERSION` by one. Additions keep it. The
+  test refuses to rewrite the list for a breaking change unless the version went up.
+- To change the API on purpose: change the code, update this file, bump the version if it
+  breaks, then run
+  `UPDATE_PUBLIC_API=1 cargo test -p herder-client-core --test public_api` and commit
+  `public-api.txt`. Such a change is a `[CONTRACT]` todo of its own (AGENTS.md).
+- The API passes `herder-protocol` types through (`HostId`, `SessionHead`, `Event`,
+  `CommandBody`, ...). Those are versioned by `PROTOCOL_VERSION` and change only in a
+  protocol `[CONTRACT]` todo; this list names them but does not track their fields.
+
+## Shape, and how it maps to UniFFI
+
+The API is designed so that the UniFFI layer (P6.2, for Swift and Kotlin) wraps it without
+adapting anything:
+
+| Rust                                                          | UniFFI                          |
+| ------------------------------------------------------------- | ------------------------------- |
+| `Client`, `SessionSubscription`, `TerminalStream`, `Changes`  | objects (`Arc`, `Send + Sync`)  |
+| `Machine`, `SessionUpdate`, `NewAccount`, `PairingUri`        | records                         |
+| `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
+| `Error`                                                       | error enum with named fields    |
+| `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
+| protocol newtype ids (`HostId`, `SessionId`, ...)             | custom types over `String`      |
+| other protocol types                                          | remote records and enums        |
+
+Rules the surface keeps, and `public_api` checks the object rules:
+
+- Every argument and return value is owned: `String`, `Vec`, `Option`, `HashMap`, primitive
+  integers, records, enums. No references beyond `&self`, no generics, no lifetimes, no
+  `PathBuf` (`Client::open` takes the config dir as a `String`).
+- Objects and every future their methods return are `Send`; objects are `Send + Sync`.
+- Streams are pull-based objects with an `async fn next(&self)` that returns `None` (or
+  `false`) when it ends. They need no foreign callback interface; Swift wraps one in an
+  `AsyncSequence`, Kotlin in a `Flow`. Dropping (in Swift/Kotlin: releasing) the object
+  unsubscribes or detaches.
+- `Client::open` must be called within a tokio runtime; the FFI layer owns that runtime.
+- `PairingUri` parses with `FromStr` and formats with `Display`. UniFFI cannot export trait
+  impls on records, so the FFI layer exports them as two plain functions.
+
+The `auth` module is Rust-only plumbing (TLS device keys and certificate pinning) for whatever
+else connects to a daemon as a device: the vault's replicator in `herder-daemon`, and tests.
+It is part of the frozen list but not of the foreign-language surface.
+
+## Coverage by area
+
+Everything a client does is one of: read the machines list, stream a session, send a command,
+stream a terminal. Commands are `herder_protocol::CommandBody` values sent with
+`Client::send`, so a new command is a protocol change, not a client-core change.
+
+| Area      | Read                                                                 | Act                                                                                       |
+| --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `role` | `Client::pair`, `rename`, `forget`, `wake`, `synced`; `PairingUri`                         |
+| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`   | `send`: `CreateSession`, `ArchiveSession`, `SendPrompt`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
+| Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
+| PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
+| Accounts  | `Machine::accounts`, `failover`; `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
+| Fleet     | `Machine::hosts` (a vault), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`                                     |
+
+## Reference
+
+### Constants
+
+- `CLIENT_API_VERSION: u32` — the version of this API.
+
+### `Client` (object)
+
+The client: paired machines and one connection supervisor per machine. Cheap to clone;
+everything stops once the last clone is dropped.
+
+| Method | Does |
+| ------ | ---- |
+| `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir` and starts connecting to every saved machine. `client` names the client in daemon logs. |
+| `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
+| `changes() -> Changes` | Notifications that `machines()` changed. |
+| `async pair(link: String) -> Result<Machine, Error>` | Pairs with the daemon a `herder://pair` link names and saves it. |
+| `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
+| `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
+| `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
+| `wake()` | Reconnects every disconnected machine now. |
+| `subscribe_session(host_id: HostId, session_id: SessionId) -> Result<SessionSubscription, Error>` | Streams a session, cached state first, across reconnects. |
+| `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
+| `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
+| `async add_account(host_id: HostId, account: NewAccount, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs a provider login in a login terminal; owners only. |
+| `async attach_terminal(host_id: HostId, terminal_id: TerminalId) -> Result<TerminalStream, Error>` | Attaches to an open terminal; owners only, one stream per terminal per client. |
+
+### Streams (objects)
+
+- `Changes::next() -> bool` (async) — `true` once the machines changed, coalescing; `false`
+  once the client stops.
+- `SessionSubscription::next() -> Option<SessionUpdate>` (async) — the next update; `None`
+  once the client or the machine stops. Dropping it unsubscribes.
+- `TerminalStream` — `next() -> Option<TerminalEvent>` (async), `terminal_id() -> TerminalId`,
+  `input(data: Vec<u8>)`, `resize(cols: u16, rows: u16)`. Dropping it detaches; the shell keeps
+  running.
+
+### Records
+
+- `Machine` — `host_id`, `name`, `addresses`, `fingerprint`, `connection`, `role`,
+  `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
+  `session_usage`.
+- `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
+  `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
+- `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
+- `PairingUri` — `hosts: Vec<String>`, `fingerprint: String`, `code: String`; `FromStr`
+  (fails with `Error::InvalidLink`) and `Display` (`herder://pair?…`).
+
+### Enums
+
+- `ConnectionState` — `Connecting`, `Connected`, `Disconnected { error: String }`.
+- `TerminalEvent` — `Output { data: Vec<u8> }`, `Reattached`, `Closed { exit_code: Option<i32> }`.
+- `Error` — `InvalidLink { message }`, `Pairing { message }`, `UnknownMachine { host_id }`,
+  `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
+  `read_only`), `Local { message }`, `Closed`.
+
+### `auth` (Rust-only)
+
+- `DeviceKey` — `generate()`, `from_pem(&str)`, `to_pem() -> &str`, `fingerprint() -> String`.
+- `client_config(daemon_fingerprint: &str, device: &DeviceKey) -> anyhow::Result<rustls::ClientConfig>`.
+
+## Changes in version 1
+
+Version 1 is the first frozen API. Compared with the code before it:
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `&HostId`, `&SessionId`, `&TerminalId` arguments | owned `HostId`, `SessionId`, `TerminalId` | UniFFI passes records and custom types by value. |
+| `Client::open(config_dir: PathBuf, ..)` | `config_dir: String` | UniFFI has no path type. |
+| `Changes::next() -> Option<()>` | `-> bool` | `Option<()>` has no foreign equivalent. |
+| `Error::InvalidLink(String)`, `Pairing(String)`, `Local(String)`, `UnknownMachine(HostId)`, `Rejected(ErrorInfo)` | named fields: `{ message }`, `{ host_id }`, `{ info }` | Foreign enums get named, not positional, fields. |
+| `TerminalEvent::Output(Vec<u8>)` | `Output { data }` | Same. |
+| `auth::PairingUri`, `FromStr::Err = anyhow::Error` | `PairingUri` at the crate root, `Err = Error` (`InvalidLink`) | Apps parse links to confirm them before pairing, as the TUI does; `auth` is Rust-only. |
+| — | `CLIENT_API_VERSION`, `public-api.txt`, `#![warn(missing_docs)]` | The freeze itself. |
