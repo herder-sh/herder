@@ -1,0 +1,131 @@
+//! The bindings as Swift and Kotlin drive them: futures polled from a thread with no tokio
+//! runtime, against a daemon with the fake adapter.
+
+mod support;
+
+use std::future::Future;
+use std::pin::pin;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+use std::thread::{self, Thread};
+use std::time::{Duration, Instant};
+
+use herder_ffi::{Client, HerderError, pairing_uri_to_string, parse_pairing_uri};
+use herder_protocol::{
+    AccountId, CommandBody, CommandResult, EventBody, ItemBody, PermissionMode, SessionStatus,
+};
+use support::{ACCOUNT, FakeDaemon};
+
+const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Runs a future to completion on this thread, as a foreign executor would: no tokio runtime.
+fn block_on<F: Future>(future: F) -> F::Output {
+    struct Unpark(Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Unpark(thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = pin!(future);
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+            return output;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no result in time");
+        thread::park_timeout(left);
+    }
+}
+
+#[test]
+fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let daemon = runtime.block_on(FakeDaemon::start()).unwrap();
+    let config = tempfile::tempdir().unwrap();
+
+    let link = parse_pairing_uri(daemon.link.clone()).unwrap();
+    assert_eq!(pairing_uri_to_string(link), daemon.link);
+    let client = Client::open(
+        config.path().display().to_string(),
+        "herder-ffi-test/0".into(),
+    )
+    .unwrap();
+    let machine = block_on(client.pair(daemon.link.clone())).unwrap();
+    assert_eq!(machine.name, "fake-host");
+    let host = machine.host_id;
+    block_on(client.synced(host.clone())).unwrap();
+
+    let created = block_on(client.send(
+        host.clone(),
+        CommandBody::CreateSession {
+            repo: Some(daemon.repo.clone()),
+            project_id: None,
+            branch: None,
+            account_id: Some(AccountId::new(ACCOUNT)),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            max_children: None,
+            failover_pin: None,
+        },
+    ))
+    .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a session, got {created:?}");
+    };
+    let subscription = client
+        .subscribe_session(host.clone(), session_id.clone())
+        .unwrap();
+    let sent = block_on(client.send(
+        host.clone(),
+        CommandBody::SendPrompt {
+            session_id,
+            text: "Say hello.".into(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(sent, CommandResult::Applied);
+
+    let mut events = Vec::new();
+    while !events.iter().any(|body| {
+        *body
+            == EventBody::SessionStatusChanged {
+                status: SessionStatus::Idle,
+            }
+    }) || !events
+        .iter()
+        .any(|body| matches!(body, EventBody::TurnCompleted { .. }))
+    {
+        let update = block_on(subscription.next()).expect("the subscription ended");
+        events.extend(update.events.into_iter().map(|event| event.body));
+    }
+    assert!(
+        events.iter().any(|body| matches!(
+            body,
+            EventBody::ItemAdded { item } if item.body == ItemBody::AssistantMessage {
+                text: "Hello, world.".into()
+            }
+        )),
+        "{events:?}"
+    );
+
+    // Backgrounded and back, the client syncs again.
+    client.suspend();
+    client.wake();
+    block_on(client.synced(host)).unwrap();
+
+    drop(subscription);
+    drop(client);
+    runtime.block_on(daemon.stop()).unwrap();
+}
+
+#[test]
+fn an_invalid_link_fails_with_invalid_link() {
+    let error = parse_pairing_uri("https://example.com".into()).unwrap_err();
+    assert!(
+        matches!(error, HerderError::InvalidLink { .. }),
+        "{error:?}"
+    );
+}
