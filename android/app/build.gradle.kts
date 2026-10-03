@@ -23,6 +23,8 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        // Robolectric's Android 16 sets up shared memory through JDK internals.
+        unitTests.all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
     }
 }
 
