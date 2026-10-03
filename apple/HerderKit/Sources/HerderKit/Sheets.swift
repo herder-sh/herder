@@ -577,6 +577,9 @@ struct MachineSettingsSheet: View {
     let hostId: HostId
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var editingAccount: Account?
+    @State private var showingAccountSettings = false
+    @State private var addingAccount = false
     @State private var confirmingForget = false
     @State private var error: String?
 
@@ -639,7 +642,7 @@ struct MachineSettingsSheet: View {
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
                 Field(label: "Accounts",
-                      hint: "Accounts are set in the machine's `daemon.toml`; a session at its limit rotates to another of the provider's accounts.") {
+                      hint: "A session at its limit rotates to another of the provider's accounts.") {
                     VStack(alignment: .leading, spacing: 8) {
                         if machine.accounts.isEmpty {
                             Text("No accounts yet").foregroundStyle(Theme.tertiary)
@@ -650,8 +653,22 @@ struct MachineSettingsSheet: View {
                                 Text(account.provider).foregroundStyle(Theme.secondary)
                                 Spacer()
                                 Text(account.accountId).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                                if machine.role == .owner {
+                                    Button("Edit") {
+                                        editingAccount = account
+                                        showingAccountSettings = true
+                                    }.disabled(machine.connection != .connected)
+                                }
                             }
                             .font(.subheadline)
+                        }
+                        if machine.role == .owner {
+                            ActionButton(title: fleet.accountLogins[hostId] == nil ? "Add Account" : "Account Login",
+                                         style: .secondary) { addingAccount = true }
+                                .disabled(machine.connection != .connected)
+                        } else {
+                            Text("Only the machine owner can add accounts.")
+                                .font(.footnote).foregroundStyle(Theme.tertiary)
                         }
                         if machine.failover.pin {
                             Label("Failover pinned: sessions stay on their account", systemImage: "pin")
@@ -671,6 +688,10 @@ struct MachineSettingsSheet: View {
                 .foregroundStyle(Theme.failure)
             Spacer()
         }
+        .sheet(isPresented: $showingAccountSettings) {
+            if let editingAccount { EditAccountSheet(fleet: fleet, hostId: hostId, account: editingAccount) }
+        }
+        .sheet(isPresented: $addingAccount) { AddAccountSheet(fleet: fleet, hostId: hostId) }
         .onAppear { name = machine?.name ?? "" }
         .confirmationDialog("Forget \(machine?.name ?? "") on this device?", isPresented: $confirmingForget,
                             titleVisibility: .visible) {
