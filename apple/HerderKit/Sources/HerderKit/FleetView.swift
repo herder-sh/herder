@@ -41,6 +41,19 @@ struct FleetView: View {
         }
         #endif
         .task { await fleet.follow() }
+        .overlay(alignment: .bottom) { ToastView(fleet: fleet) }
+        .alert(fleet.archiveRefusal.map { "Couldn’t archive “\($0.title)”" } ?? "",
+               isPresented: Binding(get: { fleet.archiveRefusal != nil }, set: { if !$0 { fleet.archiveRefusal = nil } }),
+               presenting: fleet.archiveRefusal) { refusal in
+            if refusal.canForce {
+                Button("Archive Anyway", role: .destructive) { Task { await fleet.archive(refusal.key, force: true) } }
+            }
+            Button(refusal.canForce ? "Cancel" : "OK", role: .cancel) {}
+        } message: { refusal in
+            Text(refusal.canForce
+                 ? "\(refusal.reason)\n\nArchiving anyway deletes those changes with the worktree."
+                 : refusal.reason)
+        }
         .onChange(of: draft) {
             // A draft shows in a list's session pane; Machines has none.
             if let draft {
@@ -237,8 +250,11 @@ struct SessionLink: View {
                     .buttonStyle(.plain)
             }
         }
+        .opacity(fleet.archiving.contains(session.key) ? 0.5 : 1)
         .overlay(alignment: .topTrailing) {
-            if hovering && session.state != .archived {
+            if fleet.archiving.contains(session.key) {
+                ArchivingLabel().padding(8)
+            } else if hovering && session.state != .archived {
                 IconButton(symbol: "archivebox", help: "Archive") { Task { await fleet.archive(session.key) } }
                     .padding(8)
             }
