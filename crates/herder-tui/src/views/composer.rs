@@ -107,7 +107,8 @@ fn request<'a>(
             format!("{}{tool}", ui.glyphs.separator),
             ui.muted(),
         ));
-        text(&mut body, &approval.summary, ui.text());
+        let summary = super::tools::in_worktree(&approval.summary, &session.worktree);
+        text(&mut body, &summary, ui.text());
         let hidden = body.len().saturating_sub(cap);
         body.truncate(cap);
         if hidden > 0 {
