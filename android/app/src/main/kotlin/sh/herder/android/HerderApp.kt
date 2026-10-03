@@ -6,7 +6,6 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import sh.herder.ffi.Client
 import sh.herder.ffi.HerderException
@@ -14,10 +13,10 @@ import sh.herder.ffi.HerderException
 /**
  * Opens the client on this device's profile, in app-private storage, for the life of the
  * process, and tells it when the app goes to the background and comes back. The lifecycle
- * observer and the machines flow hold the client: releasing it would stop every connection.
+ * observer and the fleet flow hold the client: releasing it would stop every connection.
  */
 class HerderApp : Application() {
-    /** The client's machines, or why the profile could not be opened. */
+    /** The client's machines and their sessions, live, or why the profile could not be opened. */
     lateinit var profile: StateFlow<Profile>
         private set
 
@@ -29,8 +28,7 @@ class HerderApp : Application() {
             profile = MutableStateFlow(Profile.Failed((error as? HerderException.Local)?.detail ?: error.toString()))
             return
         }
-        profile = client.machinesFlow()
-            .map { Profile.Open(it) }
+        profile = fleetFlow(client.machinesFlow(), client::updates)
             .stateIn(MainScope(), SharingStarted.Eagerly, Profile.Open(client.machines()))
         ProcessLifecycleOwner.get().lifecycle.addObserver(ClientLifecycle(client))
     }

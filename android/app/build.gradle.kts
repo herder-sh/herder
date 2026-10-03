@@ -23,8 +23,12 @@ android {
     }
     testOptions {
         unitTests.isIncludeAndroidResources = true
-        // Robolectric's Android 16 sets up shared memory through JDK internals.
-        unitTests.all { it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED") }
+        unitTests.all {
+            // Robolectric's Android 16 sets up shared memory through JDK internals.
+            it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+            // ScreenshotsTest writes its screenshots; nothing compares them.
+            it.systemProperty("roborazzi.test.record", "true")
+        }
     }
 }
 
@@ -44,4 +48,6 @@ dependencies {
     testImplementation(libs.compose.ui.test.junit4)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.coroutines.test)
 }
