@@ -78,6 +78,7 @@ impl Host {
             host_name: "devbox".into(),
             build: "herder/0.0.0".into(),
             pairing_code: None,
+            attachments_cap: None,
         })
     }
 

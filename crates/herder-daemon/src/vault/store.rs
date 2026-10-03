@@ -10,9 +10,15 @@
 //! sends when it returns, but the fleet shows only the current copy.
 //!
 //! Images prompts carried are kept per host the same way, beside the journals, by session and
-//! attachment id ([`VaultStore::put_attachment`]).
+//! attachment id ([`VaultStore::put_attachment`]), up to the cap the host's hello gave: the
+//! host's oldest images make room for a new one.
+//!
+//! Archived sessions are dropped after the vault's retention period ([`VaultStore::prune`]);
+//! a dropped session leaves a tombstone at the seq held, so its host, which still has it, is
+//! not asked to send it again. A host and everything it replicated go only when an owner
+//! forgets it ([`VaultStore::forget`]).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use herder_protocol::{
     AccountId, AttachmentData, AttachmentId, Batch, Bytes, Cursor, DeviceId, HostId,
@@ -75,6 +81,17 @@ CREATE TABLE attachments (
     PRIMARY KEY (host_id, session_id, attachment_id)
 ) STRICT;
 ",
+    "
+ALTER TABLE hosts ADD COLUMN attachments_cap INTEGER;
+ALTER TABLE attachments ADD COLUMN size INTEGER NOT NULL DEFAULT 0;
+UPDATE attachments SET size = length(data);
+CREATE TABLE pruned (
+    host_id    TEXT    NOT NULL,
+    session_id TEXT    NOT NULL,
+    seq        INTEGER NOT NULL,
+    PRIMARY KEY (host_id, session_id)
+) STRICT;
+",
 ];
 
 /// Leaves out copies of sessions another host recovered; `s` is the `sessions` row.
@@ -93,6 +110,28 @@ pub struct HostRecord {
     pub host_name: String,
     /// When it was last heard from.
     pub seen_at: Timestamp,
+    /// Most bytes of its images kept, as its latest hello gave it; `None` when it backs up
+    /// no images.
+    pub attachments_cap: Option<u64>,
+    /// Its sessions held here.
+    pub sessions: u32,
+    /// Bytes of its images held here.
+    pub attachment_bytes: u64,
+}
+
+/// What became of an image a host sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kept {
+    /// Kept, after evicting this many of the host's oldest images to stay within its cap;
+    /// also for a re-send of one held already.
+    Stored {
+        /// Images evicted.
+        evicted: usize,
+    },
+    /// Not kept: the host backs up no images.
+    Off,
+    /// Not kept: the image alone is bigger than the host's cap.
+    OverCap,
 }
 
 /// The account of a stored event body that sets one.
@@ -145,12 +184,14 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[derive(Debug)]
 pub struct VaultStore {
     conn: Connection,
+    path: PathBuf,
 }
 
 impl VaultStore {
     /// Opens or creates the database at `path`; the parent directory must exist.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let mut conn = Connection::open(path)?;
+        let path = path.as_ref().to_owned();
+        let mut conn = Connection::open(&path)?;
         conn.pragma_update(None, "journal_mode", "wal")?;
         // An ack promises the events are durable, as the host's own journal does.
         conn.pragma_update(None, "synchronous", "FULL")?;
@@ -165,16 +206,24 @@ impl VaultStore {
         }
         tx.pragma_update(None, "user_version", version)?;
         tx.commit()?;
-        Ok(Self { conn })
+        Ok(Self { conn, path })
     }
 
-    /// Records that `device` replicates as `host`, unless another device that is still
-    /// `paired` already does; returns whether it may.
+    /// The database file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Records that `device` replicates as `host`, keeping at most `attachments_cap` bytes
+    /// of its images, unless another device that is still `paired` already does; returns
+    /// whether it may. A lower cap evicts the host's oldest images at once; with none, the
+    /// images held stay until the host is forgotten.
     pub fn bind(
         &mut self,
         device: &DeviceId,
         host: &HostId,
         host_name: &str,
+        attachments_cap: Option<u64>,
         paired: &[DeviceId],
     ) -> Result<bool> {
         let tx = self
@@ -204,18 +253,33 @@ impl VaultStore {
             }
         }
         tx.execute(
-            "INSERT INTO hosts (device_id, host_id, host_name, seen_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (device_id) DO UPDATE SET host_name = ?3, seen_at = ?4",
-            params![device.as_str(), host.as_str(), host_name, Timestamp::now()],
+            "INSERT INTO hosts (device_id, host_id, host_name, seen_at, attachments_cap)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (device_id) DO UPDATE SET host_name = ?3, seen_at = ?4,
+               attachments_cap = ?5",
+            params![
+                device.as_str(),
+                host.as_str(),
+                host_name,
+                Timestamp::now(),
+                attachments_cap
+            ],
         )?;
+        if let Some(cap) = attachments_cap {
+            evict(&tx, host, cap, 0)?;
+        }
         tx.commit()?;
         Ok(true)
     }
 
-    /// Every host that ever replicated here, with its latest name, ordered by host id.
+    /// Every host that ever replicated here, with its latest name and what it takes here,
+    /// ordered by host id.
     pub fn hosts(&self) -> Result<Vec<HostRecord>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT host_id, host_name, seen_at FROM hosts h WHERE seen_at =
+            "SELECT host_id, host_name, seen_at, attachments_cap,
+               (SELECT COUNT(*) FROM sessions s WHERE s.host_id = h.host_id),
+               (SELECT COALESCE(SUM(size), 0) FROM attachments a WHERE a.host_id = h.host_id)
+             FROM hosts h WHERE seen_at =
                (SELECT MAX(seen_at) FROM hosts WHERE host_id = h.host_id)
              GROUP BY host_id ORDER BY host_id",
         )?;
@@ -224,6 +288,9 @@ impl VaultStore {
                 host_id: HostId::new(row.get::<_, String>(0)?),
                 host_name: row.get(1)?,
                 seen_at: row.get(2)?,
+                attachments_cap: row.get(3)?,
+                sessions: row.get(4)?,
+                attachment_bytes: row.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -367,11 +434,13 @@ impl VaultStore {
             .map(HostId::new))
     }
 
-    /// For every session of `host` held here, the last seq held, ordered by session id.
+    /// For every session of `host` held here, the last seq held, ordered by session id; for
+    /// one dropped as archived, the last seq it held then.
     pub fn cursors(&self, host: &HostId) -> Result<Vec<Cursor>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT session_id, MAX(seq) FROM events WHERE host_id = ?1
-             GROUP BY session_id ORDER BY session_id",
+            "SELECT session_id, MAX(seq) FROM events WHERE host_id = ?1 GROUP BY session_id
+             UNION ALL SELECT session_id, seq FROM pruned WHERE host_id = ?1
+             ORDER BY session_id",
         )?;
         let rows = stmt.query_map([host.as_str()], |row| {
             Ok(Cursor {
@@ -382,8 +451,19 @@ impl VaultStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Replaces what the fleet index holds for one session of `host`.
+    /// Replaces what the fleet index holds for one session of `host`. A session dropped as
+    /// archived stays dropped while it is archived; once it is not, it is taken back, and its
+    /// next batch, finding nothing held, has the host send it again from the start.
     pub fn put_summary(&mut self, host: &HostId, summary: &SessionSummary) -> Result<()> {
+        let key = [host.as_str(), summary.session_id.as_str()];
+        if self.pruned(key)?.is_some() {
+            if summary.status == SessionStatus::Archived {
+                return Ok(());
+            }
+            self.conn
+                .prepare_cached("DELETE FROM pruned WHERE host_id = ?1 AND session_id = ?2")?
+                .execute(key)?;
+        }
         self.conn
             .prepare_cached(
                 "INSERT INTO sessions (host_id, session_id, summary) VALUES (?1, ?2, ?3)
@@ -444,9 +524,25 @@ impl VaultStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Keeps an image of `host`'s session durably. A re-send with the same bytes changes
-    /// nothing; one with other bytes under the same id is malformed.
-    pub fn put_attachment(&mut self, host: &HostId, image: &AttachmentData) -> Result<()> {
+    /// The seq `host`'s session `key` was dropped at, if it was dropped as archived.
+    fn pruned(&self, key: [&str; 2]) -> Result<Option<Seq>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT seq FROM pruned WHERE host_id = ?1 AND session_id = ?2")?
+            .query_row(key, |row| row.get(0))
+            .optional()?)
+    }
+
+    /// Keeps an image of `host`'s session durably, within `cap` bytes of the host's images:
+    /// the oldest are evicted to make room. Without a cap, or bigger than it, the image is
+    /// not kept. A re-send with the same bytes changes nothing; one with other bytes under
+    /// the same id is malformed.
+    pub fn put_attachment(
+        &mut self,
+        host: &HostId,
+        image: &AttachmentData,
+        cap: Option<u64>,
+    ) -> Result<Kept> {
         let attachment = &image.attachment;
         let data = &image.data.0;
         if !IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) {
@@ -456,6 +552,12 @@ impl VaultStore {
             return Err(
                 BadBatch("an attachment's size is not that of its bytes, or too big").into(),
             );
+        }
+        let Some(cap) = cap else {
+            return Ok(Kept::Off);
+        };
+        if attachment.size > cap {
+            return Ok(Kept::OverCap);
         }
         let sha256 = Sha256::digest(data).to_vec();
         let key = [
@@ -475,7 +577,7 @@ impl VaultStore {
             .optional()?;
         match held {
             Some((media_type, held)) if media_type == attachment.media_type && held == sha256 => {
-                return Ok(());
+                return Ok(Kept::Stored { evicted: 0 });
             }
             Some(_) => {
                 return Err(
@@ -484,10 +586,11 @@ impl VaultStore {
             }
             None => {}
         }
+        let evicted = evict(&tx, host, cap, attachment.size)?;
         tx.prepare_cached(
             "INSERT INTO attachments
-               (host_id, session_id, attachment_id, media_type, sha256, data)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+               (host_id, session_id, attachment_id, media_type, sha256, data, size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )?
         .execute(params![
             key[0],
@@ -495,10 +598,11 @@ impl VaultStore {
             key[2],
             attachment.media_type,
             sha256,
-            data
+            data,
+            attachment.size
         ])?;
         tx.commit()?;
-        Ok(())
+        Ok(Kept::Stored { evicted })
     }
 
     /// The image `attachment_id` of `host`'s `session`, if it is held here.
@@ -547,6 +651,25 @@ impl VaultStore {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (host_id, session_id) = (host.as_str(), batch.session_id.as_str());
+        let last = first + batch.events.len() as Seq - 1;
+        let pruned: Option<Seq> = tx
+            .prepare_cached("SELECT seq FROM pruned WHERE host_id = ?1 AND session_id = ?2")?
+            .query_row([host_id, session_id], |row| row.get(0))
+            .optional()?;
+        if let Some(held) = pruned {
+            // Dropped as archived: what an archived session still gets is not kept either.
+            if first > held + 1 {
+                return Ok(Outcome::Rejected {
+                    held,
+                    reason: RejectReason::Gap,
+                });
+            }
+            let held = held.max(last);
+            tx.prepare_cached("UPDATE pruned SET seq = ?3 WHERE host_id = ?1 AND session_id = ?2")?
+                .execute(params![host_id, session_id, held])?;
+            tx.commit()?;
+            return Ok(Outcome::Acked(held));
+        }
         let held: Seq = tx
             .prepare_cached("SELECT MAX(seq) FROM events WHERE host_id = ?1 AND session_id = ?2")?
             .query_row([host_id, session_id], |row| row.get::<_, Option<Seq>>(0))?
@@ -598,15 +721,113 @@ impl VaultStore {
             }
         }
         tx.commit()?;
-        Ok(Outcome::Acked(
-            held.max(first + batch.events.len() as Seq - 1),
-        ))
+        Ok(Outcome::Acked(held.max(last)))
     }
+
+    /// Drops every session of the `online` hosts that is archived and had no event since
+    /// `before`, with its journal and images, leaving a tombstone at the seq it held. Hosts
+    /// not online keep everything: a dead host's sessions go only when it is forgotten.
+    /// Returns the sessions dropped.
+    pub fn prune(
+        &mut self,
+        online: &[HostId],
+        before: Timestamp,
+    ) -> Result<Vec<(HostId, SessionId)>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut dropped = Vec::new();
+        for host in online {
+            let summaries = tx
+                .prepare_cached("SELECT summary FROM sessions WHERE host_id = ?1")?
+                .query_map([host.as_str()], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for summary in summaries {
+                let summary: SessionSummary = serde_json::from_str(&summary)?;
+                if summary.status != SessionStatus::Archived || summary.updated_at >= before {
+                    continue;
+                }
+                let key = [host.as_str(), summary.session_id.as_str()];
+                let held: Seq = tx
+                    .prepare_cached(
+                        "SELECT COALESCE(MAX(seq), 0) FROM events
+                         WHERE host_id = ?1 AND session_id = ?2",
+                    )?
+                    .query_row(key, |row| row.get(0))?;
+                for table in ["events", "attachments", "sessions", "recovered"] {
+                    tx.prepare_cached(&format!(
+                        "DELETE FROM {table} WHERE host_id = ?1 AND session_id = ?2"
+                    ))?
+                    .execute(key)?;
+                }
+                tx.prepare_cached(
+                    "INSERT INTO pruned (host_id, session_id, seq) VALUES (?1, ?2, ?3)",
+                )?
+                .execute(params![key[0], key[1], held])?;
+                dropped.push((host.clone(), summary.session_id));
+            }
+        }
+        tx.commit()?;
+        Ok(dropped)
+    }
+
+    /// Drops `host` and everything it replicated: its journals, images and tombstones, and
+    /// the record that it recovered sessions from other hosts, whose copies show again.
+    /// Returns how many of its sessions were held.
+    pub fn forget(&mut self, host: &HostId) -> Result<u32> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let sessions: u32 = tx
+            .prepare_cached("SELECT COUNT(*) FROM sessions WHERE host_id = ?1")?
+            .query_row([host.as_str()], |row| row.get(0))?;
+        for table in [
+            "events",
+            "attachments",
+            "sessions",
+            "recovered",
+            "pruned",
+            "hosts",
+        ] {
+            tx.prepare_cached(&format!("DELETE FROM {table} WHERE host_id = ?1"))?
+                .execute([host.as_str()])?;
+        }
+        tx.prepare_cached("DELETE FROM recovered WHERE to_host = ?1")?
+            .execute([host.as_str()])?;
+        tx.commit()?;
+        Ok(sessions)
+    }
+}
+
+/// Evicts `host`'s oldest images until `incoming` more bytes fit within `cap`; returns how
+/// many went.
+fn evict(tx: &rusqlite::Transaction<'_>, host: &HostId, cap: u64, incoming: u64) -> Result<usize> {
+    let held = tx
+        .prepare_cached("SELECT rowid, size FROM attachments WHERE host_id = ?1 ORDER BY rowid")?
+        .query_map([host.as_str()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, u64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut total: u64 = held.iter().map(|(_, size)| size).sum::<u64>() + incoming;
+    let mut evicted = 0;
+    for (rowid, size) in held {
+        if total <= cap {
+            break;
+        }
+        tx.prepare_cached("DELETE FROM attachments WHERE rowid = ?1")?
+            .execute([rowid])?;
+        total -= size;
+        evicted += 1;
+    }
+    Ok(evicted)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cap no test image comes near.
+    const CAP: Option<u64> = Some(1 << 30);
 
     fn record(seq: Seq, text: &str) -> JournalRecord {
         JournalRecord {
@@ -683,8 +904,8 @@ mod tests {
             data: Bytes(data.to_vec()),
         };
         let png = image("image/png", b"\x89PNG\r\n\x1a\nA");
-        store.put_attachment(&host, &png).unwrap();
-        store.put_attachment(&host, &png).unwrap();
+        store.put_attachment(&host, &png, CAP).unwrap();
+        store.put_attachment(&host, &png, CAP).unwrap();
         let held = store
             .attachment(&host, &session, &AttachmentId::new("img1"))
             .unwrap();
@@ -704,7 +925,10 @@ mod tests {
             None
         );
         let refused = |store: &mut VaultStore, image: AttachmentData| {
-            matches!(store.put_attachment(&host, &image), Err(Error::BadBatch(_)))
+            matches!(
+                store.put_attachment(&host, &image, CAP),
+                Err(Error::BadBatch(_))
+            )
         };
         assert!(refused(
             &mut store,
@@ -853,15 +1077,15 @@ mod tests {
         let (h1, h2) = (HostId::new("h1"), HostId::new("h2"));
         let (d1, d2) = (DeviceId::new("d1"), DeviceId::new("d2"));
         let paired = [d1.clone(), d2.clone()];
-        assert!(store.bind(&d1, &h1, "box", &paired).unwrap());
-        assert!(store.bind(&d1, &h1, "box-renamed", &paired).unwrap());
+        assert!(store.bind(&d1, &h1, "box", None, &paired).unwrap());
+        assert!(store.bind(&d1, &h1, "box-renamed", None, &paired).unwrap());
         // d1 is h1; it cannot claim another host, nor d2 claim h1 while d1 is paired.
-        assert!(!store.bind(&d1, &h2, "other", &paired).unwrap());
-        assert!(!store.bind(&d2, &h1, "box", &paired).unwrap());
+        assert!(!store.bind(&d1, &h2, "other", None, &paired).unwrap());
+        assert!(!store.bind(&d2, &h1, "box", None, &paired).unwrap());
         // Once d1 is revoked, a new device may take over h1.
         assert!(
             store
-                .bind(&d2, &h1, "box", std::slice::from_ref(&d2))
+                .bind(&d2, &h1, "box", None, std::slice::from_ref(&d2))
                 .unwrap()
         );
         let seen: Timestamp = "2027-01-15T09:00:00Z".parse().unwrap();
@@ -875,5 +1099,255 @@ mod tests {
             (hosts[0].host_name.as_str(), hosts[0].seen_at),
             ("box", seen)
         );
+    }
+
+    fn png(session: &str, id: &str, len: usize) -> AttachmentData {
+        let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+        data.resize(len, b'x');
+        AttachmentData {
+            session_id: SessionId::new(session),
+            attachment: herder_protocol::Attachment {
+                attachment_id: AttachmentId::new(id),
+                media_type: "image/png".into(),
+                size: len as u64,
+            },
+            data: Bytes(data),
+        }
+    }
+
+    fn held(store: &VaultStore, host: &HostId, session: &str, id: &str) -> bool {
+        store
+            .attachment(host, &SessionId::new(session), &AttachmentId::new(id))
+            .unwrap()
+            .is_some()
+    }
+
+    #[test]
+    fn images_are_kept_only_within_the_hosts_cap_oldest_evicted_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (host, device) = (HostId::new("h1"), DeviceId::new("d1"));
+        let paired = std::slice::from_ref(&device);
+
+        // Off: nothing is kept, and nothing fails.
+        assert!(store.bind(&device, &host, "box", None, paired).unwrap());
+        assert_eq!(
+            store
+                .put_attachment(&host, &png("s1", "a", 100), None)
+                .unwrap(),
+            Kept::Off
+        );
+        assert!(!held(&store, &host, "s1", "a"));
+
+        assert!(
+            store
+                .bind(&device, &host, "box", Some(250), paired)
+                .unwrap()
+        );
+        let cap = Some(250);
+        for id in ["a", "b"] {
+            assert_eq!(
+                store
+                    .put_attachment(&host, &png("s1", id, 100), cap)
+                    .unwrap(),
+                Kept::Stored { evicted: 0 }
+            );
+        }
+        // Another host's images never make room for this one's.
+        let other = HostId::new("h2");
+        store
+            .put_attachment(&other, &png("s9", "z", 200), cap)
+            .unwrap();
+        assert_eq!(
+            store
+                .put_attachment(&host, &png("s2", "c", 100), cap)
+                .unwrap(),
+            Kept::Stored { evicted: 1 }
+        );
+        assert!(!held(&store, &host, "s1", "a"));
+        assert!(held(&store, &host, "s1", "b") && held(&store, &host, "s2", "c"));
+        assert!(held(&store, &other, "s9", "z"));
+        // Bigger than the cap alone: refused, and nothing evicted for it.
+        assert_eq!(
+            store
+                .put_attachment(&host, &png("s2", "d", 300), cap)
+                .unwrap(),
+            Kept::OverCap
+        );
+        assert!(held(&store, &host, "s1", "b"));
+
+        let usage = |store: &VaultStore| {
+            let hosts = store.hosts().unwrap();
+            let record = hosts.iter().find(|h| h.host_id == host).unwrap();
+            (record.attachments_cap, record.attachment_bytes)
+        };
+        assert_eq!(usage(&store), (Some(250), 200));
+        // A lower cap in the next hello evicts at once.
+        assert!(
+            store
+                .bind(&device, &host, "box", Some(150), paired)
+                .unwrap()
+        );
+        assert_eq!(usage(&store), (Some(150), 100));
+        assert!(!held(&store, &host, "s1", "b") && held(&store, &host, "s2", "c"));
+        // Turned off, what is held stays.
+        assert!(store.bind(&device, &host, "box", None, paired).unwrap());
+        assert_eq!(usage(&store), (None, 100));
+    }
+
+    fn created() -> serde_json::Value {
+        serde_json::json!({
+            "type": "session_created", "repo": "/repo", "worktree": "/wt", "branch": "b",
+            "provider": "claude", "account_id": "main", "model": "m",
+            "permission_mode": "ask"
+        })
+    }
+
+    /// Replicates session `id` of `host` with `events` events, last changed `days` ago.
+    fn replicate(
+        store: &mut VaultStore,
+        host: &HostId,
+        id: &str,
+        status: SessionStatus,
+        days: i64,
+    ) {
+        let mut events = vec![event(1, created())];
+        events.push(record(2, "x"));
+        store
+            .append(
+                host,
+                &Batch {
+                    session_id: SessionId::new(id),
+                    events,
+                },
+            )
+            .unwrap();
+        let updated_at = Timestamp::now() - jiff::SignedDuration::from_hours(24 * days);
+        store
+            .put_summary(
+                host,
+                &SessionSummary {
+                    updated_at,
+                    head_seq: 2,
+                    ..summary(id, None, status)
+                },
+            )
+            .unwrap();
+        store
+            .put_attachment(host, &png(id, "img", 10), CAP)
+            .unwrap();
+    }
+
+    #[test]
+    fn archived_sessions_of_online_hosts_are_pruned_and_not_taken_back_while_archived() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (live, dead) = (HostId::new("live"), HostId::new("dead"));
+        replicate(&mut store, &live, "old", SessionStatus::Archived, 91);
+        replicate(&mut store, &live, "recent", SessionStatus::Archived, 89);
+        replicate(&mut store, &live, "idle", SessionStatus::Idle, 400);
+        replicate(&mut store, &dead, "ancient", SessionStatus::Archived, 400);
+
+        let before = Timestamp::now() - jiff::SignedDuration::from_hours(24 * 90);
+        let dropped = store.prune(std::slice::from_ref(&live), before).unwrap();
+        assert_eq!(dropped, [(live.clone(), SessionId::new("old"))]);
+        let listed: Vec<String> = store
+            .fleet()
+            .unwrap()
+            .iter()
+            .map(|head| head.session_id.to_string())
+            .collect();
+        assert_eq!(listed, ["ancient", "idle", "recent"]);
+        assert!(!held(&store, &live, "old", "img"));
+        assert!(held(&store, &dead, "ancient", "img"));
+        assert!(
+            store
+                .prune(std::slice::from_ref(&live), before)
+                .unwrap()
+                .is_empty()
+        );
+
+        // The host still has it: its cursor says it is held, so the host does not send it
+        // again, and what an archived session still gets is acknowledged, not kept.
+        let old = SessionId::new("old");
+        let cursors = store.cursors(&live).unwrap();
+        assert!(cursors.contains(&Cursor {
+            session_id: old.clone(),
+            after_seq: 2
+        }));
+        let archived = SessionSummary {
+            head_seq: 3,
+            ..summary("old", None, SessionStatus::Archived)
+        };
+        store.put_summary(&live, &archived).unwrap();
+        let late = Batch {
+            session_id: old.clone(),
+            events: vec![record(3, "pr merged")],
+        };
+        assert_eq!(store.append(&live, &late).unwrap(), Outcome::Acked(3));
+        assert!(store.records(&live, &old, 0, 10).unwrap().is_empty());
+        assert_eq!(store.fleet().unwrap().len(), 3);
+
+        // Unarchived, it is taken back: its next batch finds nothing held, and the host sends
+        // it from the start.
+        store
+            .put_summary(&live, &summary("old", None, SessionStatus::Idle))
+            .unwrap();
+        let next = Batch {
+            session_id: old.clone(),
+            events: vec![record(4, "again")],
+        };
+        assert_eq!(
+            store.append(&live, &next).unwrap(),
+            Outcome::Rejected {
+                held: 0,
+                reason: RejectReason::Gap
+            }
+        );
+        let whole = Batch {
+            session_id: old.clone(),
+            events: vec![event(1, created()), record(2, "x")],
+        };
+        assert_eq!(store.append(&live, &whole).unwrap(), Outcome::Acked(2));
+        assert_eq!(store.fleet().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn forgetting_a_host_drops_everything_it_replicated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (gone, kept) = (HostId::new("gone"), HostId::new("kept"));
+        let (d1, d2) = (DeviceId::new("d1"), DeviceId::new("d2"));
+        assert!(
+            store
+                .bind(&d1, &gone, "old-box", CAP, std::slice::from_ref(&d1))
+                .unwrap()
+        );
+        assert!(
+            store
+                .bind(&d2, &kept, "box", CAP, std::slice::from_ref(&d2))
+                .unwrap()
+        );
+        replicate(&mut store, &gone, "s1", SessionStatus::Idle, 1);
+        replicate(&mut store, &gone, "s2", SessionStatus::Archived, 1);
+        replicate(&mut store, &kept, "s3", SessionStatus::Idle, 1);
+        // `gone` recovered s3 from `kept` once; forgetting it shows `kept`'s copy again.
+        store.claim(&gone, &SessionId::new("s3")).unwrap();
+        assert_eq!(store.fleet().unwrap().len(), 2);
+
+        assert_eq!(store.forget(&gone).unwrap(), 2);
+        assert!(store.devices_of(&gone).unwrap().is_empty());
+        let hosts = store.hosts().unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(
+            (hosts[0].sessions, hosts[0].attachment_bytes),
+            (1, 10),
+            "{hosts:?}"
+        );
+        assert!(store.cursors(&gone).unwrap().is_empty());
+        assert!(!held(&store, &gone, "s1", "img"));
+        let fleet = store.fleet().unwrap();
+        assert_eq!(fleet.len(), 1);
+        assert_eq!(fleet[0].host_id, Some(kept));
     }
 }

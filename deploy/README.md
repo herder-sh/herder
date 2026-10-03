@@ -75,3 +75,39 @@ Devices paired before host codes existed could both replicate and read. The firs
 vault with host codes starts, every device that has replicated as a host becomes host-only;
 the rest stay clients. To let such a host keep recovering, revoke it and pair it again
 with a client code.
+
+## Storage
+
+Hosts back up their prompt images only when their `[vault]` table says so:
+
+```toml
+[vault]
+attachments = true           # off by default
+attachments_cap = 1073741824 # bytes the vault keeps of this host's images; 1 GiB by default
+```
+
+The vault keeps a host's images within its cap, evicting the oldest first; an image bigger
+than the whole cap is not kept. A session recovered from the vault shows "image not backed
+up" for each image it does not hold.
+
+Archived sessions of hosts that are online leave the vault 90 days after their latest event.
+Set it in the vault's own config:
+
+```toml
+mode = "vault"
+
+[vault]
+archive_retention_days = 90
+```
+
+Nothing else leaves on its own: a host's live sessions stay as long as it has them, and the
+sessions of a host that is gone stay until you forget it, dropping its sessions and images
+and unpairing it:
+
+```sh
+kubectl exec -n herder herder-vault-0 -- /herder vault forget-host devbox
+```
+
+A host is forgotten only while it is offline; stop it backing up first. The fleet view shows
+each host's sessions and image bytes against its cap, and warns once the vault's disk is
+more than 80% full.

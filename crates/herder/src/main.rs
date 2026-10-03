@@ -8,6 +8,7 @@ mod recover;
 mod service;
 mod session;
 mod update;
+mod vault;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -47,6 +48,11 @@ enum Command {
     Session(session::Args),
     /// Take over a session whose host died, from the vault, on this host.
     Recover(recover::Args),
+    /// Look after what the vault on this machine holds.
+    Vault {
+        #[command(subcommand)]
+        command: vault::Command,
+    },
     /// Manage the systemd user service that runs the daemon at boot.
     Service {
         #[command(subcommand)]
@@ -109,6 +115,7 @@ fn main() -> ExitCode {
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Recover(args)) => recover::run(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Vault { command }) => vault::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Update {
             version,
@@ -180,6 +187,13 @@ mod tests {
             cli.command,
             Some(Command::Daemon { vault: true, .. })
         ));
+    }
+
+    #[test]
+    fn parses_vault_forget_host() {
+        let cli = Cli::try_parse_from(["herder", "vault", "forget-host", "old-box"]);
+        assert!(matches!(cli.unwrap().command, Some(Command::Vault { .. })));
+        assert!(Cli::try_parse_from(["herder", "vault", "forget-host"]).is_err());
     }
 
     #[test]

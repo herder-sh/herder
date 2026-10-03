@@ -12,12 +12,13 @@
 //! `revoke_vault_host` unpairs the devices a host replicates from once it stops backing up.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use herder_protocol::{
     Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
-    Event, EventBody, FleetHost, HostId, Seq, SessionHead, SessionId, Timestamp,
+    Event, EventBody, FleetHost, HostId, HostUsage, IMAGE_NOT_BACKED_UP, Seq, SessionHead,
+    SessionId, Timestamp, VaultVolume,
 };
 use tracing::warn;
 
@@ -94,7 +95,7 @@ impl Fleet {
         }
     }
 
-    /// Sends clients the host list with each host's liveness now.
+    /// Sends clients the host list with each host's liveness and usage now.
     pub(crate) async fn refresh_hosts(&self) {
         let _sending = self.sending_hosts.lock().await;
         let hosts = match blocking(&self.store, |store| store.hosts()).await {
@@ -109,6 +110,11 @@ impl Fleet {
                     .presence
                     .last_heard(&host.host_id)
                     .unwrap_or(host.seen_at),
+                usage: Some(HostUsage {
+                    sessions: host.sessions,
+                    attachment_bytes: host.attachment_bytes,
+                    attachments_cap: host.attachments_cap,
+                }),
                 host_id: host.host_id,
                 host_name: host.host_name,
             })
@@ -140,7 +146,10 @@ impl Fleet {
             }),
             Ok(None) => Err(error(
                 ErrorCode::NotFound,
-                format!("the vault holds no image {attachment_id} of session {session_id}"),
+                format!(
+                    "{IMAGE_NOT_BACKED_UP}: the vault holds no image {attachment_id} of \
+                     session {session_id}"
+                ),
             )),
             Err(err) => {
                 warn!("cannot read an image: {err:#}");
@@ -293,9 +302,13 @@ impl Backend for Fleet {
                 attachment_id,
             } => return self.attachment(session_id, attachment_id).await,
             CommandBody::GetVaultLink => {
+                let volume = blocking(&self.store, |store| {
+                    Ok(store.path().parent().and_then(volume))
+                });
                 return Ok(CommandResult::VaultLink {
                     is_vault: true,
                     vault: None,
+                    volume: volume.await.unwrap_or_default(),
                 });
             }
             CommandBody::PairVaultHost { host_name } => return self.pair_host(&host_name),
@@ -361,6 +374,25 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
     }
 }
 
+/// The size and use of the volume `dir` is on; `None` when it cannot be read.
+fn volume(dir: &Path) -> Option<VaultVolume> {
+    let stat = match nix::sys::statvfs::statvfs(dir) {
+        Ok(stat) => stat,
+        Err(err) => {
+            warn!(dir = %dir.display(), "cannot read the vault's disk usage: {err}");
+            return None;
+        }
+    };
+    // Each is a `u64` on Linux under a libc alias, so the casts widen nothing.
+    let block = stat.fragment_size() as u64;
+    let total = (stat.blocks() as u64).saturating_mul(block);
+    let free = (stat.blocks_free() as u64).saturating_mul(block);
+    Some(VaultVolume {
+        total_bytes: total,
+        used_bytes: total.saturating_sub(free),
+    })
+}
+
 fn error(code: ErrorCode, message: String) -> ErrorInfo {
     ErrorInfo { code, message }
 }
@@ -412,6 +444,15 @@ impl Presence {
         self.lock()
             .get(host)
             .is_some_and(|seen| seen.connections > 0)
+    }
+
+    /// Every host with a replication connection open.
+    pub(crate) fn online_hosts(&self) -> Vec<HostId> {
+        self.lock()
+            .iter()
+            .filter(|(_, seen)| seen.connections > 0)
+            .map(|(host, _)| host.clone())
+            .collect()
     }
 
     /// When `host` was last heard from, if since the vault started.
