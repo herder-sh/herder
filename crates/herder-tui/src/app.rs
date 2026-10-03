@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
-use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId, Timestamp};
+use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId, SessionStatus, Timestamp};
 use ratatui::crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 
 use crate::account_screen::AccountScreen;
@@ -244,6 +244,8 @@ pub struct App {
     pub recover: Option<Recover>,
     /// How the session list groups sessions.
     pub grouping: Grouping,
+    /// Whether the session list shows archived sessions, which it hides by default.
+    pub show_archived: bool,
     /// Whether taps and the wheel drive the TUI; `:mouse off` hands them to the terminal.
     pub mouse: bool,
     /// The glyph set `:glyphs` chose; `None` picks by the screen's width.
@@ -302,6 +304,7 @@ impl Default for App {
             switch: None,
             recover: None,
             grouping: Grouping::default(),
+            show_archived: false,
             mouse: true,
             glyphs: None,
             theme: Theme::ansi(),
@@ -464,6 +467,7 @@ impl App {
             Action::OpenSwitch => self.open_switch(),
             Action::Switch(input) => return self.switch_input(input),
             Action::Group => self.toggle_grouping(),
+            Action::ToggleArchived => self.show_archived = !self.show_archived,
             Action::OpenRecover => self.open_recover(),
             Action::Recover(input) => self.recover_input(input),
             Action::Leader => self.arm_leader(std::time::Instant::now()),
@@ -633,7 +637,7 @@ impl App {
                         host_id: machine.host_id.clone(),
                         session_id: head.session_id.clone(),
                     })
-                    .filter(|key| !self.shadowed(key))
+                    .filter(|key| !self.shadowed(key) && !self.hidden(key))
                     .collect()
             };
             if machine.hosts.is_empty() {
@@ -650,6 +654,38 @@ impl App {
             }
         }
         rows
+    }
+
+    /// Whether the session list leaves `key`'s session out: it is archived, and archived
+    /// sessions are hidden.
+    pub fn hidden(&self, key: &SessionKey) -> bool {
+        !self.show_archived && self.archived(key)
+    }
+
+    /// Whether `key`'s session is archived, by its events or, until they load, its listing.
+    fn archived(&self, key: &SessionKey) -> bool {
+        match self.sessions.get(key).filter(|session| session.loaded) {
+            Some(session) => session.status == SessionStatus::Archived,
+            None => self
+                .machines
+                .iter()
+                .find(|machine| machine.host_id == key.host_id)
+                .and_then(|machine| {
+                    machine
+                        .sessions
+                        .iter()
+                        .find(|head| head.session_id == key.session_id)
+                })
+                .is_some_and(|head| head.status == SessionStatus::Archived),
+        }
+    }
+
+    /// How many listed sessions are archived, shown or not.
+    pub fn archived_count(&self) -> usize {
+        self.sessions
+            .keys()
+            .filter(|key| !self.shadowed(key) && self.archived(key))
+            .count()
     }
 
     /// The session rows of `keys`, given oldest first: newest first, each followed by its

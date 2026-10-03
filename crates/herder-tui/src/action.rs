@@ -77,6 +77,8 @@ pub enum Action {
     Switch(crate::switch::Input),
     /// Group the session list by project or by machine.
     Group,
+    /// Show or hide archived sessions in the session list.
+    ToggleArchived,
     /// Open the recover dialog of the open or selected session.
     OpenRecover,
     /// Input to the recover dialog.
@@ -237,6 +239,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             Action::OpenSwitch
         }
         KeyCode::Char('v') => Action::Group,
+        KeyCode::Char('H') => Action::ToggleArchived,
         KeyCode::Char('R') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
             Action::OpenRecover
         }
@@ -272,6 +275,7 @@ pub fn for_leader(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('m') => Action::OpenMachines,
         KeyCode::Char('a') => Action::AddMachine,
         KeyCode::Char('v') => Action::Group,
+        KeyCode::Char('H') => Action::ToggleArchived,
         KeyCode::Char('z') => Action::Fold,
         KeyCode::Char('r') => Action::Reconnect,
         KeyCode::Char('q') => Action::Quit,
@@ -334,6 +338,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("A", "accounts: usage and limits; n adds one"),
     ("z", "fold or unfold the selected task's children"),
     ("v", "group sessions by project or by machine"),
+    ("H", "show or hide archived sessions"),
     ("R", "recover a session whose host is offline"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (

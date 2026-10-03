@@ -57,34 +57,32 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
     };
     let machine = app.machines.iter().find(|m| m.host_id == key.host_id);
     let state = app.state(key);
-    let mut lines = vec![
+    // The name gives way to the state, which is never cut.
+    let mut lines = vec![crate::ui::spread(
         Line::from(vec![
             state::dot(ui, state),
             Span::raw(" "),
             Span::styled(super::projects::session_name(session, true), ui.strong()),
-            Span::styled(format!("  {}", state.label()), state::style(ui, state)),
         ]),
-        Line::from(
-            ui.joined(
-                [
-                    Some(session.branch.clone()),
-                    machine.map(|m| m.name.clone()),
-                    Some(home(&session.repo)),
-                ]
-                .into_iter()
-                .flatten()
-                .filter(|part| !part.is_empty())
-                .map(|part| Span::styled(part, ui.muted())),
-            ),
-        ),
-        Line::from(
-            ui.joined(
-                super::tabs::facts(app)
-                    .into_iter()
-                    .map(|fact| Span::styled(fact, ui.muted())),
-            ),
-        ),
-    ];
+        Line::from(Span::styled(state.label(), state::style(ui, state))),
+        usize::from(width),
+        ui.glyphs,
+    )];
+    // Where it runs and on what: each part whole, flowed onto as many lines as they need.
+    lines.extend(flow(
+        ui,
+        [
+            Some(session.branch.clone()),
+            machine.map(|m| m.name.clone()),
+            Some(home(&session.repo)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.is_empty())
+        .collect(),
+        width,
+    ));
+    lines.extend(flow(ui, super::tabs::facts(app), width));
 
     // The account's busiest windows, and whether it fails over.
     let account = session
@@ -141,17 +139,21 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
         }
     }
 
-    // The machine's load, then the session's own.
-    let host = machine
-        .map(|m| super::resources::row(ui, m, true))
-        .unwrap_or_default();
+    // The machine's load, a label and a value a line, then the session's own.
+    let host = machine.map_or_else(Vec::new, |m| super::resources::pairs(ui, m));
     let resources = super::resources::lines(app, true);
     if !host.is_empty() || !resources.is_empty() {
-        section(&mut lines, ui, "Resources".to_owned());
-        if let Some(machine) = machine.filter(|_| !host.is_empty()) {
-            let mut spans = vec![Span::styled(format!("{}  ", machine.name), ui.muted())];
-            spans.extend(host);
-            lines.push(Line::from(spans));
+        let title = match machine.filter(|_| !host.is_empty()) {
+            Some(machine) => format!("Resources · {}", machine.name),
+            None => "Resources".to_owned(),
+        };
+        section(&mut lines, ui, title);
+        let label_width = host.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+        for (label, value) in host {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{label:<label_width$}  "), ui.muted()),
+                value,
+            ]));
         }
         lines.extend(resources);
     }
@@ -168,6 +170,31 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
     if terminals > 0 {
         section(&mut lines, ui, format!("Terminals {terminals}"));
         lines.push(Line::styled("t opens one", ui.muted()));
+    }
+    lines
+}
+
+/// `parts` joined by the separator, muted, onto lines `width` wide: a part that does not fit
+/// on a line starts the next; only a part wider than a line is cut.
+fn flow(ui: Ui, parts: Vec<String>, width: u16) -> Vec<Line<'static>> {
+    let width = usize::from(width);
+    let separator = crate::ui::width(ui.glyphs.separator);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut used = 0;
+    for part in parts {
+        let part_width = crate::ui::width(&part);
+        match lines.last_mut() {
+            Some(line) if used + separator + part_width <= width => {
+                line.spans
+                    .push(Span::styled(ui.glyphs.separator, ui.muted()));
+                line.spans.push(Span::styled(part, ui.muted()));
+                used += separator + part_width;
+            }
+            _ => {
+                lines.push(Line::from(Span::styled(part, ui.muted())));
+                used = part_width;
+            }
+        }
     }
     lines
 }

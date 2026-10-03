@@ -1093,7 +1093,7 @@ fn resource_figures_are_redrawn_as_they_arrive() {
     busier.cpu_percent = 97.0;
     fake::with_resources(&mut app, busier, false);
     let shown = text(&mut app);
-    assert!(shown.contains("cpu  97%"), "{shown}");
+    assert!(shown.contains("cpu    97%"), "{shown}");
     assert!(!shown.contains("3 processes"), "{shown}");
 }
 
@@ -1157,4 +1157,126 @@ fn the_new_session_projects_on_narrow_and_wide_screens() {
     press(&mut app, KeyCode::Char('v'));
     press(&mut app, KeyCode::Char('n'));
     narrow_and_wide("new_session_projects", &mut app);
+}
+
+#[test]
+fn a_live_daemons_sessions_at_three_widths() {
+    let mut app = fake::live();
+    at_three_widths("live", &mut app);
+    // The expanded tools, and the archived sessions shown.
+    press(&mut app, KeyCode::Esc);
+    for id in ["c3", "c4"] {
+        app.chat.expanded.insert(herder_protocol::ItemId::new(id));
+    }
+    press(&mut app, KeyCode::Char('H'));
+    at_three_widths("live_expanded", &mut app);
+}
+
+#[test]
+fn sessions_are_named_by_their_first_prompt_and_archived_ones_hide() {
+    let mut app = fake::live();
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    // herder's own branches name nothing: the first prompt does, never the id.
+    assert!(screen.contains("Fix the flaky reconnect"), "{screen}");
+    let sidebar: String = screen
+        .lines()
+        .map(|line| line.chars().take(26).collect::<String>())
+        .collect();
+    assert!(!sidebar.contains("eq3z0kae"), "{screen}");
+    // A branch someone named, without herder's prefix.
+    assert!(sidebar.contains("p2d-6-secondary"), "{screen}");
+    // Archived: counted, hidden until H.
+    assert!(screen.contains("3 archived"), "{screen}");
+    assert!(!screen.contains("Bump ratatui"), "{screen}");
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('H'));
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    assert!(screen.contains("Bump ratatui"), "{screen}");
+}
+
+#[test]
+fn tool_calls_are_one_line_until_expanded_and_then_capped() {
+    let mut app = fake::live();
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    // One line, with how long it took; no output.
+    let line = screen
+        .lines()
+        .find(|line| line.contains("cargo test -p herder-client-core reconnect"))
+        .unwrap();
+    assert!(line.contains("14s"), "{line}");
+    assert!(!screen.contains("case_01"), "{screen}");
+    assert!(!screen.contains("more lines"), "{screen}");
+    app.chat.expanded.insert(herder_protocol::ItemId::new("c3"));
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    assert!(screen.contains("case_10"), "{screen}");
+    assert!(!screen.contains("case_11"), "{screen}");
+    assert!(screen.contains("30 more lines"), "{screen}");
+}
+
+#[test]
+fn a_failure_is_a_marker_and_muted_text_not_a_red_line() {
+    let mut app = fake::live();
+    let theme = crate::ui::theme::Theme::herder(crate::ui::theme::Mode::Dark);
+    app.theme = theme.clone();
+    let terminal = render(&mut app, 160, 40);
+    let buffer = terminal.backend().buffer();
+    for text in ["cargo clippy", "model opus-9"] {
+        let (x, y) = find(buffer, text);
+        assert_eq!(buffer[(x, y)].fg, theme.text_muted, "{text}");
+        // The row's error colour is on its marker only.
+        let red = (0..buffer.area.width)
+            .filter(|&x| buffer[(x, y)].fg == theme.error && buffer[(x, y)].symbol() != " ")
+            .count();
+        assert!(red <= 2, "{text}: {red} red cells");
+    }
+}
+
+#[test]
+fn the_details_panel_wraps_rather_than_cuts_and_bars_take_one_row() {
+    let mut app = fake::live();
+    let screen = render(&mut app, 160, 40).backend().to_string();
+    assert!(screen.contains("full_access"), "{screen}");
+    assert!(screen.contains("~/Projects/herder-sh/herder"), "{screen}");
+    // Thin bars: nothing that fills a cell to the next row.
+    assert!(!screen.contains('█'), "{screen}");
+    let bars: Vec<usize> = screen
+        .lines()
+        .filter(|line| line.contains("━") && line.contains('%'))
+        .map(|line| line.chars().position(|c| c == '━').unwrap())
+        .collect();
+    assert!(
+        bars.len() >= 2 && bars.windows(2).all(|w| w[0] == w[1]),
+        "{bars:?}"
+    );
+    // Load as labels and values.
+    assert!(screen.contains("cpu    44%"), "{screen}");
+    assert!(screen.contains("mem    45%"), "{screen}");
+}
+
+#[test]
+fn the_empty_prompts_cursor_sits_before_its_placeholder() {
+    let mut app = fake::live();
+    app.compose.errors.clear();
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains("▌Write a prompt"), "{screen}");
+}
+
+/// Where `text` starts in `buffer`.
+fn find(buffer: &ratatui::buffer::Buffer, text: &str) -> (u16, u16) {
+    let wanted: Vec<String> = text.chars().map(String::from).collect();
+    for y in 0..buffer.area.height {
+        let row: Vec<&str> = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        for x in 0..row.len().saturating_sub(wanted.len()) {
+            if row[x..x + wanted.len()]
+                .iter()
+                .zip(&wanted)
+                .all(|(a, b)| a == b)
+            {
+                return (u16::try_from(x).unwrap(), y);
+            }
+        }
+    }
+    panic!("no {text:?}");
 }

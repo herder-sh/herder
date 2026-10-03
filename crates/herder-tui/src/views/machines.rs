@@ -308,7 +308,7 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     ));
     if let Some(error) = &account.error {
         bottom.push(Line::default());
-        bottom.extend(wrapped(error, Style::new().fg(ui.theme.error)));
+        bottom.extend(super::failure(ui, error, body_width));
     }
     let fields = 4;
     let height = u16::try_from(top.len() + fields + bottom.len()).unwrap_or(u16::MAX);

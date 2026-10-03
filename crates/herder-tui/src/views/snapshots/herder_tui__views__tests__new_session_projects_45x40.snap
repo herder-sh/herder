@@ -17,7 +17,7 @@ expression: terminal.backend()
 "    | * docs - guide                         "
 "  new session                          esc   "
 "                                             "
-"   search   type to filter                   "
+"   search   |type to filter                  "
 "                                             "
 "   project                                   "
 "  > app  github.com/acme...  box - laptop    "

@@ -2,27 +2,27 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-| 5h                          38%  |
-| week                        74%  |
-| day                         91%  |
-| idle                         0%  |
+| 5h    ━━━━━━━━━━━━━━━━━━━━  38%  |
+| week  ━━━━━━━━━━━━━━━━━━━━  74%  |
+| day   ━━━━━━━━━━━━━━━━━━━━  91%  |
+| idle  ━━━━━━━━━━━━━━━━━━━━   0%  |
 
  0   0..7   fg=#6b6f7a bg=#ffffff
- 0   7..15  fg=#1c1c1c bg=#2f5bb7
- 0  15..27  fg=#1c1c1c bg=#eceef2
+ 0   7..15  fg=#2f5bb7 bg=#ffffff
+ 0  15..27  fg=#dfe2e8 bg=#ffffff
  0  27..32  fg=#2f5bb7 bg=#ffffff
  0  32..34  fg=#1c1c1c bg=#ffffff
  1   0..7   fg=#6b6f7a bg=#ffffff
- 1   7..22  fg=#1c1c1c bg=#a86b00
- 1  22..27  fg=#1c1c1c bg=#eceef2
+ 1   7..22  fg=#a86b00 bg=#ffffff
+ 1  22..27  fg=#dfe2e8 bg=#ffffff
  1  27..32  fg=#a86b00 bg=#ffffff
  1  32..34  fg=#1c1c1c bg=#ffffff
  2   0..7   fg=#6b6f7a bg=#ffffff
- 2   7..25  fg=#1c1c1c bg=#c4334b
- 2  25..27  fg=#1c1c1c bg=#eceef2
+ 2   7..25  fg=#c4334b bg=#ffffff
+ 2  25..27  fg=#dfe2e8 bg=#ffffff
  2  27..32  fg=#c4334b bg=#ffffff
  2  32..34  fg=#1c1c1c bg=#ffffff
  3   0..7   fg=#6b6f7a bg=#ffffff
- 3   7..27  fg=#1c1c1c bg=#eceef2
+ 3   7..27  fg=#dfe2e8 bg=#ffffff
  3  27..32  fg=#2f5bb7 bg=#ffffff
  3  32..34  fg=#1c1c1c bg=#ffffff

@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 31] = [
+const SCENES: [Scene; 33] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -216,6 +216,18 @@ const SCENES: [Scene; 31] = [
         let mut app = crate::terminal::app_tests::with_terminals();
         press(&mut app, KeyCode::Char('t'));
         press(&mut app, KeyCode::Char('j'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("live", |theme, _, width, height| {
+        app_buffer(fake::live(), theme, width, height)
+    }),
+    ("live-expanded", |theme, _, width, height| {
+        let mut app = fake::live();
+        press(&mut app, KeyCode::Esc);
+        for id in ["c3", "c4"] {
+            app.chat.expanded.insert(herder_protocol::ItemId::new(id));
+        }
+        press(&mut app, KeyCode::Char('H'));
         app_buffer(app, theme, width, height)
     }),
 ];

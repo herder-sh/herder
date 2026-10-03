@@ -1,18 +1,25 @@
 //! Tool calls in the transcript (docs/tui-design.md §5.1): each one dense line, a glyph by
-//! tool and a summary of its arguments, which grows into a block on the panel when there is
-//! output to show.
+//! tool, a summary of its arguments, and at the right its status and how long it took. `e`
+//! (or a tap) grows the line into a block on the panel; a block shows at most 10 lines of
+//! output or 20 of a diff, then `… N more lines` (`c` copies them all).
 //!
-//! | tool | line | block |
+//! ```text
+//!   $ cargo test --workspace                                         4s
+//!   ← Edit src/health.rs  +12 -1
+//!   $ cargo publish                                      ✗ failed · 2s
+//! ```
+//!
+//! | tool | line | expanded |
 //! |---|---|---|
-//! | Bash / shell | `$ cmd` | its output, 10 lines, then `… N more lines` |
-//! | Read | `→ Read path` | never |
-//! | Write | `← Write path` | expanded: the content, numbered |
+//! | Bash / shell | `$ cmd` | its output |
+//! | Read | `→ Read path` | its output |
+//! | Write | `← Write path` | the content, numbered |
 //! | Edit / patch | `← Edit path +12 -1` | the diff; split at 120 columns and up |
-//! | Grep / Glob | `✱ Grep "pat" in dir (N matches)` | never |
-//! | Web fetch / search | `◈ Fetch url` | never |
-//! | Todo | `☐ Todos 2/5` | expanded: the list |
-//! | task tools | `◇ spawn …` | never |
-//! | other / MCP | `⚙ name k=v` | output, 3 lines |
+//! | Grep / Glob | `✱ Grep "pat" in dir (N matches)` | its output |
+//! | Web fetch / search | `◈ Fetch url` | its output |
+//! | Todo | `☐ Todos 2/5` | the list |
+//! | task tools | `◇ spawn …` | its output |
+//! | other / MCP | `› name k=v` | its output |
 //!
 //! Names are the vendor CLI's own: Claude's (`Bash`, `Edit`, ...) and Codex's (`shell`,
 //! `apply_patch`, ...). A tool the table does not know still gets the generic line.
@@ -28,12 +35,10 @@ use super::transcript::{Builder, Row};
 use crate::session::{Entry, Session, ToolApproval, first_line};
 use crate::ui::{Ui, fit, spread, width};
 
-/// Output lines a collapsed block shows.
+/// Output lines a block shows.
 const OUTPUT_LINES: usize = 10;
-/// Diff rows a collapsed edit shows.
+/// Diff rows an edit's block shows.
 const DIFF_ROWS: usize = 20;
-/// Output lines a collapsed block of an unknown tool shows.
-const OTHER_LINES: usize = 3;
 /// Context lines kept around each change of a diff.
 const CONTEXT: usize = 3;
 
@@ -366,7 +371,9 @@ fn clean(text: &str) -> String {
     out
 }
 
-/// Draws the tool call `item`, with its result when it came.
+/// Draws the tool call `item`, with its result when it came: one line, the tool's glyph,
+/// name and arguments, its status and how long it took at the right; `e` grows it into a
+/// block of its output, diff or content, capped at [`OUTPUT_LINES`] or [`DIFF_ROWS`].
 pub(super) fn tool(
     b: &mut Builder,
     item: &Item,
@@ -380,86 +387,86 @@ pub(super) fn tool(
     let output = result.map(|(output, _)| output);
     let failed = result.is_some_and(|(_, error)| error);
     let approval = b.session.tool_approvals.get(&item.id).copied();
-    let expanded = b.expanded(&item.id);
+    let expanded = b.expanded(&item.id) && b.chat.details;
     let (label, args) = summary(name, input, output, b.worktree);
-    // How the line looks: running, waiting for an approval, denied, failed or done.
-    let (glyph, style) = match (approval, result) {
-        (Some(ToolApproval::Pending), _) => (ui.glyphs.tool(name), Style::new().fg(theme.warning)),
-        (Some(ToolApproval::Denied), _) => (
-            ui.glyphs.tool(name),
-            ui.muted().add_modifier(Modifier::CROSSED_OUT),
-        ),
-        (_, None) => ("~", ui.muted()),
-        (_, Some((_, true))) => (ui.glyphs.tool(name), Style::new().fg(theme.error)),
-        (_, Some(_)) => (ui.glyphs.tool(name), ui.muted()),
+    // The glyph's colour, and the status at the right: waiting for an approval, denied,
+    // running, failed or done. Only the glyph and the status word take a colour; the
+    // arguments stay muted, as OpenCode's.
+    let glyph = ui.glyphs.tool(name);
+    let took = took(b, &item.id).map(super::transcript::duration);
+    let mut status = Vec::new();
+    let mut denied = false;
+    let glyph_style = match (approval, result) {
+        (Some(ToolApproval::Pending), _) => {
+            status.push(Span::styled(
+                "needs approval",
+                Style::new().fg(theme.warning),
+            ));
+            Style::new().fg(theme.warning)
+        }
+        (Some(ToolApproval::Denied), _) => {
+            denied = true;
+            status.push(Span::styled("denied", ui.muted()));
+            ui.muted()
+        }
+        (_, None) => {
+            status.push(Span::styled("running", ui.muted()));
+            Style::new().fg(theme.state_running)
+        }
+        (_, Some((_, true))) => {
+            status.push(Span::styled(
+                format!("{} ", ui.glyphs.check_fail),
+                Style::new().fg(theme.error),
+            ));
+            status.push(Span::styled("failed", ui.muted()));
+            Style::new().fg(theme.error)
+        }
+        (_, Some(_)) => ui.muted(),
     };
-    let plain = style == ui.muted() && result.is_some();
-    let mut spans = vec![Span::styled(glyph, style)];
+    if let Some(took) = took.filter(|_| result.is_some()) {
+        if !status.is_empty() {
+            status.push(Span::styled(ui.glyphs.separator, ui.muted()));
+        }
+        status.push(Span::styled(took, ui.muted()));
+    }
+    let crossed = |style: Style| {
+        if denied {
+            style.add_modifier(Modifier::CROSSED_OUT)
+        } else {
+            style
+        }
+    };
+    let mut spans = vec![Span::styled(glyph, glyph_style)];
     if !label.is_empty() {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            label.clone(),
-            if plain { ui.text() } else { style },
-        ));
+        spans.push(Span::styled(label.clone(), crossed(ui.text())));
     }
     if !args.is_empty() {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(args.clone(), style));
+        // A shell call's command is all its line says: text, as a tool's name is; muted
+        // once it failed, its marker saying so.
+        let style = if label.is_empty() && !failed {
+            ui.text()
+        } else {
+            ui.muted()
+        };
+        spans.push(Span::styled(args.clone(), crossed(style)));
     }
-    let details = b.chat.details;
-    let out = output.map(clean).unwrap_or_default();
-    let has_output = !out.trim().is_empty();
-    match kind {
-        _ if failed => {
-            b.start(expanded);
-            b.select(&item.id);
-            if expanded {
-                b.block(
-                    theme.error,
-                    spans,
-                    output_lines(b, &out, usize::MAX, ui.text()).0,
-                );
-            } else {
-                inline(b, spans);
-            }
-        }
-        Kind::Shell if details && has_output => {
-            b.start(true);
-            b.select(&item.id);
-            let command = in_worktree(&command(input), b.worktree);
-            let mut body = Vec::new();
-            let title = match arg(input, "description") {
-                Some(description) => {
-                    let room = b.width.saturating_sub(5);
-                    body.extend(wrap(
-                        &[(format!("$ {}", first_line(&command)), ui.muted())],
-                        room,
-                        &[],
-                        &[],
-                    ));
-                    vec![
-                        Span::styled("# ", ui.muted()),
-                        Span::styled(description.to_owned(), ui.text()),
-                    ]
-                }
-                None => vec![
-                    Span::styled("$ ", ui.muted()),
-                    Span::styled(first_line(&command).to_owned(), ui.text()),
-                ],
-            };
-            let cap = if expanded { usize::MAX } else { OUTPUT_LINES };
-            let (lines, more) = output_lines(b, &out, cap, ui.text());
-            body.extend(lines);
-            more_row(b, &mut body, more);
-            b.block(theme.border, title, body);
-        }
-        Kind::Edit if details => {
-            let lines = diff(name, input);
-            let added = lines.iter().filter(|l| matches!(l, Diff::Added(_))).count();
-            let removed = lines
-                .iter()
-                .filter(|l| matches!(l, Diff::Removed(_)))
-                .count();
+    let diff_lines = if kind == Kind::Edit {
+        diff(name, input)
+    } else {
+        Vec::new()
+    };
+    if kind == Kind::Edit {
+        let added = diff_lines
+            .iter()
+            .filter(|l| matches!(l, Diff::Added(_)))
+            .count();
+        let removed = diff_lines
+            .iter()
+            .filter(|l| matches!(l, Diff::Removed(_)))
+            .count();
+        if added + removed > 0 {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
                 format!("+{added}"),
@@ -470,82 +477,149 @@ pub(super) fn tool(
                 format!("-{removed}"),
                 Style::new().fg(theme.diff_removed),
             ));
-            if lines.is_empty() {
-                b.start(false);
-                b.select(&item.id);
-                inline(b, spans);
-                return;
-            }
-            b.start(true);
-            b.select(&item.id);
-            diff_block(b, spans, &lines, expanded);
         }
-        Kind::Write if details && expanded => {
-            b.start(true);
-            b.select(&item.id);
+    }
+    let status = Line::from(status);
+    let out = output.map(clean).unwrap_or_default();
+    let has_output = !out.trim().is_empty();
+    let block = expanded
+        && match kind {
+            Kind::Edit => !diff_lines.is_empty(),
+            Kind::Write => arg(input, "content").is_some_and(|c| !c.is_empty()),
+            Kind::Todo => false,
+            _ => has_output,
+        };
+    if !block {
+        b.start(false);
+        b.select(&item.id);
+        inline(b, spans, status);
+        if expanded && kind == Kind::Todo {
+            todo_lines(b, input);
+        }
+        return;
+    }
+    b.start(true);
+    b.select(&item.id);
+    let title = |b: &Builder, spans: Vec<Span<'static>>| -> Vec<Span<'static>> {
+        spread(
+            Line::from(spans),
+            status.clone(),
+            b.width.saturating_sub(3),
+            ui.glyphs,
+        )
+        .spans
+    };
+    let bar = if failed { theme.error } else { theme.border };
+    match kind {
+        Kind::Edit => {
+            let title = title(b, spans);
+            diff_block(b, title, &diff_lines);
+        }
+        Kind::Write => {
             let content = clean(arg(input, "content").unwrap_or_default());
             let digits = content.lines().count().max(1).to_string().len();
             let room = b.width.saturating_sub(digits + 5).max(1);
+            let lines: Vec<&str> = content.lines().collect();
+            let shown = lines.len().min(OUTPUT_LINES);
             let mut body = Vec::new();
-            for (at, line) in content.lines().enumerate() {
+            for (at, line) in lines.iter().take(shown).enumerate() {
                 let number = Span::styled(
                     format!("{:>digits$} ", at + 1),
                     Style::new().fg(theme.diff_line_number),
                 );
                 let pad = Span::raw(" ".repeat(digits + 1));
                 body.extend(wrap(
-                    &[(line.to_owned(), ui.text())],
+                    &[((*line).to_owned(), ui.text())],
                     room,
                     &[number],
                     &[pad],
                 ));
             }
-            b.block(theme.border, spans, body);
+            more_row(b, &mut body, lines.len() - shown);
+            let title = title(b, spans);
+            b.block(bar, title, body);
         }
-        Kind::Todo if expanded => {
-            b.start(false);
-            b.select(&item.id);
-            inline(b, spans);
-            for (text, status) in todos(input) {
-                let (mark, mark_style, text_style) = match status.as_str() {
-                    "completed" => (
-                        ui.glyphs.check_pass,
-                        Style::new().fg(theme.success),
-                        ui.muted(),
-                    ),
-                    "in_progress" => (ui.glyphs.bullet, Style::new().fg(theme.warning), ui.text()),
-                    _ => (" ", ui.muted(), ui.text()),
-                };
-                let line = Line::from(vec![
-                    Span::raw(" ".repeat(super::transcript::INDENT + 2)),
-                    Span::styled("[", ui.muted()),
-                    Span::styled(mark, mark_style),
-                    Span::styled("] ", ui.muted()),
-                    Span::styled(text, text_style),
-                ]);
-                b.line(fit(line, b.width, ui.glyphs));
-            }
-        }
-        Kind::Other if details && has_output => {
-            b.start(true);
-            b.select(&item.id);
-            let cap = if expanded { usize::MAX } else { OTHER_LINES };
-            let (mut body, more) = output_lines(b, &out, cap, ui.muted());
+        Kind::Shell => {
+            let command = in_worktree(&command(input), b.worktree);
+            let mut body = Vec::new();
+            // The description heads the block, with the command under it.
+            let head = match arg(input, "description") {
+                Some(description) => {
+                    let room = b.width.saturating_sub(5);
+                    body.extend(wrap(
+                        &[(format!("$ {}", first_line(&command)), ui.muted())],
+                        room,
+                        &[],
+                        &[],
+                    ));
+                    vec![
+                        Span::styled(glyph, glyph_style),
+                        Span::raw(" "),
+                        Span::styled(description.to_owned(), ui.text()),
+                    ]
+                }
+                None => spans,
+            };
+            let (lines, more) = output_lines(b, &out, OUTPUT_LINES, ui.text());
+            body.extend(lines);
             more_row(b, &mut body, more);
-            b.block(theme.border, spans, body);
+            let title = title(b, head);
+            b.block(bar, title, body);
         }
         _ => {
-            b.start(false);
-            b.select(&item.id);
-            inline(b, spans);
+            let (mut body, more) = output_lines(b, &out, OUTPUT_LINES, ui.text());
+            more_row(b, &mut body, more);
+            let title = title(b, spans);
+            b.block(bar, title, body);
         }
     }
+}
+
+/// A todo call's list, under its line.
+fn todo_lines(b: &mut Builder, input: &Value) {
+    let ui = b.ui;
+    let theme = ui.theme;
+    for (text, status) in todos(input) {
+        let (mark, mark_style, text_style) = match status.as_str() {
+            "completed" => (
+                ui.glyphs.check_pass,
+                Style::new().fg(theme.success),
+                ui.muted(),
+            ),
+            "in_progress" => (ui.glyphs.bullet, Style::new().fg(theme.warning), ui.text()),
+            _ => (" ", ui.muted(), ui.text()),
+        };
+        let line = Line::from(vec![
+            Span::raw(" ".repeat(super::transcript::INDENT + 2)),
+            Span::styled("[", ui.muted()),
+            Span::styled(mark, mark_style),
+            Span::styled("] ", ui.muted()),
+            Span::styled(text, text_style),
+        ]);
+        b.line(fit(line, b.width, ui.glyphs));
+    }
+}
+
+/// Seconds from the call `id` to its result.
+fn took(b: &Builder, id: &herder_protocol::ItemId) -> Option<i64> {
+    let session = b.session;
+    let called = session.times.get(id)?;
+    let result = session.entries.iter().find_map(|entry| match entry {
+        Entry::Item(Item {
+            id: result,
+            body: ItemBody::ToolResult { call_id, .. },
+            ..
+        }) if call_id == id => session.times.get(result),
+        _ => None,
+    })?;
+    // Under a second says nothing worth the room.
+    Some(result.as_second() - called.as_second()).filter(|took| *took > 0)
 }
 
 /// A result whose call is not in the transcript: one line, its output's first.
 pub(super) fn orphan(b: &mut Builder, item: &Item, output: &str, is_error: bool) {
     let ui = b.ui;
-    let style = if is_error {
+    let glyph_style = if is_error {
         Style::new().fg(ui.theme.error)
     } else {
         ui.muted()
@@ -553,21 +627,40 @@ pub(super) fn orphan(b: &mut Builder, item: &Item, output: &str, is_error: bool)
     b.start(false);
     b.select(&item.id);
     let glyph = ui.glyphs.tools[7];
+    let status = if is_error {
+        Line::from(vec![
+            Span::styled(
+                format!("{} ", ui.glyphs.check_fail),
+                Style::new().fg(ui.theme.error),
+            ),
+            Span::styled("failed", ui.muted()),
+        ])
+    } else {
+        Line::default()
+    };
     inline(
         b,
         vec![
-            Span::styled(glyph, style),
+            Span::styled(glyph, glyph_style),
             Span::raw(" "),
-            Span::styled(first_line(&clean(output)).to_owned(), style),
+            Span::styled(first_line(&clean(output)).to_owned(), ui.muted()),
         ],
+        status,
     );
 }
 
-/// A one-line tool item.
-fn inline(b: &mut Builder, spans: Vec<Span<'static>>) {
+/// A one-line tool item, its status at the right end.
+fn inline(b: &mut Builder, spans: Vec<Span<'static>>, status: Line<'static>) {
     let mut line = vec![Builder::indent()];
     line.extend(spans);
-    let line = fit(Line::from(line), b.width, b.ui.glyphs);
+    // Short of the right edge by the transcript blocks' margin, so statuses line up with
+    // their titles.
+    let line = spread(
+        Line::from(line),
+        status,
+        b.width.saturating_sub(1),
+        b.ui.glyphs,
+    );
     b.line(line);
 }
 
@@ -600,14 +693,14 @@ fn more_row(b: &Builder, body: &mut Vec<Line<'static>>, more: usize) {
         ui.muted(),
     ));
     let right = Line::from(vec![
-        Span::styled("e", ui.text()),
-        Span::styled(" expand", ui.muted()),
+        Span::styled("c", ui.text()),
+        Span::styled(" copy all", ui.muted()),
     ]);
     body.push(spread(left, right, b.width.saturating_sub(3), ui.glyphs));
 }
 
 /// An edit's block: its line as the title, then the diff, unified or split.
-fn diff_block(b: &mut Builder, title: Vec<Span<'static>>, lines: &[Diff], expanded: bool) {
+fn diff_block(b: &mut Builder, title: Vec<Span<'static>>, lines: &[Diff]) {
     let ui = b.ui;
     let theme = ui.theme;
     let bar = theme.border;
@@ -622,11 +715,7 @@ fn diff_block(b: &mut Builder, title: Vec<Span<'static>>, lines: &[Diff], expand
         unified_rows(b, lines)
     };
     let total = rows.len();
-    let shown = if expanded {
-        total
-    } else {
-        total.min(DIFF_ROWS)
-    };
+    let shown = total.min(DIFF_ROWS);
     for row in rows.into_iter().take(shown) {
         b.push(row);
     }
