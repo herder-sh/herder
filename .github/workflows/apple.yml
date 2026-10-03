@@ -1,0 +1,74 @@
+name: apple
+
+# Builds and tests the iOS and macOS apps in apple/ on the client core's Swift bindings. Runs
+# only when the apps or what they build on change.
+
+on:
+  pull_request:
+    paths:
+      - "apple/**"
+      - "crates/herder-ffi/**"
+      - "crates/herder-client-core/**"
+      - "crates/herder-protocol/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/apple.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apple/**"
+      - "crates/herder-ffi/**"
+      - "crates/herder-client-core/**"
+      - "crates/herder-protocol/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/apple.yml"
+
+concurrency:
+  group: apple-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_STRIP: debuginfo
+
+jobs:
+  apps:
+    name: apps
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain and the Apple targets
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the bindings, the xcframework and the fake daemon
+        run: apple/scripts/build-ffi.sh
+      - name: Test HerderKit against the fake daemon
+        env:
+          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
+        run: swift test --package-path apple/HerderKit
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec apple/project.yml
+      - name: Test the iOS app on a simulator against the fake daemon
+        run: |
+          # The fake daemon runs until its stdin closes, so keep it open for the job.
+          (sleep 3600 | target/debug/examples/fake_daemon > "$RUNNER_TEMP/fake_daemon.out" &)
+          until [ -s "$RUNNER_TEMP/fake_daemon.out" ]; do sleep 1; done
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
+            xcodebuild test -quiet -project apple/herder.xcodeproj -scheme herder-iOS \
+            -destination "platform=iOS Simulator,id=$device"
+      - name: Build the iOS app for devices
+        run: >-
+          xcodebuild build -quiet -project apple/herder.xcodeproj -scheme herder-iOS
+          -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO
+      - name: Build the macOS app
+        run: >-
+          xcodebuild build -quiet -project apple/herder.xcodeproj -scheme herder-macOS
+          -destination "generic/platform=macOS" CODE_SIGNING_ALLOWED=NO
