@@ -1,6 +1,7 @@
 import Foundation
 import Herder
 @testable import HerderKit
+import SwiftTerm
 import Testing
 
 @MainActor
@@ -123,13 +124,25 @@ struct FleetTests {
             on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
             mode: .fullAccess, prompt: "")
 
+        let terminals = fleet.terminals(of: key)
         let shell = TerminalConnection(hostId: machine.hostId, terminalId: nil)
+        terminals.connections.append(shell)
+        let screen = shell.view(client: fleet.client, sessionId: key.sessionId)
         shell.connect(client: fleet.client, sessionId: key.sessionId, cols: 80, rows: 24)
         #expect(await eventually { shell.state == .attached })
         #expect(shell.terminalId != nil)
         shell.input(Array("echo herder-$((40+2))\n".utf8)[...])
-        #expect(await eventually { String(decoding: shell.pending, as: UTF8.self).contains("herder-42") })
-        shell.detach()
+        #expect(await eventually { Self.text(of: screen).contains("herder-42") })
+
+        // Leaving the pane and coming back finds the same shell, still attached, same screen.
+        #expect(fleet.terminals(of: key).connections.first === shell)
+        #expect(shell.view(client: fleet.client, sessionId: key.sessionId) === screen)
+        shell.input(Array("echo again-$((1+1))\n".utf8)[...])
+        #expect(await eventually { Self.text(of: screen).contains("again-2") })
+    }
+
+    private static func text(of view: SwiftTerm.TerminalView) -> String {
+        String(decoding: view.getTerminal().getBufferAsData(), as: UTF8.self)
     }
 
     /// A fake daemon paired and synced, with a session that has answered once.
