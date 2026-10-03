@@ -1,10 +1,16 @@
 import Herder
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 /// The prompt box: the text on top, and inside its bottom edge the model and permission menus
 /// with the send (or stop) button; a footer bar under it says where the session runs.
 struct ComposerBox<Footer: View>: View {
     @Binding var text: String
+    /// Images going with the prompt: pasted, dropped or attached.
+    @Binding var images: [Herder.Image]
     let placeholder: String
     /// The provider whose models the menu offers.
     let provider: Provider?
@@ -26,10 +32,15 @@ struct ComposerBox<Footer: View>: View {
     @FocusState private var focused: Bool
     @State private var otherModel = false
     @State private var typedModel = ""
+    @State private var imageError: String?
+    #if os(macOS)
+    @State private var pasteMonitor: Any?
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
+                if !images.isEmpty { AttachmentStrip(images: $images) }
                 TextField(placeholder, text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
@@ -74,12 +85,23 @@ struct ComposerBox<Footer: View>: View {
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     Spacer()
-                    if running && trimmed.isEmpty {
+                    if let imageError {
+                        Text(imageError).font(.caption).foregroundStyle(Theme.failure).lineLimit(1)
+                    }
+                    #if os(macOS)
+                    Button(action: attach) {
+                        SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
+                            .foregroundStyle(Theme.secondary).frame(width: 30, height: 30).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Attach images (or paste or drop them)")
+                    #endif
+                    if running && trimmed.isEmpty && images.isEmpty {
                         CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
                     } else {
                         CircleButton(symbol: "arrow.up", help: "Send", action: send)
-                            .disabled(trimmed.isEmpty)
-                            .opacity(trimmed.isEmpty ? 0.35 : 1)
+                            .disabled(trimmed.isEmpty && images.isEmpty)
+                            .opacity(trimmed.isEmpty && images.isEmpty ? 0.35 : 1)
                             .keyboardShortcut(.return, modifiers: .command)
                     }
                 }
@@ -90,6 +112,10 @@ struct ComposerBox<Footer: View>: View {
             .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(focused ? Theme.secondary.opacity(0.5) : Theme.stroke))
             .contentShape(.rect)
             .onTapGesture { focused = true }
+            .onDrop(of: [.image], isTargeted: nil) { providers in
+                Task { images += await ImageAttachment.load(providers) }
+                return true
+            }
             HStack(spacing: 14) { footer }
                 .font(.footnote)
                 .foregroundStyle(Theme.tertiary)
@@ -101,6 +127,10 @@ struct ComposerBox<Footer: View>: View {
                 .padding(.horizontal, 18)
         }
         .onAppear { focused = true }
+        #if os(macOS)
+        .onChange(of: focused) { watchPaste(focused) }
+        .onDisappear { watchPaste(false) }
+        #endif
         .alert("Model", isPresented: $otherModel) {
             TextField("Model name", text: $typedModel)
             Button("Use") { if !typedModel.trimmingCharacters(in: .whitespaces).isEmpty { setModel(typedModel) } }
@@ -111,6 +141,37 @@ struct ComposerBox<Footer: View>: View {
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    #if os(macOS)
+    /// While the box has focus, ⌘V with an image on the clipboard attaches it; text pastes as usual.
+    private func watchPaste(_ on: Bool) {
+        if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+        pasteMonitor = nil
+        guard on else { return }
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" else { return event }
+            let pasted = ImageAttachment.fromPasteboard()
+            guard !pasted.isEmpty else { return event }
+            images += pasted
+            return nil
+        }
+    }
+
+    private func attach() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        do {
+            images += try panel.urls.map { url in
+                try ImageAttachment.make(try Data(contentsOf: url), type: UTType(filenameExtension: url.pathExtension))
+            }
+            imageError = nil
+        } catch {
+            imageError = error.localizedDescription
+        }
+    }
+    #endif
 
     /// The catalog's models, then the ones used here, then the provider's default for a draft.
     private var menuModels: [String] {
