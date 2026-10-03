@@ -52,17 +52,6 @@
         "type": {
           "type": "string",
           "const": "hosts"
-        },
-        "volume": {
-          "description": "How full the vault's disk is; absent when the vault cannot tell.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/VaultVolume"
-            },
-            {
-              "type": "null"
-            }
-          ]
         }
       },
       "required": [
@@ -738,6 +727,17 @@
               "anyOf": [
                 {
                   "$ref": "#/$defs/LinkedVault"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "volume": {
+              "description": "How full a vault's disk is, as of the answer; absent from a daemon, and when the\nvault cannot tell.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/VaultVolume"
                 },
                 {
                   "type": "null"
