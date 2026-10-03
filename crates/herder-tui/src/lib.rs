@@ -18,6 +18,7 @@ mod action;
 mod app;
 mod backend;
 mod bar;
+mod chat;
 mod compose;
 #[cfg(test)]
 mod fake;
@@ -25,6 +26,7 @@ mod inbox;
 mod machines;
 mod mouse;
 mod projects;
+mod prompt;
 mod prs;
 mod recover;
 mod session;
@@ -51,6 +53,9 @@ use ui::theme::{Mode, Theme};
 /// How long the screen may sit unchanged before it is repainted from scratch, in case the
 /// terminal lost track of it: cheap when nothing changed, as mosh then sends nothing.
 const IDLE_REPAINT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How often the screen is drawn while a spinner turns: the slower glyph set's frame.
+const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// The theme `tui.json` chose, else the one the terminal suits; with why a chosen theme did
 /// not load.
@@ -121,15 +126,27 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     let mut subscriptions = Subscriptions::default();
     // The first frame covers what the shell left where the alternate screen is missing.
     let mut repaint = true;
+    let mut last_full = std::time::Instant::now();
     let result = loop {
+        if repaint {
+            last_full = std::time::Instant::now();
+        }
         if let Err(err) = paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
             break Err(err);
         }
-        let msg = match tokio::time::timeout(IDLE_REPAINT, rx.recv()).await {
+        // While a turn runs, the spinner's next frame is due before the idle repaint.
+        let wait = if app.animating() {
+            SPINNER_FRAME
+        } else {
+            IDLE_REPAINT
+        };
+        let msg = match tokio::time::timeout(wait, rx.recv()).await {
             Ok(Some(msg)) => msg,
             Ok(None) => break Ok(()),
             Err(_) => {
-                repaint = true;
+                if last_full.elapsed() >= IDLE_REPAINT {
+                    repaint = true;
+                }
                 continue;
             }
         };
@@ -167,6 +184,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
                             let _ = tx.send(Msg::Notice(format!("saving the settings: {err}")));
                         }
                     }
+                    Effect::Copy(text) => copy(&text),
                 }
             }
             next = rx.try_recv().ok();
@@ -276,6 +294,17 @@ fn disable_input_modes(modes: Modes) {
         DisableFocusChange,
         ratatui::crossterm::terminal::EnableLineWrap
     );
+}
+
+/// Puts `text` on the clipboard with OSC 52, which terminals and SSH apps pass to the
+/// device the user sits at; a terminal without it ignores the sequence.
+fn copy(text: &str) {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]52;c;{encoded}\x07");
+    let _ = out.flush();
 }
 
 /// Sends a command on its own task and feeds the daemon's answer back to the loop.

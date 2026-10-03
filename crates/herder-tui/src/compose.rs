@@ -17,6 +17,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::action::Action;
 use crate::app::{App, Effect, Focus, Row};
+use crate::prompt::Recall;
 use crate::session::{MODES, SessionKey, mode_name};
 use crate::ui::glyphs::Glyphs;
 
@@ -47,6 +48,20 @@ pub enum Act {
     Field(i8),
     /// Change the dialog's focused choice to the next (1) or previous (-1) value.
     Cycle(i8),
+    /// Move the completion popup's selection down (1) or up (-1).
+    Completion(i8),
+    /// Accept the popup's completion.
+    Complete,
+    /// Hide the popup until the text changes.
+    HidePopup,
+    /// Walk the prompt history back (1) or forward (-1).
+    Recall(i8),
+    /// Move the approval panel's choice right (1) or left (-1).
+    Button(i8),
+    /// Answer the pending approval with the panel's choice.
+    Confirm,
+    /// Show the pending request at full height, or back at its usual.
+    Full,
 }
 
 /// What a command was sent for, so its answer lands in the right place.
@@ -75,6 +90,20 @@ pub struct Compose {
     pub quit_armed: bool,
     /// A created session to open once its machine lists it.
     pub pending_open: Option<SessionKey>,
+    /// Prompts sent from here, oldest first, with the session each went to.
+    pub history: Vec<(SessionKey, String)>,
+    /// Where `↑` / `↓` are in the history.
+    pub recall: Option<Recall>,
+    /// The completion popup's selection.
+    pub popup: usize,
+    /// The text the popup was hidden for with Esc; it stays hidden until the text changes.
+    pub popup_hidden: Option<String>,
+    /// Collapsed pastes in the prompt: the placeholder, and the text it stands for.
+    pub pastes: Vec<(String, String)>,
+    /// The approval panel's choice: 0 allow, 1 deny.
+    pub button: usize,
+    /// Whether the pending request shows at full height.
+    pub full: bool,
 }
 
 impl Default for Compose {
@@ -86,7 +115,31 @@ impl Default for Compose {
             errors: HashMap::new(),
             quit_armed: false,
             pending_open: None,
+            history: Vec::new(),
+            recall: None,
+            popup: 0,
+            popup_hidden: None,
+            pastes: Vec::new(),
+            button: 0,
+            full: false,
         }
+    }
+}
+
+impl Compose {
+    /// Replaces the prompt's text, the cursor at its end.
+    pub fn set_text(&mut self, text: &str) {
+        self.editor = editor("Write a prompt…");
+        self.editor.insert_str(text);
+    }
+
+    /// Empties the prompt.
+    pub fn clear(&mut self) {
+        self.editor = editor("Write a prompt…");
+        self.pastes.clear();
+        self.recall = None;
+        self.popup = 0;
+        self.popup_hidden = None;
     }
 }
 
@@ -240,7 +293,50 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
     if app.focus != Focus::Composer {
         return None;
     }
+    // A pending approval takes the prompt's place, and its keys.
+    if app
+        .open_session()
+        .is_some_and(|session| !session.approvals.is_empty())
+    {
+        return match key.code {
+            KeyCode::Char('y') => compose(Act::Approve(ApprovalDecision::Allow)),
+            KeyCode::Char('n') => compose(Act::Approve(ApprovalDecision::Deny)),
+            KeyCode::Left | KeyCode::Char('h') => compose(Act::Button(-1)),
+            KeyCode::Right | KeyCode::Char('l') => compose(Act::Button(1)),
+            KeyCode::Tab | KeyCode::BackTab if !plain => Some(None),
+            KeyCode::Enter => compose(Act::Confirm),
+            KeyCode::Char('f') => compose(Act::Full),
+            KeyCode::Esc | KeyCode::Backspace => compose(Act::Leave),
+            KeyCode::PageUp => Some(Some(Action::PageUp)),
+            KeyCode::PageDown => Some(Some(Action::PageDown)),
+            KeyCode::Tab | KeyCode::BackTab => Some(Some(Action::SwitchPane)),
+            _ => Some(None),
+        };
+    }
+    let popup = !app.completions().is_empty();
+    let row = app.compose.editor.cursor().0;
+    let last = app.compose.editor.lines().len().saturating_sub(1);
+    // Digits pick a pending question's answer while nothing is typed.
+    if app.compose.editor.is_empty()
+        && let KeyCode::Char(digit @ '1'..='9') = key.code
+        && plain
+        && app
+            .open_session()
+            .and_then(|session| session.questions.first())
+            .is_some_and(|question| !question.choices.is_empty())
+    {
+        return compose(Act::Choose(u32::from(digit) - u32::from('1')));
+    }
     match key.code {
+        KeyCode::Esc if popup => compose(Act::HidePopup),
+        KeyCode::Up if popup => compose(Act::Completion(-1)),
+        KeyCode::Down if popup => compose(Act::Completion(1)),
+        KeyCode::Char('p') if popup && ctrl => compose(Act::Completion(-1)),
+        KeyCode::Char('n') if popup && ctrl => compose(Act::Completion(1)),
+        KeyCode::Tab if popup => compose(Act::Complete),
+        KeyCode::Enter if popup && key.modifiers.is_empty() => compose(Act::Complete),
+        KeyCode::Up if row == 0 => compose(Act::Recall(1)),
+        KeyCode::Down if row == last && app.compose.recall.is_some() => compose(Act::Recall(-1)),
         KeyCode::Esc => compose(Act::Leave),
         // Leaves without Esc, which a phone keyboard may lack.
         KeyCode::Backspace if app.compose.editor.is_empty() => compose(Act::Leave),
@@ -274,8 +370,36 @@ impl App {
                     self.focus = Focus::Composer;
                 }
             }
-            Act::Key(key) => self.edit(key),
+            Act::Key(key) => {
+                self.edit(key);
+                self.compose.popup = 0;
+                self.compose.recall = None;
+            }
             Act::Newline => self.compose.editor.insert_newline(),
+            Act::Completion(step) => self.move_completion(isize::from(step)),
+            Act::Complete => {
+                if self.accept_completion() {
+                    return self.submit();
+                }
+            }
+            Act::HidePopup => {
+                self.compose.popup_hidden = Some(self.compose.editor.lines().join("\n"));
+            }
+            Act::Recall(step) => {
+                self.recall(isize::from(step));
+            }
+            Act::Button(step) => {
+                self.compose.button = if step > 0 { 1 } else { 0 };
+            }
+            Act::Confirm => {
+                let decision = if self.compose.button == 0 {
+                    ApprovalDecision::Allow
+                } else {
+                    ApprovalDecision::Deny
+                };
+                return self.approve(decision);
+            }
+            Act::Full => self.compose.full = !self.compose.full,
             Act::Submit => return self.submit(),
             Act::Leave => {
                 if self.compose.dialog.take().is_none() && self.compose.palette.take().is_none() {
@@ -319,7 +443,7 @@ impl App {
         } else if let Some(palette) = &mut self.compose.palette {
             palette.input.insert_str(text.replace(['\r', '\n'], " "));
         } else if self.focus == Focus::Composer {
-            self.compose.editor.insert_str(text.replace("\r\n", "\n"));
+            self.paste_prompt(text);
         }
     }
 
@@ -409,14 +533,36 @@ impl App {
         let Some(key) = self.open.clone() else {
             return Vec::new();
         };
+        if !self.sessions.contains_key(&key) {
+            return Vec::new();
+        }
+        let typed = text(&self.compose.editor);
+        if typed.trim().is_empty() {
+            return Vec::new();
+        }
+        // A `/command` runs; `//` sends a literal `/`.
+        if typed.starts_with('/') && !typed.starts_with("//") {
+            return match self.slash(&key, &typed) {
+                Ok(effects) => {
+                    self.compose.clear();
+                    self.compose.errors.remove(&key);
+                    effects
+                }
+                Err(error) => {
+                    self.compose.errors.insert(key, error);
+                    Vec::new()
+                }
+            };
+        }
+        let typed = typed
+            .strip_prefix('/')
+            .filter(|_| typed.starts_with("//"))
+            .unwrap_or(&typed);
+        let prompt = self.expand_pastes(typed);
+        self.compose.clear();
         let Some(session) = self.sessions.get_mut(&key) else {
             return Vec::new();
         };
-        let prompt = text(&self.compose.editor);
-        if prompt.trim().is_empty() {
-            return Vec::new();
-        }
-        self.compose.editor = editor("Write a prompt…");
         let session_id = session.id.clone();
         // A pending question takes the composer's text as its answer.
         if let Some(question) = session.questions.first() {
@@ -430,6 +576,7 @@ impl App {
         if session.turn.is_some() {
             session.queued.push(prompt.clone());
         }
+        self.compose.history.push((key.clone(), prompt.clone()));
         let command = CommandBody::SendPrompt {
             session_id,
             text: prompt.clone(),
@@ -438,6 +585,11 @@ impl App {
     }
 
     fn ctrl_c(&mut self) -> Vec<Effect> {
+        // Clears what is being written first.
+        if self.focus == Focus::Composer && !self.compose.editor.is_empty() {
+            self.compose.clear();
+            return Vec::new();
+        }
         if let Some(key) = &self.open
             && let Some(session) = self.sessions.get(key)
             && session.turn.is_some()
@@ -456,6 +608,8 @@ impl App {
     }
 
     fn approve(&mut self, decision: ApprovalDecision) -> Vec<Effect> {
+        self.compose.button = 0;
+        self.compose.full = false;
         let Some((key, session)) = self.open.as_ref().zip(self.open_session()) else {
             return Vec::new();
         };
@@ -533,7 +687,7 @@ impl App {
     }
 
     /// The command a palette line names, for the session it applies to.
-    fn command(
+    pub(crate) fn command(
         &self,
         target: Option<&SessionKey>,
         name: &str,
@@ -845,9 +999,7 @@ mod tests {
     fn backspace_on_an_empty_composer_leaves_it_so_y_answers_without_esc() {
         let mut app = open_s2(vec![started("turn-1"), approval("a1", "Bash: ls")]);
         press(&mut app, KeyCode::Char('i'));
-        type_text(&mut app, "y");
-        press(&mut app, KeyCode::Backspace);
-        // The first Backspace erases, the next leaves.
+        // The approval panel stands in for the composer; Backspace leaves it.
         assert_eq!(app.focus, Focus::Composer);
         press(&mut app, KeyCode::Backspace);
         assert_eq!(app.focus, Focus::Transcript);
@@ -1035,8 +1187,11 @@ mod tests {
         fake::feed(&mut app, "h1", "s2", update("s2", 4, vec![ended], vec![]));
         assert_eq!(ctrl_c(&mut app), []);
         assert!(app.compose.quit_armed);
-        // Any other key disarms it.
+        // Any other key disarms it; the next Ctrl-C clears what it typed.
         press(&mut app, KeyCode::Char('x'));
+        assert!(!app.compose.quit_armed);
+        assert_eq!(ctrl_c(&mut app), []);
+        assert!(app.compose.editor.is_empty());
         assert!(!app.compose.quit_armed);
         assert_eq!(ctrl_c(&mut app), []);
         assert_eq!(ctrl_c(&mut app), [Effect::Quit]);

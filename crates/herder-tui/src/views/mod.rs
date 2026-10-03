@@ -20,6 +20,7 @@ mod composer;
 mod help;
 mod inbox;
 mod machines;
+mod markdown;
 mod new_session;
 mod pairing;
 mod palette;
@@ -31,6 +32,7 @@ mod sessions;
 mod status;
 mod switch;
 mod terminals;
+mod tools;
 mod touch;
 mod transcript;
 
@@ -153,7 +155,7 @@ fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut 
     } else if app.focus == Focus::Inbox {
         inbox::draw(frame, area, app, compact, hits);
     } else {
-        let (area, controls) = composer::split(area, app);
+        let (area, controls) = composer::split(area, app, compact, frame.area().height);
         let [strip, usage, area] = Layout::vertical([
             Constraint::Length(prs::strip_height(app)),
             Constraint::Length(resources::strip_height(app, compact)),
@@ -162,9 +164,9 @@ fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut 
         .areas(area);
         prs::strip(frame, strip, app, compact, hits);
         resources::strip(frame, usage, app, compact);
-        transcript::draw(frame, area, app, compact, hits);
-        if let Some(controls) = controls {
-            composer::draw(frame, controls, app, compact, hits);
+        transcript::draw(frame, area, app, hits);
+        if let Some((controls, heights)) = controls {
+            composer::draw(frame, controls, heights, app, compact, hits);
         }
     }
 }

@@ -47,6 +47,8 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, narrow: bool) {
     }
     let hints = if narrow {
         vec![Hint::new("?", "help")]
+    } else if let Some(hints) = super::composer::hints(app) {
+        hints
     } else {
         vec![Hint::new("?", "help"), Hint::new("q", "quit")]
     };

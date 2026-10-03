@@ -1,11 +1,13 @@
 //! What the TUI knows of one session, folded from its subscription's updates: the facts the
 //! session list shows and the transcript the session view renders.
 
+use std::collections::HashMap;
+
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, EscalationReason, Event, EventBody,
-    HostId, Item, ItemBody, PermissionMode, Provider, PullRequest, QuestionId, Route, SessionId,
-    SessionStatus, Timestamp, TurnId,
+    AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, ErrorClass, EscalationReason, Event,
+    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider, PullRequest, QuestionId,
+    Route, SessionId, SessionStatus, Timestamp, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -26,6 +28,8 @@ pub struct Session {
     pub loaded: bool,
     /// Repository path on the host.
     pub repo: String,
+    /// The session's worktree on the host.
+    pub worktree: String,
     /// Branch the session works on now.
     pub branch: String,
     /// Current model, in the provider's naming.
@@ -48,6 +52,13 @@ pub struct Session {
     pub permission_mode: PermissionMode,
     /// The turn running now, from its start to its end.
     pub turn: Option<TurnId>,
+    /// When the running turn started.
+    pub turn_started: Option<Timestamp>,
+    /// When each item joined the transcript, and each turn started: what durations are
+    /// counted from.
+    pub times: HashMap<ItemId, Timestamp>,
+    /// Tool calls an approval was asked for, by their item, and how it stands.
+    pub tool_approvals: HashMap<ItemId, ToolApproval>,
     /// Approval requests nobody answered yet, oldest first.
     pub approvals: Vec<PendingApproval>,
     /// Questions nobody answered yet, oldest first.
@@ -63,6 +74,8 @@ pub struct Session {
 pub struct PendingApproval {
     /// The request.
     pub id: ApprovalId,
+    /// The tool call it asks about.
+    pub tool_call_id: ItemId,
     /// What the agent wants to do.
     pub summary: String,
     /// Who is asked first; a user can always answer.
@@ -96,7 +109,18 @@ pub struct PendingQuestion {
     pub since: Timestamp,
 }
 
-/// One completed line of the transcript.
+/// Where an approval for a tool call stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolApproval {
+    /// Nobody answered yet.
+    Pending,
+    /// Allowed: the tool ran.
+    Allowed,
+    /// Denied, or expired: the tool did not run.
+    Denied,
+}
+
+/// One completed entry of the transcript.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Entry {
     /// A transcript item, complete.
@@ -108,6 +132,45 @@ pub enum Entry {
         /// How loudly to show it.
         tone: Tone,
     },
+    /// A turn ended without failing: the footer of the agent's reply.
+    TurnEnded {
+        /// Seconds from its start, when the start is known.
+        took: Option<i64>,
+        /// Whether it was interrupted.
+        interrupted: bool,
+    },
+    /// A turn failed.
+    TurnFailed {
+        /// Which kind of failure.
+        class: ErrorClass,
+        /// What failed.
+        message: String,
+    },
+    /// The session moved to another model, account, provider or permission mode.
+    Switch(String),
+    /// An approval or question was answered, or expired.
+    Resolved {
+        /// An approval, rather than a question.
+        approval: bool,
+        /// What was decided, and by whom.
+        text: String,
+    },
+    /// The session spawned a child for a task.
+    Child {
+        /// The child.
+        session_id: SessionId,
+        /// Its task.
+        task: String,
+    },
+    /// A child finished a turn and reported back.
+    Report {
+        /// The child.
+        session_id: SessionId,
+        /// What it reported.
+        summary: String,
+    },
+    /// A pull request was linked; shown as it stands now, from [`Session::prs`].
+    Pr(u64),
 }
 
 /// How a notice is shown.
@@ -117,8 +180,6 @@ pub enum Tone {
     Info,
     /// Waiting on the user.
     Attention,
-    /// A failure.
-    Error,
 }
 
 impl Session {
@@ -128,6 +189,7 @@ impl Session {
             id,
             loaded: false,
             repo: String::new(),
+            worktree: String::new(),
             branch: String::new(),
             model: String::new(),
             parent: None,
@@ -139,6 +201,9 @@ impl Session {
             provider: None,
             permission_mode: PermissionMode::Ask,
             turn: None,
+            turn_started: None,
+            times: HashMap::new(),
+            tool_approvals: HashMap::new(),
             approvals: Vec::new(),
             questions: Vec::new(),
             queued: Vec::new(),
@@ -197,6 +262,7 @@ impl Session {
         let entry = match event.body {
             EventBody::SessionCreated {
                 repo,
+                worktree,
                 branch,
                 model,
                 parent,
@@ -210,6 +276,7 @@ impl Session {
                 self.provider = Some(provider);
                 self.permission_mode = permission_mode;
                 self.repo = repo;
+                self.worktree = worktree;
                 self.branch = branch;
                 self.model = model;
                 self.parent = parent;
@@ -231,44 +298,56 @@ impl Session {
                 {
                     self.queued.remove(at);
                 }
+                self.times.insert(item.id.clone(), at);
                 Some(Entry::Item(item))
             }
             EventBody::TurnStarted { turn_id } => {
                 self.turn = Some(turn_id);
+                self.turn_started = Some(at);
                 None
             }
             EventBody::TurnCompleted { turn_id } => {
-                self.turn_ended(&turn_id);
-                None
+                let took = self.turn_ended(&turn_id, at);
+                Some(Entry::TurnEnded {
+                    took,
+                    interrupted: false,
+                })
             }
             EventBody::TurnInterrupted { turn_id } => {
-                self.turn_ended(&turn_id);
-                Some(notice("turn interrupted".to_owned(), Tone::Info))
+                let took = self.turn_ended(&turn_id, at);
+                Some(Entry::TurnEnded {
+                    took,
+                    interrupted: true,
+                })
             }
             EventBody::TurnFailed { turn_id, error } => {
-                self.turn_ended(&turn_id);
-                Some(notice(
-                    format!("turn failed: {}", error.message),
-                    Tone::Error,
-                ))
+                self.turn_ended(&turn_id, at);
+                Some(Entry::TurnFailed {
+                    class: error.class,
+                    message: error.message,
+                })
             }
             EventBody::ApprovalRequested {
                 approval_id,
+                tool_call_id,
                 summary,
                 routed_to,
                 reason,
                 ..
             } => {
-                let line = asked("approval", &summary, routed_to, reason);
+                let line = asked("approval", &summary, routed_to);
+                self.tool_approvals
+                    .insert(tool_call_id.clone(), ToolApproval::Pending);
                 self.approvals.push(PendingApproval {
                     id: approval_id,
+                    tool_call_id,
                     summary,
                     routed_to,
                     reason,
                     note: None,
                     since: at,
                 });
-                Some(line)
+                line
             }
             EventBody::ApprovalEscalated {
                 approval_id,
@@ -304,27 +383,43 @@ impl Session {
             }
             EventBody::PermissionModeChanged { mode } => {
                 self.permission_mode = mode;
-                Some(notice(
-                    format!("permission mode set to {}", mode_name(mode)),
-                    Tone::Info,
-                ))
+                Some(Entry::Switch(format!("mode set to {}", mode_name(mode))))
             }
             EventBody::ApprovalResolved {
                 approval_id,
                 decision,
                 answered_by,
             } => {
-                self.approvals.retain(|approval| approval.id != approval_id);
+                let resolved = self
+                    .approvals
+                    .iter()
+                    .position(|approval| approval.id == approval_id)
+                    .map(|at| self.approvals.remove(at));
+                let tool = resolved.as_ref().map(|approval| {
+                    let state = match decision {
+                        ApprovalOutcome::Allow => ToolApproval::Allowed,
+                        ApprovalOutcome::Deny | ApprovalOutcome::Expired => ToolApproval::Denied,
+                    };
+                    self.tool_approvals
+                        .insert(approval.tool_call_id.clone(), state);
+                    self.tool_name(&approval.tool_call_id)
+                        .unwrap_or_else(|| approval.summary.clone())
+                });
                 let decision = match decision {
                     ApprovalOutcome::Allow => "allowed",
                     ApprovalOutcome::Deny => "denied",
-                    ApprovalOutcome::Expired => "approval expired",
+                    ApprovalOutcome::Expired => "expired",
                 };
+                let what =
+                    tool.map_or_else(|| decision.to_owned(), |tool| format!("{decision} {tool}"));
                 let text = match answered_by {
-                    Answerer::Primary { .. } => format!("{decision} by the primary session"),
-                    Answerer::User => decision.to_owned(),
+                    Answerer::Primary { .. } => format!("{what} by the primary session"),
+                    Answerer::User => format!("{what} by you"),
                 };
-                Some(notice(text, Tone::Info))
+                Some(Entry::Resolved {
+                    approval: true,
+                    text,
+                })
             }
             EventBody::QuestionAsked {
                 question_id,
@@ -334,7 +429,7 @@ impl Session {
                 routed_to,
                 reason,
             } => {
-                let line = asked("question", &text, routed_to, reason);
+                let line = asked("question", &text, routed_to);
                 self.questions.push(PendingQuestion {
                     id: question_id,
                     turn_id,
@@ -345,7 +440,7 @@ impl Session {
                     note: None,
                     since: at,
                 });
-                Some(line)
+                line
             }
             EventBody::QuestionAnswered {
                 question_id,
@@ -357,56 +452,71 @@ impl Session {
                 let answer = match answer {
                     Answer::Text { text } => text,
                     Answer::Choice { index } => asked
+                        .as_ref()
                         .and_then(|q| q.choices.get(index as usize).cloned())
                         .unwrap_or_else(|| format!("choice {}", u64::from(index) + 1)),
                 };
-                let text = match answered_by {
-                    Answerer::Primary { .. } => format!("the primary session answered: {answer}"),
-                    Answerer::User => format!("answered: {answer}"),
+                let by = match answered_by {
+                    Answerer::Primary { .. } => "the primary session",
+                    Answerer::User => "you",
                 };
-                Some(notice(text, Tone::Info))
+                let text = match asked {
+                    Some(asked) => format!("{} · {answer} · by {by}", first_line(&asked.text)),
+                    None => format!("answered {answer} · by {by}"),
+                };
+                Some(Entry::Resolved {
+                    approval: false,
+                    text,
+                })
             }
-            EventBody::ChildSpawned { task, .. } => {
-                Some(notice(format!("spawned child: {task}"), Tone::Info))
-            }
-            EventBody::ChildReported { summary, .. } => {
-                Some(notice(format!("child reported: {summary}"), Tone::Info))
-            }
+            EventBody::ChildSpawned {
+                child_session_id,
+                task,
+            } => Some(Entry::Child {
+                session_id: child_session_id,
+                task,
+            }),
+            EventBody::ChildReported {
+                child_session_id,
+                summary,
+                ..
+            } => Some(Entry::Report {
+                session_id: child_session_id,
+                summary,
+            }),
             EventBody::ModelSwitched { model } => {
-                let text = format!("model switched to {model}");
+                let text = format!("switched to {model}");
                 self.model = model;
-                Some(notice(text, Tone::Info))
+                Some(Entry::Switch(text))
             }
             // A switch nobody asked for is a failover from an account that hit its limit.
             EventBody::AccountSwitched { account_id } => {
                 let text = match event.by {
-                    Some(_) => format!("account switched to {account_id}"),
-                    None => {
-                        format!("failed over to account {account_id}: the last one hit its limit")
-                    }
+                    Some(_) => format!("switched to {account_id}"),
+                    None => format!("failed over to {account_id}: the last account hit its limit"),
                 };
                 self.account_id = Some(account_id);
-                Some(notice(text, Tone::Info))
+                Some(Entry::Switch(text))
             }
             EventBody::ProviderSwitched {
                 provider,
                 account_id,
                 model,
             } => {
-                let to = format!("{} ({model}, account {account_id})", provider.as_str());
+                let to = format!("{account_id} · {model} (transcript replayed)");
                 let text = match event.by {
                     Some(_) => format!("switched to {to}"),
-                    None => format!("failed over to {to}: the last account hit its limit"),
+                    None => format!("failed over to {to}"),
                 };
                 self.account_id = Some(account_id);
                 self.provider = Some(provider);
                 self.model = model;
-                Some(notice(text, Tone::Info))
+                Some(Entry::Switch(text))
             }
             EventBody::PrLinked { pr } => {
-                let text = format!("pull request #{} linked: {}", pr.number, pr.title);
+                let number = pr.number;
                 self.track(pr);
-                Some(notice(text, Tone::Info))
+                Some(Entry::Pr(number))
             }
             EventBody::PrUpdated { pr } => {
                 self.track(pr);
@@ -424,12 +534,31 @@ impl Session {
         self.entries.extend(entry);
     }
 
-    fn turn_ended(&mut self, turn_id: &TurnId) {
+    /// Ends `turn_id` at `at`; returns how many seconds it took, when its start is known.
+    fn turn_ended(&mut self, turn_id: &TurnId, at: Timestamp) -> Option<i64> {
+        let mut took = None;
         if self.turn.as_ref() == Some(turn_id) {
             self.turn = None;
+            took = self
+                .turn_started
+                .take()
+                .map(|start| at.as_second() - start.as_second());
         }
         self.questions
             .retain(|question| question.turn_id != *turn_id);
+        took
+    }
+
+    /// The name of the tool the call item `id` calls.
+    pub fn tool_name(&self, id: &ItemId) -> Option<String> {
+        self.entries.iter().rev().find_map(|entry| match entry {
+            Entry::Item(Item {
+                id: item_id,
+                body: ItemBody::ToolCall { name, .. },
+                ..
+            }) if item_id == id => Some(name.clone()),
+            _ => None,
+        })
     }
 
     /// Adds `pr`, or replaces the linked pull request with its number.
@@ -441,24 +570,21 @@ impl Session {
     }
 }
 
-/// The transcript line for an approval or question being asked: put to the primary session
-/// first, or to the user, with why when a child's went straight to the user.
-fn asked(what: &str, text: &str, routed_to: Route, reason: Option<EscalationReason>) -> Entry {
-    let (text, tone) = match (routed_to, reason) {
-        (Route::Primary, _) => (
-            format!("{what} for the primary session: {text}"),
-            Tone::Info,
-        ),
-        (Route::User, Some(reason)) => (
-            format!("{what} for you ({}): {text}", reason_text(reason)),
-            Tone::Attention,
-        ),
-        (Route::User, None) if what == "approval" => {
-            (format!("approval needed: {text}"), Tone::Attention)
-        }
-        (Route::User, None) => (format!("{what}: {text}"), Tone::Attention),
-    };
-    Entry::Notice { text, tone }
+/// The transcript line for an approval or question put to the primary session first. One
+/// put to the user has none: the request panel shows it until it is answered.
+fn asked(what: &str, text: &str, routed_to: Route) -> Option<Entry> {
+    (routed_to == Route::Primary).then(|| Entry::Notice {
+        text: format!("{what} for the primary session: {}", first_line(text)),
+        tone: Tone::Info,
+    })
+}
+
+/// The first non-blank line of `text`.
+pub fn first_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
 }
 
 /// The transcript line for a request the primary session handed to the user.
@@ -502,7 +628,7 @@ pub const MODES: [PermissionMode; 4] = [
 
 #[cfg(test)]
 mod tests {
-    use herder_protocol::{ErrorClass, TurnError, TurnId};
+    use herder_protocol::{TurnError, TurnId};
 
     use super::*;
     use crate::fake::{added, assistant, created, item, status, update};
@@ -535,9 +661,9 @@ mod tests {
             session.entries,
             [
                 Entry::Item(item("i1", assistant("Looking."))),
-                Entry::Notice {
-                    text: "turn failed: network".into(),
-                    tone: Tone::Error
+                Entry::TurnFailed {
+                    class: ErrorClass::Transient,
+                    message: "network".into(),
                 },
             ]
         );
@@ -546,6 +672,62 @@ mod tests {
         // Each update replaces the streaming list.
         session.apply(update("s1", 6, vec![], vec![]));
         assert!(session.streaming.is_empty());
+    }
+
+    #[test]
+    fn turns_time_their_replies_and_approvals_mark_their_tool_calls() {
+        use crate::fake::{approval, at, started};
+        let mut session = Session::new(SessionId::new("s1"));
+        session.apply(at(
+            update(
+                "s1",
+                1,
+                vec![started("turn-1"), approval("a1", "$ ls")],
+                vec![],
+            ),
+            100,
+        ));
+        assert_eq!(
+            session.tool_approvals.get(&ItemId::new("call-1")),
+            Some(&ToolApproval::Pending)
+        );
+        // A request put to the user takes no transcript line: the panel shows it.
+        assert!(session.entries.is_empty());
+        session.apply(at(
+            update(
+                "s1",
+                3,
+                vec![
+                    EventBody::ApprovalResolved {
+                        approval_id: ApprovalId::new("a1"),
+                        decision: ApprovalOutcome::Deny,
+                        answered_by: Answerer::User,
+                    },
+                    EventBody::TurnInterrupted {
+                        turn_id: TurnId::new("turn-1"),
+                    },
+                ],
+                vec![],
+            ),
+            172,
+        ));
+        assert_eq!(
+            session.tool_approvals.get(&ItemId::new("call-1")),
+            Some(&ToolApproval::Denied)
+        );
+        assert_eq!(
+            session.entries,
+            [
+                Entry::Resolved {
+                    approval: true,
+                    text: "denied $ ls by you".into(),
+                },
+                Entry::TurnEnded {
+                    took: Some(72),
+                    interrupted: true,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -620,7 +802,7 @@ mod tests {
             .iter()
             .filter_map(|entry| match entry {
                 Entry::Notice { text, .. } => Some(text.as_str()),
-                Entry::Item(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(
@@ -630,8 +812,14 @@ mod tests {
                 "approval for the primary session: Edit src/lib.rs",
                 "question escalated to you: the primary session left it to you; \
                  the primary says: Your call.",
-                "allowed by the primary session",
             ]
+        );
+        assert_eq!(
+            session.entries.last(),
+            Some(&Entry::Resolved {
+                approval: true,
+                text: "allowed Edit src/lib.rs by the primary session".into(),
+            })
         );
     }
 
@@ -657,9 +845,9 @@ mod tests {
         assert!(session.questions.is_empty());
         assert_eq!(
             session.entries.last(),
-            Some(&Entry::Notice {
-                text: "the primary session answered: 3000".into(),
-                tone: Tone::Info,
+            Some(&Entry::Resolved {
+                approval: false,
+                text: "Which port? · 3000 · by the primary session".into(),
             })
         );
     }
@@ -688,19 +876,11 @@ mod tests {
             }],
             vec![],
         ));
-        let notices: Vec<&str> = session
-            .entries
-            .iter()
-            .filter_map(|entry| match entry {
-                Entry::Notice { text, .. } => Some(text.as_str()),
-                Entry::Item(_) => None,
-            })
-            .collect();
         assert_eq!(
-            notices,
+            session.entries,
             [
-                "account switched to claude-work",
-                "failed over to account claude-spare: the last one hit its limit",
+                Entry::Switch("switched to claude-work".into()),
+                Entry::Switch("failed over to claude-spare: the last account hit its limit".into()),
             ]
         );
         assert_eq!(session.account_id, Some(AccountId::new("claude-spare")));

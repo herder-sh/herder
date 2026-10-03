@@ -16,6 +16,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use herder_protocol::ApprovalDecision;
 
 use crate::app::{App, Focus};
+use crate::chat::ChatAct;
 use crate::compose::{self, Act};
 use crate::inbox::{self, InboxAction};
 use crate::prs::{self, PrAction};
@@ -49,6 +50,8 @@ pub enum Action {
     Reconnect,
     /// Write to, answer or control a session; see [`crate::compose`].
     Compose(Act),
+    /// Move through the open transcript; see [`crate::chat`].
+    Chat(ChatAct),
     /// Something about pull requests.
     Pr(PrAction),
     /// Show the machines panel.
@@ -140,6 +143,15 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     let in_transcript = app.focus == Focus::Transcript;
     let action = match key.code {
+        KeyCode::Char('[') if in_transcript => Action::Chat(ChatAct::Prev),
+        KeyCode::Char(']') if in_transcript => Action::Chat(ChatAct::Next),
+        KeyCode::Char('e') if in_transcript => Action::Chat(ChatAct::Toggle),
+        KeyCode::Char('c') if in_transcript => Action::Chat(ChatAct::Copy),
+        KeyCode::Char('x') if in_transcript => Action::Chat(ChatAct::Stop),
+        // On an item, Enter expands it, as `e` does.
+        KeyCode::Enter if in_transcript && app.chat.cursor.is_some() => {
+            Action::Chat(ChatAct::Toggle)
+        }
         KeyCode::Char('i') | KeyCode::Enter if in_transcript => Action::Compose(Act::Write),
         KeyCode::Char('y') if in_transcript => {
             Action::Compose(Act::Approve(ApprovalDecision::Allow))
@@ -203,6 +215,12 @@ pub const HELP: &[(&str, &str)] = &[
     ("g / G", "first / last; G follows the transcript"),
     ("i, Enter", "write in the open session"),
     ("Enter / Alt-Enter", "send / new line, in the composer"),
+    ("/ , @", "in the composer: commands, mention a task child"),
+    ("↑ / ↓", "in the composer: earlier prompts"),
+    ("[ / ]", "previous / next item of the transcript"),
+    ("e, Enter", "expand the item: tool output, diff, reasoning"),
+    ("c", "copy the item"),
+    ("x", "stop the running turn"),
     ("Esc, ⌫ on empty", "leave the composer or close a dialog"),
     ("y / n", "allow / deny the pending approval"),
     ("1-9", "pick an answer to the pending question"),

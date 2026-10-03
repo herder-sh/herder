@@ -5,12 +5,13 @@
 use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
-use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId};
+use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId, Timestamp};
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::widgets::ListState;
 
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
+use crate::chat::Chat;
 use crate::compose::{Compose, Origin};
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
@@ -105,6 +106,8 @@ pub enum Effect {
     Mouse(bool),
     /// Save the app's [`crate::settings::Settings`] in the client profile.
     Save,
+    /// Put text on the clipboard, through the terminal (OSC 52).
+    Copy(String),
 }
 
 /// Which pane keys go to.
@@ -257,6 +260,10 @@ pub struct App {
     pub(crate) bar: Vec<Click>,
     /// The action bar button Tab moved to, which Enter presses.
     pub bar_focus: Option<usize>,
+    /// The open transcript's item cursor and folds.
+    pub chat: Chat,
+    /// The time the screen shows; `None` is the clock's. Tests fix it.
+    pub clock: Option<Timestamp>,
 }
 
 impl Default for App {
@@ -291,6 +298,8 @@ impl Default for App {
             dragged: None,
             bar: Vec::new(),
             bar_focus: None,
+            chat: Chat::default(),
+            clock: None,
         }
     }
 }
@@ -299,6 +308,22 @@ impl App {
     /// The theme and the glyph set the screen draws with.
     pub fn ui(&self) -> Ui<'_> {
         Ui::new(&self.theme, Glyphs::for_width(self.glyphs, self.width))
+    }
+
+    /// The time now, as the screen shows it.
+    pub fn now(&self) -> Timestamp {
+        self.clock.unwrap_or_else(Timestamp::now)
+    }
+
+    /// Whether the screen moves on its own: the open session's turn runs, and its spinner
+    /// with it.
+    pub fn animating(&self) -> bool {
+        self.open_session()
+            .is_some_and(|session| session.turn.is_some())
+            && matches!(
+                self.focus,
+                Focus::Transcript | Focus::Composer | Focus::Prs | Focus::Sessions
+            )
     }
 
     /// Folds in one input; returns what the event loop must do.
@@ -389,6 +414,7 @@ impl App {
         }
         match action {
             Action::Compose(_) => {}
+            Action::Chat(act) => return self.chat_act(act),
             Action::Terminals => self.open_picker(),
             Action::Quit => return vec![Effect::Quit],
             Action::Reconnect => return vec![Effect::Wake],
@@ -415,6 +441,7 @@ impl App {
                     if self.open.as_ref() != Some(&key) {
                         self.scroll = Scroll::default();
                         self.prs.strip = 0;
+                        self.chat.reset();
                     }
                     // Pin the row, so new sessions listed above it do not move the selection.
                     self.chosen = selected;

@@ -132,6 +132,8 @@ pub fn feed(app: &mut App, host: &str, session: &str, update: SessionUpdate) {
 pub fn tree() -> App {
     let mut app = App {
         grouping: crate::projects::Grouping::Machines,
+        // Times the screen shows are counted from a clock that stands still.
+        clock: Some(Timestamp::UNIX_EPOCH),
         ..App::default()
     };
     app.update(Msg::Machines(vec![machine(
@@ -178,6 +180,8 @@ pub fn tree() -> App {
 pub fn vault() -> App {
     let mut app = App {
         grouping: crate::projects::Grouping::Machines,
+        // Times the screen shows are counted from a clock that stands still.
+        clock: Some(Timestamp::UNIX_EPOCH),
         ..App::default()
     };
     let mut vault = machine("v", "vault", &[]);
@@ -473,7 +477,10 @@ pub fn projects() -> App {
             }
         }
     }
-    let mut app = App::default();
+    let mut app = App {
+        clock: Some(Timestamp::UNIX_EPOCH),
+        ..App::default()
+    };
     app.update(Msg::Machines(machines));
     for (host, id, _, repo, branch, parent, state) in sessions {
         let task = parent.map(|_| "test the cache");
@@ -566,4 +573,319 @@ pub fn with_resources(app: &mut App, host: herder_protocol::HostResources, busy:
             .insert(SessionId::new("s2"), session_usage());
     }
     app.update(Msg::Machines(machines));
+}
+
+/// A tool call item `id` of `turn`.
+fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody {
+    EventBody::ItemAdded {
+        item: Item {
+            id: ItemId::new(id),
+            turn_id: TurnId::new(turn),
+            body: ItemBody::ToolCall {
+                name: name.to_owned(),
+                input,
+            },
+        },
+    }
+}
+
+/// The result of the tool call `call`.
+fn result(call: &str, turn: &str, output: &str) -> EventBody {
+    EventBody::ItemAdded {
+        item: Item {
+            id: ItemId::new(format!("{call}-result")),
+            turn_id: TurnId::new(turn),
+            body: ItemBody::ToolResult {
+                call_id: ItemId::new(call),
+                output: output.to_owned(),
+                is_error: false,
+            },
+        },
+    }
+}
+
+/// An item `id` of `turn`.
+fn turn_item(id: &str, turn: &str, body: ItemBody) -> EventBody {
+    EventBody::ItemAdded {
+        item: Item {
+            id: ItemId::new(id),
+            turn_id: TurnId::new(turn),
+            body,
+        },
+    }
+}
+
+/// The worktree [`created`] gives `branch`.
+fn worktree(branch: &str, path: &str) -> String {
+    format!("/home/ann/.herder/worktrees/{branch}/{path}")
+}
+
+/// [`tree`] with `s2` open on the conversation of docs/tui-design.md §2.1: a finished turn
+/// that read, searched, tested, edited and spawned `s3` for the tests, then a second turn
+/// running for 1m 12s with its answer streaming. `claude-main` has used 38% of its five-hour
+/// window. The clock stands at 272 s.
+pub fn chat() -> App {
+    use serde_json::json;
+    let mut app = tree();
+    let mut machines = app.machines.clone();
+    machines[0].accounts = vec![herder_protocol::Account {
+        usage: vec![
+            herder_protocol::UsageWindow {
+                window: "five_hour".to_owned(),
+                used_percent: 38.0,
+                resets_at: None,
+            },
+            herder_protocol::UsageWindow {
+                window: "seven_day".to_owned(),
+                used_percent: 12.0,
+                resets_at: None,
+            },
+        ],
+        ..account("claude-main", "claude-main")
+    }];
+    app.update(Msg::Machines(machines));
+    let t1 = "turn-1";
+    let steps: Vec<(i64, Vec<EventBody>)> = vec![
+        (
+            100,
+            vec![
+                EventBody::TurnStarted {
+                    turn_id: TurnId::new(t1),
+                },
+                turn_item(
+                    "u1",
+                    t1,
+                    ItemBody::UserMessage {
+                        text: "Add a health endpoint and test it.".into(),
+                    },
+                ),
+            ],
+        ),
+        (
+            104,
+            vec![turn_item(
+                "r1",
+                t1,
+                ItemBody::Reasoning {
+                    text: "Where the router lives: src/api.rs builds it with Router::new, \
+                           so the route goes there.\nThen a test next to the others."
+                        .into(),
+                },
+            )],
+        ),
+        (
+            105,
+            vec![
+                call(
+                    "c1",
+                    t1,
+                    "Read",
+                    json!({"file_path": worktree("herder/api", "src/api.rs")}),
+                ),
+                result(
+                    "c1",
+                    t1,
+                    "pub fn router() -> Router {\n    Router::new()\n}",
+                ),
+                call(
+                    "c2",
+                    t1,
+                    "Grep",
+                    json!({"pattern": "Router::new", "path": worktree("herder/api", "src")}),
+                ),
+                result(
+                    "c2",
+                    t1,
+                    "Found 3 files\nsrc/api.rs\nsrc/main.rs\nsrc/test.rs",
+                ),
+            ],
+        ),
+        (
+            110,
+            vec![
+                call(
+                    "c3",
+                    t1,
+                    "Bash",
+                    json!({"command": "cargo test --workspace"}),
+                ),
+                result(
+                    "c3",
+                    t1,
+                    "running 12 tests\ntest health::ok ... ok\ntest health::version ... ok\n\
+                     test api::router ... ok\ntest api::routes ... ok\ntest api::cors ... ok\n\
+                     test db::pool ... ok\ntest db::migrate ... ok\ntest auth::login ... ok\n\
+                     test auth::logout ... ok\ntest auth::refresh ... ok\ntest auth::expired ... ok\n\
+                     \ntest result: ok. 12 passed; 0 failed",
+                ),
+            ],
+        ),
+        (
+            115,
+            vec![
+                call(
+                    "c4",
+                    t1,
+                    "Edit",
+                    json!({
+                        "file_path": worktree("herder/api", "src/api.rs"),
+                        "old_string": "pub fn router() -> Router {\n    Router::new()\n        .route(\"/\", get(index))\n}\n",
+                        "new_string": "pub fn router() -> Router {\n    Router::new()\n        .route(\"/\", get(index))\n        .route(\"/health\", get(health))\n}\n\n/// 200 with the build version, for load balancers.\nasync fn health() -> &'static str {\n    env!(\"CARGO_PKG_VERSION\")\n}\n",
+                    }),
+                ),
+                result("c4", t1, "The file src/api.rs has been updated."),
+                call(
+                    "c5",
+                    t1,
+                    "TodoWrite",
+                    json!({"todos": [
+                        {"content": "Add GET /health", "status": "completed"},
+                        {"content": "Test it", "status": "completed"},
+                        {"content": "Write the docs page", "status": "in_progress"},
+                        {"content": "Remove the old target", "status": "pending"},
+                    ]}),
+                ),
+                result("c5", t1, "ok"),
+            ],
+        ),
+        (
+            120,
+            vec![EventBody::ChildSpawned {
+                child_session_id: SessionId::new("s3"),
+                task: "write tests".into(),
+            }],
+        ),
+        (
+            172,
+            vec![
+                turn_item(
+                    "a1",
+                    t1,
+                    assistant(
+                        "I added `GET /health`; it returns **200** with the build version so \
+                         load balancers can probe it.\n\n- one route in `src/api.rs`\n- one \
+                         test, in a child session",
+                    ),
+                ),
+                EventBody::TurnCompleted {
+                    turn_id: TurnId::new(t1),
+                },
+            ],
+        ),
+        (
+            200,
+            vec![
+                EventBody::TurnStarted {
+                    turn_id: TurnId::new("turn-2"),
+                },
+                turn_item(
+                    "u2",
+                    "turn-2",
+                    ItemBody::UserMessage {
+                        text: "Good. Now remove the old target directory.".into(),
+                    },
+                ),
+            ],
+        ),
+    ];
+    for (seq, (secs, bodies)) in (3..).step_by(10).zip(steps) {
+        feed(
+            &mut app,
+            "h1",
+            "s2",
+            at(update("s2", seq, bodies, Vec::new()), secs),
+        );
+    }
+    let streaming = vec![Item {
+        id: ItemId::new("a2"),
+        turn_id: TurnId::new("turn-2"),
+        body: assistant("Removing the old target next: first I check that nothing"),
+    }];
+    feed(
+        &mut app,
+        "h1",
+        "s2",
+        update("s2", 200, Vec::new(), streaming),
+    );
+    // The child runs its tests.
+    feed(
+        &mut app,
+        "h1",
+        "s3",
+        at(
+            update(
+                "s3",
+                3,
+                vec![
+                    EventBody::TurnStarted {
+                        turn_id: TurnId::new("turn-c"),
+                    },
+                    call(
+                        "k1",
+                        "turn-c",
+                        "Bash",
+                        json!({"command": "cargo test -p api health"}),
+                    ),
+                ],
+                Vec::new(),
+            ),
+            130,
+        ),
+    );
+    app.clock = Some(Timestamp::from_second(272).unwrap());
+    app.choose_row(crate::app::Row::Session {
+        key: key("h1", "s2"),
+        depth: 0,
+    });
+    app.act(crate::action::Action::Open);
+    app.focus = crate::app::Focus::Composer;
+    app
+}
+
+/// [`chat`] with the second turn asking to run `rm -rf target/`, 12 s ago.
+pub fn chat_approval() -> App {
+    let mut app = chat();
+    let bodies = vec![
+        call(
+            "c6",
+            "turn-2",
+            "Bash",
+            serde_json::json!({"command": "rm -rf target/"}),
+        ),
+        EventBody::ApprovalRequested {
+            approval_id: herder_protocol::ApprovalId::new("a1"),
+            turn_id: TurnId::new("turn-2"),
+            tool_call_id: ItemId::new("c6"),
+            summary: "$ rm -rf target/".to_owned(),
+            routed_to: herder_protocol::Route::User,
+            reason: None,
+        },
+    ];
+    feed(
+        &mut app,
+        "h1",
+        "s2",
+        at(update("s2", 300, bodies, Vec::new()), 260),
+    );
+    app
+}
+
+/// [`chat`] with the second turn asking which heading level the docs page uses.
+pub fn chat_question() -> App {
+    let mut app = chat();
+    let mut asked = question(
+        "q1",
+        "Which heading level for the API page?",
+        &["h2 under Reference", "h1, its own page"],
+    );
+    if let EventBody::QuestionAsked { turn_id, .. } = &mut asked {
+        *turn_id = TurnId::new("turn-2");
+    }
+    feed(
+        &mut app,
+        "h1",
+        "s2",
+        at(update("s2", 300, vec![asked], Vec::new()), 250),
+    );
+    app
 }
