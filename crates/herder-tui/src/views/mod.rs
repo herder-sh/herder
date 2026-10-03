@@ -3,12 +3,17 @@
 //! [`draw`] lays the screen out and hands each area to its module. Views read the app and
 //! write back only what layout decides, such as how many transcript lines fit.
 //!
-//! Below [`NARROW`] columns, as on a phone, the screen shows one pane at a time: the session
+//! Below 80 columns ([`NARROW`]), as on a phone, the screen shows one pane at a time: the session
 //! list, or what it opened, full width. Rows and titles there are compact.
 //!
 //! A tappable header tops the screen; on a narrow screen a bar of buttons for what can be done
 //! now sits over the status line ([`touch`]). Each view records where its taps and swipes land
 //! ([`crate::mouse::Hits`]) as it draws; dialogs cover what they hide.
+//!
+//! The last column stays blank: a terminal that has just written there may wrap at the next
+//! character or not, and a phone SSH app over mosh does not always agree with mosh, which
+//! shifts the rows below. With the ASCII glyph set the finished frame goes through
+//! [`crate::glyphs::fold`].
 
 mod accounts;
 mod composer;
@@ -35,24 +40,28 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::{Frame, Terminal};
 
 use crate::app::{App, Focus};
+use crate::glyphs::{self, Glyphs};
 use crate::mouse::Hits;
 
-/// Screens narrower than this show one pane at a time.
-pub const NARROW: u16 = 80;
+/// Screens drawn narrower than this show one pane at a time: below 80 columns, as the last
+/// column stays blank.
+pub const NARROW: u16 = 79;
 
-/// Draws the screen; with `resized`, onto a cleared screen with nothing assumed of the last
+/// Draws the screen; with `full`, onto a cleared screen with nothing assumed of the last
 /// frame.
 ///
 /// While resizing, the terminal may reflow or scroll what it shows, and a resize that ends at
 /// the size of the last draw, as a phone keyboard opening and closing between two draws, does
 /// not set off ratatui's own clear. Either leaves stale rows a diff against the last frame
-/// never touches, so every resize repaints every cell.
+/// never touches, so every resize repaints every cell. So does the first frame, over what the
+/// shell left on a terminal without an alternate screen, as under mosh, and a frame now and
+/// then, over whatever a terminal got wrong since.
 pub fn paint<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    resized: bool,
+    full: bool,
 ) -> Result<(), B::Error> {
-    if resized {
+    if full {
         let size = terminal.size()?;
         terminal.resize(Rect::new(0, 0, size.width, size.height))?;
     }
@@ -63,7 +72,11 @@ pub fn paint<B: Backend>(
 /// Draws the whole screen.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let mut hits = Hits::default();
-    let area = frame.area();
+    let screen = frame.area();
+    let area = Rect {
+        width: screen.width.saturating_sub(1),
+        ..screen
+    };
     let narrow = area.width < NARROW;
     let [header, body, bar, status_line] = Layout::vertical([
         Constraint::Length(1),
@@ -114,6 +127,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     prs::prompt(frame, area, app);
     hits.append(touch);
     app.hits = hits;
+    if Glyphs::for_width(app.glyphs, area.width) == Glyphs::Ascii {
+        glyphs::fold(frame.buffer_mut());
+    }
 }
 
 /// The main pane: every session's PRs, the inbox, or the open session; `compact` on a narrow

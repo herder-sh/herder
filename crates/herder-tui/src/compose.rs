@@ -17,6 +17,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::action::Action;
 use crate::app::{App, Effect, Focus, Row};
+use crate::glyphs::Glyphs;
 use crate::session::{MODES, SessionKey, mode_name};
 
 /// A user action of this module; see [`Action::Compose`].
@@ -102,7 +103,7 @@ pub struct Palette {
 
 /// The palette's commands, for its hint and the help.
 pub const COMMANDS: &str = "model <name> · mode read_only|ask|auto_edit|full_access · archive[!] · interrupt · new · \
-     down [project] · mouse on|off";
+     down [project] · mouse on|off · glyphs unicode|ascii";
 
 /// The new-session dialog.
 #[derive(Debug)]
@@ -507,7 +508,16 @@ impl App {
                 }
             };
             self.mouse = on;
-            return vec![Effect::Mouse(on)];
+            return vec![Effect::Mouse(on), Effect::Save];
+        }
+        if name == "glyphs" {
+            let Some(glyphs) = rest.as_slice().first().and_then(|name| Glyphs::parse(name)) else {
+                palette.error = Some("usage: glyphs unicode|ascii".to_owned());
+                self.compose.palette = Some(palette);
+                return Vec::new();
+            };
+            self.glyphs = Some(glyphs);
+            return vec![Effect::Save];
         }
         match self.command(palette.target.as_ref(), name, &rest) {
             Ok((key, body)) => vec![send(&key, body, Origin::Session(key.clone()))],

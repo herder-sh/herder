@@ -9,7 +9,7 @@ use ratatui::style::Color;
 use serde_json::json;
 
 use crate::app::Focus;
-use crate::app::{App, Msg};
+use crate::app::{App, Effect, Msg};
 use crate::fake::{self, added, assistant, item, update};
 
 fn render(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
@@ -19,7 +19,11 @@ fn render(app: &mut App, width: u16, height: u16) -> Terminal<TestBackend> {
 }
 
 fn press(app: &mut App, code: KeyCode) {
-    app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    app.update(key(code));
+}
+
+fn key(code: KeyCode) -> Msg {
+    Msg::Key(KeyEvent::new(code, KeyModifiers::NONE))
 }
 
 /// `s2` of [`fake::tree`] mid-turn: a prompt, some tool work, and an answer streaming.
@@ -464,11 +468,56 @@ fn a_child_names_its_primary_and_what_the_primary_answered() {
 /// `name_120x40`.
 fn narrow_and_wide(name: &str, app: &mut App) {
     for (width, height) in [(45, 40), (120, 40)] {
-        insta::assert_snapshot!(
-            format!("{name}_{width}x{height}"),
-            render(app, width, height).backend()
-        );
+        let terminal = render(app, width, height);
+        assert_last_column_blank(terminal.backend().buffer());
+        insta::assert_snapshot!(format!("{name}_{width}x{height}"), terminal.backend());
     }
+}
+
+/// Nothing is written in the last column, where terminals disagree about wrapping.
+fn assert_last_column_blank(buffer: &ratatui::buffer::Buffer) {
+    let x = buffer.area.right() - 1;
+    for y in buffer.area.top()..buffer.area.bottom() {
+        assert_eq!(buffer[(x, y)], ratatui::buffer::Cell::default(), "row {y}");
+    }
+}
+
+#[test]
+fn a_narrow_screen_shows_ascii_unless_glyphs_chose_unicode() {
+    let mut app = fake::tree();
+    let text = "Done — the “fix” works… mostly → ship it";
+    let events = vec![added("i1", assistant(text))];
+    fake::feed(&mut app, "h1", "s2", update("s2", 3, events, Vec::new()));
+    press(&mut app, KeyCode::Enter);
+    let ascii = render(&mut app, 45, 20).backend().to_string();
+    let borders = '\u{2500}'..='\u{257f}';
+    assert!(
+        ascii.chars().all(|c| c.is_ascii() || borders.contains(&c)),
+        "{ascii}"
+    );
+    assert!(
+        ascii.contains(r#"Done - the "fix" works. mostly > ship"#),
+        "{ascii}"
+    );
+    insta::assert_snapshot!(render(&mut app, 45, 20).backend());
+
+    press(&mut app, KeyCode::Char(':'));
+    fake::type_text(&mut app, "glyphs emoji");
+    assert_eq!(app.update(key(KeyCode::Enter)), []);
+    let palette = app.compose.palette.as_ref().unwrap();
+    assert_eq!(
+        palette.error.as_deref(),
+        Some("usage: glyphs unicode|ascii")
+    );
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char(':'));
+    fake::type_text(&mut app, "glyphs unicode");
+    assert_eq!(app.update(key(KeyCode::Enter)), [Effect::Save]);
+    let unicode = render(&mut app, 45, 20).backend().to_string();
+    assert!(
+        unicode.contains("Done — the “fix” works… mostly → ship"),
+        "{unicode}"
+    );
 }
 
 #[test]
