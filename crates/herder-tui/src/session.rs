@@ -1,13 +1,13 @@
 //! What the TUI knows of one session, folded from its subscription's updates: the facts the
 //! session list shows and the transcript the session view renders.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use herder_client_core::SessionUpdate;
 use herder_protocol::{
-    AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, ErrorClass, EscalationReason, Event,
-    EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider, PullRequest, QuestionId,
-    Route, SessionId, SessionStatus, Timestamp, TurnId,
+    AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, AttachmentId, ErrorClass,
+    EscalationReason, Event, EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider,
+    PullRequest, QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -69,6 +69,9 @@ pub struct Session {
     pub queued: Vec<String>,
     /// Pull requests linked to the session now, in the order they were linked.
     pub prs: Vec<PullRequest>,
+    /// Images its prompts carried that its machine does not have, as fetching them told:
+    /// the vault never got them, so a session recovered from it lacks them.
+    pub not_backed_up: HashSet<AttachmentId>,
 }
 
 /// An approval request waiting for an answer.
@@ -211,6 +214,7 @@ impl Session {
             questions: Vec::new(),
             queued: Vec::new(),
             prs: Vec::new(),
+            not_backed_up: HashSet::new(),
         }
     }
 

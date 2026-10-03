@@ -366,6 +366,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     address: "vault.lan:7447".into(),
                     fingerprint: "3f9a".repeat(16),
                 }),
+                volume: None,
             },
         },
         ServerMessage::CommandAccepted {
@@ -373,6 +374,10 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::VaultLink {
                 is_vault: true,
                 vault: None,
+                volume: Some(VaultVolume {
+                    total_bytes: 500_000_000_000,
+                    used_bytes: 420_000_000_000,
+                }),
             },
         },
         ServerMessage::CommandAccepted {
@@ -741,12 +746,22 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                     host_name: "devbox".into(),
                     online: true,
                     last_seen: at(),
+                    usage: Some(HostUsage {
+                        sessions: 12,
+                        attachment_bytes: 340_000_000,
+                        attachments_cap: Some(1 << 30),
+                    }),
                 },
                 FleetHost {
                     host_id: HostId::new("01J9HOST2"),
                     host_name: "laptop".into(),
                     online: false,
                     last_seen: at(),
+                    usage: Some(HostUsage {
+                        sessions: 3,
+                        attachment_bytes: 0,
+                        attachments_cap: None,
+                    }),
                 },
             ],
         },
@@ -1465,6 +1480,7 @@ fn vault_link_commands_have_their_wire_form() {
     let unlinked = CommandResult::VaultLink {
         is_vault: false,
         vault: None,
+        volume: None,
     };
     assert_eq!(
         serde_json::to_value(&unlinked).unwrap(),
@@ -1612,6 +1628,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             host_name: "devbox".into(),
             build: "herder/0.0.0".into(),
             pairing_code: Some("483-921".into()),
+            attachments_cap: Some(1 << 30),
         }),
         HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
@@ -1619,6 +1636,7 @@ fn host_fixtures() -> Vec<HostMessage> {
             host_name: "devbox".into(),
             build: "herder/0.0.0".into(),
             pairing_code: None,
+            attachments_cap: None,
         }),
         HostMessage::Session(SessionSummary {
             parent: Some(SessionId::new("01J9PRIMARY")),

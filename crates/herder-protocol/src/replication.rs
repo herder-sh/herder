@@ -24,6 +24,16 @@
 //! idempotent: the vault holds one image per session and attachment id, and skips a re-send
 //! with the same content hash. Only image bytes the host still has are sent.
 //!
+//! Images are backed up only when the host's hello gives an `attachments_cap`; without one the
+//! host sends none, and the vault drops any it gets. Within the cap the vault evicts the
+//! host's oldest images to make room for a new one, and drops an image bigger than the cap.
+//! Neither fails the connection: a session whose images are not held is recovered without
+//! them.
+//!
+//! The vault drops archived sessions after its retention period. Its hello still gives a
+//! cursor for each, at the seq it held, so the host does not send it again; it takes the
+//! session back once the host's summary shows it unarchived.
+//!
 //! Re-sending is idempotent: events at seqs the vault already holds are compared with what it
 //! holds and, when equal, skipped and acknowledged again. A batch that leaves a gap, or that
 //! holds a different event at a seq the vault already has, changes nothing and is answered
@@ -92,6 +102,11 @@ pub struct HostHello {
     /// once it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_code: Option<String>,
+    /// Most bytes of this host's images the vault keeps, oldest evicted first to make room
+    /// for a new one; absent when the host backs up no images, so the vault keeps none it
+    /// sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments_cap: Option<u64>,
 }
 
 /// A session as the fleet index lists it.

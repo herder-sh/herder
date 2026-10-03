@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use herder_protocol::{
-    Answer, ApprovalDecision, CommandBody, CommandResult, HostId, Image, MAX_PROMPT_IMAGE_BYTES,
-    PermissionMode, SessionStatus,
+    Answer, ApprovalDecision, AttachmentId, CommandBody, CommandResult, HostId,
+    IMAGE_NOT_BACKED_UP, Image, MAX_PROMPT_IMAGE_BYTES, PermissionMode, SessionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -75,9 +75,11 @@ pub enum Origin {
     NewSession(HostId),
     /// A step of backing a machine up to a vault.
     Backup(crate::backup::Sent),
-    /// Fetching a transcript's image: its file name, and whether to open it or only save it.
+    /// Fetching a transcript's image: which one, its file name, and whether to open it or
+    /// only save it.
     Image {
         key: SessionKey,
+        attachment_id: AttachmentId,
         name: String,
         open: bool,
     },
@@ -454,7 +456,12 @@ impl App {
         result: Result<CommandResult, String>,
     ) -> Vec<Effect> {
         match origin {
-            Origin::Image { key, name, open } => match result {
+            Origin::Image {
+                key,
+                attachment_id,
+                name,
+                open,
+            } => match result {
                 Ok(CommandResult::Attachment { data, .. }) => {
                     return vec![Effect::Image {
                         name,
@@ -463,6 +470,13 @@ impl App {
                     }];
                 }
                 Ok(_) => self.session_result(key, Some("the machine sent no image".to_owned())),
+                // Never backed up: its chip says so from now on.
+                Err(error) if error.starts_with(IMAGE_NOT_BACKED_UP) => {
+                    if let Some(session) = self.sessions.get_mut(&key) {
+                        session.not_backed_up.insert(attachment_id);
+                    }
+                    self.notice = Some(IMAGE_NOT_BACKED_UP.to_owned());
+                }
                 Err(error) => self.session_result(key, Some(error)),
             },
             Origin::Session(key) => self.session_result(key, result.err()),
@@ -1022,6 +1036,7 @@ mod tests {
             },
             origin: Origin::Image {
                 key: key("h1", "s2"),
+                attachment_id: herder_protocol::AttachmentId::new(id),
                 name: name.into(),
                 open,
             },
@@ -1030,12 +1045,14 @@ mod tests {
         let effects = press(&mut app, KeyCode::Char('o'));
         assert_eq!(effects, [fetch("01B", "herder-01B.jpg", true)]);
         // The image arrives and opens.
+        let origin = |id: &str, name: &str| Origin::Image {
+            key: key("h1", "s2"),
+            attachment_id: herder_protocol::AttachmentId::new(id),
+            name: name.into(),
+            open: true,
+        };
         let effects = app.update(Msg::Sent {
-            origin: Origin::Image {
-                key: key("h1", "s2"),
-                name: "herder-01B.jpg".into(),
-                open: true,
-            },
+            origin: origin("01B", "herder-01B.jpg"),
             result: Ok(CommandResult::Attachment {
                 media_type: "image/jpeg".into(),
                 data: herder_protocol::Bytes(vec![1, 2]),
@@ -1056,6 +1073,23 @@ mod tests {
         app.chat.cursor = Some(herder_protocol::ItemId::new("i3"));
         assert_eq!(press(&mut app, KeyCode::Char('o')), []);
         assert_eq!(app.notice.as_deref(), Some("no images here"));
+
+        // One the vault never got, in a recovered session: said so, and marked on its chip.
+        let effects = app.update(Msg::Sent {
+            origin: origin("01A", "herder-01A.png"),
+            result: Err(format!(
+                "{IMAGE_NOT_BACKED_UP}: the vault holds no image 01A of session s2"
+            )),
+        });
+        assert_eq!(effects, []);
+        assert_eq!(app.notice.as_deref(), Some(IMAGE_NOT_BACKED_UP));
+        let session = &app.sessions[&key("h1", "s2")];
+        assert!(
+            session
+                .not_backed_up
+                .contains(&herder_protocol::AttachmentId::new("01A"))
+        );
+        assert!(!app.compose.errors.contains_key(&key("h1", "s2")));
     }
 
     #[test]

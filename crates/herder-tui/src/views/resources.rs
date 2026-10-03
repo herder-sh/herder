@@ -366,7 +366,7 @@ fn memory_percent(host: &HostResources) -> f64 {
 const GIB: u64 = 1 << 30;
 
 /// `bytes` in MiB below a GiB, else in GiB.
-fn bytes(bytes: u64) -> String {
+pub(super) fn bytes(bytes: u64) -> String {
     if bytes < GIB {
         format!("{} MiB", bytes >> 20)
     } else {
@@ -375,7 +375,7 @@ fn bytes(bytes: u64) -> String {
 }
 
 /// `bytes` in GiB with one decimal, without the unit.
-fn gib(bytes: u64) -> String {
+pub(super) fn gib(bytes: u64) -> String {
     format!("{}.{}", bytes / GIB, bytes % GIB * 10 / GIB)
 }
 

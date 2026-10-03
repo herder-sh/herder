@@ -168,6 +168,15 @@
       "description": "Opening message of a host connection.",
       "type": "object",
       "properties": {
+        "attachments_cap": {
+          "description": "Most bytes of this host's images the vault keeps, oldest evicted first to make room\nfor a new one; absent when the host backs up no images, so the vault keeps none it\nsends.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "build": {
           "description": "Build name and version, for logs, e.g. `herder/0.1.0`.",
           "type": "string"

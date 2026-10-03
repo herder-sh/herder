@@ -701,6 +701,32 @@ fn the_machines_panel_shows_connections_and_fingerprints() {
 }
 
 #[test]
+fn a_vaults_disk_and_each_hosts_usage_with_a_warning_when_nearly_full() {
+    let text = |app: &mut App, width| format!("{:?}", render(app, width, 30).backend());
+    let mut app = fake::vault_storage(212.4);
+    let shown = text(&mut app, 100);
+    assert!(shown.contains("212.4 / 480.0 GiB, 44%"), "{shown}");
+    assert!(!shown.contains("nearly full"), "{shown}");
+    let mut app = fake::vault_storage(412.8);
+    at_three_widths("vault_storage", &mut app);
+    let shown = text(&mut app, 100);
+    assert!(shown.contains("3 hosts"), "{shown}");
+    assert!(shown.contains("disk 86%"), "{shown}");
+    assert!(
+        shown.contains("412.8 / 480.0 GiB, 86% · nearly full"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("devbox    4 sessions · images 340 MiB of 1.0 GiB"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("laptop    1 session  · images off"),
+        "{shown}"
+    );
+}
+
+#[test]
 fn the_machines_panel_shows_connection_quality() {
     let mut app = fake::tree();
     app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());

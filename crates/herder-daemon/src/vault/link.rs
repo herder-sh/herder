@@ -98,6 +98,7 @@ impl Link {
                     address: vault.address,
                     fingerprint: vault.fingerprint,
                 }),
+                volume: None,
             }),
             CommandBody::LinkVault {
                 addresses,
@@ -148,11 +149,7 @@ impl Link {
         let mut failures = Vec::new();
         let mut linked = None;
         for address in addresses {
-            let vault = VaultConfig {
-                address,
-                fingerprint: fingerprint.clone(),
-                pairing_code: Some(pairing_code.clone()),
-            };
+            let vault = VaultConfig::new(address, fingerprint.clone(), Some(pairing_code.clone()));
             match self
                 .replicator(vault.clone())
                 .map_err(internal)?

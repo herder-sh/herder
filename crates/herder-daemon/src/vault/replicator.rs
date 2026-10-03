@@ -5,8 +5,9 @@
 //! session's summary and the events after its cursor, then follows the journal as it grows.
 //! It reads the journal on its own and learns of new events through [`WakeOnEvent`], which
 //! only wakes it, so a slow or unreachable vault never holds up a session. When the vault is
-//! unreachable it retries with a backoff of up to [`BACKOFF_CAP`]. Every image a batch's
-//! prompts carried goes just ahead of the batch.
+//! unreachable it retries with a backoff of up to [`BACKOFF_CAP`]. When the host backs up
+//! images (`[vault] attachments`), every image a batch's prompts carried goes just ahead of
+//! the batch; otherwise none does.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -234,6 +235,7 @@ impl Replicator {
             host_name: self.host.name.clone(),
             build: BUILD.to_owned(),
             pairing_code: self.vault.pairing_code.clone(),
+            attachments_cap: self.vault.images_cap(),
         });
         ws.send(Message::text(serde_json::to_string(&hello)?))
             .await?;
@@ -291,7 +293,12 @@ impl Replicator {
                 let Some(last) = events.last().map(|event| event.seq) else {
                     break;
                 };
-                for attachment in attachments(&events) {
+                let images = if self.vault.attachments {
+                    attachments(&events)
+                } else {
+                    Vec::new()
+                };
+                for attachment in images {
                     match self.sessions.image(&session_id, &attachment).await {
                         Ok(image) => {
                             let image = AttachmentData {
