@@ -247,7 +247,7 @@ struct ProjectPicker: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(projects, id: \.id) { project in
                             PickRow(title: project.name, detail: project.machines.map(\.name).joined(separator: ", "),
-                                    symbol: "shippingbox", icon: ProjectIcon(projectId: project.id, name: project.name)) {
+                                    symbol: "shippingbox", icon: ProjectIcon(projectId: project.id, name: project.name, image: fleet.projectIcon(project.id))) {
                                 pick(project.id, project.machines)
                             }
                         }
