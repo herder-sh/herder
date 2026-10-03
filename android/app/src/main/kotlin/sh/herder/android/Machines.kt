@@ -253,13 +253,44 @@ internal fun sampleFleet(now: Instant): Profile.Open {
     summaries[api] = summaries.getValue(api).applied(
         update(
             "s2",
-            EventBody.PrLinked(pr(12, PrState.OPEN, CiStatus.PASSING)),
-            EventBody.PrLinked(pr(9, PrState.MERGED, CiStatus.PASSING)),
+            EventBody.PrLinked(
+                pr(12, PrState.OPEN, CiStatus.PASSING).copy(
+                    title = "Add a health endpoint",
+                    headBranch = "herder/api",
+                    review = ReviewStatus.REQUIRED,
+                ),
+            ),
+            EventBody.PrLinked(
+                pr(9, PrState.MERGED, CiStatus.PASSING).copy(
+                    title = "Bump axum",
+                    headBranch = "herder/fix-login",
+                ),
+            ),
         ),
     )
     val tests = SessionKey("h1", "s3")
     summaries[tests] = summaries.getValue(tests).applied(
-        update("s3", EventBody.PrLinked(pr(14, PrState.DRAFT, CiStatus.FAILING))),
+        update(
+            "s3",
+            EventBody.PrLinked(
+                pr(14, PrState.DRAFT, CiStatus.FAILING).copy(
+                    title = "Write the tests",
+                    headBranch = "herder/api-tests",
+                ),
+            ),
+        ),
+    )
+    val docs = SessionKey("v", "s7")
+    summaries[docs] = summaries.getValue(docs).applied(
+        update(
+            "s7",
+            EventBody.PrLinked(
+                pr(3, PrState.CLOSED, CiStatus.NONE).copy(
+                    title = "Try k3s",
+                    headBranch = "herder/docs",
+                ),
+            ),
+        ),
     )
     return Profile.Open(listOf(box, nas, vault), summaries)
 }
