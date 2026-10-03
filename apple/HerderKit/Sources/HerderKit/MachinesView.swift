@@ -188,8 +188,18 @@ extension ConnectionState {
         switch self {
         case .connected: "Connected"
         case .connecting: "Connecting…"
-        case .disconnected(let error): error
+        case .disconnected(let error): Self.explain(error)
         }
+    }
+
+    /// A disconnection as the user can act on it: a daemon on another protocol version needs
+    /// updating, which the raw error buries among unreachable addresses.
+    static func explain(_ error: String) -> String {
+        guard let theirsAt = error.range(of: "this daemon speaks "),
+              let oursAt = error.range(of: "protocol version ") else { return error }
+        let theirs = error[theirsAt.upperBound...].prefix { $0.isNumber }
+        let ours = error[oursAt.upperBound...].prefix { $0.isNumber }
+        return "Runs a different herder (protocol \(theirs); this app speaks \(ours)). Update one of them to connect."
     }
 }
 

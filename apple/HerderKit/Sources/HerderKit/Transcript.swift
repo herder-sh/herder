@@ -22,7 +22,7 @@ struct ToolCall: Hashable, Identifiable {
 /// A block of a session's transcript, as the session view shows it.
 enum TranscriptBlock: Hashable, Identifiable {
     /// A user message; `outgoing` while it is on its way from this device.
-    case user(id: String, text: String, outgoing: Outgoing?)
+    case user(id: String, text: String, attachments: [Attachment] = [], outgoing: Outgoing?)
     /// The agent is working, or about to, since the date.
     case working(since: Date?, waiting: Bool)
     case assistant(id: String, text: String, streaming: Bool)
@@ -33,7 +33,7 @@ enum TranscriptBlock: Hashable, Identifiable {
 
     var id: String {
         switch self {
-        case .user(let id, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
+        case .user(let id, _, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
@@ -73,9 +73,9 @@ enum Transcript {
                 if let index = calls.lastIndex(where: { $0.id == callId }) {
                     calls[index].attach(output: output, isError: isError, streaming: streaming)
                 }
-            case .userMessage(let text, _):
+            case .userMessage(let text, let attachments):
                 flushCalls(); flushChildren()
-                blocks.append(.user(id: item.id, text: text, outgoing: nil))
+                blocks.append(.user(id: item.id, text: text, attachments: attachments, outgoing: nil))
             case .assistantMessage(let text):
                 flushCalls(); flushChildren()
                 blocks.append(.assistant(id: item.id, text: text, streaming: streaming))

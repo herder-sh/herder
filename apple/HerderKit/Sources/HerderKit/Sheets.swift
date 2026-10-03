@@ -143,6 +143,7 @@ struct ProjectPicker: View {
     @State private var other = false
     @State private var hostId: HostId = ""
     @State private var repo = ""
+    @State private var addError: String?
     @FocusState private var searching: Bool
 
     /// Machines that run sessions: connected, and not a vault.
@@ -182,22 +183,20 @@ struct ProjectPicker: View {
                     Field(label: "Machine") {
                         ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
                     }
-                    Field(label: "Repository", hint: isLocal
-                          ? "A git repository on this Mac."
-                          : "An absolute path to a git repository on the machine. Browsing remote folders needs P0.10.") {
-                        HStack(spacing: 8) {
+                    Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
+                        VStack(spacing: 8) {
                             InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
-                            #if os(macOS)
-                            if isLocal {
-                                ActionButton(title: "Browse…", style: .secondary) { browse() }
-                                    .frame(width: 120)
-                            }
-                            #endif
+                            FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
+                                .id(hostId)
+                                .frame(height: 220)
                         }
+                    }
+                    if let addError {
+                        Text(addError).font(.footnote).foregroundStyle(Theme.failure)
                     }
                     HStack {
                         Spacer()
-                        ActionButton(title: "Continue", style: .primary) { submitPath() }
+                        ActionButton(title: "Add Project", style: .primary) { await submitPath() }
                             .frame(maxWidth: 160)
                             .disabled(!pathReady)
                             .opacity(pathReady ? 1 : 0.4)
@@ -249,28 +248,21 @@ struct ProjectPicker: View {
         dismiss()
     }
 
-    /// Whether the chosen machine is this device, whose folders the system panel can show.
-    private var isLocal: Bool {
-        let addresses = machines.first { $0.hostId == hostId }?.addresses ?? []
-        return addresses.contains { $0.hasPrefix("127.") || $0.hasPrefix("localhost") || $0.hasPrefix("[::1]") }
+    private var pathReady: Bool {
+        let path = repo.trimmingCharacters(in: .whitespaces)
+        return !hostId.isEmpty && (path.hasPrefix("/") || path.hasPrefix("~/"))
     }
 
-    #if os(macOS)
-    private func browse() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Repository"
-        if panel.runModal() == .OK, let url = panel.url { repo = url.path }
-    }
-    #endif
-
-    private var pathReady: Bool { !hostId.isEmpty && repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") }
-
-    private func submitPath() {
-        picked(Draft(hostId: hostId, repo: repo.trimmingCharacters(in: .whitespaces)))
-        dismiss()
+    /// Registers the repository as a project on the machine, then opens a chat in it.
+    private func submitPath() async {
+        let path = repo.trimmingCharacters(in: .whitespaces)
+        do {
+            let projectId = try await fleet.addProject(path, on: hostId)
+            picked(Draft(hostId: hostId, projectId: projectId, repo: path))
+            dismiss()
+        } catch {
+            addError = describe(error)
+        }
     }
 }
 
@@ -299,8 +291,8 @@ private struct PickRow: View {
     }
 }
 
-/// A project's settings on each machine that has it. They are set in each machine's
-/// `daemon.toml`; the protocol has no command to change them yet.
+/// A project's settings on each machine that has it, editable by the machine's owners: the
+/// permissions and account new sessions start with, and the command a new worktree runs first.
 struct ProjectSettingsSheet: View {
     let fleet: Fleet
     let projectId: String
@@ -310,25 +302,79 @@ struct ProjectSettingsSheet: View {
         SheetScaffold(title: group?.name ?? "Project", subtitle: projectId) {
             ForEach(fleet.machines.filter { $0.projects.contains { $0.projectId == projectId } }, id: \.hostId) { machine in
                 if let project = machine.projects.first(where: { $0.projectId == projectId }) {
-                    Field(label: machine.name) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            DetailRow(label: "Name", value: project.name)
-                            DetailRow(label: "Clones", value: project.paths.joined(separator: "\n"), mono: true)
-                            DetailRow(label: "Default account",
-                                      value: project.defaultAccount.flatMap { id in
-                                          machine.accounts.first { $0.accountId == id }?.label ?? id } ?? "")
-                            DetailRow(label: "Setup command", value: project.setupCommand ?? "", mono: true)
-                        }
-                        .padding(12)
-                        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-                    }
+                    ProjectSettingsForm(fleet: fleet, machine: machine, project: project)
                 }
             }
-            Text("These are set in each machine's `daemon.toml`, under `[[project]]`.")
-                .font(.footnote)
-                .foregroundStyle(Theme.tertiary)
         } footer: {
             Spacer()
+        }
+    }
+}
+
+private struct ProjectSettingsForm: View {
+    let fleet: Fleet
+    let machine: Machine
+    let project: Project
+    @State private var mode: PermissionMode?
+    @State private var account: AccountId?
+    @State private var setup = ""
+    @State private var saved = false
+    @State private var error: String?
+
+    var body: some View {
+        let owner = machine.role == .owner
+        Field(label: machine.name) {
+            VStack(alignment: .leading, spacing: 14) {
+                DetailRow(label: "Clones", value: project.paths.joined(separator: "\n"), mono: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("New sessions start with").font(.caption).foregroundStyle(Theme.secondary)
+                    ChoiceChips(options: [(PermissionMode?.none, "Ask each time", "")]
+                                + [PermissionMode.readOnly, .ask, .autoEdit, .fullAccess].map { (Optional($0), $0.label, "") },
+                                selection: $mode)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Default account").font(.caption).foregroundStyle(Theme.secondary)
+                    ChoiceChips(options: [(AccountId?.none, "Most room left", "")]
+                                + machine.accounts.map { (Optional($0.accountId), $0.label, $0.provider) },
+                                selection: $account)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Setup command, run once in each new worktree").font(.caption).foregroundStyle(Theme.secondary)
+                    InputBox(placeholder: "make bootstrap", text: $setup, mono: true)
+                }
+                HStack {
+                    if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
+                    if saved { Label("Saved", systemImage: "checkmark").font(.footnote).foregroundStyle(Theme.secondary) }
+                    Spacer()
+                    ActionButton(title: "Save", style: .primary) { await save() }
+                        .frame(width: 120)
+                        .disabled(!owner)
+                        .opacity(owner ? 1 : 0.4)
+                }
+                if !owner {
+                    Text("Only the machine's owners can change these.").font(.footnote).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .padding(12)
+            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        }
+        .onAppear {
+            mode = project.defaultPermissionMode
+            account = project.defaultAccount
+            setup = project.setupCommand ?? ""
+        }
+    }
+
+    private func save() async {
+        let command = setup.trimmingCharacters(in: .whitespaces)
+        do {
+            try await fleet.setProjectSettings(project.projectId, on: machine.hostId, mode: mode, account: account,
+                                               setupCommand: command.isEmpty ? nil : command)
+            saved = true
+            error = nil
+        } catch {
+            self.error = describe(error)
+            saved = false
         }
     }
 }
@@ -366,15 +412,17 @@ struct MachineSettingsSheet: View {
                             stat("Disconnected", Self.duration(health.down))
                         }
                         .padding(.bottom, 4)
-                        ForEach(Array(log.enumerated().reversed()), id: \.offset) { index, change in
-                            HStack(spacing: 10) {
-                                ConnectionMark(state: change.state)
-                                Text(change.at.formatted(date: .omitted, time: .standard))
+                        ForEach(Array(ConnectionHealth.runs(log, now: .now).reversed().enumerated()), id: \.offset) { _, run in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                ConnectionMark(state: run.state)
+                                Text(run.at.formatted(date: .omitted, time: .standard))
                                     .monospacedDigit().foregroundStyle(Theme.tertiary)
-                                Text(change.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                Text(run.state.label).foregroundStyle(Theme.text).lineLimit(2)
+                                if run.times > 1 {
+                                    Text("×\(run.times)").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                                }
                                 Spacer()
-                                Text(Self.duration((index + 1 < log.count ? log[index + 1].at : .now).timeIntervalSince(change.at)))
-                                    .monospacedDigit().foregroundStyle(Theme.tertiary)
+                                Text(Self.duration(run.lasted)).monospacedDigit().foregroundStyle(Theme.tertiary)
                             }
                             .font(.footnote)
                         }
@@ -465,6 +513,35 @@ struct MachineSettingsSheet: View {
 /// A machine's connection over its log: how long it has been up, how often it came back, and
 /// how long it was down.
 struct ConnectionHealth {
+    /// A stretch of the log that kept failing the same way, or one other state.
+    struct Run {
+        let state: ConnectionState
+        let at: Date
+        var times: Int
+        var lasted: TimeInterval
+    }
+
+    /// The log with retries that fail alike folded into one run: a failure and the reconnect
+    /// attempt after it repeat until something else happens.
+    static func runs(_ log: [ConnectionChange], now: Date) -> [Run] {
+        var runs: [Run] = []
+        for (index, change) in log.enumerated() {
+            let lasted = (index + 1 < log.count ? log[index + 1].at : now).timeIntervalSince(change.at)
+            if change.state == .connecting, index + 1 < log.count, let last = runs.last,
+               last.state == log[index + 1].state, case .disconnected = last.state {
+                runs[runs.count - 1].lasted += lasted
+                continue
+            }
+            if let last = runs.last, last.state == change.state, case .disconnected = change.state {
+                runs[runs.count - 1].times += 1
+                runs[runs.count - 1].lasted += lasted
+                continue
+            }
+            runs.append(Run(state: change.state, at: change.at, times: 1, lasted: lasted))
+        }
+        return runs
+    }
+
     let currentUp: TimeInterval?
     let reconnects: Int
     let down: TimeInterval
@@ -523,6 +600,113 @@ enum Clipboard {
             NSPasteboard.general.clearContents()
             if let newValue { NSPasteboard.general.setString(newValue, forType: .string) }
             #endif
+        }
+    }
+}
+
+/// A machine's folders, browsed through the daemon: git repositories are marked; picking one
+/// sets the path.
+struct FolderBrowser: View {
+    let fleet: Fleet
+    let hostId: HostId
+    @Binding var picked: String
+    @State private var path = "~"
+    @State private var entries: [DirectoryEntry] = []
+    @State private var error: String?
+    @State private var loading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button { open(parent) } label: { SwiftUI.Image(systemName: "chevron.up") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.secondary).disabled(path == "/")
+                Text(path).font(Theme.monoSmall).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.head)
+                Spacer()
+                if loading { ProgressView().controlSize(.mini).tint(Theme.tertiary) }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            Rectangle().fill(Theme.stroke).frame(height: 1)
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure).padding(10)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries.filter(\.isDir), id: \.name) { entry in
+                            let full = join(path, entry.name)
+                            Button {
+                                if entry.isRepo { picked = full } else { open(full) }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    SwiftUI.Image(systemName: entry.isRepo ? "shippingbox.fill" : "folder")
+                                        .foregroundStyle(entry.isRepo ? Theme.accent : Theme.secondary)
+                                        .frame(width: 18)
+                                    Text(entry.name).foregroundStyle(Theme.text)
+                                    if entry.isRepo { Text("repository").font(.caption).foregroundStyle(Theme.tertiary) }
+                                    Spacer()
+                                    if picked == full { SwiftUI.Image(systemName: "checkmark").foregroundStyle(Theme.text) }
+                                    if entry.isRepo {
+                                        Button { open(full) } label: { SwiftUI.Image(systemName: "chevron.right") }
+                                            .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Open the folder")
+                                    }
+                                }
+                                .font(.subheadline)
+                                .padding(.horizontal, 10)
+                                .frame(height: 32)
+                                .background(picked == full ? Theme.raised : .clear)
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+        .task { await load(picked.isEmpty ? path : picked) }
+        // A typed path moves the browser there once the typing pauses.
+        .task(id: picked) {
+            let typed = picked.trimmingCharacters(in: .whitespaces)
+            guard typed.hasPrefix("/") || typed.hasPrefix("~"), typed != path, !isEntry(typed) else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            await load(typed.count > 1 && typed.hasSuffix("/") ? String(typed.dropLast()) : typed, quiet: true)
+        }
+    }
+
+    /// Whether the path is one of the shown folders, picked rather than typed.
+    private func isEntry(_ full: String) -> Bool {
+        entries.contains { join(path, $0.name) == full }
+    }
+
+    private var parent: String {
+        let trimmed = path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
+        guard let slash = trimmed.lastIndex(of: "/") else { return "/" }
+        return slash == trimmed.startIndex ? "/" : String(trimmed[..<slash])
+    }
+
+    private func join(_ base: String, _ name: String) -> String {
+        base.hasSuffix("/") ? base + name : base + "/" + name
+    }
+
+    private func open(_ next: String) {
+        Task { await load(next) }
+    }
+
+    /// Lists a folder and makes it the path; `quiet` keeps the last listing when a half-typed
+    /// path does not exist.
+    private func load(_ next: String, quiet: Bool = false) async {
+        loading = true
+        defer { loading = false }
+        do {
+            let listing = try await fleet.listDirectory(next, on: hostId)
+            path = listing.path
+            entries = listing.entries.sorted { ($0.isRepo ? 0 : 1, $0.name.lowercased()) < ($1.isRepo ? 0 : 1, $1.name.lowercased()) }
+            error = nil
+            if !quiet { picked = listing.path }
+        } catch {
+            if !quiet { self.error = describe(error) }
         }
     }
 }
