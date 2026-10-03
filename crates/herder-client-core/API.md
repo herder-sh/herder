@@ -234,7 +234,8 @@ them against pending human outbox entries. Older human prompts omit this field.
 The MCP `send_session` tool accepts a destination session, text and stable `message_id`.
 It does not create a child or change task ancestry. Its acceptance means persisted normal
 queue delivery; it promises neither immediate execution nor an automatic reply. Retries of
-the same sender/destination/key do not create a second queued or journaled prompt. Different
+the same sender/destination/key do not create a second queued or journaled prompt, even
+after a queued message was discarded by archiving. Durable receipts retain the accepted key. Different
 text under a used key fails. Self-send, read-only targets, permission escalation and relay
 chains beyond eight hops are refused. Existing child send/spawn retain their restrictions
 and carry the same provenance so they cannot reset relay depth. A human prompt resets it.
