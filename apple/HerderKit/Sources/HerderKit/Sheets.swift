@@ -306,6 +306,7 @@ struct ProjectSettingsSheet: View {
     let fleet: Fleet
     let projectId: String
     @State private var hostId: HostId?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let group = fleet.lists.projects.first { $0.id == projectId }
@@ -330,6 +331,8 @@ struct ProjectSettingsSheet: View {
             }
             Spacer()
         }
+        // Removed from its last machine: nothing is left to set.
+        .onChange(of: machines.isEmpty) { if machines.isEmpty { dismiss() } }
     }
 }
 
@@ -371,6 +374,7 @@ struct ProjectSettingsForm: View {
     @State private var setup = ""
     @State private var loaded = false
     @State private var error: String?
+    @State private var confirmingRemove = false
     @FocusState private var editingSetup: Bool
 
     var body: some View {
@@ -434,6 +438,28 @@ struct ProjectSettingsForm: View {
                     .frame(minHeight: 44)
                 }
             }
+            SettingsGroup(title: "Remove") {
+                let live = ProjectSettingsForm.liveSessions(of: project.projectId, on: machine)
+                SettingRow(label: "Remove from \(machine.name)",
+                           detail: live == 0 ? "The clones stay on disk; you can add it again"
+                                             : "Archive its \(live) live session\(live == 1 ? "" : "s") first") {
+                    Button("Remove…", role: .destructive) { confirmingRemove = true }
+                        .buttonStyle(.plain)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.failure)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(Theme.raised, in: .rect(cornerRadius: 7))
+                        .disabled(!owner || live > 0)
+                        .opacity(owner && live == 0 ? 1 : 0.4)
+                }
+            }
+        }
+        .confirmationDialog("Remove \(project.name) from \(machine.name)?", isPresented: $confirmingRemove,
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { Task { await remove() } }
+        } message: {
+            Text("Its clones stay on disk. Archived sessions keep their history.")
         }
         .onAppear {
             mode = project.defaultPermissionMode
@@ -444,6 +470,19 @@ struct ProjectSettingsForm: View {
         .onChange(of: mode) { if loaded { Task { await save() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
+    }
+
+    /// Sessions of the project on the machine that are not archived, which block removing it.
+    nonisolated static func liveSessions(of projectId: ProjectId, on machine: Machine) -> Int {
+        machine.sessions.filter { $0.projectId == projectId && $0.status != .archived }.count
+    }
+
+    private func remove() async {
+        do {
+            try await fleet.removeProject(project.projectId, on: machine.hostId)
+        } catch {
+            self.error = describe(error)
+        }
     }
 
     private var accountLabel: String {

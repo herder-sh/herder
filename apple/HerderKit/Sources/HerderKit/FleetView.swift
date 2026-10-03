@@ -51,6 +51,10 @@ struct FleetView: View {
             }
         }
         .onChange(of: session) { if session != nil { draft = nil } }
+        // A removed project's pane has nothing left to show.
+        .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
+            if case .project(let id) = item, !ids.contains(id) { item = .home }
+        }
         // A draft belongs to Home or its own project; leaving for elsewhere drops it.
         .onChange(of: item) {
             guard let draft else { return }

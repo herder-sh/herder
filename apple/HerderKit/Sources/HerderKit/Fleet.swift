@@ -205,6 +205,12 @@ public final class Fleet {
             projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand))
     }
 
+    /// Stops a machine managing a project; its clones stay on disk. The machine refuses while
+    /// the project has sessions that are not archived.
+    func removeProject(_ projectId: ProjectId, on hostId: HostId) async throws {
+        _ = try await client.send(hostId: hostId, command: .removeProject(projectId: projectId))
+    }
+
     /// Runs a queued prompt now: interrupts the turn, so the daemon starts the queue.
     func sendNow(_ key: SessionKey) async {
         await interrupt(key)
