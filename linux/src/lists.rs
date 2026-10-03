@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
 use herder_protocol::{
-    EventBody, FleetHost, HostId, PrState, ProjectId, PullRequest, SessionHead, SessionId,
-    SessionStatus, Timestamp,
+    EventBody, FleetHost, HostId, ProjectId, PullRequest, SessionHead, SessionId, SessionStatus,
+    Timestamp,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -158,13 +158,6 @@ pub fn host_state(host: &FleetHost) -> String {
         format!("{minutes}m")
     };
     format!("offline · {ago} ago")
-}
-
-/// The pull requests a list shows, open ones first, each group in link order.
-fn ordered(prs: &[PullRequest]) -> Vec<PullRequest> {
-    let mut prs = prs.to_vec();
-    prs.sort_by_key(|pr| matches!(pr.state, PrState::Merged | PrState::Closed));
-    prs
 }
 
 fn key(machine: &Machine, head: &SessionHead) -> SessionKey {
@@ -358,7 +351,9 @@ impl Lists<'_> {
             } else {
                 0
             },
-            prs: summary.map(|s| ordered(&s.prs)).unwrap_or_default(),
+            prs: summary
+                .map(|s| crate::prs::ordered(&s.prs))
+                .unwrap_or_default(),
             place: (grouping == Grouping::Projects).then(|| place(machine, head)),
             moved_to: self.moved_to(key, head),
         })
@@ -460,8 +455,8 @@ fn place(machine: &Machine, head: &SessionHead) -> String {
 #[cfg(test)]
 pub mod tests {
     use herder_protocol::{
-        AccountId, CiStatus, Event, Mergeable, PermissionMode, Project, Provider, ReviewStatus,
-        Role,
+        AccountId, CiStatus, Event, Mergeable, PermissionMode, PrState, Project, Provider,
+        ReviewStatus, Role,
     };
 
     use super::*;
@@ -770,7 +765,7 @@ pub mod tests {
         )));
         assert_eq!(summary.branch, "herder/b");
         assert_eq!(
-            ordered(&summary.prs),
+            crate::prs::ordered(&summary.prs),
             [
                 pr(9, PrState::Open, CiStatus::Failing),
                 pr(7, PrState::Merged, CiStatus::Passing)

@@ -92,8 +92,7 @@ button.tool-header label.tool-label {
   color: @herder_text_muted;
 }
 
-.assistant .code,
-.tool-block {
+.assistant .code {
   background-color: @card_bg_color;
   border-radius: 6px;
 }
@@ -155,34 +154,6 @@ button.tool-header label.tool-label {
 
 .added-count { color: @herder_success; font-family: monospace; }
 .removed-count { color: @herder_error; font-family: monospace; }
-
-.tool-block {
-  box-shadow: inset 3px 0 alpha(currentColor, 0.15);
-  padding: 6px 0 6px 0;
-}
-
-.tool-block.failed {
-  box-shadow: inset 3px 0 @herder_error;
-}
-
-.tool-block > button.tool-header {
-  margin: 0 6px 0 9px;
-}
-
-.tool-block .output {
-  padding: 4px 16px 4px 18px;
-}
-
-.tool-block button.more {
-  margin: 0 6px 0 12px;
-  padding: 2px 6px;
-  min-height: 0;
-  color: @herder_text_muted;
-}
-
-.tool-block button.more label {
-  font-weight: normal;
-}
 
 .diff {
   padding: 4px 0;
@@ -337,4 +308,123 @@ button.tool-header label.tool-label {
   font-family: monospace;
   font-size: 0.9em;
   color: @herder_text_muted;
+}
+
+/* Tool calls: one row each, how long and how it went at the end, a chevron for a body. */
+.tool-took {
+  font-size: 0.9em;
+  font-feature-settings: "tnum";
+  color: @herder_text_muted;
+}
+
+.tool-status {
+  min-width: 1.2em;
+}
+
+.tool-status.pending { color: @herder_warning; }
+.tool-status.failed { color: @herder_error; }
+
+/* Start-aligned as the status is, on the first line of a wrapped row. */
+.tool-chevron {
+  color: @herder_text_muted;
+  -gtk-icon-size: 12px;
+  min-width: 16px;
+  min-height: 1.4em;
+}
+
+spinner.tool-status {
+  margin-top: 0.2em;
+}
+
+.transcript > .tool-row {
+  padding: 2px 8px;
+}
+
+.transcript > .tool > button.tool-header {
+  padding: 2px 4px;
+}
+
+.tool-body {
+  background-color: @card_bg_color;
+  box-shadow: inset 3px 0 alpha(currentColor, 0.15);
+  border-radius: 6px;
+  padding: 6px 0;
+  margin: 4px 0 6px 0;
+}
+
+.tool-body.failed {
+  box-shadow: inset 3px 0 @herder_error;
+}
+
+.tool-body .output {
+  padding: 2px 16px 2px 18px;
+}
+
+.tool-body .todos {
+  padding: 2px 16px 2px 18px;
+}
+
+.tool-body button.more {
+  margin: 0 6px 0 12px;
+  padding: 2px 6px;
+  min-height: 0;
+  color: @herder_text_muted;
+}
+
+.tool-body button.more label {
+  font-weight: normal;
+}
+
+/* Pull requests: the number and state in the state's colour, the checks in theirs. */
+.pr-open { color: @herder_pr_open; }
+.pr-draft { color: @herder_pr_draft; }
+.pr-merged { color: @herder_pr_merged; }
+.pr-closed { color: @herder_pr_closed; }
+
+.pr-row {
+  padding: 9px 6px 9px 14px;
+}
+
+.pr-row.line {
+  padding: 3px 6px 3px 14px;
+}
+
+.pr-number {
+  font-weight: bold;
+  font-feature-settings: "tnum";
+}
+
+.pr-title {
+  font-weight: 600;
+}
+
+.pr-meta {
+  font-size: 0.9em;
+}
+
+.pr-state {
+  font-size: 0.85em;
+  font-weight: bold;
+  padding: 0 7px;
+  border-radius: 99px;
+  background-color: alpha(currentColor, 0.14);
+}
+
+.pr-check.ok { color: @herder_success; }
+.pr-check.bad { color: @herder_error; }
+.pr-check.wait { color: @herder_warning; }
+.pr-check.unknown { color: @herder_text_muted; }
+
+.pr-branch {
+  font-family: monospace;
+  color: @herder_text_muted;
+}
+
+/* The session view's PRs, over the transcript, in line with its cards. */
+.pr-strip {
+  padding: 6px 24px 6px 24px;
+}
+
+.pr-heading {
+  margin-top: 6px;
 }

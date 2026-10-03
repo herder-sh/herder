@@ -1,8 +1,10 @@
 //! The main window: the machines in a sidebar, each with its connection state and a vault's
 //! hosts under it, online or offline; and the sessions of the selected one, or of all, grouped
 //! by project or by machine ([`crate::lists`]). Activating a session opens it
-//! ([`crate::session_view`]) over the list. Narrow, the sidebar, the list and the session are
-//! pages of one stack and rows show less, as the TUI's compact rows do.
+//! ([`crate::session_view`]) over the list. The sidebar's "Pull requests" lists every
+//! session's PRs instead, grouped the same way ([`crate::prs`]), as the TUI's `P` view.
+//! Narrow, the sidebar, the list and the session are pages of one stack and rows show less,
+//! as the TUI's compact rows do.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +13,9 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gio, glib};
 use herder_client_core::{ConnectionState, Machine, SessionUpdate};
-use herder_protocol::{CiStatus, Mergeable, PrState, PullRequest, ReviewStatus, SessionStatus};
+use herder_protocol::{
+    CiStatus, CommandBody, HostId, Mergeable, PrState, PullRequest, ReviewStatus, SessionStatus,
+};
 
 use crate::lists::{self, Grouping, Lists, Scope, SessionKey, Summary};
 use crate::session::Session;
@@ -42,6 +46,11 @@ pub struct MainWindow {
     content_stack: gtk::Stack,
     /// The groups of the session list.
     groups: gtk::Box,
+    /// The sidebar's row of the PR list, kept across redraws for its count.
+    prs_row: adw::ActionRow,
+    /// The groups of the PR list.
+    pr_groups: gtk::Box,
+    toasts: adw::ToastOverlay,
     by_machine: gtk::ToggleButton,
     state: Rc<RefCell<State>>,
 }
@@ -54,10 +63,20 @@ struct State {
     /// Every listed session as its events built it, for the session view.
     sessions: HashMap<SessionKey, Session>,
     /// What each sidebar row selects, in row order.
-    scopes: Vec<Scope>,
+    picks: Vec<Pick>,
     scope: Scope,
+    /// Whether the PR list shows rather than the sessions of `scope`.
+    prs: bool,
     grouping: Grouping,
     compact: bool,
+    sender: Option<Sender>,
+}
+
+/// What a sidebar row selects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Pick {
+    Sessions(Scope),
+    Prs,
 }
 
 impl MainWindow {
@@ -119,6 +138,22 @@ impl MainWindow {
             .icon_name("computer-symbolic")
             .title("No sessions")
             .build();
+        let pr_groups = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(18)
+            .margin_top(12)
+            .margin_bottom(24)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        let no_prs = adw::StatusPage::builder()
+            .icon_name("insert-link-symbolic")
+            .title("No pull requests")
+            .description(
+                "A session's pull requests show here once it pushes its branch, \
+                 or once one is linked from the session's menu.",
+            )
+            .build();
         let content_stack = gtk::Stack::new();
         content_stack.add_named(
             &gtk::ScrolledWindow::builder()
@@ -133,10 +168,25 @@ impl MainWindow {
             Some("sessions"),
         );
         content_stack.add_named(&no_sessions, Some("empty"));
+        content_stack.add_named(
+            &gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .child(
+                    &adw::Clamp::builder()
+                        .maximum_size(900)
+                        .child(&pr_groups)
+                        .build(),
+                )
+                .build(),
+            Some("prs"),
+        );
+        content_stack.add_named(&no_prs, Some("no-prs"));
         content_stack.set_visible_child_name("empty");
+        let toasts = adw::ToastOverlay::new();
+        toasts.set_child(Some(&content_stack));
         let content_view = adw::ToolbarView::new();
         content_view.add_top_bar(&content_header);
-        content_view.set_content(Some(&content_stack));
+        content_view.set_content(Some(&toasts));
         let sessions_page = adw::NavigationPage::builder()
             .title("Sessions")
             .tag("sessions")
@@ -184,6 +234,9 @@ impl MainWindow {
         window.add_breakpoint(narrow.clone());
         window.set_application(app);
 
+        let prs_row = adw::ActionRow::builder().title("Pull requests").build();
+        prs_row.add_prefix(&crate::prs::icon());
+
         let this = Self {
             window,
             split,
@@ -197,6 +250,9 @@ impl MainWindow {
             session_view,
             content_stack,
             groups,
+            prs_row,
+            pr_groups,
+            toasts,
             by_machine,
             state: Rc::default(),
         };
@@ -232,9 +288,29 @@ impl MainWindow {
         self.window.present();
     }
 
-    /// Where the session view's commands go.
+    /// Where the session view's and the PR list's commands go.
     pub fn set_sender(&self, sender: Sender) {
+        self.state.borrow_mut().sender = Some(Rc::clone(&sender));
         self.session_view.set_sender(sender);
+    }
+
+    /// Sends `command` to `host_id`; a refusal shows as a toast.
+    fn send(&self, host_id: HostId, command: CommandBody) {
+        let Some(sender) = self.state.borrow().sender.clone() else {
+            return;
+        };
+        let reply = sender(host_id, command);
+        let toasts = self.toasts.clone();
+        glib::spawn_future_local(async move {
+            if let Err(message) = reply.await {
+                toasts.add_toast(
+                    adw::Toast::builder()
+                        .title(glib::markup_escape_text(&message))
+                        .timeout(10)
+                        .build(),
+                );
+            }
+        });
     }
 
     /// Opens `key`'s session over the list.
@@ -300,10 +376,20 @@ impl MainWindow {
             }
         }
         self.sidebar_title.set_subtitle(&summary(machines));
-        let scope = self.state.borrow().scope.clone();
+        let pick = {
+            let state = self.state.borrow();
+            if state.prs {
+                Pick::Prs
+            } else {
+                Pick::Sessions(state.scope.clone())
+            }
+        };
         // Rebuilding the rows fires `row-selected` with none; the selection is restored below.
+        // Unselected first: the PR row is kept, and a row removed while selected stays
+        // marked so, which would make selecting it again do nothing.
+        self.list.unselect_all();
         self.list.remove_all();
-        let mut scopes = Vec::new();
+        let mut picks = Vec::new();
         if !machines.is_empty() {
             let row = adw::ActionRow::builder()
                 .title("All machines")
@@ -311,7 +397,9 @@ impl MainWindow {
                 .build();
             row.add_prefix(&gtk::Image::from_icon_name("view-list-symbolic"));
             self.list.append(&row);
-            scopes.push(Scope::All);
+            picks.push(Pick::Sessions(Scope::All));
+            self.list.append(&self.prs_row);
+            picks.push(Pick::Prs);
         }
         for machine in machines {
             let state = lists::connection(&machine.connection);
@@ -319,7 +407,7 @@ impl MainWindow {
             let mark = mark(&machine.connection);
             self.list
                 .append(&sidebar_row(&machine.name, &subtitle, mark, 0));
-            scopes.push(Scope::Machine(machine.host_id.clone()));
+            picks.push(Pick::Sessions(Scope::Machine(machine.host_id.clone())));
             for host in &machine.hosts {
                 let count = machine
                     .sessions
@@ -330,24 +418,27 @@ impl MainWindow {
                 let mark = if host.online { "success" } else { "error" };
                 self.list
                     .append(&sidebar_row(&host.host_name, &subtitle, mark, 1));
-                scopes.push(Scope::Host {
+                picks.push(Pick::Sessions(Scope::Host {
                     vault: machine.host_id.clone(),
                     host: host.host_id.clone(),
-                });
+                }));
             }
         }
         self.sidebar
             .set_visible_child_name(if machines.is_empty() { "empty" } else { "list" });
         // A machine or host gone from the list falls back to all machines.
-        let index = scopes
+        let index = picks
             .iter()
-            .position(|known| *known == scope)
-            .or((!scopes.is_empty()).then_some(0));
-        self.state.borrow_mut().scopes = scopes;
+            .position(|known| *known == pick)
+            .or((!picks.is_empty()).then_some(0));
+        self.state.borrow_mut().picks = picks;
         match index.and_then(|index| self.list.row_at_index(i32::try_from(index).ok()?)) {
             Some(row) => self.list.select_row(Some(&row)),
             None => {
-                self.state.borrow_mut().scope = Scope::All;
+                let mut state = self.state.borrow_mut();
+                state.scope = Scope::All;
+                state.prs = false;
+                drop(state);
                 self.content.set_title("Sessions");
                 self.sessions_page.set_title("Sessions");
                 self.show_sessions();
@@ -396,16 +487,25 @@ impl MainWindow {
     fn select(&self, index: i32) {
         let title = {
             let mut state = self.state.borrow_mut();
-            let Some(scope) = usize::try_from(index)
+            let Some(pick) = usize::try_from(index)
                 .ok()
-                .and_then(|index| state.scopes.get(index))
+                .and_then(|index| state.picks.get(index))
                 .cloned()
             else {
                 return;
             };
-            let title = scope_title(&state.machines, &scope);
-            state.scope = scope;
-            title
+            match pick {
+                Pick::Sessions(scope) => {
+                    let title = scope_title(&state.machines, &scope);
+                    state.scope = scope;
+                    state.prs = false;
+                    title
+                }
+                Pick::Prs => {
+                    state.prs = true;
+                    "Pull requests".to_owned()
+                }
+            }
         };
         self.content.set_title(&title);
         self.sessions_page.set_title(&title);
@@ -423,7 +523,7 @@ impl MainWindow {
         self.show_sessions();
     }
 
-    /// Redraws the session list.
+    /// Redraws the session list, or the PR list, and the PR list's count in the sidebar.
     fn show_sessions(&self) {
         let state = self.state.borrow();
         let lists = Lists {
@@ -431,6 +531,21 @@ impl MainWindow {
             summaries: &state.summaries,
             compact: state.compact,
         };
+        let prs = state.summaries.values().flat_map(|summary| &summary.prs);
+        let (open, linked) = prs.fold((0, 0), |(open, linked), pr| {
+            (open + usize::from(crate::prs::live(pr)), linked + 1)
+        });
+        self.prs_row.set_subtitle(&match (open, linked) {
+            (0, 0) => "none linked".to_owned(),
+            (0, linked) => format!("{linked} closed or merged"),
+            (open, _) => format!("{open} open"),
+        });
+        if state.prs {
+            let groups = lists.groups(&Scope::All, state.grouping);
+            drop(state);
+            self.show_prs(&groups);
+            return;
+        }
         let groups = lists.groups(&state.scope, state.grouping);
         while let Some(child) = self.groups.first_child() {
             self.groups.remove(&child);
@@ -452,6 +567,86 @@ impl MainWindow {
         let any = groups.iter().any(|group| !group.rows.is_empty());
         self.content_stack
             .set_visible_child_name(if any { "sessions" } else { "empty" });
+    }
+
+    /// Redraws the PR list: under each project's or machine's heading, each session with PRs
+    /// over its PRs, live ones first.
+    fn show_prs(&self, groups: &[lists::Group]) {
+        while let Some(child) = self.pr_groups.first_child() {
+            self.pr_groups.remove(&child);
+        }
+        let compact = self.state.borrow().compact;
+        let mut any = false;
+        for group in groups {
+            let rows: Vec<&lists::SessionRow> = group
+                .rows
+                .iter()
+                .filter(|row| !row.prs.is_empty())
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            any = true;
+            let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+            section.append(
+                &gtk::Label::builder()
+                    .label(&group.title)
+                    .xalign(0.0)
+                    .wrap(true)
+                    .css_classes(["title-4", "pr-heading"])
+                    .build(),
+            );
+            for row in rows {
+                let unlink = (!self.read_only(&row.key)).then(|| {
+                    let window = self.clone();
+                    let key = row.key.clone();
+                    Rc::new(move |number| {
+                        window.send(
+                            key.host_id.clone(),
+                            CommandBody::UnlinkPr {
+                                session_id: key.session_id.clone(),
+                                number,
+                            },
+                        );
+                    }) as crate::prs::Unlink
+                });
+                let opener = self.clone();
+                let key = row.key.clone();
+                let (status, class) = status(row.status);
+                section.append(&crate::prs::session_group(
+                    &crate::prs::SessionPrs {
+                        title: &row.title,
+                        status: (status, class.first().copied().unwrap_or_default()),
+                        place: row.place.as_deref().unwrap_or_default(),
+                        prs: &row.prs,
+                        unlink,
+                        open: Rc::new(move || opener.open(&key)),
+                    },
+                    compact,
+                ));
+            }
+            self.pr_groups.append(&section);
+        }
+        self.content_stack
+            .set_visible_child_name(if any { "prs" } else { "no-prs" });
+    }
+
+    /// Whether `key`'s session cannot be driven from here: a vault's, or archived or moved.
+    fn read_only(&self, key: &SessionKey) -> bool {
+        let state = self.state.borrow();
+        let Some(machine) = state.machines.iter().find(|m| m.host_id == key.host_id) else {
+            return true;
+        };
+        let status = machine
+            .sessions
+            .iter()
+            .find(|head| head.session_id == key.session_id)
+            .map(|head| head.status);
+        !machine.hosts.is_empty()
+            || matches!(
+                status,
+                None | Some(SessionStatus::Archived | SessionStatus::Moved)
+            )
     }
 }
 
@@ -496,17 +691,18 @@ impl MainWindow {
             .emit_by_name::<()>("activated", &[]);
     }
 
+    /// Picks the sidebar's row `index`, as a click does.
+    pub fn pick(&self, index: i32) {
+        let row = self.list.row_at_index(index).expect("a sidebar row");
+        self.list.select_row(Some(&row));
+    }
+
     pub fn session_view(&self) -> &SessionView {
         &self.session_view
     }
 
     pub fn scroll_to_end(&self) {
         self.session_view.scroll_to_end();
-    }
-
-    /// Opens the composer's `account`, `model` or `mode` picker.
-    pub fn open_picker(&self, name: &str) -> gtk::Popover {
-        self.session_view.open_picker(name)
     }
 }
 
@@ -602,12 +798,7 @@ fn pr_badge(pr: &PullRequest) -> gtk::Label {
     }
     let badge = gtk::Label::new(Some(&text));
     badge.set_tooltip_text(Some(&pr.title));
-    badge.add_css_class(match pr.state {
-        PrState::Open => "success",
-        PrState::Draft => "dim-label",
-        PrState::Merged => "accent",
-        PrState::Closed => "error",
-    });
+    badge.add_css_class(crate::prs::state(pr.state).1);
     badge
 }
 
@@ -788,6 +979,7 @@ mod tests {
             rows(window.list.upcast_ref()),
             [
                 ("All machines", "7 sessions"),
+                ("Pull requests", "none linked"),
                 ("box", "connected · 4 sessions"),
                 ("nas <1>", "connection refused · 1 session"),
                 ("vault", "connected · 2 sessions"),
@@ -799,10 +991,10 @@ mod tests {
         assert_eq!(window.content.title(), "All machines");
 
         // The selection follows its machine across redraws.
-        select(&window, 2);
+        select(&window, 3);
         assert_eq!(window.content.title(), "nas <1>");
         window.show_machines(&machines[1..]);
-        assert_eq!(window.list.selected_row().map(|row| row.index()), Some(1));
+        assert_eq!(window.list.selected_row().map(|row| row.index()), Some(2));
         assert_eq!(window.content.title(), "nas <1>");
         // Gone, it falls back to all machines.
         window.show_machines(&machines[2..]);
@@ -869,7 +1061,7 @@ mod tests {
 
         window.by_machine.set_active(true);
         assert_eq!(group_titles(&window), ["box", "nas", "devbox", "laptop"]);
-        select(&window, 5);
+        select(&window, 6);
         assert_eq!(group_titles(&window), ["laptop"]);
         assert_eq!(
             rows(window.groups.upcast_ref()),
@@ -883,7 +1075,7 @@ mod tests {
         );
 
         // Narrow, rows show a glyph and the branch's last part.
-        select(&window, 1);
+        select(&window, 2);
         window.set_compact(true);
         assert_eq!(badges(&window, "api"), ["●", "(2)", "!1", "#12 ✓"]);
     }
@@ -933,6 +1125,88 @@ mod tests {
             window.content_stack.visible_child_name().as_deref(),
             Some("empty")
         );
+    }
+
+    #[gtk::test]
+    fn the_pr_list_lists_every_sessions_prs_by_project_and_opens_a_session() {
+        adw::init().expect("libadwaita initializes");
+        let window = MainWindow::new(None);
+        let (machines, summaries) = fleet();
+        window.show_machines(&machines);
+        select(&window, 1);
+        assert_eq!(window.content.title(), "Pull requests");
+        assert_eq!(
+            window.content_stack.visible_child_name().as_deref(),
+            Some("no-prs")
+        );
+        for (key, summary) in &summaries {
+            let mut events = vec![created(&summary.repo, &summary.branch)];
+            match (key.host_id.as_str(), key.session_id.as_str()) {
+                ("h1", "s2") => {
+                    events.push(EventBody::PrLinked {
+                        pr: pr(7, PrState::Merged, CiStatus::Passing),
+                    });
+                    events.push(EventBody::PrLinked {
+                        pr: pr(12, PrState::Open, CiStatus::Failing),
+                    });
+                }
+                ("v", "s7") => events.push(EventBody::PrLinked {
+                    pr: pr(3, PrState::Draft, CiStatus::Pending),
+                }),
+                _ => {}
+            }
+            window.apply(key, &update(key.session_id.as_str(), events));
+        }
+        assert_eq!(
+            window.content_stack.visible_child_name().as_deref(),
+            Some("prs")
+        );
+        assert_eq!(window.prs_row.subtitle().as_deref(), Some("2 open"));
+        let texts = crate::transcript::texts(window.pr_groups.upcast_ref());
+        let at = |wanted: &str| {
+            texts
+                .iter()
+                .position(|text| text == wanted)
+                .unwrap_or_else(|| panic!("{wanted} in {texts:?}"))
+        };
+        // Projects in order, each session's live PRs first.
+        assert!(at("App") < at("herder/api"));
+        assert!(at("herder/api") < at("#12"));
+        assert!(at("#12") < at("✗ ci"));
+        assert!(at("✗ ci") < at("#7"));
+        assert!(at("#7") < at("web"));
+        assert!(at("web") < at("#3"));
+        assert!(at("running · box") < at("#12"));
+        assert!(!texts.iter().any(|text| text == "herder/fix-login"));
+
+        // By machine, the vault's host heads its session.
+        window.by_machine.set_active(true);
+        let texts = crate::transcript::texts(window.pr_groups.upcast_ref());
+        assert!(texts.iter().any(|text| text == "laptop"), "{texts:?}");
+
+        // A session's button opens it over the list.
+        fn open_button(widget: &gtk::Widget) -> Option<gtk::Button> {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.tooltip_text().as_deref() == Some("Open the session")
+                {
+                    return Some(button.clone());
+                }
+                if let Some(found) = open_button(&widget) {
+                    return Some(found);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        open_button(window.pr_groups.upcast_ref())
+            .expect("the session's button")
+            .emit_clicked();
+        assert_eq!(window.session_view.key(), Some(key("h1", "s2")));
+        // The list stays picked across redraws.
+        window.show_machines(&machines);
+        assert_eq!(window.list.selected_row().map(|row| row.index()), Some(1));
     }
 
     #[gtk::test]

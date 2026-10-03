@@ -8,7 +8,10 @@
 //!   replays the transcript there, as the TUI's switch picker says.
 //! - While a turn runs, a status line counts its time and the composer can stop it;
 //!   prompts sent meanwhile wait, marked queued, until the daemon starts them.
-//! - Archived and moved sessions, and a vault's, are read-only: no composer.
+//! - Its pull requests are listed over the transcript ([`crate::prs`]); the header's menu
+//!   links another.
+//! - Archived and moved sessions, and a vault's, are read-only: no composer, and no linking
+//!   or unlinking PRs.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -17,11 +20,11 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib, pango};
+use gtk::{gdk, gio, glib, pango};
 use herder_client_core::Machine;
 use herder_protocol::{
-    Account, Answer, ApprovalDecision, CommandBody, ItemBody, ItemId, PermissionMode, Route,
-    SessionId, SessionStatus, Timestamp,
+    Account, Answer, ApprovalDecision, CommandBody, ItemBody, ItemId, PermissionMode, PullRequest,
+    Route, SessionId, SessionStatus, Timestamp,
 };
 
 use crate::lists::SessionKey;
@@ -57,6 +60,10 @@ pub struct SessionView {
     page: adw::NavigationPage,
     title: adw::WindowTitle,
     status: gtk::Label,
+    /// The session's actions: `link-pr`.
+    actions: gio::SimpleActionGroup,
+    /// The session's PRs, over the transcript.
+    prs: gtk::Box,
     toasts: adw::ToastOverlay,
     scroller: gtk::ScrolledWindow,
     /// The durable entries, one widget each.
@@ -109,6 +116,9 @@ struct State {
     /// What each entry was drawn from, by entry, with its widget.
     drawn: Vec<(String, Option<gtk::Widget>)>,
     expanded: Rc<RefCell<HashSet<ItemId>>>,
+    full: Rc<RefCell<HashSet<ItemId>>>,
+    /// What the PR list was drawn from: the PRs, narrow, read-only.
+    drawn_prs: Option<(Vec<PullRequest>, bool, bool)>,
     /// Prompts sent from here not in the transcript yet.
     pending: Vec<String>,
     /// The request the card shows, so a redraw keeps what the user typed.
@@ -125,7 +135,20 @@ impl SessionView {
         let title = adw::WindowTitle::new("", "");
         let status = gtk::Label::new(None);
         let header = adw::HeaderBar::builder().title_widget(&title).build();
+        let menu = gio::Menu::new();
+        menu.append(Some("Link Pull Request…"), Some("session.link-pr"));
+        header.pack_end(
+            &gtk::MenuButton::builder()
+                .icon_name("view-more-symbolic")
+                .menu_model(&menu)
+                .tooltip_text("Session")
+                .build(),
+        );
         header.pack_end(&status);
+        let actions = gio::SimpleActionGroup::new();
+        let prs = vbox(0);
+        prs.add_css_class("pr-strip");
+        prs.set_visible(false);
 
         let transcript = vbox(0);
         transcript.add_css_class("transcript");
@@ -193,17 +216,27 @@ impl SessionView {
         toasts.set_child(Some(&body));
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
+        view.add_top_bar(
+            &adw::Clamp::builder()
+                .maximum_size(860)
+                .tightening_threshold(600)
+                .child(&prs)
+                .build(),
+        );
         view.set_content(Some(&toasts));
         let page = adw::NavigationPage::builder()
             .title("Session")
             .tag("session")
             .child(&view)
             .build();
+        page.insert_action_group("session", Some(&actions));
 
         let this = Self {
             page,
             title,
             status,
+            actions,
+            prs,
             toasts,
             scroller,
             transcript,
@@ -226,6 +259,8 @@ impl SessionView {
                 recent: Vec::new(),
                 drawn: Vec::new(),
                 expanded: Rc::default(),
+                full: Rc::default(),
+                drawn_prs: None,
                 pending: Vec::new(),
                 request: None,
                 ages: Vec::new(),
@@ -262,6 +297,7 @@ impl SessionView {
     pub fn set_compact(&self, compact: bool) {
         self.state.borrow_mut().compact = compact;
         self.redraw_chrome();
+        self.redraw_prs();
     }
 
     /// Forgets the session shown, which is gone.
@@ -288,6 +324,8 @@ impl SessionView {
                 state.pending.clear();
                 state.request = None;
                 state.expanded.borrow_mut().clear();
+                state.full.borrow_mut().clear();
+                state.drawn_prs = None;
                 while let Some(child) = self.transcript.first_child() {
                     self.transcript.remove(&child);
                 }
@@ -330,6 +368,7 @@ impl SessionView {
         self.redraw_streaming();
         self.redraw_bottom();
         self.redraw_chrome();
+        self.redraw_prs();
         self.tick();
         if self.follow.get() {
             // Once laid out: the new items' size is not known yet.
@@ -344,6 +383,7 @@ impl SessionView {
         Context {
             session: &state.session,
             expanded: &state.expanded,
+            full: &state.full,
             open_child: opener,
         }
     }
@@ -802,6 +842,63 @@ impl SessionView {
         self.working.set_visible(running);
     }
 
+    /// The session's PRs over the transcript, redrawn when they change; none, no list.
+    fn redraw_prs(&self) {
+        let (prs, compact, read_only) = {
+            let state = self.state.borrow();
+            (
+                state.session.prs.clone(),
+                state.compact,
+                state.read_only.is_some(),
+            )
+        };
+        if let Some(action) = self
+            .actions
+            .lookup_action("link-pr")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_enabled(!read_only);
+        }
+        let drawn = Some((prs.clone(), compact, read_only));
+        if self.state.borrow().drawn_prs == drawn {
+            return;
+        }
+        self.state.borrow_mut().drawn_prs = drawn;
+        while let Some(child) = self.prs.first_child() {
+            self.prs.remove(&child);
+        }
+        self.prs.set_visible(!prs.is_empty());
+        if prs.is_empty() {
+            return;
+        }
+        let unlink = (!read_only).then(|| {
+            let view = self.clone();
+            Rc::new(move |number| {
+                if let Some(key) = view.key() {
+                    view.send(CommandBody::UnlinkPr {
+                        session_id: key.session_id,
+                        number,
+                    });
+                }
+            }) as crate::prs::Unlink
+        });
+        self.prs.append(&crate::prs::strip(&prs, compact, unlink));
+    }
+
+    /// Asks for a PR to link to the session, and links it.
+    fn link_pr(&self) {
+        let title = self.state.borrow().session.title();
+        let view = self.clone();
+        crate::prs::link_dialog(&self.page, &title, move |number| {
+            if let Some(key) = view.key() {
+                view.send(CommandBody::LinkPr {
+                    session_id: key.session_id,
+                    number,
+                });
+            }
+        });
+    }
+
     /// Updates what counts time: the turn's duration and the request's age.
     fn tick(&self) {
         let state = self.state.borrow();
@@ -1049,6 +1146,11 @@ impl SessionView {
     }
 
     fn wire(&self) {
+        let link = gio::SimpleAction::new("link-pr", None);
+        let view = self.clone();
+        link.connect_activate(move |_, _| view.link_pr());
+        self.actions.add_action(&link);
+
         let c = &self.composer;
         // Enter sends, Shift+Enter (or Ctrl+J) adds a line.
         let keys = gtk::EventControllerKey::new();
@@ -1139,17 +1241,6 @@ impl SessionView {
         adjustment.set_value(adjustment.upper() - adjustment.page_size());
     }
 
-    #[cfg(test)]
-    pub fn open_picker(&self, name: &str) -> gtk::Popover {
-        let button = match name {
-            "account" => &self.composer.account,
-            "model" => &self.composer.model,
-            _ => &self.composer.mode,
-        };
-        button.popup();
-        button.popover().expect("a picker")
-    }
-
     /// Types `text` into the composer and presses Enter.
     #[cfg(test)]
     pub fn submit(&self, text: &str) {
@@ -1167,6 +1258,99 @@ impl SessionView {
         let mut texts = transcript::texts(self.transcript.upcast_ref());
         texts.extend(transcript::texts(self.streaming.upcast_ref()));
         texts
+    }
+
+    #[cfg(test)]
+    pub fn pr_texts(&self) -> Vec<String> {
+        if !self.prs.get_visible() {
+            return Vec::new();
+        }
+        transcript::texts(self.prs.upcast_ref())
+    }
+
+    /// The PR list's rows.
+    #[cfg(test)]
+    pub fn pr_rows(&self) -> Vec<gtk::ListBoxRow> {
+        let mut rows = Vec::new();
+        if let Some(list) = find::<gtk::ListBox>(self.prs.upcast_ref()) {
+            let mut at = 0;
+            while let Some(row) = list.row_at_index(at) {
+                rows.push(row);
+                at += 1;
+            }
+        }
+        rows
+    }
+
+    #[cfg(test)]
+    pub fn link_pr_for_test(&self) {
+        self.page
+            .activate_action("session.link-pr", None)
+            .expect("the action is there");
+    }
+
+    #[cfg(test)]
+    pub fn can_link_pr(&self) -> bool {
+        self.actions
+            .lookup_action("link-pr")
+            .is_some_and(|action| action.is_enabled())
+    }
+
+    /// The button of the tool call whose line shows `text`.
+    #[cfg(test)]
+    fn tool_button(&self, text: &str) -> gtk::Button {
+        fn shows(widget: &gtk::Widget, text: &str) -> bool {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if widget
+                    .downcast_ref::<gtk::Label>()
+                    .is_some_and(|label| label.text() == text)
+                    || shows(&widget, text)
+                {
+                    return true;
+                }
+                child = widget.next_sibling();
+            }
+            false
+        }
+        fn find(widget: &gtk::Widget, text: &str) -> Option<gtk::Button> {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.has_css_class("tool-header")
+                    && shows(&widget, text)
+                {
+                    return Some(button.clone());
+                }
+                if let Some(found) = find(&widget, text) {
+                    return Some(found);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        find(self.transcript.upcast_ref(), text).expect("the tool call's row")
+    }
+
+    /// Clicks the row of the tool call whose line shows `text`, as expanding it does.
+    #[cfg(test)]
+    pub fn toggle_tool(&self, text: &str) {
+        self.tool_button(text).emit_clicked();
+    }
+
+    /// Scrolls the transcript to the tool call whose line shows `text`.
+    #[cfg(test)]
+    pub fn scroll_to_tool(&self, text: &str) {
+        let button = self.tool_button(text);
+        let Some(child) = self.scroller.child() else {
+            return;
+        };
+        if let Some(point) = button.compute_point(&child, &gtk::graphene::Point::new(0.0, 0.0)) {
+            self.follow.set(false);
+            self.scroller
+                .vadjustment()
+                .set_value(f64::from(point.y()) - 12.0);
+        }
     }
 
     #[cfg(test)]

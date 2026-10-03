@@ -4,8 +4,8 @@
 //! - The agent's text: Markdown, unframed; a reply ends with a footer,
 //!   `▣ account · model · 1m 12s`.
 //! - Reasoning: one muted line, `+ Thought: <first line>`, that expands.
-//! - A tool call: one dense line, `→ Read src/api.rs`, which grows into a block when it has
-//!   output or a diff; the block shows its first lines and expands to all of them.
+//! - A tool call: one row, `→ Read src/api.rs`, with how long it took and how it went; one
+//!   with output or a diff expands to it, its first lines and then all of them.
 //! - Switches: a rule across the transcript. Failures: a card with the bar in `error`.
 
 use std::cell::RefCell;
@@ -28,6 +28,8 @@ pub struct Context<'a> {
     pub session: &'a Session,
     /// Items expanded by the user, kept across redraws.
     pub expanded: &'a Rc<RefCell<HashSet<ItemId>>>,
+    /// Tool calls whose whole output the user asked for.
+    pub full: &'a Rc<RefCell<HashSet<ItemId>>>,
     /// Opens a child session, from its task line.
     pub open_child: &'a Rc<dyn Fn(SessionId)>,
 }
@@ -42,11 +44,14 @@ pub fn signature(session: &Session, entry: &Entry) -> String {
             body: ItemBody::ToolCall { .. },
             ..
         }) => format!(
-            "{:?} {:?}",
+            "{:?} {:?} {:?} {}",
             session
                 .result(id)
                 .map(|(output, error)| (output.len(), error)),
-            session.tool_approval(id)
+            session.tool_approval(id),
+            session.took(id),
+            // Only a call without its result shows whether a turn runs.
+            session.result(id).is_none() && session.running()
         ),
         Entry::Pr(number) => format!("{:?}", session.prs.iter().find(|pr| pr.number == *number)),
         _ => String::new(),
@@ -313,7 +318,8 @@ fn foldable(
     column.upcast()
 }
 
-/// A tool call, with its result once it came.
+/// A tool call as one row: glyph, tool, what it works on, how long it took and how it
+/// went. One with output, a diff, content or a todo list has a chevron and expands to it.
 fn tool(cx: &Context, id: &ItemId, name: &str, input: &Value) -> gtk::Widget {
     let session = cx.session;
     let worktree = session.worktree.as_str();
@@ -321,171 +327,265 @@ fn tool(cx: &Context, id: &ItemId, name: &str, input: &Value) -> gtk::Widget {
     let output = result.map(|(output, _)| tools::clean(output));
     let failed = result.is_some_and(|(_, error)| error);
     let approval = session.tool_approval(id);
-    let (label, args) = tools::summary(name, input, output.as_deref(), worktree);
+    let (mut label, args) = tools::summary(name, input, output.as_deref(), worktree);
     let kind = tools::kind(name);
-    // Running until its result comes: a `~` in place of the glyph.
-    let glyph = if result.is_none() && approval.is_none() {
-        "~"
-    } else {
-        tools::glyph(name)
-    };
     let mut extra = Vec::new();
-    let mut lines = Vec::new();
+    let mut diff_lines = Vec::new();
     if kind == Kind::Edit {
-        lines = tools::diff(name, input);
-        let added = lines.iter().filter(|l| matches!(l, Diff::Added(_))).count();
-        let removed = lines
+        diff_lines = tools::diff(name, input);
+        let added = diff_lines
+            .iter()
+            .filter(|l| matches!(l, Diff::Added(_)))
+            .count();
+        let removed = diff_lines
             .iter()
             .filter(|l| matches!(l, Diff::Removed(_)))
             .count();
         extra.push((format!("+{added}"), "added-count"));
         extra.push((format!("−{removed}"), "removed-count"));
     }
-    let line = tool_line(glyph, &label, &args, &extra);
-    match approval {
-        Some(ToolApproval::Pending) => line.add_css_class("pending"),
-        Some(ToolApproval::Denied) => {
-            line.add_css_class("denied");
-            strike(&line);
-        }
-        _ if failed => line.add_css_class("failed"),
-        _ => {}
+    if kind == Kind::Shell
+        && let Some(description) = tools::arg(input, "description")
+    {
+        label = description.to_owned();
     }
     let output = output.unwrap_or_default();
     let has_output = !output.trim().is_empty();
-    let expanded = cx.expanded.borrow().contains(id);
-    match kind {
-        _ if failed && has_output => block(
-            cx,
-            id,
-            line,
-            Body::Output(output, tools::OUTPUT_LINES),
-            expanded,
-            true,
-        ),
-        Kind::Shell if has_output => {
-            let command = tools::in_worktree(&tools::command(input), worktree);
-            let header = match tools::arg(input, "description") {
-                Some(description) => tool_line("#", description, "", &[]),
-                None => tool_line("$", first_line(&command), "", &[]),
+    let body = match kind {
+        _ if failed && has_output => Some(Body::Output(output, tools::OUTPUT_LINES)),
+        Kind::Shell | Kind::Other if has_output => {
+            let cap = if kind == Kind::Shell {
+                tools::OUTPUT_LINES
+            } else {
+                tools::OTHER_LINES
             };
-            block(
-                cx,
-                id,
-                header,
-                Body::Output(output, tools::OUTPUT_LINES),
-                expanded,
-                false,
-            )
+            Some(Body::Output(output, cap))
         }
-        Kind::Edit if !lines.is_empty() => block(cx, id, line, Body::Diff(lines), expanded, false),
+        Kind::Edit if !diff_lines.is_empty() => Some(Body::Diff(diff_lines)),
         Kind::Write => {
             let content = tools::clean(tools::arg(input, "content").unwrap_or_default());
-            if content.trim().is_empty() {
-                return line.upcast();
-            }
-            let body = output_label(&content);
-            body.add_css_class("output");
-            foldable(cx, id, line.upcast(), body.upcast(), "tool-block")
+            (!content.trim().is_empty()).then_some(Body::Output(content, usize::MAX))
         }
-        Kind::Todo => {
-            let list = vbox(2);
-            list.set_margin_start(24);
-            for (text, status) in tools::todos(input) {
-                let (mark, class) = match status.as_str() {
-                    "completed" => ("✓", "state-done"),
-                    "in_progress" => ("•", "state-running"),
-                    _ => (" ", "muted"),
-                };
-                let row = hbox(6);
-                let mark = gtk::Label::builder()
-                    .label(format!("[{mark}]"))
-                    .css_classes(["mono", class])
-                    .build();
-                row.append(&mark);
-                row.append(&wrapped(&text, false));
-                list.append(&row);
-            }
-            foldable(cx, id, line.upcast(), list.upcast(), "foldable")
+        Kind::Todo => Some(Body::Todos(tools::todos(input))),
+        _ => None,
+    };
+
+    let line = tool_line(tools::glyph(name), &label, &args, &extra);
+    let status = match approval {
+        Some(ToolApproval::Pending) => {
+            line.add_css_class("pending");
+            Status::Text("awaiting approval", "pending")
         }
-        Kind::Other if has_output => block(
-            cx,
-            id,
-            line,
-            Body::Output(output, tools::OTHER_LINES),
-            expanded,
-            false,
-        ),
-        _ => line.upcast(),
+        Some(ToolApproval::Denied) => {
+            line.add_css_class("denied");
+            strike(&line);
+            Status::Text("denied", "muted")
+        }
+        _ if failed => {
+            line.add_css_class("failed");
+            Status::Text("✗", "failed")
+        }
+        _ if result.is_some() => Status::Text("✓", "muted"),
+        // A call whose turn ended without its result never finishes.
+        _ if session.running() => Status::Running,
+        _ => Status::None,
+    };
+    let spacer = gtk::Box::builder().hexpand(true).build();
+    line.append(&spacer);
+    if let Some(took) = session.took(id).filter(|took| *took > 0) {
+        line.append(
+            &gtk::Label::builder()
+                .label(duration(took))
+                .valign(gtk::Align::Start)
+                .css_classes(["tool-took"])
+                .build(),
+        );
     }
+    let mark: gtk::Widget = match status {
+        Status::Text(text, class) => gtk::Label::builder()
+            .label(text)
+            .valign(gtk::Align::Start)
+            .css_classes(["tool-status", class])
+            .build()
+            .upcast(),
+        Status::Running => {
+            let spinner = gtk::Spinner::builder()
+                .spinning(true)
+                .valign(gtk::Align::Start)
+                .css_classes(["tool-status"])
+                .build();
+            spinner.set_tooltip_text(Some("Running"));
+            spinner.upcast()
+        }
+        Status::None => gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(),
+    };
+    line.append(&mark);
+    let chevron = gtk::Image::builder()
+        .icon_name("pan-end-symbolic")
+        .valign(gtk::Align::Start)
+        .css_classes(["tool-chevron"])
+        .build();
+    line.append(&chevron);
+    let Some(body) = body else {
+        // Its place is kept, so every row's status lines up.
+        chevron.set_opacity(0.0);
+        line.add_css_class("tool-row");
+        return line.upcast();
+    };
+    expandable(cx, id, line, chevron, body, failed)
 }
 
-/// What a tool block shows under its header, and how many lines of it while collapsed.
+/// How a tool call stands, at the end of its row.
+enum Status {
+    Text(&'static str, &'static str),
+    Running,
+    None,
+}
+
+/// What a tool call expands to, and how many lines of it show before `… N more lines`.
 enum Body {
     Output(String, usize),
     Diff(Vec<Diff>),
+    Todos(Vec<(String, String)>),
 }
 
-/// A tool block: its header, then its output or diff, capped until expanded.
-fn block(
+/// A tool call's row as a button that shows or hides its body, remembered per item. The
+/// body is built when first shown.
+fn expandable(
     cx: &Context,
     id: &ItemId,
-    header: gtk::Box,
+    line: gtk::Box,
+    chevron: gtk::Image,
     body: Body,
-    expanded: bool,
+    failed: bool,
+) -> gtk::Widget {
+    let column = vbox(0);
+    column.add_css_class("tool");
+    let button = gtk::Button::builder()
+        .child(&line)
+        .css_classes(["flat", "tool-header"])
+        .tooltip_text("Show the output")
+        .build();
+    let revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .build();
+    column.append(&button);
+    column.append(&revealer);
+    let body = Rc::new(body);
+    let show = {
+        let full = Rc::clone(cx.full);
+        let id = id.clone();
+        let button = button.clone();
+        move |open: bool| {
+            if open && revealer.child().is_none() {
+                revealer.set_child(Some(&body_widget(&id, &body, &full, failed)));
+            }
+            revealer.set_reveal_child(open);
+            chevron.set_icon_name(Some(if open {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            }));
+            button.set_tooltip_text(Some(if open {
+                "Hide the output"
+            } else {
+                "Show the output"
+            }));
+        }
+    };
+    show(cx.expanded.borrow().contains(id));
+    let set = Rc::clone(cx.expanded);
+    let id = id.clone();
+    button.connect_clicked(move |_| {
+        let open = {
+            let mut set = set.borrow_mut();
+            let open = !set.contains(&id);
+            if open {
+                set.insert(id.clone());
+            } else {
+                set.remove(&id);
+            }
+            open
+        };
+        show(open);
+    });
+    column.upcast()
+}
+/// A tool call's body: its output, diff or todo list on a card, the first lines of a long
+/// one until `… N more lines` shows the rest, remembered in `full`.
+fn body_widget(
+    id: &ItemId,
+    body: &Rc<Body>,
+    full: &Rc<RefCell<HashSet<ItemId>>>,
     failed: bool,
 ) -> gtk::Widget {
     let card = vbox(2);
-    card.add_css_class("tool-block");
-    card.add_css_class("block");
+    card.add_css_class("tool-body");
     if failed {
         card.add_css_class("failed");
     }
-    let button = gtk::Button::builder()
-        .child(&header)
-        .css_classes(["flat", "tool-header"])
-        .build();
-    card.append(&button);
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    if let Body::Todos(todos) = &**body {
+        let list = vbox(2);
+        list.add_css_class("todos");
+        for (text, status) in todos {
+            let (mark, class) = match status.as_str() {
+                "completed" => ("✓", "state-done"),
+                "in_progress" => ("•", "state-running"),
+                _ => (" ", "muted"),
+            };
+            let row = hbox(6);
+            row.append(
+                &gtk::Label::builder()
+                    .label(format!("[{mark}]"))
+                    .valign(gtk::Align::Start)
+                    .css_classes(["mono", class])
+                    .build(),
+            );
+            row.append(&wrapped(text, false));
+            list.append(&row);
+        }
+        card.append(&list);
+        return card.upcast();
+    }
+    let content = vbox(0);
     card.append(&content);
     let more = gtk::Button::builder()
         .css_classes(["flat", "more"])
         .halign(gtk::Align::Start)
         .build();
     card.append(&more);
-
-    let body = Rc::new(body);
     let fill = {
         let content = content.clone();
         let more = more.clone();
-        let body = Rc::clone(&body);
-        move |expanded: bool| {
+        let body = Rc::clone(body);
+        move |all: bool| {
             while let Some(child) = content.first_child() {
                 content.remove(&child);
             }
-            let (shown, total) = match &*body {
+            let (shown, total, cap) = match &*body {
                 Body::Output(text, cap) => {
                     let total = text.lines().count();
-                    let shown = if expanded { total } else { total.min(*cap) };
+                    let shown = if all { total } else { total.min(*cap) };
                     let text: Vec<&str> = text.lines().take(shown).collect();
                     let label = output_label(&text.join("\n"));
                     label.add_css_class("output");
                     content.append(&label);
-                    (shown, total)
+                    (shown, total, *cap)
                 }
                 Body::Diff(lines) => {
                     let total = lines.len();
-                    let shown = if expanded {
+                    let shown = if all {
                         total
                     } else {
                         total.min(tools::DIFF_LINES)
                     };
                     content.append(&diff(&lines[..shown]));
-                    (shown, total)
+                    (shown, total, tools::DIFF_LINES)
                 }
+                Body::Todos(_) => (0, 0, 0),
             };
             let hidden = total - shown;
-            more.set_visible(hidden > 0 || (expanded && collapsible(&body)));
+            more.set_visible(hidden > 0 || total > cap);
             more.set_label(&if hidden > 0 {
                 format!(
                     "… {hidden} more {}",
@@ -496,37 +596,23 @@ fn block(
             });
         }
     };
-    fill(expanded);
-    let fill = Rc::new(fill);
-    let toggle = {
-        let set = Rc::clone(cx.expanded);
-        let id = id.clone();
-        let fill = Rc::clone(&fill);
-        move || {
-            let mut set = set.borrow_mut();
-            let open = !set.contains(&id);
-            if open {
-                set.insert(id.clone());
+    fill(full.borrow().contains(id));
+    let full = Rc::clone(full);
+    let id = id.clone();
+    more.connect_clicked(move |_| {
+        let all = {
+            let mut full = full.borrow_mut();
+            let all = !full.contains(&id);
+            if all {
+                full.insert(id.clone());
             } else {
-                set.remove(&id);
+                full.remove(&id);
             }
-            drop(set);
-            fill(open);
-        }
-    };
-    let toggle = Rc::new(toggle);
-    let on_header = Rc::clone(&toggle);
-    button.connect_clicked(move |_| on_header());
-    more.connect_clicked(move |_| toggle());
+            all
+        };
+        fill(all);
+    });
     card.upcast()
-}
-
-/// Whether a body is longer than its collapsed cap, so it can be collapsed again.
-fn collapsible(body: &Body) -> bool {
-    match body {
-        Body::Output(text, cap) => text.lines().count() > *cap,
-        Body::Diff(lines) => lines.len() > tools::DIFF_LINES,
-    }
 }
 
 /// Diff lines: a sign column and the text, added and removed lines on their colours.
