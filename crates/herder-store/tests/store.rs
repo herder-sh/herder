@@ -85,6 +85,7 @@ fn pr(number: u64, state: PrState) -> PullRequest {
 fn message(text: String) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("item"),
             turn_id: TurnId::new("turn"),
@@ -595,11 +596,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     store
         .append(new_event(
             &s,
@@ -617,11 +618,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             ALTER TABLE queued_prompts DROP COLUMN retry_at; PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -633,12 +634,12 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
-             ALTER TABLE queued_prompts DROP COLUMN retry_at;
+             ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
              ALTER TABLE queued_prompts DROP COLUMN attachments; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -669,7 +670,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -695,7 +696,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 9);
+    assert_eq!(version(&path), 10);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -716,13 +717,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 10)
+        .pragma_update(None, "user_version", 11)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 10,
-            supported: 9
+            found: 11,
+            supported: 10
         })
     ));
 }
@@ -957,6 +958,7 @@ fn queued_prompts_survive_a_reopen_in_order() {
     let path = dir.path().join("herder.db");
     let (s1, s2) = (SessionId::new("s1"), SessionId::new("s2"));
     let prompt = |by: Option<&str>, text: &str, retry| QueuedPrompt {
+        agent_message: None,
         by: by.map(UserId::new),
         text: text.into(),
         attachments: Vec::new(),
@@ -964,6 +966,7 @@ fn queued_prompts_survive_a_reopen_in_order() {
         retry_at: retry.then(|| "2026-10-03T21:20:00Z".parse().unwrap()),
     };
     let with_image = QueuedPrompt {
+        agent_message: None,
         attachments: vec![Attachment {
             attachment_id: AttachmentId::new("a1"),
             media_type: "image/png".into(),
@@ -1026,7 +1029,7 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "ALTER TABLE queued_prompts DROP COLUMN retry_at;
+            "ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
          PRAGMA user_version = 8;",
@@ -1050,6 +1053,7 @@ fn nested_item_ancestry_survives_journal_reopen() {
         item: Item {
             id: ItemId::new("child-message"),
             turn_id: TurnId::new("turn"),
+            agent_message: None,
             parent_call_id: Some(ItemId::new("agent-call")),
             body: ItemBody::AssistantMessage {
                 text: "Child output".into(),
@@ -1065,4 +1069,54 @@ fn nested_item_ancestry_survives_journal_reopen() {
     let events = store.read_since(&session, 1, usize::MAX).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].body, child);
+}
+
+#[test]
+fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let mut store = Store::open(&path).unwrap();
+    let session = SessionId::new("receiver");
+    store.append(new_event(&session, 0, created())).unwrap();
+    let metadata = herder_protocol::AgentMessage {
+        sender_session_id: SessionId::new("sender"),
+        message_id: "message-1".into(),
+        hop_count: 1,
+        permission_ceiling: PermissionMode::Ask,
+    };
+    let queued = QueuedPrompt {
+        agent_message: Some(metadata.clone()),
+        by: None,
+        text: "Hello".into(),
+        attachments: vec![],
+        retry: false,
+        retry_at: None,
+    };
+    store
+        .set_queued_prompts(&session, &[queued.clone()])
+        .unwrap();
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.queued_prompts(&session).unwrap(), [queued]);
+    let item = Item {
+        agent_message: Some(metadata.clone()),
+        parent_call_id: None,
+        id: ItemId::new("message"),
+        turn_id: TurnId::new("turn"),
+        body: ItemBody::UserMessage {
+            text: "Hello".into(),
+            attachments: vec![],
+        },
+    };
+    store
+        .append(new_event(&session, 1, EventBody::ItemAdded { item }))
+        .unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert!(store.queued_prompts(&session).unwrap().is_empty());
+    let events = store.read_since(&session, 1, 10).unwrap();
+    let EventBody::ItemAdded { item } = &events[0].body else {
+        panic!("missing prompt")
+    };
+    assert_eq!(item.agent_message, Some(metadata));
 }

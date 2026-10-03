@@ -83,6 +83,7 @@ pub fn status(status: SessionStatus) -> EventBody {
 
 pub fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new("turn-1"),
@@ -587,6 +588,7 @@ pub fn with_resources(app: &mut App, host: herder_protocol::HostResources, busy:
 fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
@@ -602,6 +604,7 @@ fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody
 fn result(call: &str, turn: &str, output: &str) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(format!("{call}-result")),
             turn_id: TurnId::new(turn),
@@ -618,6 +621,7 @@ fn result(call: &str, turn: &str, output: &str) -> EventBody {
 fn turn_item(id: &str, turn: &str, body: ItemBody) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
@@ -810,6 +814,7 @@ pub fn chat() -> App {
         );
     }
     let streaming = vec![Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new("a2"),
         turn_id: TurnId::new("turn-2"),
