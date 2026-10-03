@@ -41,6 +41,11 @@ dependencies {
     implementation(libs.activity.compose)
     implementation(libs.lifecycle.process)
     implementation(libs.lifecycle.runtime.compose)
+    implementation(libs.camera.camera2)
+    implementation(libs.camera.lifecycle)
+    implementation(libs.camera.view)
+    implementation(libs.camera.mlkit)
+    implementation(libs.mlkit.barcode)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

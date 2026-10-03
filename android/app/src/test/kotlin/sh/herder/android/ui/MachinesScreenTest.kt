@@ -135,6 +135,15 @@ class MachinesScreenTest {
     fun saysWhenThereAreNoMachines() {
         compose.setContent { HerderTheme { MachinesScreen(Profile.Open(emptyList())) } }
         compose.onNodeWithText("No machines").assertIsDisplayed()
+        compose.onNodeWithText("Add a machine").assertIsDisplayed()
+    }
+
+    @Test
+    fun addMachineOpensThePairingSheet() {
+        compose.setContent { HerderTheme { MachinesScreen(sampleFleet(now), now) } }
+        compose.onNodeWithContentDescription("Add a machine").performClick()
+        compose.onNodeWithText("Add machine").assertIsDisplayed()
+        compose.onNodeWithText("herder pair").assertIsDisplayed()
     }
 
     @Test

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -114,6 +116,8 @@ typealias SessionContent = @Composable (key: SessionKey, compact: Boolean, onOpe
  * session's PRs the same way. Wide, the two sit side by side; narrow, the sessions and the
  * PR list are a page of their own and rows show less, as the TUI's compact rows do. A session
  * opens on a tap, drawn by [session]: in place of the list beside the machines, or as a page.
+ * [onPair] pairs from a `herder://pair` link after the user scans or pastes it; [initialLink]
+ * opens that sheet on a deep link.
  */
 @Composable
 fun MachinesScreen(
@@ -121,15 +125,32 @@ fun MachinesScreen(
     now: Instant = remember(profile) { Instant.now() },
     send: Sender? = null,
     onOpenUrl: ((String) -> Unit)? = null,
+    onPair: (suspend (String) -> String?)? = null,
+    initialLink: String = "",
     session: SessionContent = { _, _, _, _ -> },
 ) {
     // What the user picked; on a phone, `null` shows the machines page.
     var picked by remember { mutableStateOf<SidebarPick?>(null) }
+    var pairing by rememberSaveable { mutableStateOf(initialLink.isNotEmpty()) }
     // The sessions opened, the last one shown; a child opened from its parent goes on top.
     var opened by remember { mutableStateOf<List<SessionKey>>(emptyList()) }
+    var grouping by rememberSaveable { mutableStateOf(Grouping.Projects) }
+    LaunchedEffect(initialLink) {
+        if (initialLink.isNotEmpty()) pairing = true
+    }
+    val add = if (profile is Profile.Open) ({ pairing = true }) else null
+    if (pairing) {
+        BackHandler { pairing = false }
+        PairScreen(
+            machines = (profile as? Profile.Open)?.machines.orEmpty(),
+            initialLink = initialLink,
+            onPair = onPair,
+            onClose = { pairing = false },
+        )
+        return
+    }
     val back = { opened = opened.dropLast(1) }
     val open: (SessionKey) -> Unit = { opened = opened + it }
-    var grouping by rememberSaveable { mutableStateOf(Grouping.Projects) }
     val listed = (profile as? Profile.Open)?.takeIf { it.machines.isNotEmpty() }
     // A machine or host gone from the list falls back to all machines; the PR list stays.
     val sidebar = picked?.let { pick ->
@@ -147,11 +168,11 @@ fun MachinesScreen(
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         when {
-            listed == null -> MachinesPane(profile, selected = null, now = now, onSelect = {})
+            listed == null -> MachinesPane(profile, selected = null, now = now, onSelect = {}, onAdd = add)
             maxWidth >= TwoPanes -> Row(Modifier.fillMaxSize()) {
                 val shownSidebar = sidebar ?: SidebarPick.Sessions(Scope.All)
                 Box(Modifier.width(MachinesPaneWidth).fillMaxHeight()) {
-                    MachinesPane(listed, selected = shownSidebar, now = now, onSelect = ::select)
+                    MachinesPane(listed, selected = shownSidebar, now = now, onSelect = ::select, onAdd = add)
                 }
                 VerticalDivider()
                 if (shown != null) {
@@ -176,7 +197,7 @@ fun MachinesScreen(
                 BackHandler(onBack = back)
                 session(shown, true, open, back)
             }
-            sidebar == null -> MachinesPane(listed, selected = null, now = now, onSelect = { picked = it })
+            sidebar == null -> MachinesPane(listed, selected = null, now = now, onSelect = { picked = it }, onAdd = add)
             sidebar is SidebarPick.Prs -> {
                 BackHandler { picked = null }
                 PrsScreen(listed, grouping, { grouping = it }, compact = true, now, send, open, { picked = null }, onOpenUrl)
@@ -192,7 +213,13 @@ fun MachinesScreen(
 /** The machines list, or why there is none; [selected] is highlighted. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MachinesPane(profile: Profile, selected: SidebarPick?, now: Instant, onSelect: (SidebarPick) -> Unit) {
+private fun MachinesPane(
+    profile: Profile,
+    selected: SidebarPick?,
+    now: Instant,
+    onSelect: (SidebarPick) -> Unit,
+    onAdd: (() -> Unit)?,
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -205,13 +232,29 @@ private fun MachinesPane(profile: Profile, selected: SidebarPick?, now: Instant,
                         }
                     }
                 },
+                actions = {
+                    if (onAdd != null) {
+                        IconButton(onClick = onAdd) {
+                            Icon(painterResource(R.drawable.ic_add), contentDescription = "Add a machine")
+                        }
+                    }
+                },
             )
         },
     ) { padding ->
         when (profile) {
             is Profile.Failed -> Status("Cannot open the profile", profile.message, padding)
             is Profile.Open if profile.machines.isEmpty() ->
-                Status("No machines", "Paired machines show up here.", padding)
+                Status(
+                    "No machines",
+                    "Run herder pair on a machine, then scan the QR code it prints or paste the link.",
+                    padding,
+                    action = onAdd?.let { add ->
+                        {
+                            Button(onClick = add) { Text("Add a machine") }
+                        }
+                    },
+                )
             is Profile.Open -> LazyColumn(contentPadding = padding) {
                 item {
                     ScopeItem(
@@ -515,7 +558,12 @@ private fun ConnectionState.color(): Color = when (this) {
 }
 
 @Composable
-private fun Status(title: String, detail: String, padding: PaddingValues) {
+private fun Status(
+    title: String,
+    detail: String,
+    padding: PaddingValues,
+    action: (@Composable () -> Unit)? = null,
+) {
     Column(
         modifier = Modifier.fillMaxSize().padding(padding).padding(32.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
@@ -523,6 +571,10 @@ private fun Status(title: String, detail: String, padding: PaddingValues) {
     ) {
         Text(title, style = MaterialTheme.typography.titleLarge)
         Text(detail, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        if (action != null) {
+            Spacer(Modifier.size(8.dp))
+            action()
+        }
     }
 }
 
