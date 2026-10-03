@@ -108,6 +108,7 @@ mod tests {
 
     fn item(id: &str, turn: &str, text: &str) -> Item {
         Item {
+            parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
             body: ItemBody::AssistantMessage { text: text.into() },
@@ -167,5 +168,29 @@ mod tests {
             },
         ));
         assert!(log.streaming().is_empty());
+    }
+    #[test]
+    fn ancestry_survives_snapshots_completion_and_cached_reconnect() {
+        let mut log = SessionLog::default();
+        let mut child = item("child", "t1", "Hi");
+        child.parent_call_id = Some(ItemId::new("agent-call"));
+        log.snapshot(child.clone());
+        assert!(log.delta(&child.id, " there"));
+        child.body = ItemBody::AssistantMessage {
+            text: "Hi there".into(),
+        };
+        assert_eq!(log.streaming(), [child.clone()]);
+        log.event(event(
+            1,
+            EventBody::ItemAdded {
+                item: child.clone(),
+            },
+        ));
+        assert!(log.streaming().is_empty());
+        let saved = serde_json::to_vec(log.events()).unwrap();
+        let mut reconnected = SessionLog::from_events(serde_json::from_slice(&saved).unwrap());
+        assert!(!reconnected.event(event(1, EventBody::ItemAdded { item: child })));
+        assert_eq!(reconnected.events(), log.events());
+        assert_eq!(reconnected.last_seq(), 1);
     }
 }

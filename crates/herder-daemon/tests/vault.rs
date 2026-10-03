@@ -274,6 +274,7 @@ fn seed_images(dir: &Path, sessions: usize, prompts: usize) {
             let data = [PNG, id.as_bytes()].concat();
             std::fs::write(images.join(format!("{id}.png")), &data).unwrap();
             let item = Item {
+                parent_call_id: None,
                 id: ItemId::new(format!("item-{id}")),
                 turn_id: TurnId::new("turn"),
                 body: ItemBody::UserMessage {

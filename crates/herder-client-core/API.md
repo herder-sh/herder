@@ -206,3 +206,10 @@ Version 1 is the first frozen API. Compared with the code before it:
 | `TerminalEvent::Output(Vec<u8>)` | `Output { data }` | Same. |
 | `auth::PairingUri`, `FromStr::Err = anyhow::Error` | `PairingUri` at the crate root, `Err = Error` (`InvalidLink`) | Apps parse links to confirm them before pairing, as the TUI does; `auth` is Rust-only. |
 | — | `CLIENT_API_VERSION`, `public-api.txt`, `#![warn(missing_docs)]` | The freeze itself. |
+
+Provider-native sub-agent transcript items carry `Item::parent_call_id`, the `ItemId` of
+ their spawning tool call in the same turn. `None` identifies the main conversation.
+Clients must group these items beneath their call instead of mixing their text into the
+main conversation. This reference is preserved in durable events, offline caches and
+streaming snapshots. Claude emits completed nested messages live; nested token deltas
+are not currently exposed. These are parts of the parent session, not separate sessions.

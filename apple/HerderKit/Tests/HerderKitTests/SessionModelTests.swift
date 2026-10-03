@@ -104,8 +104,8 @@ struct SessionModelTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            .itemAdded(item: Item(id: "i1", turnId: "t1", body: .toolCall(name: "Bash", input: #"{"command":"ls -la"}"#))),
-            .itemAdded(item: Item(id: "i2", turnId: "t1", body: .assistantMessage(text: "Done.\nMore detail."))),
+            .itemAdded(item: Item(parentCallId: nil, id: "i1", turnId: "t1", body: .toolCall(name: "Bash", input: #"{"command":"ls -la"}"#))),
+            .itemAdded(item: Item(parentCallId: nil, id: "i2", turnId: "t1", body: .assistantMessage(text: "Done.\nMore detail."))),
             .turnCompleted(turnId: "t1"), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
         #expect(model.lastTool == "Bash ls -la")
