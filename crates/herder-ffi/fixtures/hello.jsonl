@@ -1,0 +1,11 @@
+# The turn the Swift and Kotlin samples drive: one prompt, a streamed answer.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Say hello."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_started", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
+{"sleep_ms": 50}
+{"emit": {"type": "item_delta", "item_id": "item-1", "text": "Hello"}}
+{"sleep_ms": 50}
+{"emit": {"type": "item_delta", "item_id": "item-1", "text": ", world."}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Hello, world."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "shutdown"}}

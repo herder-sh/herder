@@ -1,0 +1,40 @@
+[package]
+name = "herder-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "herder_ffi"
+
+# Generates the Swift and Kotlin bindings from the built library.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+herder-client-core.workspace = true
+herder-protocol.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+uniffi.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
+herder-adapters.workspace = true
+herder-daemon.workspace = true
+herder-store.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "net"] }
+
+[lints]
+workspace = true
