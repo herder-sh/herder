@@ -10,6 +10,13 @@ project or by machine, each with its status, its task tree, how many of its task
 its PRs. On a tablet the machines and the sessions sit side by side; on a phone the sessions are
 a page of their own.
 
+A tap opens a session (docs/tui-design.md §2.1, §5): its transcript streams, each tool call one
+row that expands on a tap; an approval or a question replaces the composer with a card, answered
+with large Allow / Deny buttons or a swipe (right allows, left denies), a choice or typed text.
+The composer sends prompts (queued while a turn runs), stops the turn, and switches the
+session's account (another provider's replays the transcript), model and permission mode.
+Archived and moved sessions, and a vault's, are read-only.
+
 - `ffi` is the AAR the app links: the Gradle build runs cargo to build the host library,
   `uniffi-bindgen` to generate the bindings from it, and `cargo ndk` to build the Android
   libraries (arm64-v8a, x86_64).

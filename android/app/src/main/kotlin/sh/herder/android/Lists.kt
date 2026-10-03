@@ -40,17 +40,30 @@ data class Summary(
     val branch: String = "",
     /** Pull requests linked to the session now, in the order they were linked. */
     val prs: List<PullRequest> = emptyList(),
+    /** Provider it runs on now, for the model picker. */
+    val provider: String = "",
+    /** Model it runs on now, for the model picker. */
+    val model: String = "",
 ) {
     /** This summary with [update] folded in. */
     fun applied(update: SessionUpdate): Summary {
         var repo = repo
         var branch = branch
+        var provider = provider
+        var model = model
         val prs = prs.toMutableList()
         for (event in update.events) {
             when (val body = event.body) {
                 is EventBody.SessionCreated -> {
                     repo = body.repo
                     branch = body.branch
+                    provider = body.provider
+                    model = body.model
+                }
+                is EventBody.ModelSwitched -> model = body.model
+                is EventBody.ProviderSwitched -> {
+                    provider = body.provider
+                    model = body.model
                 }
                 is EventBody.BranchCheckedOut -> branch = body.branch
                 is EventBody.PrLinked -> prs.link(body.pr)
@@ -59,7 +72,7 @@ data class Summary(
                 else -> {}
             }
         }
-        return Summary(loaded = true, repo = repo, branch = branch, prs = prs)
+        return Summary(loaded = true, repo = repo, branch = branch, prs = prs, provider = provider, model = model)
     }
 }
 
@@ -123,6 +136,10 @@ data class SessionRow(
 /** Every listed session, for the subscriptions to follow. */
 fun keys(machines: List<Machine>): Set<SessionKey> =
     machines.flatMapTo(mutableSetOf()) { machine -> machine.sessions.map { key(machine, it) } }
+
+/** The models the app's sessions of [provider] run on, for the model picker, by name. */
+fun recentModels(summaries: Map<SessionKey, Summary>, provider: String?): List<String> =
+    summaries.values.filter { it.provider == provider && it.model.isNotEmpty() }.map { it.model }.distinct().sorted()
 
 /** `count` sessions, in words. */
 fun sessions(count: Int): String = if (count == 1) "1 session" else "$count sessions"
