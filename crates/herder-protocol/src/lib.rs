@@ -29,7 +29,7 @@ pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
 pub use event::{
     Answer, Answerer, ApprovalDecision, ApprovalOutcome, CiStatus, ErrorClass, EscalationReason,
     Event, EventBody, Item, ItemBody, Mergeable, PrState, PullRequest, ReviewStatus, Route,
-    SessionStatus, TurnError,
+    SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
     AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, QuestionId,
@@ -46,10 +46,13 @@ pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
     Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow,
 };
-pub use types::{PermissionMode, Provider};
+pub use types::{PermissionMode, Provider, clean_title};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
 pub const PROTOCOL_VERSION: u32 = 4;
+
+/// Most characters a session title may have.
+pub const MAX_TITLE_CHARS: usize = 80;
 
 /// Per-session sequence number of a durable event: starts at 1 and increases by 1 per event.
 pub type Seq = u64;

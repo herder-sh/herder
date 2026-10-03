@@ -14,7 +14,8 @@ use herder_protocol::{
     EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image, Item, ItemBody, ItemId,
     Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider, PullRequest,
     QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus, SessionUsage,
-    Terminal, TerminalId, TerminalPurpose, Timestamp, TurnError, TurnId, UsageWindow, UserId,
+    Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId, UsageWindow,
+    UserId,
 };
 use serde_json::Value as Json;
 
@@ -240,7 +241,17 @@ pub enum EventBody {
     PrUnlinked {
         number: u64,
     },
+    TitleChanged {
+        title: String,
+        source: TitleSource,
+    },
     Unknown,
+}
+
+#[uniffi::remote(Enum)]
+pub enum TitleSource {
+    Auto,
+    User,
 }
 
 #[uniffi::remote(Enum)]
@@ -418,6 +429,10 @@ pub enum CommandBody {
     UnarchiveSession {
         session_id: SessionId,
     },
+    RenameSession {
+        session_id: SessionId,
+        title: String,
+    },
     SendPrompt {
         session_id: SessionId,
         text: String,
@@ -587,6 +602,7 @@ pub struct SessionHead {
     pub status: SessionStatus,
     pub parent: Option<SessionId>,
     pub task: Option<String>,
+    pub title: Option<String>,
     pub project_id: Option<ProjectId>,
     pub account_id: AccountId,
     pub children_need_you: u32,
