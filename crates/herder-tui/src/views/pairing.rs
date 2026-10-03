@@ -2,14 +2,15 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::Paragraph;
 
-pub(super) fn draw(frame: &mut Frame, area: Rect) {
-    let command = Style::new().fg(Color::Cyan);
+use crate::ui::Ui;
+
+pub(super) fn draw(frame: &mut Frame, area: Rect, ui: Ui) {
+    let command = ui.accent();
     let text = Text::from(vec![
-        Line::styled("No machines paired yet.", super::bold()),
+        Line::styled("No machines paired yet.", ui.strong()),
         Line::raw(""),
         Line::raw("On a machine running the herder daemon, run"),
         Line::raw(""),

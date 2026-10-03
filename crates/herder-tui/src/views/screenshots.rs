@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 22] = [
+const SCENES: [Scene; 31] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -164,7 +164,69 @@ const SCENES: [Scene; 22] = [
         app.update(Msg::Paste(super::tests::LINK.to_owned()));
         app_buffer(app, theme, width, height)
     }),
+    ("inbox", |theme, _, width, height| {
+        app_buffer(inbox(), theme, width, height)
+    }),
+    ("inbox-answer", |theme, _, width, height| {
+        let mut app = inbox();
+        press(&mut app, KeyCode::Enter);
+        fake::type_text(&mut app, "8080, behind the proxy");
+        app_buffer(app, theme, width, height)
+    }),
+    ("prs", |theme, _, width, height| {
+        let mut app = fake::projects();
+        press(&mut app, KeyCode::Char('P'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("prs-tab", |theme, _, width, height| {
+        let mut app = fake::with_prs();
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('j'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("accounts", |theme, _, width, height| {
+        let mut app = fake::tree();
+        super::tests::add_accounts(&mut app);
+        press(&mut app, KeyCode::Char('A'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("fleet", |theme, _, width, height| {
+        let mut app = fake::tree();
+        super::tests::add_accounts(&mut app);
+        fake::with_resources(&mut app, fake::host_resources(4), false);
+        press(&mut app, KeyCode::Char('m'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("resources", |theme, _, width, height| {
+        let mut app = super::tests::mid_turn();
+        fake::with_resources(&mut app, fake::host_resources(2), true);
+        app_buffer(app, theme, width, height)
+    }),
+    ("recover", |theme, _, width, height| {
+        let mut app = fake::vault();
+        app.choose_row(crate::app::Row::Session {
+            key: fake::key("v", "s2"),
+            depth: 0,
+        });
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('R'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("terminals", |theme, _, width, height| {
+        let mut app = crate::terminal::app_tests::with_terminals();
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('j'));
+        app_buffer(app, theme, width, height)
+    }),
 ];
+
+/// [`fake::escalated`] in the inbox, two minutes after the escalation.
+fn inbox() -> App {
+    let mut app = fake::escalated();
+    app.clock = Some(herder_protocol::Timestamp::from_second(320).unwrap());
+    press(&mut app, KeyCode::Char('i'));
+    app
+}
 
 /// Presses `code`.
 fn press(app: &mut App, code: KeyCode) {

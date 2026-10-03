@@ -110,31 +110,6 @@ impl Hits {
         self.wheel(area, Wheel::Keys);
     }
 
-    /// Records a tap on each shown row of a list drawn in `area`, inside its borders: rows
-    /// from `offset`, the first shown, each as tall as `heights` says. `row` names the row of
-    /// an item, or `None` for an item that is not one, such as a heading.
-    pub fn list(
-        &mut self,
-        area: Rect,
-        offset: usize,
-        heights: &[usize],
-        row: impl Fn(usize) -> Option<Click>,
-    ) {
-        let mut y = area.y;
-        for (at, height) in heights.iter().enumerate().skip(offset) {
-            if y >= area.bottom() {
-                break;
-            }
-            let height = u16::try_from(*height)
-                .unwrap_or(u16::MAX)
-                .min(area.bottom() - y);
-            if let Some(click) = row(at) {
-                self.click(Rect::new(area.x, y, area.width, height), click);
-            }
-            y += height;
-        }
-    }
-
     /// Puts `top`'s spots over these.
     pub fn append(&mut self, mut top: Hits) {
         self.clicks.append(&mut top.clicks);
