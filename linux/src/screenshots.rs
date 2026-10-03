@@ -117,6 +117,7 @@ fn timed(bodies: Vec<(i64, Option<&str>, EventBody)>) -> Vec<Event> {
 fn item(id: &str, turn: &str, body: ItemBody) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
+            parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
             body,
@@ -268,6 +269,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                 ),
             ));
             streaming.push(Item {
+                parent_call_id: None,
                 id: ItemId::new("a2"),
                 turn_id: TurnId::new("t2"),
                 body: ItemBody::AssistantMessage {
