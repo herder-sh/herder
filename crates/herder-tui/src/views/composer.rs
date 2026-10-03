@@ -362,8 +362,8 @@ pub(super) fn draw(
     };
     status_row(frame, status_text, app, session, compact);
     let buf = frame.buffer_mut();
-    if let Some((text, recover)) = app.open.as_ref().and_then(|key| app.read_only(key)) {
-        let style = if recover {
+    if let Some((text, fork)) = app.open.as_ref().and_then(|key| app.read_only(key)) {
+        let style = if fork {
             Style::new().fg(ui.theme.error)
         } else {
             ui.muted()
@@ -374,8 +374,8 @@ pub(super) fn draw(
             ui.glyphs,
         )
         .render(prompt, buf);
-        if recover {
-            hits.click(prompt, Click::Act(Action::OpenRecover));
+        if fork {
+            hits.click(prompt, Click::Act(Action::OpenFork));
         }
         return;
     }

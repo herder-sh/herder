@@ -30,8 +30,9 @@
 //! `<data_dir>/checkpoints/<session>/<turn>.bundle` instead, leaving out commits already on a
 //! remote-tracking branch; the latest [`KEEP`] bundles are kept.
 //!
-//! A host recovering the session after its host died fetches the pushed refs from `origin`
-//! ([`fetch_latest`]); bundles stay on the host that wrote them.
+//! A host forking the session reads its own refs ([`latest`]) when the session ran there, and
+//! else fetches the pushed refs from `origin` ([`fetch_latest`]); bundles stay on the host
+//! that wrote them.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -191,6 +192,12 @@ pub async fn fetch_latest(
     tokio::time::timeout(timeout, fetch)
         .await
         .map_err(|_| Error::Git(format!("fetching from origin took over {timeout:?}")))??;
+    Ok(refs(repo, session_id).await?.pop())
+}
+
+/// The latest of `session_id`'s checkpoint refs `repo` has itself, as the session's host
+/// made them.
+pub async fn latest(repo: &Path, session_id: &SessionId) -> Result<Option<String>, Error> {
     Ok(refs(repo, session_id).await?.pop())
 }
 

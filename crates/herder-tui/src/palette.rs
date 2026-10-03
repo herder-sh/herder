@@ -25,7 +25,7 @@ pub fn key_of(command: &Command) -> &'static str {
         "stop" => "ctrl+c",
         "pr" => "L",
         "term" => "t",
-        "recover" => "R",
+        "fork" => "F",
         "inbox" => "I",
         "prs" => "P",
         "accounts" => "A",

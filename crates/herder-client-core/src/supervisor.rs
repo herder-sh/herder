@@ -137,6 +137,7 @@ struct State {
     terminals: Vec<herder_protocol::Terminal>,
     resources: Option<herder_protocol::HostResources>,
     session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
+    vault: Option<herder_protocol::VaultStatus>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -384,6 +385,7 @@ impl Supervisor {
             terminals: state.terminals.clone(),
             resources: state.resources.clone(),
             session_usage: state.session_usage.clone(),
+            vault: state.vault.clone(),
         }
     }
 
@@ -678,12 +680,13 @@ impl Supervisor {
 
     fn set_connection(&self, connection: ConnectionState) {
         let mut state = self.lock();
-        // Resource figures are live; a new connection sends them afresh.
+        // Resource figures and a vault's status are live; a new connection sends them afresh.
         if connection == ConnectionState::Connected {
             state.quality.connected();
         } else {
             state.resources = None;
             state.session_usage.clear();
+            state.vault = None;
             state.quality.disconnected();
         }
         state.connection = Some(connection);
@@ -756,6 +759,10 @@ impl Supervisor {
             }
             ServerMessage::HostResources(resources) => {
                 state.resources = Some(resources);
+                return self.notify_after(state);
+            }
+            ServerMessage::VaultStatus(status) => {
+                state.vault = Some(status);
                 return self.notify_after(state);
             }
             ServerMessage::SessionResources { session_id, usage } => {

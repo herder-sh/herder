@@ -126,6 +126,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::ListDirectory {
             path: "~/Projects".into(),
         }),
+        command(CommandBody::ForkSession {
+            session_id: session_id(),
+            account_id: Some(AccountId::new("01J9ACCOUNT")),
+        }),
         command(CommandBody::AddProject {
             path: "/home/dev/herder".into(),
         }),
@@ -412,6 +416,15 @@ fn server_fixtures() -> Vec<ServerMessage> {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::ProjectAdded {
                 project_id: ProjectId::new("github.com/herder-sh/herder"),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::SessionForked {
+                session_id: SessionId::new("01J9SESSION2"),
+                account_id: AccountId::new("01J9ACCOUNT"),
+                forked_from: SessionId::new("01J9SESSION"),
+                from_host_id: HostId::new("01J9HOST2"),
             },
         },
         event(
@@ -730,7 +743,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     messages
 }
 
-/// Host lists of a vault: one empty, one with an online and an offline host.
+/// Host lists and statuses of a vault: one empty, one with an online and an offline host.
 fn fleet_fixtures() -> Vec<ServerMessage> {
     vec![
         ServerMessage::Hosts { hosts: Vec::new() },
@@ -750,6 +763,33 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                 },
             ],
         },
+        ServerMessage::VaultStatus(VaultStatus {
+            sessions: 0,
+            events: 0,
+            storage_bytes: 4096,
+            hosts: Vec::new(),
+        }),
+        ServerMessage::VaultStatus(VaultStatus {
+            sessions: 3,
+            events: 120,
+            storage_bytes: 1_048_576,
+            hosts: vec![
+                HostReplication {
+                    host_id: HostId::new("01J9HOST"),
+                    sessions: 2,
+                    events: 100,
+                    last_event_at: Some(at()),
+                    lag_ms: Some(42),
+                },
+                HostReplication {
+                    host_id: HostId::new("01J9HOST2"),
+                    sessions: 1,
+                    events: 20,
+                    last_event_at: Some(at()),
+                    lag_ms: None,
+                },
+            ],
+        }),
     ]
 }
 
@@ -1307,6 +1347,40 @@ fn optional_fields_may_be_absent() {
             terminal_id: TerminalId::new("t"),
             exit_code: None
         }
+    );
+}
+
+#[test]
+fn fork_and_vault_status_wire_shape() {
+    let fork = serde_json::to_value(command(CommandBody::ForkSession {
+        session_id: SessionId::new("s"),
+        account_id: None,
+    }))
+    .unwrap();
+    assert_eq!(
+        fork["body"],
+        json!({"type": "fork_session", "session_id": "s"})
+    );
+    let status: ServerMessage = serde_json::from_value(json!({
+        "type": "vault_status",
+        "sessions": 1,
+        "events": 2,
+        "storage_bytes": 3,
+        "hosts": [{"host_id": "h", "sessions": 1, "events": 2}]
+    }))
+    .unwrap();
+    let ServerMessage::VaultStatus(status) = status else {
+        panic!("expected a vault status");
+    };
+    assert_eq!(
+        status.hosts,
+        [HostReplication {
+            host_id: HostId::new("h"),
+            sessions: 1,
+            events: 2,
+            last_event_at: None,
+            lag_ms: None,
+        }]
     );
 }
 

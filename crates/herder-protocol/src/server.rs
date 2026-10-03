@@ -28,6 +28,9 @@ pub enum ServerMessage {
         /// The hosts, ordered by host id.
         hosts: Vec<FleetHost>,
     },
+    /// What a vault holds and how each host's replication stands; sent by a vault only, after
+    /// hello and whenever it changes, at most once every two seconds.
+    VaultStatus(VaultStatus),
     /// Every project with a clone on this daemon's host; sent after hello and whenever any of
     /// it changes. Clients merge the lists of all their daemons by `project_id`.
     Projects {
@@ -154,6 +157,40 @@ pub struct FleetHost {
     /// When the vault last heard from the host; for an online host, as of when it connected
     /// or the list was last sent.
     pub last_seen: Timestamp,
+}
+
+/// What a vault holds, in total and per host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct VaultStatus {
+    /// Sessions the vault lists: every host's, without copies another host took over.
+    pub sessions: u64,
+    /// Journal events held, of every copy.
+    pub events: u64,
+    /// Size of the vault's database, in bytes.
+    pub storage_bytes: u64,
+    /// Each host that replicated here, ordered by host id; the same hosts as
+    /// [`ServerMessage::Hosts`].
+    pub hosts: Vec<HostReplication>,
+}
+
+/// How far one host's replication to a vault got.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostReplication {
+    /// The host.
+    pub host_id: HostId,
+    /// Sessions of the host held, without copies another host took over.
+    pub sessions: u64,
+    /// Journal events of the host held.
+    pub events: u64,
+    /// When the newest event held of the host happened, by the host's clock; absent until one
+    /// is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<Timestamp>,
+    /// How far the vault was behind the host when it last stored a batch from it: the age of
+    /// that batch's newest event, in milliseconds. Absent until the host sent a batch since
+    /// the vault started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_ms: Option<u64>,
 }
 
 /// A user's role on a daemon.
@@ -287,6 +324,18 @@ pub enum CommandResult {
         path: String,
         /// Its entries, ordered by name.
         entries: Vec<DirectoryEntry>,
+    },
+    /// A session was forked onto this daemon's host, answering `fork_session`; the fork is in
+    /// the session list.
+    SessionForked {
+        /// The new session.
+        session_id: SessionId,
+        /// The account it runs on.
+        account_id: AccountId,
+        /// The session it was forked from.
+        forked_from: SessionId,
+        /// The host that session ran on.
+        from_host_id: HostId,
     },
     /// A repository is a project of this daemon, answering `add_project`; the project list
     /// with it follows.

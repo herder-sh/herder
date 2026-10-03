@@ -3,11 +3,11 @@
 //! Everything runs on this machine in scratch dirs, as separate processes: a vault (`herder
 //! daemon` in vault mode), hosts A and B, a bare git `origin` both hosts clone. A runs a few
 //! turns that change code, each checkpointed to `origin`, and is SIGKILLed in the middle of the
-//! next one. `herder recover` on B takes the session over; B's worktree must be A's last
-//! checkpoint exactly, and the session goes on there. A, started again on its old data dir,
-//! keeps its copy read-only.
+//! next one. `herder fork` on B forks the session from the vault; the fork's worktree must be
+//! A's last checkpoint exactly, and the session's history goes on there. A, started again on
+//! its old data dir, keeps its session as it was.
 //!
-//! The vault and `herder recover` / `herder pair` are the herder binary. A host is this test
+//! The vault and `herder fork` / `herder pair` are the herder binary. A host is this test
 //! binary run again as a child ([`drill_host`]): `herder_daemon::serve`, the function `herder
 //! daemon` runs, with a scripted agent ([`Agent`]) in place of a vendor CLI, so no provider is
 //! ever called. Run the drill on its own with `cargo test -p herder --test disaster_drill`.
@@ -31,8 +31,8 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters};
 use herder_daemon::vault::VaultStore;
 use herder_protocol::{
     AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor,
-    ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION,
-    PermissionMode, ProjectId, Provider, ServerMessage, SessionId, SessionStatus,
+    ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode,
+    ProjectId, Provider, ServerMessage, SessionId, SessionStatus,
 };
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
@@ -534,7 +534,7 @@ const A_LAST: &str = "src/lib.rs=pub fn run() { half written\nhang";
 const B_TURN: &str = "src/lib.rs=pub fn run() { println!(\"recovered\") }";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
+async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let (a_dir, b_dir) = (root.join("a"), root.join("b"));
@@ -652,37 +652,34 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    // Until A dies, B may not take its session over.
+    // A's disk is gone with it: B must work from the vault and origin alone.
     let mut b = Process::host(&b_config);
     wait_for(&b_dir.join("data/control.sock")).await;
-    let recover = [
-        "recover",
-        "--config",
-        b_config.to_str().unwrap(),
-        session_id.as_str(),
-    ];
-    let (ok, output) = herder(&recover).await;
-    assert!(!ok && output.contains("is online"), "{output}");
-
-    // A's disk is gone with it: B must work from the vault and origin alone.
     a.sigkill();
     let a_disk = a_dir.join("data/worktrees");
     let lost = a_dir.join("lost-worktrees");
     std::fs::rename(&a_disk, &lost).unwrap();
 
-    // B recovers it as soon as the vault sees A gone.
-    let deadline = Instant::now() + TIMEOUT;
-    let output = loop {
-        let (ok, output) = herder(&recover).await;
-        if ok {
-            break output;
-        }
-        assert!(
-            output.contains("is online") && Instant::now() < deadline,
-            "herder recover: {output}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
+    // B forks it from the vault.
+    let fork = [
+        "fork",
+        "--config",
+        b_config.to_str().unwrap(),
+        session_id.as_str(),
+    ];
+    let (ok, output) = herder(&fork).await;
+    assert!(ok, "herder fork: {output}");
+    let forked = output
+        .lines()
+        .find_map(|line| line.strip_prefix("forked "))
+        .and_then(|line| line.split(' ').next())
+        .map(SessionId::new)
+        .unwrap_or_else(|| panic!("no fork in {output}"));
+    assert_ne!(forked, session_id);
+    assert!(
+        output.contains(&format!("from {session_id} of {a_host}")),
+        "{output}"
+    );
     assert!(
         output.contains(&format!("files restored from {last_checkpoint}")),
         "{output}"
@@ -699,7 +696,7 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
     // B's worktree is exactly A's last checkpoint: the edit of the turn A died in is gone.
     assert_eq!(worktree_files(&b_worktree), expected);
 
-    // The session goes on on B, its agent seeded with the transcript from A.
+    // The session's history goes on on B, the fork's agent seeded with the transcript from A.
     let b_link = pair(&b_config, "alice").await;
     let mut client = Client::connect(
         &b_link.hosts[0],
@@ -708,12 +705,12 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
         Some(b_link.code.clone()),
     )
     .await;
-    client.subscribe(&session_id).await;
+    client.subscribe(&forked).await;
     client
         .until(|body| matches!(body, EventBody::AccountSwitched { .. }))
         .await;
     assert!(client.events.len() > a_events);
-    client.prompt(&session_id, B_TURN).await.unwrap();
+    client.prompt(&forked, B_TURN).await.unwrap();
     client.until_idle_after(A_TURNS.len() + 1).await;
     assert_eq!(
         std::fs::read_to_string(b_worktree.join("src/lib.rs")).unwrap(),
@@ -727,11 +724,10 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
     assert_eq!(seeds.len(), 1, "{seeds:?}");
     let prompts: Vec<_> = seeds[0].iter().step_by(2).map(String::as_str).collect();
     assert_eq!(prompts, [A_TURNS[0], A_TURNS[1], A_TURNS[2], A_LAST]);
-    // ... and B checkpoints its turns to origin as A did.
+    // ... and B checkpoints the fork's turns to origin as A did.
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        let latest = checkpoints(&origin, &session_id).pop().unwrap();
-        if latest != last_checkpoint {
+        if let Some(latest) = checkpoints(&origin, &forked).pop() {
             assert_eq!(worktree_files(&b_worktree), tree_files(&origin, &latest));
             break;
         }
@@ -740,7 +736,7 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
     }
     drop(client);
 
-    // A comes back on its old data dir: its copy turns read-only.
+    // A comes back on its old data dir: its session is still its own and takes prompts.
     std::fs::rename(&lost, &a_disk).unwrap();
     let _a = Process::host(&a_config);
     let deadline = Instant::now() + TIMEOUT;
@@ -753,26 +749,9 @@ async fn a_dead_hosts_session_goes_on_on_another_host_from_the_vault() {
     };
     client.subscribe(&session_id).await;
     client
-        .until(|body| {
-            matches!(
-                body,
-                EventBody::SessionStatusChanged {
-                    retry_at: None,
-                    status: SessionStatus::Moved
-                }
-            )
-        })
-        .await;
-    let refused = client
         .prompt(&session_id, "src/lib.rs=fn from_a() {}")
         .await
-        .unwrap_err();
-    assert_eq!(refused.code, ErrorCode::Conflict, "{refused:?}");
-    assert!(
-        refused.message.contains("recovered on another host"),
-        "{}",
-        refused.message
-    );
+        .unwrap();
     drop(client);
     b.sigkill();
 }

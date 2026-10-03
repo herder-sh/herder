@@ -59,7 +59,7 @@
 //! its turn starts. `get_attachment` reads one back; it changes nothing, so its answer is not
 //! remembered ([`changes_nothing`]). A transcript replayed into another CLI keeps each prompt's
 //! attachments, and the adapter names every image in a line of text: the seed carries no
-//! bytes, and the vault keeps none either, so a recovered session's earlier images are
+//! bytes, and the vault keeps none either, so a forked session's earlier images are
 //! references only.
 //!
 //! # Checkpoints
@@ -183,11 +183,12 @@
 //! title the session; it is accepted once the run has started, and a run that fails changes
 //! nothing.
 //!
-//! # Recovery
+//! # Forks
 //!
-//! A session whose host died can go on on another host from the journal its vault holds
-//! ([`SessionManager::recover`], see [`crate::vault`]); it keeps its id. When the host it
-//! came from returns, that copy is stopped and made `moved`, read-only
+//! Any session, of this host or, through the vault, of another one whose host is up or gone,
+//! can be forked here: its history goes on in a new session ([`SessionManager::fork`], see
+//! [`fork`]), and the original is left as it is. A copy of a session that another host took
+//! over under the same id, as the vault shows it, is stopped and made `moved`, read-only
 //! ([`SessionManager::moved_away`]).
 //!
 //! # Restart
@@ -201,14 +202,13 @@
 mod actor;
 mod attachments;
 pub mod failover;
+pub mod fork;
 pub(crate) mod journal;
-mod recover;
 mod routing;
 mod setup;
 mod tasks;
 pub mod titles;
 
-pub use recover::Recovered;
 pub use routing::{Escalation, Notifier};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -382,6 +382,8 @@ struct Inner {
     /// Held while a title is checked and journaled, so renames and generated titles apply one
     /// at a time.
     titling: Mutex<()>,
+    /// Where forks find sessions, updated when the vault link changes ([`SessionManager::fork_from`]).
+    forks: std::sync::RwLock<Option<Arc<fork::Forks>>>,
     shutdown: CancellationToken,
 }
 
@@ -490,6 +492,7 @@ impl SessionManager {
                 checkpoints: OnceLock::new(),
                 titler: OnceLock::new(),
                 titling: Mutex::new(()),
+                forks: std::sync::RwLock::new(None),
                 shutdown,
             }),
         })
@@ -558,6 +561,22 @@ impl SessionManager {
                     .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
             }
             CommandBody::AddProject { path } => return self.add_project(&path).await,
+            CommandBody::ForkSession {
+                session_id,
+                account_id,
+            } => {
+                let request = fork::Request {
+                    session_id,
+                    account_id,
+                };
+                let forked = self.fork(request).await?;
+                return Ok(CommandResult::SessionForked {
+                    session_id: forked.session_id,
+                    account_id: forked.account_id,
+                    forked_from: forked.forked_from,
+                    from_host_id: forked.from_host_id,
+                });
+            }
             CommandBody::SetProjectSettings {
                 project_id,
                 default_permission_mode,

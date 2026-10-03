@@ -77,7 +77,7 @@ pub(super) async fn save(
 }
 
 /// Keeps `images` under `dir` for `session_id`, each under its id: a new prompt's, or those
-/// of a session recovered from another host.
+/// of a session forked from another one.
 pub(super) async fn keep(
     dir: &Path,
     session_id: &SessionId,

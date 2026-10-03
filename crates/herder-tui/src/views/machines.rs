@@ -18,7 +18,7 @@
 //! ```
 
 use herder_client_core::{ConnectionState, Machine};
-use herder_protocol::Role;
+use herder_protocol::{Role, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -264,6 +264,9 @@ fn details(
     for (label, value, style) in super::resources::facts(ui, machine) {
         lines.extend(field(ui, label, &value, style, width));
     }
+    for (label, value) in vault_facts(machine, app.now()) {
+        lines.extend(field(ui, &label, &value, ui.text(), width));
+    }
     lines.extend(field(
         ui,
         "host id",
@@ -317,6 +320,57 @@ fn latency(machine: &Machine) -> Option<String> {
         latency.push_str(&format!(" · avg {average} ms · {min}–{max} ms"));
     }
     Some(latency)
+}
+
+/// A vault's status as of `now`: what it holds, then each host's replication, labelled with
+/// the host's name.
+fn vault_facts(machine: &Machine, now: Timestamp) -> Vec<(String, String)> {
+    let Some(vault) = &machine.vault else {
+        return Vec::new();
+    };
+    let count = |n: u64, one: &str| match n {
+        1 => format!("1 {one}"),
+        n => format!("{n} {one}s"),
+    };
+    let mut facts = vec![(
+        "vault".to_owned(),
+        format!(
+            "{} · {} · {}",
+            count(vault.sessions, "session"),
+            count(vault.events, "event"),
+            storage(vault.storage_bytes)
+        ),
+    )];
+    for host in &vault.hosts {
+        let name = machine
+            .hosts
+            .iter()
+            .find(|fleet| fleet.host_id == host.host_id)
+            .map_or_else(|| host.host_id.to_string(), |fleet| fleet.host_name.clone());
+        let mut value = format!(
+            "{} · {}",
+            count(host.sessions, "session"),
+            count(host.events, "event")
+        );
+        if let Some(at) = host.last_event_at {
+            let ago = crate::account_screen::until(now.duration_since(at).as_secs());
+            value.push_str(&format!(" · last event {ago} ago"));
+        }
+        if let Some(lag) = host.lag_ms {
+            value.push_str(&format!(" · lag {lag} ms"));
+        }
+        facts.push((super::sessions::clip(&name, LABEL - 1), value));
+    }
+    facts
+}
+
+/// `bytes` in KiB below a MiB, else as host memory shows.
+fn storage(bytes: u64) -> String {
+    if bytes < 1 << 20 {
+        format!("{} KiB", bytes >> 10)
+    } else {
+        super::resources::bytes(bytes)
+    }
 }
 
 /// A label and its value, the value wrapped `width` wide under itself; a word longer than a

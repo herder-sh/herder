@@ -519,12 +519,12 @@ the client: there is no command for it (§10).
 
 ### 2.6 Fleet
 
-The fleet view is today's machines panel, extended with the vault's hosts and recover.
-`R` on a session whose host is offline opens the recover dialog. That dialog still shows
-the command to run (P3.6).
+The fleet view is today's machines panel, extended with the vault's hosts and fork.
+`F` on any session opens the fork dialog: enter forks it onto a host paired as owner, else
+the dialog shows the command to run there (P0.13).
 
 ```text
- herder         inbox 2 «│ fleet · 3 machines               a add · e rename · d forget · R recover
+ herder         inbox 2 «│ fleet · 3 machines               a add · e rename · d forget · F fork
                          │
  projects                │ ▶ ● box     owner   10.0.0.4:7447   cpu 23%  mem 41%  turns 3/6
  ◉ app                 2 │             SHA256:9f2c…41ab   accounts 3   sessions 5
@@ -534,7 +534,7 @@ the command to run (P3.6).
      └ ◉ docs          ? │     ● box      online
  ● herder                │     ● m2       online
    └ ● p2d-1-design      │     ✗ oldbox   offline · last seen 3h ago
- ○ infra                 │         ◉ api-refactor · app        R recover on box or m2
+ ○ infra                 │         ◉ api-refactor · app        F fork onto box or m2
                          │
  ─────────────────────── │
  attention      priority │
@@ -549,7 +549,7 @@ the command to run (P3.6).
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  a add  e rename  d forget  R recover  esc back              ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  a add  e rename  d forget  F fork  esc back              ● box ● m2 ◌ vault
 ```
 
 ### 2.7 Switch account / provider / model (picker)
@@ -602,7 +602,7 @@ right, a search box when there is a list, and footer hints.
 | add machine | 60 | link or host / fingerprint / code; the fingerprint must be confirmed |
 | add account | 60 | provider, id, label, config dir, then a login terminal |
 | terminals | 60 | `+ new terminal`, then open shells (owner only) |
-| recover | 60 | offline host, online hosts, `herder recover <id>` |
+| fork | 60 | where the session runs, hosts paired as owner; enter forks onto one, else `herder fork <id>` to run there |
 | command palette | 88 | every command and its key; "Suggested" first (OpenCode `ctrl+p`) |
 | help | 88 | the keymap from §4, grouped and filterable with `/` |
 | theme | 60 | built-in and user themes with live preview |
@@ -646,7 +646,7 @@ behaviour, kept.
 | waiting | `WaitingForCapacity` | `◌` | `~` | `secondary` |
 | idle | `Idle`, already seen | `○` | `o` | `textMuted` |
 | archived | `Archived` | `▪` | `_` | `textMuted` |
-| moved | `Moved` (recovered elsewhere) | `→` | `>` | `secondary` |
+| moved | `Moved` (taken over elsewhere) | `→` | `>` | `secondary` |
 | unknown | `Unknown`, or not loaded | `·` | `.` | `textMuted` |
 
 The waiting kind refines "needs you" in the text but not in the glyph: `approve?` or
@@ -698,7 +698,7 @@ mode bar does. Unlike Herdr, it has its own row and never covers content.
 | `?` | help | | `n` | new session |
 | `/` | go to (search) | | `s` | switch account / provider / model |
 | `:` | command palette (also `ctrl+p`) | | `t` | terminals (owner only) |
-| `I` | inbox (`i` from the sidebar, as today) | | `R` | recover (host offline) |
+| `I` | inbox (`i` from the sidebar, as today) | | `F` | fork onto a host |
 | `P` | all PRs | | `p` | the session's prs tab |
 | `A` | accounts | | `L` | link a PR |
 | `m` | fleet (machines) | | `a` | add machine |
@@ -802,7 +802,7 @@ Rules for the new design:
 Keybinds live in `tui.json` under `keybinds`, using OpenCode's names where they exist
 (`session_new`, `session_interrupt`, `model_list`, `sidebar_toggle`, `input_newline`,
 `messages_page_up`, …). Herder-only actions get new names (`inbox`, `prs_all`, `accounts`,
-`fleet`, `recover`, `terminal_list`, `approval_allow`, `approval_deny`). Values are
+`fleet`, `fork`, `terminal_list`, `approval_allow`, `approval_deny`). Values are
 comma-separated alternatives; `"none"` unbinds. `leader` is set separately.
 
 ---
@@ -866,7 +866,7 @@ sends a literal `/`. The commands replace today's `:` palette words, which still
 | `/pr <n\|url>`, `/unpr` | link / unlink a PR |
 | `/term` | terminals (owner) |
 | `/down [project]` | compose down (owner) |
-| `/recover` | recover dialog |
+| `/fork` | fork dialog |
 | `/thinking`, `/details` | show or hide reasoning / tool output |
 | `/theme`, `/glyphs ascii\|unicode`, `/mouse on\|off` | display settings, saved |
 | `/inbox`, `/prs`, `/accounts`, `/fleet` | open a view |

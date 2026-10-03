@@ -19,9 +19,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::Replicator;
-use super::recover::Recovery;
+use super::fork::FromVault;
 use crate::config::{self, VaultConfig};
 use crate::session::SessionManager;
+use crate::session::fork::Forks;
 use crate::ws::Host;
 
 /// What a host replicates with.
@@ -64,6 +65,7 @@ impl Link {
             changing: tokio::sync::Mutex::new(()),
             state: Mutex::new(State::default()),
         };
+        link.configure_forks(None)?;
         if let Some(vault) = vault {
             link.replicate(vault)?;
         }
@@ -75,18 +77,19 @@ impl Link {
         self.lock().vault.clone()
     }
 
-    /// Recovers sessions from the vault onto this host; `None` while it has none.
-    pub fn recovery(&self) -> Result<Option<Recovery>> {
-        let Some(vault) = self.vault() else {
-            return Ok(None);
-        };
-        Ok(Some(Recovery {
-            vault,
-            device: Replicator::device_key(&self.setup.data_dir)?,
-            host: self.setup.host.clone(),
-            sessions: self.setup.sessions.clone(),
-            data_dir: self.setup.data_dir.clone(),
-        }))
+    /// Keeps fork lookup aligned with the live vault link, including no vault.
+    fn configure_forks(&self, vault: Option<VaultConfig>) -> Result<()> {
+        self.setup.sessions.fork_from(Forks {
+            host: self.setup.host.id.clone(),
+            vault: vault
+                .map(|vault| {
+                    Ok::<_, anyhow::Error>(FromVault {
+                        vault,
+                        device: Replicator::device_key(&self.setup.data_dir)?,
+                    })
+                })
+                .transpose()?,
+        })
     }
 
     /// Applies `get_vault_link`, `link_vault` or `unlink_vault`.
@@ -192,6 +195,7 @@ impl Link {
             ));
         };
         self.save(None).await?;
+        self.configure_forks(None).map_err(internal)?;
         let mut state = self.lock();
         state.vault = None;
         if let Some(replicating) = state.replicating.take() {
@@ -213,6 +217,7 @@ impl Link {
     /// Starts replicating to `vault`, in place of any replicator running.
     fn replicate(&self, vault: VaultConfig) -> Result<()> {
         let replicator = self.replicator(vault.clone())?;
+        self.configure_forks(Some(vault.clone()))?;
         let stop = self.setup.shutdown.child_token();
         tokio::spawn(replicator.run(stop.clone()));
         let mut state = self.lock();

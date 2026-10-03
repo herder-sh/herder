@@ -139,8 +139,8 @@ fn dialog_title(app: &App) -> &'static str {
         "accounts"
     } else if app.switch.is_some() {
         "switch account"
-    } else if app.recover.is_some() {
-        "recover"
+    } else if app.fork.is_some() {
+        "fork"
     } else if app.terminals.is_some() {
         "terminals"
     } else if app.compose.dialog.is_some() {
