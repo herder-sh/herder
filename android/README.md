@@ -15,7 +15,10 @@ row that expands on a tap; an approval or a question replaces the composer with 
 with large Allow / Deny buttons or a swipe (right allows, left denies), a choice or typed text.
 The composer sends prompts (queued while a turn runs), stops the turn, and switches the
 session's account (another provider's replays the transcript), model and permission mode.
-Archived and moved sessions, and a vault's, are read-only.
+Its pull requests sit over the transcript (number, title, branch, state, CI, review,
+mergeable); a tap opens the PR in the browser, and the session menu links another. The
+machines list's Pull requests screen lists every session's the same way. Archived and moved
+sessions, and a vault's, are read-only.
 
 - `ffi` is the AAR the app links: the Gradle build runs cargo to build the host library,
   `uniffi-bindgen` to generate the bindings from it, and `cargo ndk` to build the Android

@@ -52,7 +52,7 @@ class SessionScreenshotsTest {
     private fun phone(theme: String) {
         compose.setContent {
             HerderTheme(dark = theme == "dark") {
-                SessionScreen(SampleKey, session, machine, listOf("opus", "sonnet"), { _, _ -> null }, {}, {}, clock)
+                SessionScreen(SampleKey, session, machine, listOf("opus", "sonnet"), { _, _ -> null }, {}, {}, clock, compact = true)
             }
         }
     }

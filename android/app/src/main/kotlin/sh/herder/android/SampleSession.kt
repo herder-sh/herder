@@ -11,6 +11,7 @@ import sh.herder.ffi.ItemBody
 import sh.herder.ffi.Machine
 import sh.herder.ffi.PermissionMode
 import sh.herder.ffi.PrState
+import sh.herder.ffi.ReviewStatus
 import sh.herder.ffi.Route
 import sh.herder.ffi.SessionStatus
 import sh.herder.ffi.SessionUpdate
@@ -148,7 +149,19 @@ internal fun sampleSession(stage: Stage): Session {
                 EventBody.SessionStatusChanged(SessionStatus.IDLE),
                 EventBody.ProviderSwitched("codex", "codex-work", "gpt-5"),
                 EventBody.PermissionModeChanged(PermissionMode.AUTO_EDIT),
-                EventBody.PrLinked(pr(12, PrState.OPEN, CiStatus.PASSING).copy(title = "Add a health endpoint")),
+                EventBody.PrLinked(
+                    pr(12, PrState.OPEN, CiStatus.PASSING).copy(
+                        title = "Add a health endpoint",
+                        headBranch = "herder/api",
+                        review = ReviewStatus.REQUIRED,
+                    ),
+                ),
+                EventBody.PrLinked(
+                    pr(9, PrState.DRAFT, CiStatus.PENDING).copy(
+                        title = "Document the health endpoint",
+                        headBranch = "herder/api-docs",
+                    ),
+                ),
             ),
         )
     }
