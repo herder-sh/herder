@@ -78,8 +78,9 @@ class PrsScreenTest {
             compose.onNodeWithText(label).fetchSemanticsNode().boundsInRoot.top
         }
         assertTrue(positions[0] < positions[1])
-        compose.onAllNodesWithText("Open").assertCountEquals(3)
-        compose.onAllNodesWithText("Open").onFirst().performClick()
+        compose.onAllNodesWithContentDescription("Open the session").assertCountEquals(3)
+        compose.onAllNodesWithContentDescription("Open the session").onFirst().performClick()
+        compose.waitForIdle()
         assertEquals(SampleKey, opened)
     }
 
@@ -146,13 +147,13 @@ class PrsScreenTest {
                 )
             }
         }
-        compose.onNodeWithText("Add a health endpoint").assertIsDisplayed()
+        compose.onAllNodesWithText("Add a health endpoint").onFirst().assertIsDisplayed()
         compose.onNodeWithText("open").assertIsDisplayed()
         compose.onNodeWithText("✓ ci").assertIsDisplayed()
         compose.onNodeWithText("… review").assertIsDisplayed()
         compose.onNodeWithText("✓ merge").assertIsDisplayed()
-        compose.onNodeWithText("herder/api").assertIsDisplayed()
-        compose.onNodeWithText("Document the health endpoint").assertIsDisplayed()
+        compose.onAllNodesWithText("herder/api").onFirst().assertIsDisplayed()
+        compose.onAllNodesWithText("Document the health endpoint").onFirst().assertIsDisplayed()
         compose.onNodeWithText("draft").assertIsDisplayed()
         compose.onNodeWithText("… ci").assertIsDisplayed()
 
@@ -213,7 +214,7 @@ class PrsScreenTest {
                 )
             }
         }
-        compose.onNodeWithText("Add a health endpoint").assertIsDisplayed()
+        compose.onAllNodesWithText("Add a health endpoint").onFirst().assertIsDisplayed()
         compose.onAllNodesWithText("✓ ci").assertCountEquals(0)
         compose.onAllNodesWithText("herder/api").assertCountEquals(0)
     }

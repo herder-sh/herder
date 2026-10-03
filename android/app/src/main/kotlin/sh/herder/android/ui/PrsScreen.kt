@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -248,8 +247,7 @@ private fun SessionPrs(
                 .clip(RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpen)
                 .heightIn(min = 48.dp)
-                .padding(start = 16.dp, end = 8.dp, top = 8.dp)
-                .semantics { contentDescription = "Open the session" },
+                .padding(start = 16.dp, end = 4.dp, top = 8.dp),
         ) {
             Text(
                 row.status.glyph(),
@@ -264,8 +262,9 @@ private fun SessionPrs(
                 val meta = listOfNotNull(row.status.label(), place).joinToString(" · ")
                 Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("Open", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onOpen, modifier = Modifier.semantics { contentDescription = "Open the session" }) {
+                Text("Open")
+            }
         }
         for (pr in row.prs) {
             PrRow(pr, size, unlink?.let { { it(pr.number) } }, onOpenUrl, onCopy)
