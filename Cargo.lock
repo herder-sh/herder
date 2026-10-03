@@ -1259,6 +1259,7 @@ name = "herder-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "herder-adapters",
  "herder-client-core",
  "herder-daemon",
@@ -1269,6 +1270,7 @@ dependencies = [
  "ratatui",
  "ratatui-textarea",
  "serde_json",
+ "similar",
  "tempfile",
  "textwrap",
  "tokio",

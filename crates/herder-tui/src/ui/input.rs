@@ -38,21 +38,29 @@ fn style(ui: Ui, editor: &mut TextArea, focused: bool, background: Color) {
 /// The prompt: the editor in its panel.
 pub struct Prompt<'a, 'b> {
     ui: Ui<'a>,
-    editor: &'a mut TextArea<'b>,
+    editor: &'a TextArea<'b>,
     meta: Option<Line<'a>>,
     focused: bool,
     accent: Option<Color>,
+    placeholder: Option<&'a str>,
 }
 
 impl<'a, 'b> Prompt<'a, 'b> {
-    pub fn new(ui: Ui<'a>, editor: &'a mut TextArea<'b>) -> Self {
+    pub fn new(ui: Ui<'a>, editor: &'a TextArea<'b>) -> Self {
         Self {
             ui,
             editor,
             meta: None,
             focused: false,
             accent: None,
+            placeholder: None,
         }
+    }
+
+    /// What the empty prompt shows in place of the editor's placeholder.
+    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
+        self.placeholder = Some(placeholder);
+        self
     }
 
     /// The line under the text: `account · model · mode`.
@@ -113,7 +121,10 @@ impl<'a, 'b> Prompt<'a, 'b> {
         };
         if self.editor.is_empty() {
             // The placeholder starts where the text will, under the cursor.
-            Line::styled(self.editor.placeholder_text().to_owned(), ui.muted()).render(text, buf);
+            let placeholder = self
+                .placeholder
+                .unwrap_or_else(|| self.editor.placeholder_text());
+            Line::styled(placeholder.to_owned(), ui.muted()).render(text, buf);
             if self.focused {
                 buf[(text.x, text.y)].modifier.insert(Modifier::REVERSED);
             }
@@ -356,31 +367,28 @@ mod tests {
         for width in [45, 100] {
             snapshot::each(&format!("prompt-{width}"), |variant| {
                 snapshot::render(variant, width, 11, |ui, area, buf| {
-                    let mut focused =
-                        editor("write the docs page too, and link it from @README.md");
+                    let focused = editor("write the docs page too, and link it from @README.md");
                     let height = Prompt::height(&focused, width, 6, true);
                     assert_eq!(height, if width < 50 { 5 } else { 4 });
-                    Prompt::new(ui, &mut focused)
+                    Prompt::new(ui, &focused)
                         .meta(meta(ui))
                         .focused(true)
                         .render(Rect { height, ..area }, buf);
                     // Unfocused and empty: the placeholder, the bar in the border colour.
-                    let mut empty = editor("");
+                    let empty = editor("");
                     let below = Rect {
                         y: area.y + height + 1,
                         height: Prompt::height(&empty, width, 6, true),
                         ..area
                     };
-                    Prompt::new(ui, &mut empty)
-                        .meta(meta(ui))
-                        .render(below, buf);
-                    let mut answer = editor("h2 under Reference");
+                    Prompt::new(ui, &empty).meta(meta(ui)).render(below, buf);
+                    let answer = editor("h2 under Reference");
                     let last = Rect {
                         y: below.bottom() + 1,
                         height: 2,
                         ..area
                     };
-                    Prompt::new(ui, &mut answer)
+                    Prompt::new(ui, &answer)
                         .accent(ui.theme.attention)
                         .focused(true)
                         .render(last, buf);

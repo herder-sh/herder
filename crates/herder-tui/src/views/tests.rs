@@ -1003,3 +1003,43 @@ fn resource_figures_are_redrawn_as_they_arrive() {
     assert!(shown.contains("cpu  97%"), "{shown}");
     assert!(!shown.contains("3 processes"), "{shown}");
 }
+
+#[test]
+fn the_agent_session_view_on_narrow_and_wide_screens() {
+    // docs/tui-design.md §2.1: messages, tool lines and blocks, the reply's footer, the
+    // spinner and usage under the prompt.
+    for (width, height) in [(45, 40), (100, 30), (160, 40)] {
+        let mut app = fake::chat();
+        insta::assert_snapshot!(
+            format!("chat_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+    }
+}
+
+#[test]
+fn the_item_cursor_expands_tool_output_and_splits_diffs_when_wide() {
+    let mut app = fake::chat();
+    app.focus = Focus::Transcript;
+    for id in ["r1", "c3"] {
+        app.chat.expanded.insert(ItemId::new(id));
+    }
+    app.chat.cursor = Some(ItemId::new("c3"));
+    app.chat.reveal = true;
+    insta::assert_snapshot!(render(&mut app, 160, 50).backend());
+}
+
+#[test]
+fn an_approval_replaces_the_prompt_and_a_question_sits_over_it() {
+    let mut app = fake::chat_approval();
+    insta::assert_snapshot!("chat_approval", render(&mut app, 100, 30).backend());
+    let mut app = fake::chat_question();
+    insta::assert_snapshot!("chat_question", render(&mut app, 45, 40).backend());
+}
+
+#[test]
+fn the_command_popup_opens_over_the_transcript() {
+    let mut app = fake::chat();
+    fake::type_text(&mut app, "/mo");
+    insta::assert_snapshot!(render(&mut app, 100, 30).backend());
+}

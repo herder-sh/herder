@@ -15,7 +15,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use super::{GAP, Ui, badge, fill, spread, width};
+use super::{GAP, Ui, badge, fill, line_width, spread, width};
 
 pub struct Request<'a> {
     ui: Ui<'a>,
@@ -98,6 +98,12 @@ impl<'a> Request<'a> {
         if y >= area.bottom() {
             return None;
         }
+        // The buttons come first: the keys beside them go when both do not fit.
+        let right = if line_width(&left) + GAP + line_width(&right) > text_width {
+            Line::default()
+        } else {
+            right
+        };
         spread(left, right, text_width, ui.glyphs).render(text(y), buf);
         Some(text(y))
     }
@@ -147,7 +153,7 @@ mod tests {
     #[test]
     fn requests() {
         snapshot::each("request", |variant| {
-            snapshot::render(variant, 60, 13, |ui, area, buf| {
+            snapshot::render(variant, 60, 14, |ui, area, buf| {
                 let mut head = header(ui, ui.glyphs.approval, "approval".into());
                 head.push(Span::styled(
                     format!("{}Bash", ui.glyphs.separator),
@@ -181,6 +187,13 @@ mod tests {
                     },
                     buf,
                 );
+                // Too narrow for the keys too: the buttons stay whole.
+                let (deny, _) = buttons(ui, &["allow", "deny"], 1);
+                let narrow =
+                    Request::new(ui, header(ui, ui.glyphs.approval, "approval".into()), "")
+                        .footer(deny, Span::styled("y allow · n deny", ui.muted()));
+                let area = Rect::new(0, 11, 22, 3);
+                narrow.render(area, buf);
             })
         });
     }

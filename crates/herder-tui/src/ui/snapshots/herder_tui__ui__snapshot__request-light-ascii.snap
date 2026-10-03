@@ -13,8 +13,9 @@ expression: dump(&buffer)
 |│ Which heading level for the API page?                     |
 |│  1 h2 under Reference                                     |
 |│  2 h1, its own page                                       |
-|                                                            |
-|                                                            |
+|│ ^ approval                                                |
+|│                                                           |
+|│  allow    deny                                            |
 
  0   0..1   fg=#b0307f bg=#f6f7f9
  0   1..60  fg=#1c1c1c bg=#f6f7f9
@@ -54,5 +55,20 @@ expression: dump(&buffer)
  9   1..60  fg=#1c1c1c bg=#f6f7f9
 10   0..1   fg=#b0307f bg=#f6f7f9
 10   1..60  fg=#1c1c1c bg=#f6f7f9
-11   0..60  fg=#1c1c1c bg=#ffffff
-12   0..60  fg=#1c1c1c bg=#ffffff
+11   0..1   fg=#b0307f bg=#f6f7f9
+11   1..2   fg=#1c1c1c bg=#f6f7f9
+11   2..3   fg=#b0307f bg=#f6f7f9
+11   3..4   fg=#1c1c1c bg=#f6f7f9
+11   4..12  fg=#1c1c1c bg=#f6f7f9 BOLD
+11  12..22  fg=#1c1c1c bg=#f6f7f9
+11  22..60  fg=#1c1c1c bg=#ffffff
+12   0..1   fg=#b0307f bg=#f6f7f9
+12   1..22  fg=#1c1c1c bg=#f6f7f9
+12  22..60  fg=#1c1c1c bg=#ffffff
+13   0..1   fg=#b0307f bg=#f6f7f9
+13   1..2   fg=#1c1c1c bg=#f6f7f9
+13   2..9   fg=#6b6f7a bg=#f6f7f9
+13   9..11  fg=#1c1c1c bg=#f6f7f9
+13  11..17  fg=#ffffff bg=#b0307f BOLD
+13  17..22  fg=#1c1c1c bg=#f6f7f9
+13  22..60  fg=#1c1c1c bg=#ffffff

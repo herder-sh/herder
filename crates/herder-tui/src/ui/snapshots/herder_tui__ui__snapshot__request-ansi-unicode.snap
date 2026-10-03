@@ -13,8 +13,9 @@ expression: dump(&buffer)
 |┃ Which heading level for the API page?                     |
 |┃  1 h2 under Reference                                     |
 |┃  2 h1, its own page                                       |
-|                                                            |
-|                                                            |
+|┃ △ approval                                                |
+|┃                                                           |
+|┃  allow    deny                                            |
 
  0   0..1   fg=Magenta bg=Reset
  0   1..60  fg=Reset bg=Reset
@@ -54,5 +55,17 @@ expression: dump(&buffer)
  9   1..60  fg=Reset bg=Reset
 10   0..1   fg=Magenta bg=Reset
 10   1..60  fg=Reset bg=Reset
-11   0..60  fg=Reset bg=Reset
-12   0..60  fg=Reset bg=Reset
+11   0..1   fg=Magenta bg=Reset
+11   1..2   fg=Reset bg=Reset
+11   2..3   fg=Magenta bg=Reset
+11   3..4   fg=Reset bg=Reset
+11   4..12  fg=Reset bg=Reset BOLD
+11  12..60  fg=Reset bg=Reset
+12   0..1   fg=Magenta bg=Reset
+12   1..60  fg=Reset bg=Reset
+13   0..1   fg=Magenta bg=Reset
+13   1..2   fg=Reset bg=Reset
+13   2..9   fg=DarkGray bg=Reset
+13   9..11  fg=Reset bg=Reset
+13  11..17  fg=Black bg=Magenta BOLD
+13  17..60  fg=Reset bg=Reset

@@ -213,7 +213,7 @@ impl Gallery {
             Span::styled("opus", ui.muted()),
             Span::styled("ask", ui.muted()),
         ]));
-        Prompt::new(ui, &mut self.prompt)
+        Prompt::new(ui, &self.prompt)
             .meta(meta)
             .focused(self.focus == Focus::Prompt && !self.dialog)
             .render(prompt, buf);

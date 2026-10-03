@@ -33,6 +33,7 @@ mod details;
 mod help;
 mod inbox;
 mod machines;
+mod markdown;
 mod new_session;
 mod pairing;
 mod palette;
@@ -46,6 +47,7 @@ mod status;
 mod switch;
 mod tabs;
 mod terminals;
+mod tools;
 mod touch;
 mod transcript;
 
@@ -333,7 +335,7 @@ fn chat(
     details: bool,
     hits: &mut Hits,
 ) {
-    let (area, controls) = composer::split(area, app);
+    let (area, controls) = composer::split(area, app, compact, frame.area().height);
     let usage = if details {
         0
     } else {
@@ -342,9 +344,9 @@ fn chat(
     let [usage_area, area] =
         Layout::vertical([Constraint::Length(usage), Constraint::Fill(1)]).areas(area);
     resources::strip(frame, usage_area, app, compact);
-    transcript::draw(frame, area, app, compact, hits);
-    if let Some(controls) = controls {
-        composer::draw(frame, controls, app, compact, hits);
+    transcript::draw(frame, area, app, hits);
+    if let Some((controls, heights)) = controls {
+        composer::draw(frame, controls, heights, app, compact, hits);
     }
 }
 
