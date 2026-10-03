@@ -301,89 +301,211 @@ private struct PickRow: View {
 
 /// A project's settings on each machine that has it, editable by the machine's owners: the
 /// permissions and account new sessions start with, and the command a new worktree runs first.
+/// Changes apply as they are made.
 struct ProjectSettingsSheet: View {
     let fleet: Fleet
     let projectId: String
+    @State private var hostId: HostId?
 
     var body: some View {
         let group = fleet.lists.projects.first { $0.id == projectId }
-        SheetScaffold(title: group?.name ?? "Project", subtitle: projectId) {
-            ForEach(fleet.machines.filter { $0.projects.contains { $0.projectId == projectId } }, id: \.hostId) { machine in
-                if let project = machine.projects.first(where: { $0.projectId == projectId }) {
-                    ProjectSettingsForm(fleet: fleet, machine: machine, project: project)
-                }
+        let machines = fleet.machines.filter { $0.projects.contains { $0.projectId == projectId } }
+        let machine = machines.first { $0.hostId == hostId } ?? machines.first
+        SheetScaffold(title: group?.name ?? "Project", subtitle: projectId, height: 520) {
+            if machines.count > 1 {
+                MachineTabs(machines: machines, selection: Binding(get: { machine?.hostId }, set: { hostId = $0 }))
+            }
+            if let machine, let project = machine.projects.first(where: { $0.projectId == projectId }) {
+                ProjectSettingsForm(fleet: fleet, machine: machine, project: project)
+                    .id(machine.hostId)
+            } else {
+                Text("No connected machine has this project.").foregroundStyle(Theme.secondary)
             }
         } footer: {
+            if let machine {
+                Label(machine.role == .owner ? "Saved on \(machine.name) as you change it"
+                                             : "Only \(machine.name)'s owners can change these",
+                      systemImage: machine.role == .owner ? "checkmark.circle" : "lock")
+                    .font(.footnote).foregroundStyle(Theme.tertiary)
+            }
             Spacer()
         }
     }
 }
 
-private struct ProjectSettingsForm: View {
+/// One tab per machine, when a project is on several.
+struct MachineTabs: View {
+    let machines: [Machine]
+    @Binding var selection: HostId?
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(machines, id: \.hostId) { machine in
+                let selected = machine.hostId == selection
+                Button { selection = machine.hostId } label: {
+                    HStack(spacing: 6) {
+                        ConnectionMark(state: machine.connection)
+                        Text(machine.name).lineLimit(1)
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(selected ? Theme.text : Theme.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(selected ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Theme.background, in: .rect(cornerRadius: 9))
+    }
+}
+
+struct ProjectSettingsForm: View {
     let fleet: Fleet
     let machine: Machine
     let project: Project
     @State private var mode: PermissionMode?
     @State private var account: AccountId?
     @State private var setup = ""
-    @State private var saved = false
+    @State private var loaded = false
     @State private var error: String?
+    @FocusState private var editingSetup: Bool
 
     var body: some View {
         let owner = machine.role == .owner
-        Field(label: machine.name) {
-            VStack(alignment: .leading, spacing: 14) {
-                DetailRow(label: "Clones", value: project.paths.joined(separator: "\n"), mono: true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("New sessions start with").font(.caption).foregroundStyle(Theme.secondary)
-                    ChoiceChips(options: [(PermissionMode?.none, "Ask each time", "")]
-                                + [PermissionMode.readOnly, .ask, .autoEdit, .fullAccess].map { (Optional($0), $0.label, "") },
-                                selection: $mode)
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup(title: "New sessions") {
+                SettingRow(label: "Permissions", detail: "What agents may do without asking") {
+                    FooterItem(symbol: "lock.shield", text: mode?.label ?? "Ask each time") {
+                        Picker("Permissions", selection: $mode) {
+                            Text("Ask each time").tag(PermissionMode?.none)
+                            ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) {
+                                Text($0.label).tag(Optional($0))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Default account").font(.caption).foregroundStyle(Theme.secondary)
-                    ChoiceChips(options: [(AccountId?.none, "Most room left", "")]
-                                + machine.accounts.map { (Optional($0.accountId), $0.label, $0.provider) },
-                                selection: $account)
+                RowDivider()
+                SettingRow(label: "Account", detail: "Rotates to another when it runs out") {
+                    FooterItem(symbol: "person.crop.circle", text: accountLabel) {
+                        Picker("Account", selection: $account) {
+                            Text("Most room left").tag(AccountId?.none)
+                            ForEach(machine.accounts, id: \.accountId) { account in
+                                Text("\(account.label) · \(account.provider)").tag(Optional(account.accountId))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Setup command, run once in each new worktree").font(.caption).foregroundStyle(Theme.secondary)
-                    InputBox(placeholder: "make bootstrap", text: $setup, mono: true)
-                }
-                HStack {
-                    if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
-                    if saved { Label("Saved", systemImage: "checkmark").font(.footnote).foregroundStyle(Theme.secondary) }
-                    Spacer()
-                    ActionButton(title: "Save", style: .primary) { await save() }
-                        .frame(width: 120)
-                        .disabled(!owner)
-                        .opacity(owner ? 1 : 0.4)
-                }
-                if !owner {
-                    Text("Only the machine's owners can change these.").font(.footnote).foregroundStyle(Theme.tertiary)
+                RowDivider()
+                SettingRow(label: "Setup command", detail: "Runs once in each new worktree") {
+                    TextField("make bootstrap", text: $setup)
+                        .textFieldStyle(.plain)
+                        .font(Theme.mono)
+                        .foregroundStyle(Theme.text)
+                        .multilineTextAlignment(.trailing)
+                        .autocorrectionDisabled()
+                        .focused($editingSetup)
+                        .onSubmit { Task { await save() } }
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: 240, minHeight: 32)
+                        .background(Theme.surface, in: .rect(cornerRadius: 7))
                 }
             }
-            .padding(12)
-            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .font(.subheadline)
+            .foregroundStyle(Theme.secondary)
+            .disabled(!owner)
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
+            }
+            SettingsGroup(title: project.paths.count == 1 ? "Clone" : "Clones") {
+                ForEach(Array(project.paths.enumerated()), id: \.offset) { index, path in
+                    if index > 0 { RowDivider() }
+                    HStack(spacing: 8) {
+                        Text(path).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.head)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 8)
+                        CopyButton(text: path)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                }
+            }
         }
         .onAppear {
             mode = project.defaultPermissionMode
             account = project.defaultAccount
             setup = project.setupCommand ?? ""
+            loaded = true
         }
+        .onChange(of: mode) { if loaded { Task { await save() } } }
+        .onChange(of: account) { if loaded { Task { await save() } } }
+        .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
+    }
+
+    private var accountLabel: String {
+        machine.accounts.first { $0.accountId == account }?.label ?? "Most room left"
     }
 
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
+        guard mode != project.defaultPermissionMode || account != project.defaultAccount
+                || (command.isEmpty ? nil : command) != project.setupCommand else { return }
         do {
             try await fleet.setProjectSettings(project.projectId, on: machine.hostId, mode: mode, account: account,
                                                setupCommand: command.isEmpty ? nil : command)
-            saved = true
             error = nil
         } catch {
             self.error = describe(error)
-            saved = false
         }
+    }
+}
+
+/// The hairline between rows of a settings card.
+struct RowDivider: View {
+    var body: some View {
+        Rectangle().fill(Theme.stroke.opacity(0.6)).frame(height: 1).padding(.leading, 14)
+    }
+}
+
+/// A titled card of settings rows; `RowDivider` separates them.
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeading(title: title)
+            VStack(spacing: 0) {
+                content
+            }
+            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
+        }
+    }
+}
+
+/// A setting: its name and what it does on the left, its control on the right.
+struct SettingRow<Control: View>: View {
+    let label: String
+    var detail = ""
+    @ViewBuilder var control: Control
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
+                if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(Theme.tertiary) }
+            }
+            Spacer(minLength: 12)
+            control
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(minHeight: 52)
     }
 }
 
