@@ -36,9 +36,9 @@ struct AgentMessageSource: View {
         HStack(spacing: 4) {
             Text(fleet.sessions[source]?.title ?? "Session …\(message.senderSessionId.suffix(6))")
                 .lineLimit(1).truncationMode(.middle)
-            Image(systemName: "arrow.up.right")
+            if senderAvailable { Image(systemName: "arrow.up.right") }
         }
         .font(.caption).foregroundStyle(Theme.tertiary)
-        .accessibilityLabel("Open sender session \(message.senderSessionId)")
+        .accessibilityLabel("\(senderAvailable ? "Open sender session" : "Sender session") \(message.senderSessionId)")
     }
 }
