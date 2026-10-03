@@ -272,6 +272,15 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         setup_command: Option<String>,
     },
+    /// Stop managing a project on this host; owners only. Answered with `applied`; the
+    /// project list without it follows. Its clones leave the daemon's `[[project]]` entries
+    /// and are excluded from discovery, until `add_project` adds one again; nothing on disk is
+    /// deleted. A project with live (not archived) sessions is refused with `conflict`;
+    /// archived ones keep existing without a project.
+    RemoveProject {
+        /// The project, one of this daemon's.
+        project_id: ProjectId,
+    },
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {
         /// Target terminal.

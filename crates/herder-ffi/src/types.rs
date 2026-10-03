@@ -486,6 +486,9 @@ pub enum CommandBody {
         default_account: Option<AccountId>,
         setup_command: Option<String>,
     },
+    RemoveProject {
+        project_id: ProjectId,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,

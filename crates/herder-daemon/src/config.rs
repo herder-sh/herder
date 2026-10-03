@@ -61,6 +61,7 @@
 //! [projects]
 //! roots = ["~/Projects"]   # scanned 3 levels deep; none by default
 //! setup_timeout_secs = 600 # how long a setup command may run; 10 minutes by default
+//! exclude = ["~/Projects/old"] # repositories left out wherever they are found
 //!
 //! [[project]]
 //! name = "herder"                  # the last segment of the id when absent
@@ -77,7 +78,9 @@
 //!
 //! Owners add `[[project]]` entries and change their `default_permission_mode`,
 //! `default_account` and `setup_command` from a client too ([`add_project`],
-//! [`set_project_settings`]); the rest of the file is kept as written.
+//! [`set_project_settings`]), and remove projects ([`remove_project`]): a removed project's
+//! clones leave every entry's `paths` and go into `exclude`; the rest of the file is kept as
+//! written.
 //!
 //! An entry needs `remotes` or `paths`. No remote or path may appear in two entries.
 //!
@@ -240,6 +243,7 @@ impl Default for ConfigFile {
 #[serde(default, deny_unknown_fields)]
 struct ProjectsFile {
     roots: Vec<PathBuf>,
+    exclude: Vec<PathBuf>,
     setup_timeout_secs: Option<u64>,
 }
 
@@ -349,6 +353,16 @@ fn resolve_projects(
         .iter()
         .map(|root| resolve_path(root, env).context("projects.roots"))
         .collect::<Result<_>>()?;
+    let exclude = table
+        .exclude
+        .iter()
+        .map(|path| {
+            Ok(resolve_path(path, env)
+                .context("projects.exclude")?
+                .components()
+                .collect())
+        })
+        .collect::<Result<_>>()?;
     let mut remotes_seen = HashSet::new();
     let mut paths_seen = HashSet::new();
     let entries = entries
@@ -417,6 +431,7 @@ fn resolve_projects(
     Ok(ProjectsConfig {
         roots,
         setup_timeout,
+        exclude,
         entries,
     })
 }
@@ -483,15 +498,24 @@ pub fn read_projects(path: &Path) -> Result<ProjectsConfig> {
 }
 
 /// Adds `clone` to the paths of the `[[project]]` entry `entry` of the config file at `path`,
-/// counted in file order, or declares it in a new entry when `None`; returns the projects as
-/// the file now resolves them. See [`edit_project`].
+/// counted in file order, or declares it in a new entry when `None`, and takes it out of
+/// `[projects] exclude`; returns the projects as the file now resolves them. See
+/// [`edit_config`].
 pub fn add_project(path: &Path, entry: Option<usize>, clone: &Path) -> Result<ProjectsConfig> {
     let clone = clone
         .to_str()
         .with_context(|| format!("{} is not UTF-8", clone.display()))?
         .to_owned();
-    edit_project(path, entry, |table| {
-        let paths = table
+    edit_config(path, |doc, env| {
+        // A clone of a removed project comes back.
+        if let Some(exclude) = doc
+            .get_mut("projects")
+            .and_then(|table| table.get_mut("exclude"))
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            exclude.retain(|path| !names(path, Path::new(&clone), env));
+        }
+        let paths = project_table(doc, entry, path)?
             .entry("paths")
             .or_insert_with(|| toml_edit::value(toml_edit::Array::new()))
             .as_array_mut()
@@ -499,6 +523,77 @@ pub fn add_project(path: &Path, entry: Option<usize>, clone: &Path) -> Result<Pr
         paths.push(clone);
         Ok(())
     })
+}
+
+/// Removes the clones `clones` of a project, as discovery found them, from the config file at
+/// `path`: drops them from the `paths` of every `[[project]]` entry, and each entry that is
+/// left with neither `remotes` nor `paths`, and adds them to `[projects] exclude`; returns the
+/// projects as the file now resolves them. The rest of the file is kept as written, and only
+/// a file that still loads replaces it.
+pub fn remove_project(path: &Path, clones: &[PathBuf]) -> Result<ProjectsConfig> {
+    let clones = clones
+        .iter()
+        .map(|clone| {
+            clone
+                .to_str()
+                .with_context(|| format!("{} is not UTF-8", clone.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    edit_config(path, |doc, env| {
+        let removed = |value: &toml_edit::Value| {
+            clones
+                .iter()
+                .any(|clone| names(value, Path::new(clone), env))
+        };
+        if let Some(entries) = doc
+            .get_mut("project")
+            .and_then(toml_edit::Item::as_array_of_tables_mut)
+        {
+            for table in entries.iter_mut() {
+                if let Some(paths) = table
+                    .get_mut("paths")
+                    .and_then(toml_edit::Item::as_array_mut)
+                {
+                    paths.retain(|path| !removed(path));
+                }
+            }
+            entries.retain(|table| {
+                let empty = |key| {
+                    table
+                        .get(key)
+                        .and_then(toml_edit::Item::as_array)
+                        .is_none_or(toml_edit::Array::is_empty)
+                };
+                !(empty("remotes") && empty("paths"))
+            });
+        }
+        let exclude = doc
+            .entry("projects")
+            .or_insert(toml_edit::table())
+            .as_table_like_mut()
+            .context("projects is not a table")?
+            .entry("exclude")
+            .or_insert(toml_edit::value(toml_edit::Array::new()))
+            .as_array_mut()
+            .context("projects.exclude is not an array")?;
+        for clone in &clones {
+            if !exclude
+                .iter()
+                .any(|path| names(path, Path::new(clone), env))
+            {
+                exclude.push(*clone);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Whether the path string `value` of the config file names `path`, once resolved.
+fn names(value: &toml_edit::Value, path: &Path, env: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    value
+        .as_str()
+        .and_then(|text| resolve_path(Path::new(text), &env).ok())
+        .is_some_and(|resolved| resolved.components().eq(path.components()))
 }
 
 /// A project's settings as a client sets them; `None` leaves a setting out.
@@ -514,7 +609,7 @@ pub struct ProjectSettings {
 
 /// Replaces the settings of the `[[project]]` entry `entry` of the config file at `path`,
 /// counted in file order, or adds an entry declaring `clone` with them when `None`; returns
-/// the projects as the file now resolves them. See [`edit_project`].
+/// the projects as the file now resolves them. See [`edit_config`].
 pub fn set_project_settings(
     path: &Path,
     entry: Option<usize>,
@@ -525,7 +620,8 @@ pub fn set_project_settings(
         .to_str()
         .with_context(|| format!("{} is not UTF-8", clone.display()))?
         .to_owned();
-    edit_project(path, entry, |table| {
+    edit_config(path, |doc, _| {
+        let table = project_table(doc, entry, path)?;
         if entry.is_none() {
             table.insert(
                 "paths",
@@ -557,15 +653,42 @@ pub fn set_project_settings(
     })
 }
 
-/// Rewrites the config file at `path` with `edit` applied to its `[[project]]` entry `entry`,
-/// counted in file order, or to a new entry appended when `None`, keeping the rest of the file
-/// as written; creates the file when it does not exist. The file is replaced atomically, and
-/// only if it still loads: an edit that breaks it, such as a path another entry has, fails and
-/// changes nothing. Returns the projects as the new file resolves them.
-fn edit_project(
-    path: &Path,
+/// The `[[project]]` entry `entry` of `doc`, the config file at `path`, counted in file order,
+/// or a new entry appended when `None`.
+fn project_table<'a>(
+    doc: &'a mut toml_edit::DocumentMut,
     entry: Option<usize>,
-    edit: impl FnOnce(&mut toml_edit::Table) -> Result<()>,
+    path: &Path,
+) -> Result<&'a mut toml_edit::Table> {
+    let entries = doc
+        .entry("project")
+        .or_insert(toml_edit::Item::ArrayOfTables(
+            toml_edit::ArrayOfTables::new(),
+        ))
+        .as_array_of_tables_mut()
+        .with_context(|| format!("project in {} is not an array of tables", path.display()))?;
+    match entry {
+        Some(index) => entries
+            .get_mut(index)
+            .with_context(|| format!("{} has no project entry {}", path.display(), index + 1)),
+        None => {
+            entries.push(toml_edit::Table::new());
+            let last = entries.len() - 1;
+            entries
+                .get_mut(last)
+                .context("the new project entry is gone")
+        }
+    }
+}
+
+/// Rewrites the config file at `path` with `edit` applied, keeping the rest of the file as
+/// written; creates the file when it does not exist. `edit` gets the environment paths in the
+/// file resolve with. The file is replaced atomically, and only if it still loads: an edit that
+/// breaks it, such as a path another entry has, fails and changes nothing. Returns the projects
+/// as the new file resolves them.
+fn edit_config(
+    path: &Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut, &dyn Fn(&str) -> Option<OsString>) -> Result<()>,
 ) -> Result<ProjectsConfig> {
     let env = |key: &str| std::env::var_os(key);
     let text = match std::fs::read_to_string(path) {
@@ -578,26 +701,7 @@ fn edit_project(
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .with_context(|| format!("parsing config file {}", path.display()))?;
-    let entries = doc
-        .entry("project")
-        .or_insert(toml_edit::Item::ArrayOfTables(
-            toml_edit::ArrayOfTables::new(),
-        ))
-        .as_array_of_tables_mut()
-        .with_context(|| format!("project in {} is not an array of tables", path.display()))?;
-    let table = match entry {
-        Some(index) => entries
-            .get_mut(index)
-            .with_context(|| format!("{} has no project entry {}", path.display(), index + 1))?,
-        None => {
-            entries.push(toml_edit::Table::new());
-            let last = entries.len() - 1;
-            entries
-                .get_mut(last)
-                .context("the new project entry is gone")?
-        }
-    };
-    edit(table)?;
+    edit(&mut doc, &env)?;
     let text = doc.to_string();
     let file: ConfigFile =
         toml::from_str(&text).with_context(|| format!("changing {}", path.display()))?;
@@ -1204,6 +1308,7 @@ mod tests {
             [projects]
             roots = ["~/Projects", "/srv/src"]
             setup_timeout_secs = 90
+            exclude = ["~/Projects/old/"]
 
             [[project]]
             name = "herder"
@@ -1223,6 +1328,7 @@ mod tests {
             ProjectsConfig {
                 roots: vec![home.path().join("Projects"), PathBuf::from("/srv/src")],
                 setup_timeout: std::time::Duration::from_secs(90),
+                exclude: vec![home.path().join("Projects/old")],
                 entries: vec![
                     ProjectEntry {
                         name: Some("herder".to_owned()),
@@ -1374,6 +1480,47 @@ mod tests {
         let path = home.path().join("new/daemon.toml");
         let projects = add_project(&path, None, Path::new("/src/app")).unwrap();
         assert_eq!(projects.entries[0].paths, [PathBuf::from("/src/app")]);
+        assert_eq!(read_projects(&path).unwrap(), projects);
+    }
+
+    #[test]
+    fn a_removed_project_leaves_the_entries_and_is_excluded() {
+        let home = tempfile::tempdir().unwrap();
+        let original = "# mine\n[[project]]\nname = \"herder\"\n\
+                        remotes = [\"git@github.com:herder-sh/herder.git\"]\n\
+                        paths = [\"/src/herder\", \"/src/fork\"]\n\n\
+                        [[project]]\npaths = [\"/src/app/\"]\n";
+        let path = write(home.path(), original);
+        let projects = remove_project(
+            &path,
+            &[PathBuf::from("/src/app"), PathBuf::from("/src/herder")],
+        )
+        .unwrap();
+        // The entry with remotes keeps its name; the one left empty goes.
+        assert_eq!(
+            projects.entries,
+            [ProjectEntry {
+                name: Some("herder".into()),
+                remotes: vec![ProjectId::new("github.com/herder-sh/herder")],
+                paths: vec![PathBuf::from("/src/fork")],
+                ..ProjectEntry::default()
+            }]
+        );
+        assert_eq!(
+            projects.exclude,
+            [PathBuf::from("/src/app"), PathBuf::from("/src/herder")]
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# mine\n")
+        );
+        // Removing again excludes nothing twice; adding takes it out of the list.
+        let projects = remove_project(&path, &[PathBuf::from("/src/app")]).unwrap();
+        assert_eq!(projects.exclude.len(), 2);
+        let projects = add_project(&path, None, Path::new("/src/app")).unwrap();
+        assert_eq!(projects.exclude, [PathBuf::from("/src/herder")]);
+        assert_eq!(projects.entries[1].paths, [PathBuf::from("/src/app")]);
         assert_eq!(read_projects(&path).unwrap(), projects);
     }
 

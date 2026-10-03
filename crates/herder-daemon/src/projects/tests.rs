@@ -532,3 +532,177 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     shutdown.cancel();
     task.await.unwrap();
 }
+
+#[tokio::test]
+async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Projects");
+    let (app, lib) = (root.join("app"), root.join("lib"));
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    git_repo(
+        &lib,
+        "[remote \"origin\"]\n\turl = git@github.com:org/lib.git\n",
+    );
+    let file = tmp.path().join("daemon.toml");
+    fs::write(
+        &file,
+        format!(
+            "# mine\n[projects]\nroots = [\"{}\"]\n\n[[project]]\nname = \"Lib\"\npaths = [\"{}\"]\n",
+            root.display(),
+            lib.display()
+        ),
+    )
+    .unwrap();
+    // A live session in app, and an archived one in lib.
+    let mut store = herder_store::Store::open(tmp.path().join("herder.db")).unwrap();
+    for (id, repo) in [("s1", &app), ("s2", &lib)] {
+        store
+            .append(herder_store::NewEvent {
+                session_id: SessionId::new(id),
+                at: jiff::Timestamp::now(),
+                by: None,
+                body: herder_protocol::EventBody::SessionCreated {
+                    repo: repo.to_string_lossy().into_owned(),
+                    worktree: tmp.path().join(id).to_string_lossy().into_owned(),
+                    branch: "b".into(),
+                    provider: herder_protocol::Provider::Claude,
+                    account_id: AccountId::new("a"),
+                    model: "m".into(),
+                    permission_mode: herder_protocol::PermissionMode::Ask,
+                    max_children: None,
+                    failover_pin: None,
+                    parent: None,
+                    task: None,
+                },
+            })
+            .unwrap();
+    }
+    store
+        .append(herder_store::NewEvent {
+            session_id: SessionId::new("s2"),
+            at: jiff::Timestamp::now(),
+            by: None,
+            body: herder_protocol::EventBody::SessionStatusChanged {
+                status: herder_protocol::SessionStatus::Archived,
+            },
+        })
+        .unwrap();
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store,
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::new(),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    let overrides = Arc::new(Overrides::new(
+        file.clone(),
+        crate::config::read_projects(&file).unwrap(),
+    ));
+    sessions
+        .manage_projects(host(), Arc::clone(&overrides))
+        .unwrap();
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: overrides,
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed: Arc::new(Notify::new()),
+        }
+        .run(shutdown.clone()),
+    );
+    let (app_path, lib_path) = (
+        app.to_string_lossy().into_owned(),
+        lib.to_string_lossy().into_owned(),
+    );
+    let both = [
+        project("github.com/org/app", "app", &[&app_path]),
+        project("github.com/org/lib", "Lib", &[&lib_path]),
+    ];
+    assert_eq!(next_projects(&outbox).await, both);
+    let owner = herder_protocol::UserId::new("owner");
+    let handle = |command| sessions.handle(owner.clone(), command);
+    let remove = |id: &str| herder_protocol::CommandBody::RemoveProject {
+        project_id: ProjectId::new(id),
+    };
+
+    let error = handle(remove("github.com/org/app")).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::Conflict);
+    assert!(
+        error.message.contains("1 live session"),
+        "{}",
+        error.message
+    );
+    let error = handle(remove("github.com/org/other")).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+
+    // Removed, it stays out though the roots scan and its archived session find it.
+    assert_eq!(
+        handle(remove("github.com/org/lib")).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    assert_eq!(next_projects(&outbox).await, both[..1]);
+    assert!(lib.join(".git/config").is_file());
+    let config = crate::config::read_projects(&file).unwrap();
+    assert_eq!(
+        (config.entries, config.exclude),
+        (vec![], vec![lib.clone()])
+    );
+    assert!(
+        fs::read_to_string(&file).unwrap().starts_with("# mine\n"),
+        "the rest of the file is kept"
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let heads = sessions.sessions().await.unwrap();
+            if heads
+                .iter()
+                .all(|head| head.project_id.is_some() == (head.session_id == SessionId::new("s1")))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the archived session loses its project");
+
+    // Added again, it is back.
+    let add = herder_protocol::CommandBody::AddProject { path: lib_path };
+    assert_eq!(
+        handle(add).await,
+        Ok(herder_protocol::CommandResult::ProjectAdded {
+            project_id: ProjectId::new("github.com/org/lib"),
+        })
+    );
+    assert_eq!(
+        next_projects(&outbox).await,
+        [
+            both[0].clone(),
+            project("github.com/org/lib", "lib", &[&both[1].paths[0]])
+        ]
+    );
+    assert!(
+        crate::config::read_projects(&file)
+            .unwrap()
+            .exclude
+            .is_empty()
+    );
+
+    shutdown.cancel();
+    task.await.unwrap();
+}

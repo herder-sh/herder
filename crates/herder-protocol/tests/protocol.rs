@@ -141,6 +141,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             default_account: None,
             setup_command: None,
         }),
+        command(CommandBody::RemoveProject {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+        }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
             force: false,
@@ -1314,6 +1317,14 @@ fn project_optional_fields_may_be_absent() {
             default_account: None,
             setup_command: None,
         }
+    );
+
+    let remove = CommandBody::RemoveProject {
+        project_id: ProjectId::new("github.com/org/repo"),
+    };
+    assert_eq!(
+        serde_json::to_value(&remove).unwrap(),
+        json!({ "type": "remove_project", "project_id": "github.com/org/repo" })
     );
 }
 
