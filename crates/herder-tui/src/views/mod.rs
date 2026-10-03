@@ -104,6 +104,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Under the dialogs, but their taps over everything.
     let mut touch = Hits::default();
     touch::header(frame, header, app, narrow, &mut touch);
+    let clicks = if narrow {
+        touch::clicks(app)
+    } else {
+        Vec::new()
+    };
+    // Tab's focus stays on a button only while the bar stays the same.
+    if clicks != app.bar {
+        app.bar = clicks;
+        app.bar_focus = None;
+    }
     if narrow {
         touch::bar(frame, bar, app, &mut touch);
     }

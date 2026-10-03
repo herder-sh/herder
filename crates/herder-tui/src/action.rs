@@ -6,6 +6,10 @@
 //!
 //! Every action has a key a phone's on-screen keyboard has: a letter, a digit, Enter or
 //! Backspace. Esc, Tab, arrows and Ctrl chords are alternatives, never the only way.
+//!
+//! Every view is usable with only the keys a phone SSH app's gestures send, too: arrows move
+//! or scroll, PgUp / PgDn page, Home / End jump, Enter opens, Esc and Backspace go back, and on
+//! a narrow screen Tab and Shift-Tab reach the action bar's buttons ([`crate::bar`]).
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -90,6 +94,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             KeyCode::Char('k') | KeyCode::Up => Action::Up,
             KeyCode::Char('j') | KeyCode::Down => Action::Down,
             KeyCode::Char(' ') | KeyCode::PageDown => Action::PageDown,
+            KeyCode::PageUp => Action::PageUp,
+            KeyCode::Home => Action::Top,
+            KeyCode::End => Action::Bottom,
             _ => Action::ToggleHelp,
         };
         return Some(action);
@@ -110,8 +117,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         let action = match key.code {
             KeyCode::Char('k') | KeyCode::Up => Action::Up,
             KeyCode::Char('j') | KeyCode::Down => Action::Down,
-            KeyCode::Char('g') | KeyCode::Home => Action::Top,
-            KeyCode::Char('G') | KeyCode::End => Action::Bottom,
+            KeyCode::Char('g') | KeyCode::Home | KeyCode::PageUp => Action::Top,
+            KeyCode::Char('G') | KeyCode::End | KeyCode::PageDown => Action::Bottom,
             KeyCode::Enter => Action::Open,
             KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q' | 't') => Action::Back,
             _ => return None,
@@ -187,6 +194,10 @@ pub const HELP: &[(&str, &str)] = &[
     ("j / k, ↓ / ↑", "move, or scroll the transcript"),
     ("Enter, l", "open the selected session"),
     ("Tab", "switch between sessions and transcript"),
+    (
+        "Tab, Enter",
+        "narrow screen: move along the button bar, press",
+    ),
     ("h, ⌫, Esc", "back to the sessions"),
     ("b / Space", "scroll a page (also PgUp / PgDn)"),
     ("g / G", "first / last; G follows the transcript"),

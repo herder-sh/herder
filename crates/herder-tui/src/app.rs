@@ -247,6 +247,10 @@ pub struct App {
     pub(crate) pressed: Option<Click>,
     /// Where the press of a drag in progress landed, and the row it last reached.
     pub(crate) dragged: Option<(u16, u16, u16)>,
+    /// What the last frame's action bar buttons do, in order; empty on a wide screen.
+    pub(crate) bar: Vec<Click>,
+    /// The action bar button Tab moved to, which Enter presses.
+    pub bar_focus: Option<usize>,
 }
 
 impl Default for App {
@@ -277,6 +281,8 @@ impl Default for App {
             hits: Hits::default(),
             pressed: None,
             dragged: None,
+            bar: Vec::new(),
+            bar_focus: None,
         }
     }
 }
@@ -287,6 +293,9 @@ impl App {
         match msg {
             Msg::Key(key) => {
                 self.notice = None;
+                if let Some(effects) = self.bar_key(key) {
+                    return effects;
+                }
                 match action::for_key(key, self) {
                     Some(action) => self.act(action),
                     None => Vec::new(),
@@ -350,7 +359,11 @@ impl App {
             match action {
                 Action::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
                 Action::Down => self.help_scroll += 1,
+                Action::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
                 Action::PageDown => self.help_scroll += 10,
+                Action::Top => self.help_scroll = 0,
+                // The help clamps its scroll to its last page as it draws.
+                Action::Bottom => self.help_scroll = usize::MAX,
                 _ => {
                     self.help = false;
                     self.help_scroll = 0;
