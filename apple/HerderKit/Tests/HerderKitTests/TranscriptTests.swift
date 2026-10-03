@@ -171,7 +171,7 @@ struct DefaultAccountTests {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         model.outbox = [Outgoing(text: "next", images: [], state: .delivered), Outgoing(text: "typing", images: [], state: .sending)]
-        let users = Transcript.blocks(model).compactMap { if case .user(_, let text, _, _) = $0 { text } else { nil } }
+        let users = Transcript.blocks(model).compactMap { if case .user(_, let text, _, _, _) = $0 { text } else { nil } }
         #expect(users == ["typing"])
         #expect(Transcript.queued(model).map(\.text) == ["next"])
     }
