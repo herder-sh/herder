@@ -10,7 +10,10 @@ no sessions and keeps a durable copy of every session journal its hosts replicat
 
 ## Build the image
 
-From the repository root:
+CI publishes a multi-arch (amd64, arm64) image to `ghcr.io/herder-sh/herder`: `:latest`
+and `:main` track `main`, `:sha-<short>` pins a commit, and a `v*` tag adds `:<version>`.
+
+To build your own, from the repository root:
 
 ```sh
 podman build -f deploy/Containerfile -t registry.example.com/herder:dev .
