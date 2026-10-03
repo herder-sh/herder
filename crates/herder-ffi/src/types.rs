@@ -13,10 +13,10 @@ use herder_protocol::{
     ApprovalOutcome, Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult,
     Constraint, Container, ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
     EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image,
-    Item, ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId,
-    Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId,
-    SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource,
-    TurnError, TurnId, UsageWindow, UserId,
+    Item, ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project,
+    ProjectId, Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead,
+    SessionId, SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSource, TurnError, TurnId, UsageWindow, UserId,
 };
 use serde_json::Value as Json;
 
