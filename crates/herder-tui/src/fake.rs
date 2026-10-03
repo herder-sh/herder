@@ -283,6 +283,7 @@ pub fn question(id: &str, text: &str, choices: &[&str]) -> EventBody {
 /// An account of `host`'s machine, for the new-session dialog.
 pub fn account(id: &str, label: &str) -> herder_protocol::Account {
     herder_protocol::Account {
+        config_dir: None,
         account_id: AccountId::new(id),
         provider: Provider::Claude,
         label: label.to_owned(),

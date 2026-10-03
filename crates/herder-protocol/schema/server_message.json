@@ -384,6 +384,13 @@
           "description": "The account.",
           "$ref": "#/$defs/AccountId"
         },
+        "config_dir": {
+          "description": "Config directory on the host; absent for the provider default.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "label": {
           "description": "Display label chosen by the owner.",
           "type": "string"

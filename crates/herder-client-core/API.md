@@ -181,6 +181,12 @@ ends. A ping still unanswered when the next is due counts in `missed_pongs`; the
 the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
 connected machine.
 
+## Changes in version 6
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Account::config_dir: Option<String>` | Owners see and change where an account's configuration lives. A new field breaks code that builds an `Account`. |
+
 ## Changes in version 4
 
 | Before | Now | Why |
@@ -239,3 +245,13 @@ after a queued message was discarded by archiving. Durable receipts retain the a
 text under a used key fails. Self-send, read-only targets, permission escalation and relay
 chains beyond eight hops are refused. Existing child send/spawn retain their restrictions
 and carry the same provenance so they cannot reset relay depth. A human prompt resets it.
+
+### Account settings (client API 6)
+
+`Account.config_dir` exposes the host-local configuration directory (absent means the
+provider default). `send(host, SetAccountSettings { account_id, label, config_dir })`
+updates the label and directory for an existing account; only owners may do this.
+The daemon persists configuration and broadcasts the refreshed account list. Labels
+must be non-empty. Directory changes require all sessions on the daemon archived;
+provider and account id cannot be changed. No provider credentials are exposed.
+The wire change is additive (protocol 4); the native record shape changes (client API 6).

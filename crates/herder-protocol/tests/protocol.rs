@@ -222,6 +222,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::SetAccountSettings {
+            account_id: AccountId::new("01J9ACCOUNT"),
+            label: "Personal".into(),
+            config_dir: Some("~/.claude-personal".into()),
+        }),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
         }),
@@ -701,6 +706,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ]
         .into_iter()
         .map(|provider| Account {
+            config_dir: None,
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             provider,

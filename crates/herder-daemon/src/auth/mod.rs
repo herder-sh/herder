@@ -449,6 +449,11 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             "bringing down containers is for the daemon's owners only",
         ));
     }
+    if matches!(command, CommandBody::SetAccountSettings { .. }) && identity.role != Role::Owner {
+        return Err(forbidden(
+            "changing accounts is for the daemon's owners only",
+        ));
+    }
     let host = matches!(
         command,
         CommandBody::ListDirectory { .. }
@@ -782,5 +787,22 @@ mod tests {
                 .is_empty()
         );
         assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
+    }
+    #[test]
+    fn only_owners_may_configure_accounts() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let command = CommandBody::SetAccountSettings {
+            account_id: herder_protocol::AccountId::new("work"),
+            label: "Work".into(),
+            config_dir: None,
+        };
+        assert!(authorize(&alice, &command).is_ok());
+        alice.role = Role::Member;
+        assert_eq!(
+            authorize(&alice, &command).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
     }
 }

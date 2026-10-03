@@ -123,6 +123,7 @@ pub(super) fn herd() -> App {
         resets_at: None,
     };
     machines[0].accounts = vec![Account {
+        config_dir: None,
         account_id: AccountId::new("claude-main"),
         provider: Provider::Claude,
         label: "claude-main".to_owned(),
@@ -755,6 +756,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
     let mut app = fake::tree();
     let mut machines = app.machines.clone();
     machines[0].accounts = vec![herder_protocol::Account {
+        config_dir: None,
         account_id: herder_protocol::AccountId::new("claude-main"),
         provider: herder_protocol::Provider::Claude,
         label: "Main".into(),
