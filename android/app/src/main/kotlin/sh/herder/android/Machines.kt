@@ -202,6 +202,7 @@ internal fun sampleFleet(now: Instant): Profile.Open {
                 projectId = "github.com/org/app",
                 name = "App",
                 paths = listOf("/srv/app"),
+                defaultPermissionMode = null,
                 defaultAccount = null,
                 setupCommand = null,
             ),

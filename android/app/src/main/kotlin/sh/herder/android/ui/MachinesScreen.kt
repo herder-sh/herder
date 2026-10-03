@@ -65,6 +65,7 @@ import sh.herder.android.Lists
 import sh.herder.android.Profile
 import sh.herder.android.R
 import sh.herder.android.Scope
+import sh.herder.android.SessionKey
 import sh.herder.android.SessionRow
 import sh.herder.android.badge
 import sh.herder.android.glyph
@@ -94,33 +95,66 @@ private val Indent = 20.dp
 private const val ROW_PRS = 2
 
 /**
+ * Draws the open session [key]: [onOpen] opens another, [onBack] returns to where it was opened
+ * from; [compact] on a phone.
+ */
+typealias SessionContent = @Composable (key: SessionKey, compact: Boolean, onOpen: (SessionKey) -> Unit, onBack: () -> Unit) -> Unit
+
+/**
  * The paired machines, each with its connection and a vault's hosts under it, online or
  * offline; and the sessions of the selected one, or of all, grouped by project or by machine,
  * each with its status, its task tree and its PRs. Wide, the two sit side by side; narrow, the
- * sessions are a page of their own and rows show less, as the TUI's compact rows do.
+ * sessions are a page of their own and rows show less, as the TUI's compact rows do. A session
+ * opens on a tap, drawn by [session]: in place of the list beside the machines, or as a page.
  */
 @Composable
-fun MachinesScreen(profile: Profile, now: Instant = remember(profile) { Instant.now() }) {
+fun MachinesScreen(
+    profile: Profile,
+    now: Instant = remember(profile) { Instant.now() },
+    session: SessionContent = { _, _, _, _ -> },
+) {
     // What the user picked; on a phone, `null` shows the machines page.
     var picked by remember { mutableStateOf<Scope?>(null) }
+    // The sessions opened, the last one shown; a child opened from its parent goes on top.
+    var opened by remember { mutableStateOf<List<SessionKey>>(emptyList()) }
+    val back = { opened = opened.dropLast(1) }
+    val open: (SessionKey) -> Unit = { opened = opened + it }
     var grouping by rememberSaveable { mutableStateOf(Grouping.Projects) }
-    val open = (profile as? Profile.Open)?.takeIf { it.machines.isNotEmpty() }
+    val listed = (profile as? Profile.Open)?.takeIf { it.machines.isNotEmpty() }
     // A machine or host gone from the list falls back to all machines.
-    val scope = picked?.let { if (open != null && it in scopes(open.machines)) it else Scope.All }
+    val scope = picked?.let { if (listed != null && it in scopes(listed.machines)) it else Scope.All }
+    val shown = opened.lastOrNull()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         when {
-            open == null -> MachinesPane(profile, selected = null, now = now, onSelect = {})
+            listed == null -> MachinesPane(profile, selected = null, now = now, onSelect = {})
             maxWidth >= TwoPanes -> Row(Modifier.fillMaxSize()) {
                 Box(Modifier.width(MachinesPaneWidth).fillMaxHeight()) {
-                    MachinesPane(open, selected = scope ?: Scope.All, now = now, onSelect = { picked = it })
+                    MachinesPane(
+                        listed,
+                        selected = scope ?: Scope.All,
+                        now = now,
+                        onSelect = {
+                            picked = it
+                            opened = emptyList()
+                        },
+                    )
                 }
                 VerticalDivider()
-                SessionsPane(open, scope ?: Scope.All, grouping, { grouping = it }, compact = false, now, onBack = null)
+                if (shown != null) {
+                    BackHandler(onBack = back)
+                    session(shown, false, open, back)
+                } else {
+                    SessionsPane(listed, scope ?: Scope.All, grouping, { grouping = it }, compact = false, now, null, open)
+                }
             }
-            scope == null -> MachinesPane(open, selected = null, now = now, onSelect = { picked = it })
+            shown != null -> {
+                BackHandler(onBack = back)
+                session(shown, true, open, back)
+            }
+            scope == null -> MachinesPane(listed, selected = null, now = now, onSelect = { picked = it })
             else -> {
                 BackHandler { picked = null }
-                SessionsPane(open, scope, grouping, { grouping = it }, compact = true, now, onBack = { picked = null })
+                SessionsPane(listed, scope, grouping, { grouping = it }, compact = true, now, { picked = null }, open)
             }
         }
     }
@@ -240,6 +274,7 @@ private fun SessionsPane(
     compact: Boolean,
     now: Instant,
     onBack: (() -> Unit)?,
+    onOpen: (SessionKey) -> Unit,
 ) {
     val groups = remember(profile, scope, grouping, compact, now) {
         Lists(profile.machines, profile.summaries, compact, now).groups(scope, grouping)
@@ -275,7 +310,9 @@ private fun SessionsPane(
                 ) {
                     for (group in groups) {
                         item { GroupHeader(group) }
-                        items(group.rows, key = { "${it.key.hostId}/${it.key.sessionId}" }) { SessionItem(it) }
+                        items(group.rows, key = { "${it.key.hostId}/${it.key.sessionId}" }) { row ->
+                            SessionItem(row) { onOpen(row.key) }
+                        }
                     }
                 }
             }
@@ -329,8 +366,9 @@ private fun GroupHeader(group: Group) {
  * need the user, and its PRs.
  */
 @Composable
-private fun SessionItem(row: SessionRow) {
+private fun SessionItem(row: SessionRow, onClick: () -> Unit) {
     ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
         headlineContent = { Text(row.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             val status = row.status.color()
@@ -387,7 +425,7 @@ private fun Trailing(row: SessionRow) {
 
 /** A PR in its state's colour: open, draft, merged or closed. */
 @Composable
-private fun PrPill(pr: PullRequest) {
+internal fun PrPill(pr: PullRequest) {
     val color = when (pr.state) {
         PrState.OPEN -> MaterialTheme.colorScheme.primary
         PrState.DRAFT -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -428,7 +466,7 @@ private val GlyphWidth: Dp = 24.dp
 
 /** A status's colour: the accent for what needs the user, quiet for what does not. */
 @Composable
-private fun SessionStatus.color(): Color = when (this) {
+internal fun SessionStatus.color(): Color = when (this) {
     SessionStatus.NEEDS_YOU -> MaterialTheme.colorScheme.primary
     SessionStatus.ERROR -> MaterialTheme.colorScheme.error
     SessionStatus.RUNNING -> MaterialTheme.colorScheme.tertiary

@@ -20,6 +20,10 @@ class HerderApp : Application() {
     lateinit var profile: StateFlow<Profile>
         private set
 
+    /** The client, once the profile is open. */
+    var client: Client? = null
+        private set
+
     override fun onCreate() {
         super.onCreate()
         val client = try {
@@ -28,6 +32,7 @@ class HerderApp : Application() {
             profile = MutableStateFlow(Profile.Failed((error as? HerderException.Local)?.detail ?: error.toString()))
             return
         }
+        this.client = client
         profile = fleetFlow(client.machinesFlow(), client::updates)
             .stateIn(MainScope(), SharingStarted.Eagerly, Profile.Open(client.machines()))
         ProcessLifecycleOwner.get().lifecycle.addObserver(ClientLifecycle(client))
