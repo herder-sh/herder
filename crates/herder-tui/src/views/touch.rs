@@ -6,7 +6,7 @@ use herder_protocol::{ApprovalDecision, SessionStatus};
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -16,6 +16,7 @@ use crate::compose::Act;
 use crate::inbox::{InboxAction, What};
 use crate::mouse::{self, Click, Hits};
 use crate::prs::PrAction;
+use crate::ui::hints::{ButtonBar, Hint};
 
 /// Most characters of a question's choice its button shows.
 const CHOICE: usize = 10;
@@ -62,11 +63,14 @@ pub(super) fn header(frame: &mut Frame, area: Rect, app: &App, narrow: bool, hit
     ])
     .areas(area);
 
-    let button = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let ui = app.ui();
+    let button = ui.accent().add_modifier(Modifier::BOLD);
     frame.render_widget(Line::styled(back_label, button), back_area);
     frame.render_widget(Paragraph::new(title(app, narrow)), title_area);
     let inbox_style = if waiting > 0 {
-        Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+        Style::new()
+            .fg(ui.theme.attention)
+            .add_modifier(Modifier::BOLD)
     } else {
         super::dim()
     };
@@ -119,59 +123,20 @@ pub(super) fn clicks(app: &App) -> Vec<Click> {
         .collect()
 }
 
-/// The bar of buttons for what can be done now, the most pressing first: as many as fit,
-/// from the first, or so the one Tab moved to shows, which is drawn reversed.
+/// The bar of buttons for what can be done now, the most pressing first: a [`ButtonBar`],
+/// scrolled so the one Tab moved to shows.
 pub(super) fn bar(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
-    let buttons: Vec<(Button, u16)> = buttons(app)
-        .into_iter()
-        .map(|button| {
-            // The key, the label and the gap after them.
-            let width = button.key.chars().count() + button.label.chars().count() + 4;
-            (button, u16::try_from(width).unwrap_or(u16::MAX))
-        })
+    let buttons = buttons(app);
+    let hints: Vec<Hint> = buttons
+        .iter()
+        .map(|button| Hint::new(button.key.clone(), button.label.clone()))
         .collect();
-    let mut first = 0;
-    if let Some(focus) = app.bar_focus.filter(|at| *at < buttons.len()) {
-        let fits = |first: usize| {
-            buttons[first..=focus]
-                .iter()
-                .map(|(_, width)| u32::from(*width))
-                .sum::<u32>()
-                <= u32::from(area.width) + 1
-        };
-        while first < focus && !fits(first) {
-            first += 1;
-        }
+    let placed = ButtonBar::new(app.ui(), &hints)
+        .focus(app.bar_focus)
+        .render(area, frame.buffer_mut());
+    for (at, rect) in placed {
+        hits.click(and_below(rect), buttons[at].click.clone());
     }
-    let mut spans = Vec::new();
-    let mut x = area.x;
-    for (at, (button, width)) in buttons.into_iter().enumerate().skip(first) {
-        let width = width - 1;
-        if x + width > area.right() {
-            break;
-        }
-        let mut key_style = Style::new()
-            .fg(Color::Yellow)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD);
-        let mut label_style = Style::new().fg(Color::White).bg(Color::DarkGray);
-        if app.bar_focus == Some(at) {
-            key_style = key_style.add_modifier(Modifier::REVERSED);
-            label_style = label_style.add_modifier(Modifier::REVERSED);
-        }
-        // The gap after a button is its own, so every spot of the bar taps something.
-        hits.click(
-            and_below(Rect::new(x, area.y, (width + 1).min(area.right() - x), 1)),
-            button.click,
-        );
-        spans.extend([
-            Span::styled(format!(" {} ", button.key), key_style),
-            Span::styled(format!("{} ", button.label), label_style),
-            Span::raw(" "),
-        ]);
-        x += width + 1;
-    }
-    frame.render_widget(Line::from(spans), area);
 }
 
 /// The buttons for what has the keys now.

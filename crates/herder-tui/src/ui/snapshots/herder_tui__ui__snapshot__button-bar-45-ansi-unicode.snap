@@ -1,0 +1,38 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+| y allow   n deny   < back   ^c stop   : cmd |
+| y allow   n deny   < back   ^c stop   : cmd |
+| n deny   < back   ^c stop   : cmd   ? help  |
+
+ 0   0..2   fg=Cyan bg=Reset BOLD
+ 0   2..10  fg=Reset bg=Reset
+ 0  10..12  fg=Cyan bg=Reset BOLD
+ 0  12..19  fg=Reset bg=Reset
+ 0  19..21  fg=Cyan bg=Reset BOLD
+ 0  21..28  fg=Reset bg=Reset
+ 0  28..31  fg=Cyan bg=Reset BOLD
+ 0  31..38  fg=Reset bg=Reset
+ 0  38..40  fg=Cyan bg=Reset BOLD
+ 0  40..45  fg=Reset bg=Reset
+ 1   0..9   fg=Black bg=Cyan BOLD
+ 1   9..10  fg=Reset bg=Reset
+ 1  10..12  fg=Cyan bg=Reset BOLD
+ 1  12..19  fg=Reset bg=Reset
+ 1  19..21  fg=Cyan bg=Reset BOLD
+ 1  21..28  fg=Reset bg=Reset
+ 1  28..31  fg=Cyan bg=Reset BOLD
+ 1  31..38  fg=Reset bg=Reset
+ 1  38..40  fg=Cyan bg=Reset BOLD
+ 1  40..45  fg=Reset bg=Reset
+ 2   0..2   fg=Cyan bg=Reset BOLD
+ 2   2..9   fg=Reset bg=Reset
+ 2   9..11  fg=Cyan bg=Reset BOLD
+ 2  11..18  fg=Reset bg=Reset
+ 2  18..21  fg=Cyan bg=Reset BOLD
+ 2  21..28  fg=Reset bg=Reset
+ 2  28..30  fg=Cyan bg=Reset BOLD
+ 2  30..36  fg=Reset bg=Reset
+ 2  36..44  fg=Black bg=Cyan BOLD
+ 2  44..45  fg=Reset bg=Reset

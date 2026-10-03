@@ -1,6 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-expression: "render(app, width, height).backend()"
+expression: terminal.backend()
 ---
 " ‹ back  herder                                                                                             inbox 0  +  "
 "┌ sessions ───────────────────────────┐┌──────────────────────────────────────────────────────────────────────────────┐ "
@@ -41,4 +41,4 @@ expression: "render(app, width, height).backend()"
 "│                                     ││                                                                              │ "
 "│                                     ││                                                                              │ "
 "└─────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘ "
-" ● box connected                                                                                        ? help  q quit  "
+" ? help  q quit                                                                                        ● box connected  "

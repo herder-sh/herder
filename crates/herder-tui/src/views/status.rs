@@ -1,53 +1,57 @@
-//! The bottom line: each machine's connection, and the essential keys; on a narrow screen,
-//! only each machine's mark and name.
+//! The bottom line, a [`ModeBar`]: a notice or what waits on the user, the essential keys, and
+//! each machine's connection at the right end; on a narrow screen, only each machine's mark
+//! and name.
 
 use herder_client_core::ConnectionState;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-
-const KEYS: &str = " ? help  q quit ";
-const NARROW_KEYS: &str = " ? help ";
+use crate::ui::hints::{Hint, ModeBar};
 
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, narrow: bool) {
-    let mut spans = Vec::new();
+    let ui = app.ui();
+    let theme = ui.theme;
+    let mut lead = Vec::new();
     if let Some(notice) = &app.notice {
-        spans.push(Span::styled(
-            format!(" {notice} "),
-            Style::new().fg(Color::Yellow),
-        ));
+        lead.push(Span::styled(notice.clone(), Style::new().fg(theme.warning)));
     }
     let waiting = app.waiting().len();
     if waiting > 0 && app.notice.is_none() {
         let text = if narrow {
-            format!(" {waiting} waiting · I ")
+            format!("{waiting} waiting · I")
         } else {
-            format!(" {waiting} waiting on you · I inbox ")
+            format!("{waiting} waiting on you · I inbox")
         };
-        spans.push(Span::styled(text, Style::new().fg(Color::Magenta)));
+        lead.push(Span::styled(text, Style::new().fg(theme.attention)));
     }
+    let mut right = Vec::new();
     for machine in app.machines.iter().filter(|_| app.notice.is_none()) {
         let (mark, color, text) = match &machine.connection {
-            ConnectionState::Connected => ("●", Color::Green, "connected".to_owned()),
-            ConnectionState::Connecting => ("◌", Color::Yellow, "connecting".to_owned()),
-            ConnectionState::Disconnected { error } => ("✗", Color::Red, error.clone()),
+            ConnectionState::Connected => (ui.glyphs.connected, theme.success, "connected"),
+            ConnectionState::Connecting => (ui.glyphs.connecting, theme.warning, "connecting"),
+            ConnectionState::Disconnected { error } => {
+                (ui.glyphs.disconnected, theme.error, error.as_str())
+            }
         };
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(mark, Style::new().fg(color)));
-        spans.push(Span::raw(format!(" {} ", machine.name)));
+        if !right.is_empty() {
+            right.push(Span::raw("  "));
+        }
+        right.push(Span::styled(mark, Style::new().fg(color)));
+        right.push(Span::styled(format!(" {}", machine.name), ui.text()));
         if !narrow {
-            spans.push(Span::styled(text, super::dim()));
-            spans.push(Span::raw(" "));
+            right.push(Span::styled(format!(" {text}"), ui.muted()));
         }
     }
-    let keys = if narrow { NARROW_KEYS } else { KEYS };
-    let keys_width = u16::try_from(keys.len()).unwrap_or(u16::MAX);
-    let [machines, keys_area] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(keys_width)]).areas(area);
-    frame.render_widget(Paragraph::new(Line::from(spans)), machines);
-    frame.render_widget(Line::styled(keys, super::dim()).right_aligned(), keys_area);
+    let hints = if narrow {
+        vec![Hint::new("?", "help")]
+    } else {
+        vec![Hint::new("?", "help"), Hint::new("q", "quit")]
+    };
+    ModeBar::new(ui, &hints)
+        .lead(Line::from(lead))
+        .right(Line::from(right))
+        .render(area, frame.buffer_mut());
 }

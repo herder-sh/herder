@@ -13,4 +13,4 @@ expression: terminal.backend()
 "│                            ││                                               │ "
 "│                            ││                                               │ "
 "└────────────────────────────┘└───────────────────────────────────────────────┘ "
-" ● box connected                                                ? help  q quit  "
+" ? help  q quit                                                ● box connected  "

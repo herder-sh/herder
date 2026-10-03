@@ -11,4 +11,4 @@ expression: terminal.backend()
 "│ idle      app · herder/fix…││                                               │ "
 "│                            ││                                               │ "
 "└────────────────────────────┘└───────────────────────────────────────────────┘ "
-" ● box connected                                                ? help  q quit  "
+" ? help  q quit                                                ● box connected  "

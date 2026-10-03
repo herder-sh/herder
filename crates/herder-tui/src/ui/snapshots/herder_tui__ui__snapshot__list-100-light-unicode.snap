@@ -1,0 +1,77 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+| attention                                                                                 priority |
+|▶ ◉ docs · app                                                                                  box |
+|    escalated: exceeds authority                                                                    |
+|    Which heading level should the API page use?                                                    |
+|  ✗ deploy-preview · infra                                                                      box |
+|  ✓ fix-login · app                                                                             box |
+|  ● a rather long session title that has to give way · herder                                    m2 |
+|                                                                                                    |
+| idle                                                                                               |
+|  ◌ queued · app                                                                                 m2 |
+|  ○ write tests · app                                                                           box |
+|                                                                                                    |
+
+ 0   0..1   fg=#1c1c1c bg=#ffffff
+ 0   1..10  fg=#1c1c1c bg=#ffffff BOLD
+ 0  10..91  fg=#1c1c1c bg=#ffffff
+ 0  91..99  fg=#6b6f7a bg=#ffffff
+ 0  99..100 fg=#1c1c1c bg=#ffffff
+ 1   0..1   fg=#2f5bb7 bg=#eceef2
+ 1   1..2   fg=#1c1c1c bg=#eceef2
+ 1   2..14  fg=#1c1c1c bg=#eceef2 BOLD
+ 1  14..96  fg=#1c1c1c bg=#eceef2
+ 1  96..99  fg=#6b6f7a bg=#eceef2
+ 1  99..100 fg=#1c1c1c bg=#eceef2
+ 2   0..4   fg=#1c1c1c bg=#eceef2
+ 2   4..99  fg=#6b6f7a bg=#eceef2
+ 2  99..100 fg=#1c1c1c bg=#eceef2
+ 3   0..100 fg=#1c1c1c bg=#eceef2
+ 4   0..1   fg=#2f5bb7 bg=#ffffff
+ 4   1..2   fg=#1c1c1c bg=#ffffff
+ 4   2..3   fg=#c4334b bg=#ffffff
+ 4   3..18  fg=#1c1c1c bg=#ffffff
+ 4  18..26  fg=#6b6f7a bg=#ffffff
+ 4  26..96  fg=#1c1c1c bg=#ffffff
+ 4  96..99  fg=#6b6f7a bg=#ffffff
+ 4  99..100 fg=#1c1c1c bg=#ffffff
+ 5   0..1   fg=#2f5bb7 bg=#ffffff
+ 5   1..2   fg=#1c1c1c bg=#ffffff
+ 5   2..3   fg=#00739e bg=#ffffff
+ 5   3..13  fg=#1c1c1c bg=#ffffff
+ 5  13..19  fg=#6b6f7a bg=#ffffff
+ 5  19..96  fg=#1c1c1c bg=#ffffff
+ 5  96..99  fg=#6b6f7a bg=#ffffff
+ 5  99..100 fg=#1c1c1c bg=#ffffff
+ 6   0..1   fg=#2f5bb7 bg=#ffffff
+ 6   1..2   fg=#1c1c1c bg=#ffffff
+ 6   2..3   fg=#a86b00 bg=#ffffff
+ 6   3..52  fg=#1c1c1c bg=#ffffff
+ 6  52..61  fg=#6b6f7a bg=#ffffff
+ 6  61..97  fg=#1c1c1c bg=#ffffff
+ 6  97..99  fg=#6b6f7a bg=#ffffff
+ 6  99..100 fg=#1c1c1c bg=#ffffff
+ 7   0..100 fg=#1c1c1c bg=#ffffff
+ 8   0..1   fg=#1c1c1c bg=#ffffff
+ 8   1..5   fg=#1c1c1c bg=#ffffff BOLD
+ 8   5..100 fg=#1c1c1c bg=#ffffff
+ 9   0..1   fg=#2f5bb7 bg=#ffffff
+ 9   1..2   fg=#1c1c1c bg=#ffffff
+ 9   2..3   fg=#4a6fa5 bg=#ffffff
+ 9   3..10  fg=#1c1c1c bg=#ffffff
+ 9  10..16  fg=#6b6f7a bg=#ffffff
+ 9  16..97  fg=#1c1c1c bg=#ffffff
+ 9  97..99  fg=#6b6f7a bg=#ffffff
+ 9  99..100 fg=#1c1c1c bg=#ffffff
+10   0..1   fg=#2f5bb7 bg=#ffffff
+10   1..2   fg=#1c1c1c bg=#ffffff
+10   2..3   fg=#6b6f7a bg=#ffffff
+10   3..15  fg=#1c1c1c bg=#ffffff
+10  15..21  fg=#6b6f7a bg=#ffffff
+10  21..96  fg=#1c1c1c bg=#ffffff
+10  96..99  fg=#6b6f7a bg=#ffffff
+10  99..100 fg=#1c1c1c bg=#ffffff
+11   0..100 fg=#1c1c1c bg=#ffffff

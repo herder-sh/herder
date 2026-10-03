@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{
 use crate::app::{App, Effect, Focus, Msg};
 use crate::compose::Origin;
 use crate::fake::{self, added, key, update};
-use crate::glyphs::{self, Glyphs};
+use crate::ui::glyphs::{self, Glyphs};
 
 /// A phone over SSH, and a desktop terminal.
 const SIZES: [(u16, u16); 2] = [(45, 40), (120, 40)];

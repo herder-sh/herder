@@ -1,0 +1,16 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|search    docs                               |
+|                                             |
+|model     opus                               |
+
+ 0   0..6   fg=#7aa2f7 bg=#111216 BOLD
+ 0   6..9   fg=#e6e6e6 bg=#111216
+ 0   9..10  fg=#e6e6e6 bg=#21242c
+ 0  10..11  fg=#e6e6e6 bg=#21242c REVERSED
+ 0  11..45  fg=#e6e6e6 bg=#21242c
+ 1   0..45  fg=#e6e6e6 bg=#111216
+ 2   0..5   fg=#7f8492 bg=#111216
+ 2   5..45  fg=#e6e6e6 bg=#111216

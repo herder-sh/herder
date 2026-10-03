@@ -1,6 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-expression: "render(app, width, height).backend()"
+expression: terminal.backend()
 ---
 " < back  box > app - api         inbox 0  +  "
 "┌ resources ───────────────────────────────┐ "
@@ -41,4 +41,4 @@ expression: "render(app, width, height).backend()"
 "│ Write a prompt.                          │ "
 "└────────────────────────────── i to write ┘ "
 " i write   s switch   t term                 "
-" * box                               ? help  "
+" ? help                               * box  "

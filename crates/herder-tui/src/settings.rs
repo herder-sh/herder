@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use crate::app::App;
-use crate::glyphs::Glyphs;
+use crate::ui::glyphs::Glyphs;
+use crate::ui::theme::Mode;
 
 /// The client profile's file of TUI settings.
 const FILE: &str = "tui.json";
@@ -27,12 +28,36 @@ impl Settings {
     }
 }
 
-/// The settings saved in the profile in `config_dir`; defaults for what is missing.
-pub fn load(config_dir: &Path) -> Settings {
-    let saved = std::fs::read(config_dir.join(FILE))
+/// The theme `tui.json` chose. Nothing in the TUI sets it yet: edit the file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    /// The theme's name; `None` picks by the terminal.
+    pub theme: Option<String>,
+    /// Dark or light; `None` (`auto`) asks the terminal.
+    pub mode: Option<Mode>,
+}
+
+/// What `tui.json` in `config_dir` holds; `null` when it is missing or broken.
+fn saved(config_dir: &Path) -> serde_json::Value {
+    std::fs::read(config_dir.join(FILE))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// The theme saved in the profile in `config_dir`.
+pub fn look(config_dir: &Path) -> Look {
+    let saved = saved(config_dir);
+    let text = |key| saved.get(key).and_then(serde_json::Value::as_str);
+    Look {
+        theme: text("theme").map(str::to_owned),
+        mode: text("mode").and_then(Mode::parse).flatten(),
+    }
+}
+
+/// The settings saved in the profile in `config_dir`; defaults for what is missing.
+pub fn load(config_dir: &Path) -> Settings {
+    let saved = saved(config_dir);
     Settings {
         mouse: saved
             .get("mouse")
@@ -45,12 +70,18 @@ pub fn load(config_dir: &Path) -> Settings {
     }
 }
 
-/// Saves `settings` in the profile in `config_dir`.
+/// Saves `settings` in the profile in `config_dir`, keeping what else the file holds.
 pub fn save(config_dir: &Path, settings: Settings) -> std::io::Result<()> {
-    let mut saved = serde_json::json!({ "mouse": settings.mouse });
-    if let Some(glyphs) = settings.glyphs {
-        saved["glyphs"] = glyphs.name().into();
-    }
+    let mut saved = match saved(config_dir) {
+        serde_json::Value::Object(saved) => saved,
+        _ => serde_json::Map::new(),
+    };
+    saved.insert("mouse".into(), settings.mouse.into());
+    match settings.glyphs {
+        Some(glyphs) => saved.insert("glyphs".into(), glyphs.name().into()),
+        None => saved.remove("glyphs"),
+    };
+    let saved = serde_json::Value::Object(saved);
     std::fs::write(config_dir.join(FILE), format!("{saved}\n"))
 }
 
@@ -74,5 +105,28 @@ mod tests {
         };
         save(dir.path(), chosen).unwrap();
         assert_eq!(load(dir.path()), chosen);
+    }
+
+    #[test]
+    fn the_theme_is_read_and_kept_by_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(look(dir.path()), Look::default());
+        std::fs::write(
+            dir.path().join(FILE),
+            r#"{"theme": "herder", "mode": "light", "mouse": true}"#,
+        )
+        .unwrap();
+        let chosen = Look {
+            theme: Some("herder".into()),
+            mode: Some(Mode::Light),
+        };
+        assert_eq!(look(dir.path()), chosen);
+        let settings = Settings {
+            mouse: false,
+            glyphs: None,
+        };
+        save(dir.path(), settings).unwrap();
+        assert_eq!(look(dir.path()), chosen);
+        assert_eq!(load(dir.path()), settings);
     }
 }

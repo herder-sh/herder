@@ -1,0 +1,28 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|  PROMPT   enter send   ● box  ● m2  ◌ vault |
+|  NAVIGATE   / commands  @ mention           |
+
+ 0   0..1   fg=#1c1c1c bg=#ffffff
+ 0   1..9   fg=#ffffff bg=#2f5bb7 BOLD
+ 0   9..11  fg=#1c1c1c bg=#ffffff
+ 0  11..16  fg=#1c1c1c bg=#ffffff BOLD
+ 0  16..21  fg=#6b6f7a bg=#ffffff
+ 0  21..24  fg=#1c1c1c bg=#ffffff
+ 0  24..25  fg=#3f7d1f bg=#ffffff
+ 0  25..31  fg=#1c1c1c bg=#ffffff
+ 0  31..32  fg=#3f7d1f bg=#ffffff
+ 0  32..37  fg=#1c1c1c bg=#ffffff
+ 0  37..38  fg=#a86b00 bg=#ffffff
+ 0  38..45  fg=#1c1c1c bg=#ffffff
+ 1   0..1   fg=#1c1c1c bg=#ffffff
+ 1   1..11  fg=#ffffff bg=#4a6fa5 BOLD
+ 1  11..13  fg=#1c1c1c bg=#ffffff
+ 1  13..14  fg=#1c1c1c bg=#ffffff BOLD
+ 1  14..23  fg=#6b6f7a bg=#ffffff
+ 1  23..25  fg=#1c1c1c bg=#ffffff
+ 1  25..26  fg=#1c1c1c bg=#ffffff BOLD
+ 1  26..34  fg=#6b6f7a bg=#ffffff
+ 1  34..45  fg=#1c1c1c bg=#ffffff
