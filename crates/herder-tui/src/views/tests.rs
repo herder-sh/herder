@@ -926,14 +926,26 @@ fn resize(terminal: &mut Terminal<TestBackend>, app: &mut App, width: u16, heigh
     terminal.backend_mut().resize(width, height);
     let effects = app.update(Msg::Resize);
     assert_eq!(effects, [crate::app::Effect::Repaint]);
-    super::paint(terminal, app, true).unwrap();
+    super::paint(
+        terminal,
+        app,
+        super::Paint::Full,
+        &mut ratatui::buffer::Buffer::default(),
+    )
+    .unwrap();
 }
 
 #[test]
 fn resizing_narrow_wide_narrow_leaves_no_stale_cells() {
     let mut app = mid_turn();
     let mut terminal = Terminal::new(TestBackend::new(45, 40)).unwrap();
-    super::paint(&mut terminal, &mut app, false).unwrap();
+    super::paint(
+        &mut terminal,
+        &mut app,
+        super::Paint::Diff,
+        &mut ratatui::buffer::Buffer::default(),
+    )
+    .unwrap();
     for (width, height) in [(120, 40), (45, 40), (45, 22), (45, 40)] {
         resize(&mut terminal, &mut app, width, height);
         assert_eq!(
@@ -951,7 +963,8 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
 
     let mut app = fake::tree();
     let mut terminal = Terminal::new(TestBackend::new(45, 40)).unwrap();
-    super::paint(&mut terminal, &mut app, false).unwrap();
+    let mut last = ratatui::buffer::Buffer::default();
+    super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap();
     // A phone keyboard opened and closed between two draws: the terminal reflowed its rows,
     // and its size is the one ratatui last drew at.
     let mut junk = Cell::default();
@@ -1279,4 +1292,95 @@ fn find(buffer: &ratatui::buffer::Buffer, text: &str) -> (u16, u16) {
         }
     }
     panic!("no {text:?}");
+}
+
+/// [`TestBackend`] that counts its clears.
+struct Clears(TestBackend, usize);
+
+impl ratatui::backend::Backend for Clears {
+    type Error = <TestBackend as ratatui::backend::Backend>::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.0.draw(content)
+    }
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.hide_cursor()
+    }
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.0.show_cursor()
+    }
+    fn get_cursor_position(&mut self) -> Result<ratatui::layout::Position, Self::Error> {
+        self.0.get_cursor_position()
+    }
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> Result<(), Self::Error> {
+        self.0.set_cursor_position(position)
+    }
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.1 += 1;
+        self.0.clear()
+    }
+    fn clear_region(&mut self, kind: ratatui::backend::ClearType) -> Result<(), Self::Error> {
+        self.1 += 1;
+        self.0.clear_region(kind)
+    }
+    fn size(&self) -> Result<ratatui::layout::Size, Self::Error> {
+        self.0.size()
+    }
+    fn window_size(&mut self) -> Result<ratatui::backend::WindowSize, Self::Error> {
+        self.0.window_size()
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.0.flush()
+    }
+}
+
+#[test]
+fn a_resync_writes_every_cell_again_without_a_clear() {
+    use ratatui::backend::Backend;
+    use ratatui::buffer::Cell;
+
+    let mut app = fake::tree();
+    let mut terminal = Terminal::new(Clears(TestBackend::new(45, 40), 0)).unwrap();
+    let mut last = ratatui::buffer::Buffer::default();
+    assert!(super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap());
+    // The terminal lost track of the screen, as a phone app over mosh may.
+    let mut junk = Cell::default();
+    junk.set_symbol("#");
+    let cells: Vec<(u16, u16, Cell)> = (0..40)
+        .flat_map(|y| (0..45).map(move |x| (x, y)))
+        .map(|(x, y)| (x, y, junk.clone()))
+        .collect();
+    terminal
+        .backend_mut()
+        .draw(cells.iter().map(|(x, y, cell)| (*x, *y, cell)))
+        .unwrap();
+    super::paint(&mut terminal, &mut app, super::Paint::Resync, &mut last).unwrap();
+    assert_eq!(terminal.backend().1, 0, "a resync never clears");
+    assert_eq!(*terminal.backend().0.buffer(), fresh(&mut app, 45, 40));
+}
+
+#[test]
+fn an_unchanged_frame_writes_nothing() {
+    let mut app = fake::tree();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let mut last = ratatui::buffer::Buffer::default();
+    assert!(super::paint(&mut terminal, &mut app, super::Paint::Full, &mut last).unwrap());
+    // Nothing changed: the terminal gets nothing, however often the loop asks.
+    for _ in 0..3 {
+        assert!(!super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap());
+    }
+    // A change is written, and only the frame after it.
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::NONE,
+    )));
+    assert!(super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap());
+    assert_eq!(*terminal.backend().buffer(), fresh(&mut app, 100, 30));
+    assert!(!super::paint(&mut terminal, &mut app, super::Paint::Diff, &mut last).unwrap());
 }

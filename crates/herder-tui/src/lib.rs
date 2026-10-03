@@ -28,6 +28,7 @@ mod machines;
 mod mouse;
 mod nav;
 mod new_session;
+mod pace;
 mod palette;
 mod projects;
 mod prompt;
@@ -53,13 +54,6 @@ use app::{App, Effect, Msg};
 use session::SessionKey;
 use settings::Settings;
 use ui::theme::{Mode, Theme};
-
-/// How long the screen may sit unchanged before it is repainted from scratch, in case the
-/// terminal lost track of it: cheap when nothing changed, as mosh then sends nothing.
-const IDLE_REPAINT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// How often the screen is drawn while a spinner turns: the slower glyph set's frame.
-const SPINNER_FRAME: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// The theme `tui.json` chose, else the one the terminal suits; with why a chosen theme did
 /// not load.
@@ -130,45 +124,49 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     }
     let mut subscriptions = Subscriptions::default();
     // The first frame covers what the shell left where the alternate screen is missing.
-    let mut repaint = true;
-    let mut last_full = std::time::Instant::now();
+    let mut draw = Some(views::Paint::Full);
+    let mut pace = pace::Pace::new(std::time::Instant::now());
+    let mut last = ratatui::buffer::Buffer::default();
     let result = loop {
-        if repaint {
-            last_full = std::time::Instant::now();
+        if let Some(how) = draw.take() {
+            if let Err(err) = paint(&mut terminal, &mut app, how, &mut last) {
+                break Err(err);
+            }
+            pace.painted(how, std::time::Instant::now());
         }
-        if let Err(err) = paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
-            break Err(err);
-        }
-        // An armed leader wakes the loop when it lapses, so its badge goes; while a turn
-        // runs, the spinner's next frame is due before the idle repaint.
-        let leader = app.leader_left(std::time::Instant::now());
-        let idle = if app.animating() {
-            SPINNER_FRAME
-        } else {
-            IDLE_REPAINT
+        // Wait for a message, or until a frame is due: the spinner's, what the machines
+        // sent, a narrow screen's resync, or the armed leader lapsing, so its badge goes.
+        let now = std::time::Instant::now();
+        let leader = app.leader_left(now);
+        let wait = [pace.wait(&app, now), leader].into_iter().flatten().min();
+        let received = match wait {
+            Some(wait) => tokio::time::timeout(wait, rx.recv()).await.ok(),
+            None => Some(rx.recv().await),
         };
-        let wait = leader.map_or(idle, |leader| leader.min(idle));
-        let msg = match tokio::time::timeout(wait, rx.recv()).await {
-            Ok(Some(msg)) => msg,
-            Ok(None) => break Ok(()),
-            Err(_) if leader.is_some() => Msg::Tick(std::time::Instant::now()),
-            Err(_) => {
-                if last_full.elapsed() >= IDLE_REPAINT {
-                    repaint = true;
-                }
+        let msg = match received {
+            Some(Some(msg)) => msg,
+            Some(None) => break Ok(()),
+            None if leader.is_some_and(|left| left <= wait.unwrap_or_default()) => {
+                Msg::Tick(std::time::Instant::now())
+            }
+            None => {
+                draw = pace.lapsed(&app, std::time::Instant::now());
                 continue;
             }
         };
         // Fold in everything that queued up while drawing, then draw once.
         let mut quit = false;
         let mut attach = None;
+        let mut full = false;
+        let mut input = false;
         let mut next = Some(msg);
         while let Some(msg) = next {
+            input |= !matches!(msg, Msg::Machines(_) | Msg::Session { .. });
             for effect in app.update(msg) {
                 match effect {
                     Effect::Quit => quit = true,
                     Effect::Wake => client.wake(),
-                    Effect::Repaint => repaint = true,
+                    Effect::Repaint => full = true,
                     Effect::Send {
                         host_id,
                         command,
@@ -209,25 +207,35 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         if quit {
             break Ok(());
         }
+        draw = if full {
+            Some(views::Paint::Full)
+        } else {
+            pace.after(input, std::time::Instant::now())
+        };
         subscriptions.sync(&client, &app, &tx);
     };
     restore(modes);
     result
 }
 
-/// Draws the screen; with `full`, every cell anew, as one synchronized update where the
-/// terminal supports that, so the cleared screen never shows.
-fn paint(terminal: &mut backend::Tui, app: &mut App, full: bool) -> Result<()> {
+/// Draws the screen `how` says, every frame written as one synchronized update (DEC mode
+/// 2026), so a terminal that supports it shows whole frames only, never one half drawn or
+/// cleared. A frame the same as `last`, the one last written, writes nothing at all.
+fn paint(
+    terminal: &mut backend::Tui,
+    app: &mut App,
+    how: views::Paint,
+    last: &mut ratatui::buffer::Buffer,
+) -> Result<()> {
     use ratatui::crossterm::execute;
     use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
-    if full {
-        execute!(std::io::stdout(), BeginSynchronizedUpdate)?;
+    if !views::render(terminal, app, how, last)? {
+        return Ok(());
     }
-    let painted = views::paint(terminal, app, full);
-    if full {
-        execute!(std::io::stdout(), EndSynchronizedUpdate)?;
-    }
-    Ok(painted?)
+    execute!(std::io::stdout(), BeginSynchronizedUpdate)?;
+    let written = views::write(terminal, how, last);
+    execute!(std::io::stdout(), EndSynchronizedUpdate)?;
+    Ok(written?)
 }
 
 /// The input modes [`enable_input_modes`] turned on.

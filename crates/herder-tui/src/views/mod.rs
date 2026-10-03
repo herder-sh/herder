@@ -53,6 +53,7 @@ mod touch;
 mod transcript;
 
 use ratatui::backend::Backend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -68,25 +69,82 @@ use crate::ui::glyphs::{self, Glyphs};
 /// mobile layout, since the last column stays blank.
 pub const NARROW: u16 = 64;
 
-/// Draws the screen; with `full`, onto a cleared screen with nothing assumed of the last
-/// frame.
+/// How [`paint`] puts a frame on the terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Paint {
+    /// Only the cells that changed since the last frame: what nearly every frame is.
+    Diff,
+    /// Onto a cleared screen, with nothing assumed of the last frame: after a resize or when
+    /// the terminal comes back to the front.
+    Full,
+    /// Every cell written again over what is shown, without a clear: for a terminal that may
+    /// have lost track of the screen, as a phone app over mosh, nothing ever blanks.
+    Resync,
+}
+
+/// Draws the screen as `how` says: [`render`], then [`write`] if anything changed.
 ///
 /// While resizing, the terminal may reflow or scroll what it shows, and a resize that ends at
 /// the size of the last draw, as a phone keyboard opening and closing between two draws, does
 /// not set off ratatui's own clear. Either leaves stale rows a diff against the last frame
-/// never touches, so every resize repaints every cell. So does the first frame, over what the
-/// shell left on a terminal without an alternate screen, as under mosh, and a frame now and
-/// then, over whatever a terminal got wrong since.
+/// never touches, so every resize repaints every cell ([`Paint::Full`]). So does the first
+/// frame, over what the shell left on a terminal without an alternate screen, as under mosh.
+#[cfg(test)]
 pub fn paint<B: Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
-    full: bool,
-) -> Result<(), B::Error> {
-    if full {
+    how: Paint,
+    last: &mut Buffer,
+) -> Result<bool, B::Error> {
+    if !render(terminal, app, how, last)? {
+        return Ok(false);
+    }
+    write(terminal, how, last)?;
+    Ok(true)
+}
+
+/// Draws the frame into `terminal`'s buffer; returns whether it has anything to write. A
+/// [`Paint::Diff`] that comes out the same as `last`, the frame last written, has nothing:
+/// the buffer is reset and the terminal gets not a byte.
+pub fn render<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+    how: Paint,
+    last: &Buffer,
+) -> Result<bool, B::Error> {
+    if how == Paint::Full {
         let size = terminal.size()?;
         terminal.resize(Rect::new(0, 0, size.width, size.height))?;
+    } else {
+        terminal.autoresize()?;
     }
-    terminal.draw(|frame| draw(frame, app))?;
+    let mut frame = terminal.get_frame();
+    draw(&mut frame, app);
+    if how == Paint::Diff && terminal.current_buffer_mut() == last {
+        terminal.current_buffer_mut().reset();
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Writes the frame [`render`] drew: the cells that changed, or with [`Paint::Resync`] every
+/// cell; keeps it in `last`.
+pub fn write<B: Backend>(
+    terminal: &mut Terminal<B>,
+    how: Paint,
+    last: &mut Buffer,
+) -> Result<(), B::Error> {
+    let frame = terminal.apply_buffer()?;
+    last.clone_from(frame.buffer);
+    if how == Paint::Resync {
+        let width = last.area.width.max(1);
+        let cells = last.content.iter().enumerate().map(|(at, cell)| {
+            let at = u16::try_from(at).unwrap_or(u16::MAX);
+            (at % width, at / width, cell)
+        });
+        terminal.backend_mut().draw(cells)?;
+        terminal.backend_mut().flush()?;
+    }
     Ok(())
 }
 
