@@ -10,7 +10,7 @@ use herder_client_core::ConnectionState;
 use herder_protocol::{FleetHost, SessionStatus, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem};
 
@@ -18,6 +18,8 @@ use crate::account_screen;
 use crate::app::{App, Focus, Row};
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::projects::Grouping;
+use crate::ui::Ui;
+use crate::ui::state::{self, State};
 
 /// Width of the status label column.
 const BADGE: usize = 9;
@@ -63,10 +65,11 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             let Some(machine) = app.machines.iter().find(|m| m.host_id == *host_id) else {
                 return ListItem::new("");
             };
+            let ui = app.ui();
             let (mark, color) = match machine.connection {
-                ConnectionState::Connected => ("●", Color::Green),
-                ConnectionState::Connecting => ("◌", Color::Yellow),
-                ConnectionState::Disconnected { .. } => ("✗", Color::Red),
+                ConnectionState::Connected => (ui.glyphs.connected, ui.theme.success),
+                ConnectionState::Connecting => (ui.glyphs.connecting, ui.theme.warning),
+                ConnectionState::Disconnected { .. } => (ui.glyphs.disconnected, ui.theme.error),
             };
             let mut spans = vec![
                 Span::styled(mark, Style::new().fg(color)),
@@ -88,10 +91,11 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 .iter()
                 .filter(|head| head.host_id.as_ref() == Some(&host.host_id))
                 .count();
+            let ui = app.ui();
             let (mark, color) = if host.online {
-                ("●", Color::Green)
+                (ui.glyphs.connected, ui.theme.success)
             } else {
-                ("✗", Color::Red)
+                (ui.glyphs.disconnected, ui.theme.error)
             };
             let mut spans = vec![
                 Span::styled(format!("  {mark}"), Style::new().fg(color)),
@@ -99,7 +103,7 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 Span::styled(format!(" ({count})"), super::dim()),
             ];
             if !host.online {
-                spans.push(Span::styled(" offline", Style::new().fg(Color::Red)));
+                spans.push(Span::styled(" offline", Style::new().fg(ui.theme.error)));
                 spans.push(Span::styled(format!(" · {} ago", ago(host)), super::dim()));
             }
             ListItem::new(Line::from(spans))
@@ -128,7 +132,7 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
                 if waiting > 0 {
                     tree.push(Span::styled(
                         format!(" !{waiting}"),
-                        Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                        state::style(app.ui(), State::NeedsYou),
                     ));
                 }
             }
@@ -136,9 +140,10 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             let (label, style) = if !session.loaded {
                 ("…", super::dim())
             } else if compact {
-                super::composer::waiting_glyph(session).unwrap_or_else(|| glyph(session.status))
+                super::composer::waiting_glyph(session)
+                    .unwrap_or_else(|| glyph(app.ui(), session.status))
             } else {
-                super::composer::waiting(session).unwrap_or_else(|| badge(session.status))
+                super::composer::waiting(session).unwrap_or_else(|| badge(app.ui(), session.status))
             };
             let label_width = if compact { 1 } else { BADGE };
             let mut title = Style::new();
@@ -152,9 +157,9 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             let machine = (app.grouping == Grouping::Projects)
                 .then(|| super::projects::machine_label(app, key));
             // A moved copy says where the session went.
-            let moved = app
-                .moved_to(key)
-                .map(|to| Span::styled(format!(" → {to}"), Style::new().fg(Color::Blue)));
+            let moved = app.moved_to(key).map(|to| {
+                Span::styled(format!(" → {to}"), Style::new().fg(app.theme.state_waiting))
+            });
             let machine_width =
                 machine.as_ref().map_or(0, Span::width) + moved.as_ref().map_or(0, Span::width);
             let room = width.saturating_sub(
@@ -198,34 +203,13 @@ pub(super) fn clip(text: &str, width: usize) -> String {
 }
 
 /// A status as one glyph, in its label's colour, for compact rows.
-pub(super) fn glyph(status: SessionStatus) -> (&'static str, Style) {
-    let glyph = match status {
-        SessionStatus::Idle => "·",
-        SessionStatus::Running => "●",
-        SessionStatus::WaitingForCapacity => "◌",
-        SessionStatus::NeedsYou => "!",
-        SessionStatus::Error => "✗",
-        SessionStatus::Archived => "▪",
-        SessionStatus::Moved => "→",
-        SessionStatus::Unknown => "?",
-    };
-    (glyph, badge(status).1)
+pub(super) fn glyph(ui: Ui, status: SessionStatus) -> (&'static str, Style) {
+    let state = State::of(status, false);
+    (ui.glyphs.state(state), state::style(ui, state))
 }
 
 /// A status's label and colour.
-pub(super) fn badge(status: SessionStatus) -> (&'static str, Style) {
-    let color = |color| Style::new().fg(color);
-    match status {
-        SessionStatus::Idle => ("idle", super::dim()),
-        SessionStatus::Running => ("running", color(Color::Yellow)),
-        SessionStatus::WaitingForCapacity => ("waiting", color(Color::Blue)),
-        SessionStatus::NeedsYou => (
-            "needs you",
-            color(Color::Magenta).add_modifier(Modifier::BOLD),
-        ),
-        SessionStatus::Error => ("error", color(Color::Red)),
-        SessionStatus::Archived => ("archived", super::dim().add_modifier(Modifier::DIM)),
-        SessionStatus::Moved => ("moved", super::dim()),
-        SessionStatus::Unknown => ("?", super::dim()),
-    }
+pub(super) fn badge(ui: Ui, status: SessionStatus) -> (&'static str, Style) {
+    let state = State::of(status, false);
+    (state.label(), state::style(ui, state))
 }

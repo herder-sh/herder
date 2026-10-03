@@ -1,0 +1,23 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|  PROMPT   NAVIGATE   APPROVAL          |
+|  queued   open   merged   draft        |
+
+ 0   0..1   fg=#1c1c1c bg=#ffffff
+ 0   1..9   fg=#ffffff bg=#2f5bb7 BOLD
+ 0   9..10  fg=#1c1c1c bg=#ffffff
+ 0  10..20  fg=#ffffff bg=#4a6fa5 BOLD
+ 0  20..21  fg=#1c1c1c bg=#ffffff
+ 0  21..31  fg=#ffffff bg=#b0307f BOLD
+ 0  31..40  fg=#1c1c1c bg=#ffffff
+ 1   0..1   fg=#1c1c1c bg=#ffffff
+ 1   1..9   fg=#a86b00 bg=#eceef2
+ 1   9..10  fg=#1c1c1c bg=#ffffff
+ 1  10..16  fg=#3f7d1f bg=#eceef2
+ 1  16..17  fg=#1c1c1c bg=#ffffff
+ 1  17..25  fg=#7847bd bg=#eceef2
+ 1  25..26  fg=#1c1c1c bg=#ffffff
+ 1  26..33  fg=#6b6f7a bg=#eceef2
+ 1  33..40  fg=#1c1c1c bg=#ffffff

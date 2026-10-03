@@ -1,0 +1,43 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|┃ write the docs page too, and link it from @README.md                                              |
+|┃                                                                                                   |
+|┃ claude-main · opus · ask                                                                          |
+|╹                                                                                                   |
+|                                                                                                    |
+|┃ Write a prompt…                                                                                   |
+|┃                                                                                                   |
+|┃ claude-main · opus · ask                                                                          |
+|╹                                                                                                   |
+|                                                                                                    |
+|                                                                                                    |
+
+ 0   0..1   fg=Cyan bg=Reset
+ 0   1..2   fg=Reset bg=Reset
+ 0   2..3   fg=Reset bg=Reset REVERSED
+ 0   3..100 fg=Reset bg=Reset
+ 1   0..1   fg=Cyan bg=Reset
+ 1   1..100 fg=Reset bg=Reset
+ 2   0..1   fg=Cyan bg=Reset
+ 2   1..13  fg=Reset bg=Reset
+ 2  13..26  fg=DarkGray bg=Reset
+ 2  26..100 fg=Reset bg=Reset
+ 3   0..1   fg=Cyan bg=Reset
+ 3   1..100 fg=Reset bg=Reset
+ 4   0..100 fg=Reset bg=Reset
+ 5   0..1   fg=DarkGray bg=Reset
+ 5   1..2   fg=Reset bg=Reset
+ 5   2..99  fg=DarkGray bg=Reset
+ 5  99..100 fg=Reset bg=Reset
+ 6   0..1   fg=DarkGray bg=Reset
+ 6   1..100 fg=Reset bg=Reset
+ 7   0..1   fg=DarkGray bg=Reset
+ 7   1..13  fg=Reset bg=Reset
+ 7  13..26  fg=DarkGray bg=Reset
+ 7  26..100 fg=Reset bg=Reset
+ 8   0..1   fg=DarkGray bg=Reset
+ 8   1..100 fg=Reset bg=Reset
+ 9   0..100 fg=Reset bg=Reset
+10   0..100 fg=Reset bg=Reset

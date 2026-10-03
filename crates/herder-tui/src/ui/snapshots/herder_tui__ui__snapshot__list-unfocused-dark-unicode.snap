@@ -1,0 +1,27 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|    escalated: exceeds authority             |
+|    Which heading level should the API page… |
+|  ✗ deploy-preview · infra               box |
+|▶ ✓ fix-login · app                      box |
+
+ 0   0..4   fg=#e6e6e6 bg=#111216
+ 0   4..44  fg=#7f8492 bg=#111216
+ 0  44..45  fg=#e6e6e6 bg=#111216
+ 1   0..45  fg=#e6e6e6 bg=#111216
+ 2   0..1   fg=#7f8492 bg=#111216
+ 2   1..2   fg=#e6e6e6 bg=#111216
+ 2   2..3   fg=#f7768e bg=#111216
+ 2   3..18  fg=#e6e6e6 bg=#111216
+ 2  18..26  fg=#7f8492 bg=#111216
+ 2  26..41  fg=#e6e6e6 bg=#111216
+ 2  41..44  fg=#7f8492 bg=#111216
+ 2  44..45  fg=#e6e6e6 bg=#111216
+ 3   0..1   fg=#7f8492 bg=#111216
+ 3   1..2   fg=#e6e6e6 bg=#111216
+ 3   2..19  fg=#e6e6e6 bg=#111216 BOLD
+ 3  19..41  fg=#e6e6e6 bg=#111216
+ 3  41..44  fg=#7f8492 bg=#111216
+ 3  44..45  fg=#e6e6e6 bg=#111216

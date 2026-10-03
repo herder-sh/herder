@@ -13,7 +13,7 @@
 //! The last column stays blank: a terminal that has just written there may wrap at the next
 //! character or not, and a phone SSH app over mosh does not always agree with mosh, which
 //! shifts the rows below. With the ASCII glyph set the finished frame goes through
-//! [`crate::glyphs::fold`].
+//! [`crate::ui::glyphs::fold`].
 
 mod accounts;
 mod composer;
@@ -37,11 +37,12 @@ mod transcript;
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::Block;
 use ratatui::{Frame, Terminal};
 
 use crate::app::{App, Focus};
-use crate::glyphs::{self, Glyphs};
 use crate::mouse::Hits;
+use crate::ui::glyphs::{self, Glyphs};
 
 /// Screens drawn narrower than this show one pane at a time: 64 columns or fewer, as Herdr's
 /// mobile layout, since the last column stays blank.
@@ -78,6 +79,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ..screen
     };
     let narrow = area.width < NARROW;
+    app.width = area.width;
+    frame.render_widget(Block::new().style(app.ui().base()), screen);
     let [header, body, bar, status_line] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
@@ -168,11 +171,7 @@ fn main(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut 
 
 /// The border style of a pane: highlighted while it has focus.
 fn border(app: &App, pane: Focus) -> Style {
-    if app.focus == pane {
-        Style::new().fg(Color::Cyan)
-    } else {
-        Style::new().fg(Color::DarkGray)
-    }
+    app.ui().border(app.focus == pane)
 }
 
 /// Style for secondary text.
@@ -196,5 +195,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     area
 }
 
+#[cfg(test)]
+mod screenshots;
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,75 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+| attention                          priority |
+|> ! docs - app                           box |
+|    escalated: exceeds authority             |
+|    Which heading level should the API pa... |
+|  x deploy-preview - infra               box |
+|  v fix-login - app                      box |
+|  * a rather long session title that ...  m2 |
+|                                             |
+| idle                                        |
+|  ~ queued - app                          m2 |
+|  o write tests - app                    box |
+|                                             |
+
+ 0   0..1   fg=#1c1c1c bg=#ffffff
+ 0   1..10  fg=#1c1c1c bg=#ffffff BOLD
+ 0  10..36  fg=#1c1c1c bg=#ffffff
+ 0  36..44  fg=#6b6f7a bg=#ffffff
+ 0  44..45  fg=#1c1c1c bg=#ffffff
+ 1   0..1   fg=#2f5bb7 bg=#eceef2
+ 1   1..2   fg=#1c1c1c bg=#eceef2
+ 1   2..14  fg=#1c1c1c bg=#eceef2 BOLD
+ 1  14..41  fg=#1c1c1c bg=#eceef2
+ 1  41..44  fg=#6b6f7a bg=#eceef2
+ 1  44..45  fg=#1c1c1c bg=#eceef2
+ 2   0..4   fg=#1c1c1c bg=#eceef2
+ 2   4..44  fg=#6b6f7a bg=#eceef2
+ 2  44..45  fg=#1c1c1c bg=#eceef2
+ 3   0..45  fg=#1c1c1c bg=#eceef2
+ 4   0..1   fg=#2f5bb7 bg=#ffffff
+ 4   1..2   fg=#1c1c1c bg=#ffffff
+ 4   2..3   fg=#c4334b bg=#ffffff
+ 4   3..18  fg=#1c1c1c bg=#ffffff
+ 4  18..26  fg=#6b6f7a bg=#ffffff
+ 4  26..41  fg=#1c1c1c bg=#ffffff
+ 4  41..44  fg=#6b6f7a bg=#ffffff
+ 4  44..45  fg=#1c1c1c bg=#ffffff
+ 5   0..1   fg=#2f5bb7 bg=#ffffff
+ 5   1..2   fg=#1c1c1c bg=#ffffff
+ 5   2..3   fg=#00739e bg=#ffffff
+ 5   3..13  fg=#1c1c1c bg=#ffffff
+ 5  13..19  fg=#6b6f7a bg=#ffffff
+ 5  19..41  fg=#1c1c1c bg=#ffffff
+ 5  41..44  fg=#6b6f7a bg=#ffffff
+ 5  44..45  fg=#1c1c1c bg=#ffffff
+ 6   0..1   fg=#2f5bb7 bg=#ffffff
+ 6   1..2   fg=#1c1c1c bg=#ffffff
+ 6   2..3   fg=#a86b00 bg=#ffffff
+ 6   3..42  fg=#1c1c1c bg=#ffffff
+ 6  42..44  fg=#6b6f7a bg=#ffffff
+ 6  44..45  fg=#1c1c1c bg=#ffffff
+ 7   0..45  fg=#1c1c1c bg=#ffffff
+ 8   0..1   fg=#1c1c1c bg=#ffffff
+ 8   1..5   fg=#1c1c1c bg=#ffffff BOLD
+ 8   5..45  fg=#1c1c1c bg=#ffffff
+ 9   0..1   fg=#2f5bb7 bg=#ffffff
+ 9   1..2   fg=#1c1c1c bg=#ffffff
+ 9   2..3   fg=#4a6fa5 bg=#ffffff
+ 9   3..10  fg=#1c1c1c bg=#ffffff
+ 9  10..16  fg=#6b6f7a bg=#ffffff
+ 9  16..42  fg=#1c1c1c bg=#ffffff
+ 9  42..44  fg=#6b6f7a bg=#ffffff
+ 9  44..45  fg=#1c1c1c bg=#ffffff
+10   0..1   fg=#2f5bb7 bg=#ffffff
+10   1..2   fg=#1c1c1c bg=#ffffff
+10   2..3   fg=#6b6f7a bg=#ffffff
+10   3..15  fg=#1c1c1c bg=#ffffff
+10  15..21  fg=#6b6f7a bg=#ffffff
+10  21..41  fg=#1c1c1c bg=#ffffff
+10  41..44  fg=#6b6f7a bg=#ffffff
+10  44..45  fg=#1c1c1c bg=#ffffff
+11   0..45  fg=#1c1c1c bg=#ffffff

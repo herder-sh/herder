@@ -1,0 +1,44 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|┃ write the docs page too, and link it from  |
+|┃ @README.md                                 |
+|┃                                            |
+|┃ claude-main · opus · ask                   |
+|┃                                            |
+|                                             |
+|┃ Write a prompt…                            |
+|┃                                            |
+|┃ claude-main · opus · ask                   |
+|┃                                            |
+|                                             |
+
+ 0   0..1   fg=#7aa2f7 bg=#181a20
+ 0   1..2   fg=#e6e6e6 bg=#181a20
+ 0   2..3   fg=#e6e6e6 bg=#181a20 REVERSED
+ 0   3..45  fg=#e6e6e6 bg=#181a20
+ 1   0..1   fg=#7aa2f7 bg=#181a20
+ 1   1..45  fg=#e6e6e6 bg=#181a20
+ 2   0..1   fg=#7aa2f7 bg=#181a20
+ 2   1..45  fg=#e6e6e6 bg=#181a20
+ 3   0..1   fg=#7aa2f7 bg=#181a20
+ 3   1..13  fg=#e6e6e6 bg=#181a20
+ 3  13..26  fg=#7f8492 bg=#181a20
+ 3  26..45  fg=#e6e6e6 bg=#181a20
+ 4   0..1   fg=#7aa2f7 bg=#181a20
+ 4   1..45  fg=#e6e6e6 bg=#181a20
+ 5   0..45  fg=#e6e6e6 bg=#111216
+ 6   0..1   fg=#3b3f4a bg=#181a20
+ 6   1..2   fg=#e6e6e6 bg=#181a20
+ 6   2..44  fg=#7f8492 bg=#181a20
+ 6  44..45  fg=#e6e6e6 bg=#181a20
+ 7   0..1   fg=#3b3f4a bg=#181a20
+ 7   1..45  fg=#e6e6e6 bg=#181a20
+ 8   0..1   fg=#3b3f4a bg=#181a20
+ 8   1..13  fg=#e6e6e6 bg=#181a20
+ 8  13..26  fg=#7f8492 bg=#181a20
+ 8  26..45  fg=#e6e6e6 bg=#181a20
+ 9   0..1   fg=#3b3f4a bg=#181a20
+ 9   1..45  fg=#e6e6e6 bg=#181a20
+10   0..45  fg=#e6e6e6 bg=#111216

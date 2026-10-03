@@ -1,0 +1,49 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|behind the dialog: what it covers dims                                                              |
+|behind the dialog: what it covers dims                                                              |
+|behind the dialog: w┌ go to ────────────────────────────────────────────── esc ┐                    |
+|behind the dialog: w│                                                          │                    |
+|behind the dialog: w│  the body                                                │                    |
+|behind the dialog: w│  goes here                                               │                    |
+|behind the dialog: w│                                                          │                    |
+|behind the dialog: w│  enter open  esc close                                   │                    |
+|behind the dialog: w│                                                          │                    |
+|behind the dialog: w└──────────────────────────────────────────────────────────┘                    |
+|behind the dialog: what it covers dims                                                              |
+|behind the dialog: what it covers dims                                                              |
+
+ 0   0..100 fg=DarkGray bg=Reset
+ 1   0..100 fg=DarkGray bg=Reset
+ 2   0..22  fg=DarkGray bg=Reset
+ 2  22..27  fg=Reset bg=Reset BOLD
+ 2  27..100 fg=DarkGray bg=Reset
+ 3   0..21  fg=DarkGray bg=Reset
+ 3  21..79  fg=Reset bg=Reset
+ 3  79..100 fg=DarkGray bg=Reset
+ 4   0..21  fg=DarkGray bg=Reset
+ 4  21..79  fg=Reset bg=Reset
+ 4  79..100 fg=DarkGray bg=Reset
+ 5   0..21  fg=DarkGray bg=Reset
+ 5  21..79  fg=Reset bg=Reset
+ 5  79..100 fg=DarkGray bg=Reset
+ 6   0..21  fg=DarkGray bg=Reset
+ 6  21..79  fg=Reset bg=Reset
+ 6  79..100 fg=DarkGray bg=Reset
+ 7   0..21  fg=DarkGray bg=Reset
+ 7  21..23  fg=Reset bg=Reset
+ 7  23..28  fg=Reset bg=Reset BOLD
+ 7  28..33  fg=DarkGray bg=Reset
+ 7  33..35  fg=Reset bg=Reset
+ 7  35..38  fg=Reset bg=Reset BOLD
+ 7  38..44  fg=DarkGray bg=Reset
+ 7  44..79  fg=Reset bg=Reset
+ 7  79..100 fg=DarkGray bg=Reset
+ 8   0..21  fg=DarkGray bg=Reset
+ 8  21..79  fg=Reset bg=Reset
+ 8  79..100 fg=DarkGray bg=Reset
+ 9   0..100 fg=DarkGray bg=Reset
+10   0..100 fg=DarkGray bg=Reset
+11   0..100 fg=DarkGray bg=Reset

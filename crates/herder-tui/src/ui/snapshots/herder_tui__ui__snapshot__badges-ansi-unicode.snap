@@ -1,0 +1,23 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|  PROMPT   NAVIGATE   APPROVAL          |
+|  queued   open   merged   draft        |
+
+ 0   0..1   fg=Reset bg=Reset
+ 0   1..9   fg=Black bg=Cyan BOLD
+ 0   9..10  fg=Reset bg=Reset
+ 0  10..20  fg=Black bg=Blue BOLD
+ 0  20..21  fg=Reset bg=Reset
+ 0  21..31  fg=Black bg=Magenta BOLD
+ 0  31..40  fg=Reset bg=Reset
+ 1   0..1   fg=Reset bg=Reset
+ 1   1..9   fg=Yellow bg=Reset
+ 1   9..10  fg=Reset bg=Reset
+ 1  10..16  fg=Green bg=Reset
+ 1  16..17  fg=Reset bg=Reset
+ 1  17..25  fg=Magenta bg=Reset
+ 1  25..26  fg=Reset bg=Reset
+ 1  26..33  fg=DarkGray bg=Reset
+ 1  33..40  fg=Reset bg=Reset

@@ -17,8 +17,8 @@ use ratatui_textarea::{TextArea, WrapMode};
 
 use crate::action::Action;
 use crate::app::{App, Effect, Focus, Row};
-use crate::glyphs::Glyphs;
 use crate::session::{MODES, SessionKey, mode_name};
+use crate::ui::glyphs::Glyphs;
 
 /// A user action of this module; see [`Action::Compose`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -12,7 +12,6 @@ use ratatui::widgets::ListState;
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
 use crate::compose::{Compose, Origin};
-use crate::glyphs::Glyphs;
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::mouse::{Click, Hits};
@@ -22,6 +21,9 @@ use crate::recover::Recover;
 use crate::session::{Session, SessionKey};
 use crate::switch::Switch;
 use crate::terminal::{self, Picker};
+use crate::ui::Ui;
+use crate::ui::glyphs::Glyphs;
+use crate::ui::theme::Theme;
 
 /// An input to the app.
 #[derive(Clone, Debug)]
@@ -241,6 +243,10 @@ pub struct App {
     pub mouse: bool,
     /// The glyph set `:glyphs` chose; `None` picks by the screen's width.
     pub glyphs: Option<Glyphs>,
+    /// The colours the screen draws with; `ansi`, today's look, until the settings choose.
+    pub theme: Theme,
+    /// Columns the screen is drawn in, last column aside: set as each frame starts.
+    pub width: u16,
     /// Where the last frame's tappable and scrollable spots are.
     pub hits: Hits,
     /// What the press of a tap in progress landed on.
@@ -278,6 +284,8 @@ impl Default for App {
             grouping: Grouping::default(),
             mouse: true,
             glyphs: None,
+            theme: Theme::ansi(),
+            width: 0,
             hits: Hits::default(),
             pressed: None,
             dragged: None,
@@ -288,6 +296,11 @@ impl Default for App {
 }
 
 impl App {
+    /// The theme and the glyph set the screen draws with.
+    pub fn ui(&self) -> Ui<'_> {
+        Ui::new(&self.theme, Glyphs::for_width(self.glyphs, self.width))
+    }
+
     /// Folds in one input; returns what the event loop must do.
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
         match msg {

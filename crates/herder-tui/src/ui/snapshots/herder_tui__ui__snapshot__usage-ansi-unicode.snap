@@ -1,0 +1,27 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+| 5h    ████████░░░░░░░░░░░░  38%  |
+| week  ███████████████░░░░░  74%  |
+| day   ██████████████████░░  91%  |
+| idle  ░░░░░░░░░░░░░░░░░░░░   0%  |
+
+ 0   0..7   fg=DarkGray bg=Reset
+ 0   7..15  fg=Cyan bg=Reset
+ 0  15..27  fg=DarkGray bg=Reset
+ 0  27..32  fg=Cyan bg=Reset
+ 0  32..34  fg=Reset bg=Reset
+ 1   0..7   fg=DarkGray bg=Reset
+ 1   7..22  fg=Yellow bg=Reset
+ 1  22..27  fg=DarkGray bg=Reset
+ 1  27..32  fg=Yellow bg=Reset
+ 1  32..34  fg=Reset bg=Reset
+ 2   0..7   fg=DarkGray bg=Reset
+ 2   7..25  fg=Red bg=Reset
+ 2  25..27  fg=DarkGray bg=Reset
+ 2  27..32  fg=Red bg=Reset
+ 2  32..34  fg=Reset bg=Reset
+ 3   0..27  fg=DarkGray bg=Reset
+ 3  27..32  fg=Cyan bg=Reset
+ 3  32..34  fg=Reset bg=Reset
