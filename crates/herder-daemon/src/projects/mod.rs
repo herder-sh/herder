@@ -10,9 +10,12 @@
 //! repos again whenever a session is created ([`OnSessionsChanged`]). Each time the resolved
 //! list differs from the last, it goes to every client through [`Hub::projects_changed`].
 //!
-//! Owners change the `[[project]]` entries from a client: `add_project` declares a repository
-//! and `set_project_settings` replaces a project's settings. Both rewrite the daemon's config
-//! file and take effect at once ([`Overrides`]); discovery then rescans and publishes the list.
+//! Owners change the `[[project]]` entries from a client: `add_project` declares a repository,
+//! `set_project_settings` replaces a project's settings and `remove_project` drops a project:
+//! its clones leave the entries and go into `[projects] exclude`, which discovery leaves out
+//! wherever it finds them, until `add_project` declares one again. Each rewrites the daemon's
+//! config file and takes effect at once ([`Overrides`]); discovery then rescans and publishes
+//! the list. Removing never touches the repositories themselves.
 
 pub mod scan;
 #[cfg(test)]
@@ -48,6 +51,8 @@ pub struct ProjectsConfig {
     pub roots: Vec<PathBuf>,
     /// How long a setup command may run before it is killed and the setup fails.
     pub setup_timeout: Duration,
+    /// Repositories left out wherever they are found: the clones of removed projects.
+    pub exclude: Vec<PathBuf>,
     /// Overrides, in file order.
     pub entries: Vec<ProjectEntry>,
 }
@@ -57,6 +62,7 @@ impl Default for ProjectsConfig {
         Self {
             roots: Vec::new(),
             setup_timeout: SETUP_TIMEOUT,
+            exclude: Vec::new(),
             entries: Vec::new(),
         }
     }
@@ -165,6 +171,16 @@ impl Overrides {
         });
         let config =
             crate::config::set_project_settings(&self.file, entry, Path::new(clone), settings)?;
+        self.replace(config);
+        Ok(())
+    }
+
+    /// Removes `project`, as discovery last listed it, from this host's projects: its clones
+    /// leave every entry and are excluded from discovery ([`crate::config::remove_project`]).
+    /// Nothing on disk but the config file changes. Blocks on the file system.
+    pub fn remove(&self, project: &Project) -> anyhow::Result<()> {
+        let clones: Vec<PathBuf> = project.paths.iter().map(PathBuf::from).collect();
+        let config = crate::config::remove_project(&self.file, &clones)?;
         self.replace(config);
         Ok(())
     }
@@ -396,7 +412,7 @@ impl Discovery {
 }
 
 /// Every repository to resolve: those `scanned`, the session repos still there and the paths
-/// `config` declares that are directories.
+/// `config` declares that are directories, but none `config` excludes.
 fn wanted(
     config: &ProjectsConfig,
     scanned: &[PathBuf],
@@ -406,5 +422,6 @@ fn wanted(
     let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
     wanted.extend(session_repos.into_iter().filter(|path| scan::is_repo(path)));
     wanted.extend(declared.filter(|path| path.is_dir()).cloned());
+    wanted.retain(|path| !config.exclude.contains(path));
     wanted
 }

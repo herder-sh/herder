@@ -531,6 +531,9 @@ impl SessionManager {
                 };
                 return self.set_project_settings(&project_id, settings).await;
             }
+            CommandBody::RemoveProject { project_id } => {
+                return self.remove_project(&project_id).await;
+            }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
             CommandBody::SetModel { session_id, model } => {
                 (session_id, Request::SetModel { model })
@@ -778,20 +781,7 @@ impl SessionManager {
         settings: ProjectSettings,
     ) -> Result<CommandResult, ErrorInfo> {
         let (_, overrides) = self.projects()?;
-        let project = self
-            .inner
-            .journal
-            .projects()
-            .list
-            .iter()
-            .find(|project| project.project_id == *project_id)
-            .cloned()
-            .ok_or_else(|| {
-                error(
-                    ErrorCode::NotFound,
-                    format!("project {project_id} has no clone on this host"),
-                )
-            })?;
+        let project = self.listed_project(project_id)?;
         if let Some(account_id) = &settings.default_account
             && self.inner.account(account_id).is_none()
         {
@@ -804,6 +794,55 @@ impl SessionManager {
             .await
             .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
         Ok(CommandResult::Applied)
+    }
+
+    /// Removes `project_id`, one of the listed projects, unless a session not archived runs in
+    /// one of its clones ([`Overrides::remove`]).
+    async fn remove_project(&self, project_id: &ProjectId) -> Result<CommandResult, ErrorInfo> {
+        let (_, overrides) = self.projects()?;
+        let project = self.listed_project(project_id)?;
+        let live = self
+            .inner
+            .journal
+            .sessions()
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .filter(|session| {
+                session.status != SessionStatus::Archived && project.paths.contains(&session.repo)
+            })
+            .count();
+        if live > 0 {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!(
+                    "project {project_id} has {live} live session{}; archive {} first",
+                    if live == 1 { "" } else { "s" },
+                    if live == 1 { "it" } else { "them" },
+                ),
+            ));
+        }
+        tokio::task::spawn_blocking(move || overrides.remove(&project).map_err(internal))
+            .await
+            .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
+        Ok(CommandResult::Applied)
+    }
+
+    /// `project_id` as discovery last listed it.
+    fn listed_project(&self, project_id: &ProjectId) -> Result<Project, ErrorInfo> {
+        self.inner
+            .journal
+            .projects()
+            .list
+            .iter()
+            .find(|project| project.project_id == *project_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::NotFound,
+                    format!("project {project_id} has no clone on this host"),
+                )
+            })
     }
 
     fn projects(&self) -> Result<(HostId, Arc<Overrides>), ErrorInfo> {

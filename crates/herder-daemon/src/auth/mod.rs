@@ -350,6 +350,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
         CommandBody::ListDirectory { .. }
             | CommandBody::AddProject { .. }
             | CommandBody::SetProjectSettings { .. }
+            | CommandBody::RemoveProject { .. }
     );
     if host && identity.role != Role::Owner {
         return Err(forbidden(

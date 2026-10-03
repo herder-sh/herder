@@ -819,6 +819,24 @@
           ]
         },
         {
+          "description": "Stop managing a project on this host; owners only. Answered with `applied`; the\nproject list without it follows. Its clones leave the daemon's `[[project]]` entries\nand are excluded from discovery, until `add_project` adds one again; nothing on disk is\ndeleted. A project with live (not archived) sessions is refused with `conflict`;\narchived ones keep existing without a project.",
+          "type": "object",
+          "properties": {
+            "project_id": {
+              "description": "The project, one of this daemon's.",
+              "$ref": "#/$defs/ProjectId"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_project"
+            }
+          },
+          "required": [
+            "type",
+            "project_id"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
