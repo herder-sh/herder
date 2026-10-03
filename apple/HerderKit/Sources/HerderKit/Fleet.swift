@@ -18,6 +18,8 @@ public final class Fleet {
     var archiveRefusal: ArchiveRefusal?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
+    /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
+    @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
