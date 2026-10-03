@@ -211,6 +211,17 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         }
     );
 
+    let missing_fork = CommandBody::ForkSession {
+        session_id: SessionId::new("not-on-this-host"),
+        account_id: None,
+    };
+    // Even without a vault the running daemon supports local forks. A missing source is
+    // not found, rather than forks being unsupported.
+    assert_eq!(
+        refused(&owner, &host_id, missing_fork.clone()).await,
+        ErrorCode::NotFound
+    );
+
     // A host code is host-only: a client cannot pair with it.
     let CommandResult::HostPairing { code, .. } = send(
         &owner,
@@ -314,6 +325,13 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
             .any(|d| d.user == "devbox" && d.device_role == DeviceRole::Host),
         "{devices:?}"
     );
+    // Fork lookup now reaches the vault without restarting. This host-only device cannot
+    // read other sessions as a client, so the vault refuses the read.
+    assert_eq!(
+        refused(&owner, &host_id, missing_fork.clone()).await,
+        ErrorCode::Internal
+    );
+
     // A second link waits for the first to stop.
     assert_eq!(
         refused(&owner, &host_id, linking).await,
@@ -324,6 +342,11 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     assert_eq!(
         send(&owner, &host_id, CommandBody::UnlinkVault).await,
         CommandResult::Applied
+    );
+    // Unlink also stops fork lookup from reaching the old vault.
+    assert_eq!(
+        refused(&owner, &host_id, missing_fork).await,
+        ErrorCode::NotFound
     );
     machine_when(&owner, |m| {
         m.host_id == vault_id && m.hosts.iter().any(|h| h.host_id == host_id && !h.online)
