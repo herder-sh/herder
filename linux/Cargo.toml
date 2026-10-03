@@ -19,10 +19,16 @@ all = { level = "warn", priority = -1 }
 [workspace.dependencies]
 adw = { package = "libadwaita", version = "0.9", features = ["v1_4"] }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+herder-adapters = { path = "../crates/herder-adapters" }
 herder-client-core = { path = "../crates/herder-client-core" }
+herder-daemon = { path = "../crates/herder-daemon" }
 herder-protocol = { path = "../crates/herder-protocol" }
+herder-store = { path = "../crates/herder-store" }
+serde_json = "1"
+similar = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio-util = "0.7"
 
 [package]
 name = "herder-gtk"
@@ -37,10 +43,16 @@ adw.workspace = true
 gtk.workspace = true
 herder-client-core.workspace = true
 herder-protocol.workspace = true
+serde_json.workspace = true
+similar.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+herder-adapters.workspace = true
+herder-daemon.workspace = true
+herder-store.workspace = true
 tempfile.workspace = true
+tokio-util.workspace = true
 
 [lints]
 workspace = true
