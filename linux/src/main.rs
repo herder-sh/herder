@@ -3,14 +3,20 @@
 //!
 //! - `main` (this module): the tokio runtime the client runs on, the application, and the
 //!   wiring between the client and the window.
-//! - `window`: the main window, drawn from plain [`herder_client_core::Machine`] values.
+//! - `lists`: the session lists, built from plain [`herder_client_core::Machine`] values and
+//!   what each session's subscription said.
+//! - `window`: the main window, drawing the machines and those lists.
 
+mod lists;
 mod window;
+
+use std::collections::HashMap;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use herder_client_core::Client;
+use herder_client_core::{Client, Machine};
 
+use lists::SessionKey;
 use window::MainWindow;
 
 const APP_ID: &str = "sh.herder.Herder";
@@ -58,15 +64,24 @@ fn open_client() -> Result<Client, String> {
     .map_err(|err| err.to_string())
 }
 
-/// Shows the client's machines as they change, and wires the app actions to it.
+/// Shows the client's machines and their sessions as they change, and wires the app actions
+/// to it.
 fn connect(app: &adw::Application, window: &MainWindow, client: Client) {
-    window.show_machines(&client.machines());
+    let mut subscriptions = Subscriptions::default();
+    let mut refresh = {
+        let window = window.clone();
+        let client = client.clone();
+        move || {
+            let machines = client.machines();
+            window.show_machines(&machines);
+            subscriptions.sync(&client, &window, &machines);
+        }
+    };
+    refresh();
     let changes = client.changes();
-    let shown = window.clone();
-    let machines = client.clone();
     glib::spawn_future_local(async move {
         while changes.next().await {
-            shown.show_machines(&machines.machines());
+            refresh();
         }
     });
 
@@ -75,7 +90,47 @@ fn connect(app: &adw::Application, window: &MainWindow, client: Client) {
     reconnect.connect_activate(move |_, _| woken.wake());
     app.add_action(&reconnect);
     app.set_accels_for_action("app.reconnect", &["<Control>r"]);
+    app.set_accels_for_action("win.group-by-machine", &["<Control>g"]);
 
     // A desktop app is not backgrounded; quitting is when the offline cache must be saved.
     app.connect_shutdown(move |_| client.suspend());
+}
+
+/// One task per listed session, folding its updates into the window.
+#[derive(Default)]
+struct Subscriptions(HashMap<SessionKey, glib::JoinHandle<()>>);
+
+impl Subscriptions {
+    /// Subscribes to every listed session and drops the ones no longer listed.
+    fn sync(&mut self, client: &Client, window: &MainWindow, machines: &[Machine]) {
+        let listed = lists::keys(machines);
+        let tasks = &mut self.0;
+        tasks.retain(|key, task| {
+            let keep = listed.contains(key);
+            if !keep {
+                // Dropping the subscription with its task unsubscribes.
+                task.abort();
+            }
+            keep
+        });
+        for key in listed {
+            if tasks.contains_key(&key) {
+                continue;
+            }
+            let Ok(subscription) =
+                client.subscribe_session(key.host_id.clone(), key.session_id.clone())
+            else {
+                // The machine is gone; the next machine list drops the session.
+                continue;
+            };
+            let window = window.clone();
+            let task_key = key.clone();
+            let task = glib::spawn_future_local(async move {
+                while let Some(update) = subscription.next().await {
+                    window.apply(&task_key, &update);
+                }
+            });
+            tasks.insert(key, task);
+        }
+    }
 }

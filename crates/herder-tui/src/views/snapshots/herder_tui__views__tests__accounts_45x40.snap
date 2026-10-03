@@ -40,5 +40,5 @@ expression: terminal.backend()
 "│ in the machine's daemon config (failover │ "
 "│ = true per account, [failover] pin).     │ "
 "└───── n add  r reconnect  Esc close ──────┘ "
-" > ok   esc close                            "
+" n add   esc close                           "
 " * box  x laptop                     ? help  "

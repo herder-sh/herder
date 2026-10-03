@@ -247,6 +247,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
         KeyCode::Enter if key.modifiers.is_empty() => compose(Act::Submit),
         KeyCode::Enter => compose(Act::Newline),
         KeyCode::Char('j') if ctrl => compose(Act::Newline),
+        // The editor has no pages: they scroll the transcript above it.
+        KeyCode::PageUp => Some(Some(Action::PageUp)),
+        KeyCode::PageDown => Some(Some(Action::PageDown)),
         KeyCode::Tab | KeyCode::BackTab if plain => Some(Some(Action::SwitchPane)),
         _ => compose(Act::Key(key)),
     }

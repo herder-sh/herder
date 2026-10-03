@@ -16,6 +16,7 @@ redacted on top of `herder dev record`'s defaults (which catch the email address
 learned from a throwaway `claude` first.
 
 limit_reached.jsonl is hand-built (see its header comment) and is not recorded here.
+full_access.jsonl runs in `bypassPermissions`, the adapter's flag for `full_access`.
 """
 
 import json
@@ -39,6 +40,9 @@ CLAUDE = [
     "--allow-dangerously-skip-permissions", "--permission-mode", "default",
     "--safe-mode", "--model", "haiku",
 ]
+
+# Scenarios recorded in another permission mode than `default`.
+MODES = {"full_access": "bypassPermissions"}
 
 SEED_PREAMBLE = (
     "This session continues an earlier conversation, replayed below from herder's log. "
@@ -152,6 +156,27 @@ def scenario_approval(claude):
         claude.answer(message["request_id"], {"behavior": "allow"})
 
 
+FULL_ACCESS = (
+    "Run these two shell commands with the Bash tool, verbatim, as two separate calls in "
+    "order, then reply with the word done. First: `cd sub` Second: "
+    "`cd /tmp/herder-claude-fixture && rm -f sub/*; ls sub`"
+)
+
+
+def scenario_full_access(claude):
+    """bypassPermissions still asks when a safety check holds a command: here the dangerous
+    rm check, which resolves `sub/*` against the shell's cwd from before the `cd`."""
+    os.makedirs(os.path.join(CWD, "sub"), exist_ok=True)
+    open(os.path.join(CWD, "sub", "a.tmp"), "w").close()
+    claude.call({"subtype": "initialize"})
+    claude.prompt(FULL_ACCESS)
+    while True:
+        message = claude.until(lambda m: is_result(m) or is_permission(m))
+        if is_result(message):
+            return
+        claude.answer(message["request_id"], {"behavior": "allow"})
+
+
 QUESTION = (
     "Use the AskUserQuestion tool to ask me whether to print A or B, then reply with exactly "
     "the letter I chose."
@@ -222,6 +247,7 @@ SCENARIOS = {
     "question_interrupt": scenario_question_interrupt,
     "interrupt": scenario_interrupt,
     "seed": scenario_seed,
+    "full_access": scenario_full_access,
 }
 
 
@@ -244,10 +270,12 @@ def main():
     for value in private_values():
         redact += ["--redact", re.escape(value)]
     for name in sys.argv[1:] or SCENARIOS:
+        mode = MODES.get(name, "default")
+        command = [mode if arg == "default" else arg for arg in CLAUDE]
         claude = Claude(
             [os.path.join(os.getcwd(), "target/debug/herder"), "dev", "record", "claude", name,
              "--out", os.path.join(HERE, f"{name}.jsonl"), "--cli-version", version,
-             *redact, "--", *CLAUDE]
+             *redact, "--", *command]
         )
         SCENARIOS[name](claude)
         claude.close()

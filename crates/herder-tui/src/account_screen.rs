@@ -100,8 +100,8 @@ pub fn for_key(key: KeyEvent, screen: &AccountScreen) -> Option<Action> {
         }
         KeyCode::Char('k') | KeyCode::Up => Input::Up,
         KeyCode::Char('j') | KeyCode::Down => Input::Down,
-        KeyCode::Char('g') | KeyCode::Home => Input::Top,
-        KeyCode::Char('G') | KeyCode::End => Input::Bottom,
+        KeyCode::Char('g') | KeyCode::Home | KeyCode::PageUp => Input::Top,
+        KeyCode::Char('G') | KeyCode::End | KeyCode::PageDown => Input::Bottom,
         KeyCode::Char('n') => Input::Add,
         KeyCode::Char('r') => return Some(Action::Reconnect),
         KeyCode::Char('?') => return Some(Action::ToggleHelp),

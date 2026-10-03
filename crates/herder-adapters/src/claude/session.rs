@@ -589,6 +589,18 @@ impl Session {
             self.ask(request_id, turn_id, request.input).await;
             return;
         }
+        if self.mode == PermissionMode::FullAccess
+            && !request.requires_user_interaction
+            && !dangerous_removal(request.decision_reason.as_deref())
+        {
+            // `bypassPermissions` still asks when one of Claude's safety checks holds a call;
+            // `full_access` means the user already said yes. See the module docs.
+            let permission = Permission::Allow {
+                updated_input: None,
+            };
+            self.answer(&request_id, permission).await;
+            return;
+        }
         let summary = summary(&request);
         let tool_call_id = match self.tool_calls.get(&request.tool_use_id) {
             Some(id) => id.clone(),
@@ -841,6 +853,16 @@ fn result_text(content: Value) -> String {
     }
 }
 
+/// Whether Claude Code asks because a command would remove something it cannot clear: a
+/// system directory, the working directory or one of its ancestors, or a target it could not
+/// analyse. A glob it could not resolve only because of an earlier `cd` is not one.
+fn dangerous_removal(reason: Option<&str>) -> bool {
+    reason.is_some_and(|reason| {
+        reason.starts_with("Dangerous ")
+            && !reason.contains(" operation on statically-unresolvable target: ")
+    })
+}
+
 /// One line saying what a tool call wants to do: the tool and its main argument.
 fn summary(request: &CanUseTool) -> String {
     let detail = ["command", "file_path", "path", "url", "pattern"]
@@ -921,7 +943,26 @@ mod tests {
             tool_use_id: "toolu_1".into(),
             title: None,
             description: description.map(str::to_owned),
+            decision_reason: None,
+            requires_user_interaction: false,
         }
+    }
+
+    #[test]
+    fn only_a_stale_cd_glob_is_not_a_dangerous_removal() {
+        let reason = |text: &str| dangerous_removal(Some(text));
+        assert!(reason("Dangerous rm operation on critical path: /"));
+        assert!(reason(
+            "Dangerous rm operation on working directory or its ancestor: /w"
+        ));
+        assert!(reason(
+            "Dangerous rm operation \u{2014} too many command substitutions to analyze (9)"
+        ));
+        assert!(!reason(
+            "Dangerous rm operation on statically-unresolvable target: /w/sub/sub/*"
+        ));
+        assert!(!reason("This command uses the `&` background operator"));
+        assert!(!dangerous_removal(None));
     }
 
     #[test]
