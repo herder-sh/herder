@@ -6,6 +6,10 @@
 //! replication connection ([`Presence`]). `get_attachment` answers from the images hosts
 //! replicated; every other command on a session is refused as `read_only`: a session is
 //! driven on its host, which the error names.
+//!
+//! Owners link hosts to the vault from a client: `pair_vault_host` mints a host-only code, as
+//! `herder pair --host` does, for the client to hand the host with `link_vault`, and
+//! `revoke_vault_host` unpairs the devices a host replicates from once it stops backing up.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,6 +23,7 @@ use tracing::warn;
 
 use super::VaultStore;
 use super::blocking;
+use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::session::EventSink;
 use crate::ws::{Backend, Identity};
@@ -28,6 +33,8 @@ use crate::ws::{Backend, Identity};
 pub(crate) struct Fleet {
     store: Arc<Mutex<VaultStore>>,
     hub: Arc<Hub>,
+    /// Pairs hosts and revokes them, for owners.
+    auth: Arc<Auth>,
     presence: Arc<Presence>,
     /// The session list clients got last.
     listed: Arc<tokio::sync::Mutex<Vec<SessionHead>>>,
@@ -36,10 +43,11 @@ pub(crate) struct Fleet {
 }
 
 impl Fleet {
-    pub(crate) fn new(store: Arc<Mutex<VaultStore>>, hub: Arc<Hub>) -> Self {
+    pub(crate) fn new(store: Arc<Mutex<VaultStore>>, hub: Arc<Hub>, auth: Arc<Auth>) -> Self {
         Self {
             store,
             hub,
+            auth,
             presence: Arc::default(),
             listed: Arc::default(),
             sending_hosts: Arc::default(),
@@ -144,6 +152,51 @@ impl Fleet {
         }
     }
 
+    /// A one-time code that pairs the host named `host_name` to replicate here and only that.
+    fn pair_host(&self, host_name: &str) -> Result<CommandResult, ErrorInfo> {
+        let pairing = self
+            .auth
+            .mint_host(host_name, PAIRING_TTL)
+            .map_err(|err| error(ErrorCode::BadRequest, format!("{err:#}")))?;
+        Ok(CommandResult::HostPairing {
+            code: pairing.code,
+            expires_at: pairing.expires_at,
+        })
+    }
+
+    /// Unpairs every device that replicates as `host_id`, closing its connections.
+    async fn revoke_host(&self, host_id: HostId) -> Result<CommandResult, ErrorInfo> {
+        let devices = {
+            let host_id = host_id.clone();
+            blocking(&self.store, move |store| store.devices_of(&host_id)).await
+        };
+        let devices = devices.map_err(|err| {
+            warn!("cannot look up a host's devices: {err:#}");
+            error(ErrorCode::Internal, "cannot read the vault database".into())
+        })?;
+        let mut revoked = 0;
+        for device in &devices {
+            match self.auth.revoke(device) {
+                Ok(true) => revoked += 1,
+                Ok(false) => {}
+                Err(err) => {
+                    warn!(device_id = %device, "cannot revoke a host's device: {err:#}");
+                    return Err(error(
+                        ErrorCode::Internal,
+                        "cannot save the paired devices".into(),
+                    ));
+                }
+            }
+        }
+        if revoked == 0 {
+            return Err(error(
+                ErrorCode::NotFound,
+                format!("no paired device replicates as host {host_id}"),
+            ));
+        }
+        Ok(CommandResult::Applied)
+    }
+
     async fn heads(&self) -> anyhow::Result<Vec<SessionHead>> {
         blocking(&self.store, |store| store.fleet()).await
     }
@@ -234,12 +287,26 @@ impl Backend for Fleet {
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
-        if let CommandBody::GetAttachment {
-            session_id,
-            attachment_id,
-        } = command
-        {
-            return self.attachment(session_id, attachment_id).await;
+        match command {
+            CommandBody::GetAttachment {
+                session_id,
+                attachment_id,
+            } => return self.attachment(session_id, attachment_id).await,
+            CommandBody::GetVaultLink => {
+                return Ok(CommandResult::VaultLink {
+                    is_vault: true,
+                    vault: None,
+                });
+            }
+            CommandBody::PairVaultHost { host_name } => return self.pair_host(&host_name),
+            CommandBody::RevokeVaultHost { host_id } => return self.revoke_host(host_id).await,
+            CommandBody::LinkVault { .. } | CommandBody::UnlinkVault => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "a vault backs up nowhere; link a host to it instead".into(),
+                ));
+            }
+            _ => {}
         }
         match target(&command) {
             Some(session_id) => Err(self.read_only(session_id).await),
@@ -281,6 +348,11 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetProjectSettings { .. }
         | CommandBody::RemoveProject { .. }
         | CommandBody::GetProjectIcon { .. }
+        | CommandBody::GetVaultLink
+        | CommandBody::LinkVault { .. }
+        | CommandBody::UnlinkVault
+        | CommandBody::PairVaultHost { .. }
+        | CommandBody::RevokeVaultHost { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

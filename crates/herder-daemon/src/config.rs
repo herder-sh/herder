@@ -26,6 +26,23 @@
 //! pin = false # true keeps every session on its account
 //! ```
 //!
+//! # Titles
+//!
+//! A small model titles each session from its conversation ([`crate::session::titles`]), by
+//! running the provider's own CLI once on an account's config dir:
+//!
+//! ```toml
+//! [titles]
+//! enabled = true          # false gives sessions only the titles users type
+//! provider = "claude"     # claude or codex; the titling account's when absent
+//! model = "haiku"         # in that provider's naming; haiku for claude, gpt-6-luna for codex
+//! account = "claude-main" # an `[[accounts]]` id; the session's own account when absent
+//! ```
+//!
+//! Without `account`, a session is titled on its own account, or, when `provider` is not the
+//! session's, on that provider's available account with the most room left. A session whose
+//! provider cannot title gets no generated title.
+//!
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
@@ -116,7 +133,7 @@ use serde::Deserialize;
 use crate::accounts;
 use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
-use crate::session::{AccountConfig, Accounts, FailoverConfig, TaskLimits};
+use crate::session::{AccountConfig, Accounts, FailoverConfig, TaskLimits, TitlesConfig};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -140,6 +157,8 @@ pub struct Config {
     pub tasks: TaskLimits,
     /// How sessions fail over when their account hits a limit.
     pub failover: FailoverConfig,
+    /// How sessions are titled.
+    pub titles: TitlesConfig,
     /// Limits for the systemd scopes sessions run in.
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
@@ -214,6 +233,7 @@ struct ConfigFile {
     providers: BTreeMap<String, ProviderFile>,
     tasks: TaskLimits,
     failover: FailoverConfig,
+    titles: TitlesFile,
     resources: ResourcesConfig,
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
@@ -231,11 +251,33 @@ impl Default for ConfigFile {
             providers: BTreeMap::new(),
             tasks: TaskLimits::default(),
             failover: FailoverConfig::default(),
+            titles: TitlesFile::default(),
             resources: ResourcesConfig::default(),
             projects: ProjectsFile::default(),
             project: Vec::new(),
             mode: Mode::default(),
             vault: None,
+        }
+    }
+}
+
+/// The `[titles]` table as written.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct TitlesFile {
+    enabled: bool,
+    provider: Option<String>,
+    model: Option<String>,
+    account: Option<String>,
+}
+
+impl Default for TitlesFile {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: None,
+            model: None,
+            account: None,
         }
     }
 }
@@ -313,6 +355,7 @@ impl Config {
         file.resources.validate()?;
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
+        let titles = resolve_titles(file.titles, &accounts)?;
         if let Some(vault) = &file.vault {
             ensure!(
                 file.mode == Mode::Host,
@@ -333,6 +376,7 @@ impl Config {
             binaries: resolve_binaries(file.providers, &env)?,
             tasks: file.tasks,
             failover: file.failover,
+            titles,
             resources: file.resources,
             projects,
             mode: file.mode,
@@ -342,6 +386,51 @@ impl Config {
             }),
         })
     }
+}
+
+/// Validates the `[titles]` table.
+fn resolve_titles(table: TitlesFile, accounts: &Accounts) -> Result<TitlesConfig> {
+    let titles = |provider: &Provider| matches!(provider, Provider::Claude | Provider::Codex);
+    let provider = table.provider.map(Provider::from);
+    if let Some(provider) = &provider {
+        ensure!(
+            titles(provider),
+            "titles.provider: herder titles sessions with claude or codex, not {}",
+            provider.as_str()
+        );
+    }
+    let account = table.account.map(AccountId::new);
+    if let Some(id) = &account {
+        let config = accounts
+            .get(id)
+            .with_context(|| format!("titles.account: {id} is not an account"))?;
+        ensure!(
+            titles(&config.provider),
+            "titles.account: herder titles sessions with claude or codex, and {id} is a {} \
+             account",
+            config.provider.as_str()
+        );
+        if let Some(provider) = &provider {
+            ensure!(
+                *provider == config.provider,
+                "titles.account: {id} is not a {} account",
+                provider.as_str()
+            );
+        }
+    }
+    ensure!(
+        table
+            .model
+            .as_ref()
+            .is_none_or(|model| !model.trim().is_empty()),
+        "titles.model is empty"
+    );
+    Ok(TitlesConfig {
+        enabled: table.enabled,
+        provider,
+        model: table.model,
+        account,
+    })
 }
 
 /// Validates the `[projects]` table and the `[[project]]` entries.
@@ -661,6 +750,27 @@ pub fn set_project_settings(
         }
         Ok(())
     })
+}
+
+/// Sets the `[vault]` table of the config file at `path` to `vault`, or removes it when
+/// `None`; the rest of the file is kept as written, and only a file that still loads replaces
+/// it. A `pairing_code` is never written: the host is paired by the time it is kept.
+pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
+    edit_config(path, |doc, _| {
+        match vault {
+            Some(vault) => {
+                let mut table = toml_edit::Table::new();
+                table.insert("address", toml_edit::value(vault.address.as_str()));
+                table.insert("fingerprint", toml_edit::value(vault.fingerprint.as_str()));
+                doc.insert("vault", toml_edit::Item::Table(table));
+            }
+            None => {
+                doc.remove("vault");
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// The `[[project]]` entry `entry` of `doc`, the config file at `path`, counted in file order,
@@ -1020,6 +1130,7 @@ mod tests {
                 binaries: HashMap::new(),
                 tasks: TaskLimits { max_children: 2 },
                 failover: FailoverConfig { pin: true },
+                titles: TitlesConfig::default(),
                 resources: ResourcesConfig {
                     memory_max_percent: 25,
                     memory_high_percent: 90,
@@ -1036,6 +1147,50 @@ mod tests {
                 vault: None,
             }
         );
+    }
+
+    #[test]
+    fn the_vault_table_is_set_and_removed_keeping_the_rest_of_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let original = "# my daemon\nlisten = \"127.0.0.1:7447\"  # loopback only\n\n\
+                        [log]\nlevel = \"debug\"\n";
+        std::fs::write(&path, original).unwrap();
+        let vault = VaultConfig {
+            address: "vault.lan:7447".into(),
+            fingerprint: "ab".repeat(32),
+            pairing_code: Some("ABCDE-FGHJK".into()),
+        };
+        set_vault(&path, Some(&vault)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(original), "{text}");
+        assert!(!text.contains("ABCDE"), "the code is never kept: {text}");
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(
+            config.vault,
+            Some(VaultConfig {
+                pairing_code: None,
+                ..vault.clone()
+            })
+        );
+
+        // Setting it again replaces it; removing it gives the file back as it was.
+        let moved = VaultConfig {
+            address: "10.0.0.9:7447".into(),
+            ..vault
+        };
+        set_vault(&path, Some(&moved)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("[vault]").count(), 1, "{text}");
+        assert!(text.contains("10.0.0.9:7447"), "{text}");
+        set_vault(&path, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // A host with no config file gets one.
+        let fresh = tmp.path().join("new/daemon.toml");
+        set_vault(&fresh, Some(&moved)).unwrap();
+        let config = Config::load_with_env(Some(&fresh), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(config.vault.unwrap().address, "10.0.0.9:7447");
     }
 
     #[test]
@@ -1230,6 +1385,63 @@ mod tests {
                 (Provider::Opencode, PathBuf::from("/opt/opencode")),
             ])
         );
+    }
+
+    #[test]
+    fn titles_are_on_by_default_and_take_a_provider_model_and_account() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config =
+            Config::load_with_env(Some(&write(tmp.path(), "")), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.titles, TitlesConfig::default());
+        assert!(config.titles.enabled);
+
+        let path = write(
+            tmp.path(),
+            r#"
+            [[accounts]]
+            id = "codex-main"
+            provider = "codex"
+            config_dir = "/codex"
+
+            [titles]
+            enabled = false
+            provider = "codex"
+            model = "gpt-6-luna"
+            account = "codex-main"
+            "#,
+        );
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(
+            config.titles,
+            TitlesConfig {
+                enabled: false,
+                provider: Some(Provider::Codex),
+                model: Some("gpt-6-luna".to_owned()),
+                account: Some(AccountId::new("codex-main")),
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_titles_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let accounts = "[[accounts]]\nid = \"main\"\nprovider = \"claude\"\n\
+                        [[accounts]]\nid = \"grok\"\nprovider = \"grok\"\n";
+        for (titles, expected) in [
+            ("provider = \"grok\"", "with claude or codex, not grok"),
+            ("account = \"nobody\"", "nobody is not an account"),
+            ("account = \"grok\"", "grok is a grok account"),
+            (
+                "provider = \"codex\"\naccount = \"main\"",
+                "main is not a codex account",
+            ),
+            ("model = \" \"", "titles.model is empty"),
+            ("color = \"red\"", "unknown field"),
+        ] {
+            let path = write(tmp.path(), &format!("{accounts}[titles]\n{titles}\n"));
+            let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{titles}: {err:#}");
+        }
     }
 
     #[test]

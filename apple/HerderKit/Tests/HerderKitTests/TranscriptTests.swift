@@ -33,6 +33,58 @@ struct TranscriptTests {
         #expect(calls[1].kind == .edit)
     }
 
+    @Test func toolGroupsStaySeparateAcrossTurnsWithReusedIds() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("c1", .toolCall(name: "Bash", input: "{}")),
+            item("r1", .toolResult(callId: "c1", output: "first", isError: false)),
+            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "t2"),
+            item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
+            item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2"),
+            .turnCompleted(turnId: "t2"),
+        ])
+        let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
+            if case .tools(_, let calls) = block { return calls }
+            return nil
+        }
+        #expect(groups.count == 2)
+        #expect(groups.map { $0.map(\.output) } == [["first"], ["second"]])
+    }
+
+    @Test func resultsAttachAcrossApprovalNoticesAndProseDuringStreamingAndReplay() {
+        var script = Script()
+        var model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("c1", .toolCall(name: "Bash", input: "{}")),
+            .approvalRequested(approvalId: "a1", turnId: "t1", toolCallId: "c1", summary: "Run command?", routedTo: .user, reason: nil),
+            .approvalResolved(approvalId: "a1", decision: .allow, answeredBy: .user),
+            item("a", .assistantMessage(text: "Waiting for the command.")),
+        ])
+        let result = Item(id: "r1", turnId: "t1", body: .toolResult(callId: "c1", output: "partial", isError: false))
+        model.apply(SessionUpdate(events: [], streaming: [result]))
+        guard case .tools(_, let streamingCalls) = Transcript.blocks(model)[0] else {
+            Issue.record("missing tool group")
+            return
+        }
+        #expect(streamingCalls[0].output == "partial")
+        #expect(streamingCalls[0].outcome == .running)
+        model.apply(SessionUpdate(events: [
+            script.event(item("r1", .toolResult(callId: "c1", output: "failed", isError: true))),
+            script.event(.turnCompleted(turnId: "t1")),
+            script.event(.turnStarted(turnId: "t2")),
+            script.event(item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2")),
+            script.event(item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2")),
+            script.event(.turnCompleted(turnId: "t2")),
+        ], streaming: []))
+        let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
+            if case .tools(_, let calls) = block { return calls }
+            return nil
+        }
+        #expect(groups.map { $0.map(\.output) } == [["failed"], ["second"]])
+        #expect(groups.map { $0.map(\.outcome) } == [[.failed], [.ok]])
+    }
+
     @Test func eventsBecomeNoticesWordedAsInTheTUI() {
         var script = Script()
         let model = script.model([
@@ -53,10 +105,9 @@ struct TranscriptTests {
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         let outgoing = Outgoing(text: "next", state: .delivered)
         model.outbox = [outgoing]
-        // Running: the turn's progress, then the message waiting behind it.
-        let running = Transcript.blocks(model)
-        #expect(running.suffix(2) == [.working(since: model.turnStartedAt, waiting: false),
-                                      .user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing)])
+        // Running: the turn's progress; the message waits in the tray above the composer.
+        #expect(Transcript.blocks(model).last == .working(since: model.turnStartedAt, waiting: false))
+        #expect(Transcript.queued(model) == [outgoing])
         // Idle: the message, then the wait for the agent to take it.
         model.apply(script.event(.turnCompleted(turnId: "t1")))
         #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
@@ -74,7 +125,7 @@ struct TranscriptTests {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         model.apply(SessionUpdate(events: [], streaming: [Item(id: "s", turnId: "t1", body: .assistantMessage(text: "Hel"))]))
-        #expect(Transcript.blocks(model).last == .assistant(id: "s", text: "Hel", streaming: true))
+        #expect(Transcript.blocks(model).last == .assistant(id: "t1/s", text: "Hel", streaming: true))
     }
 }
 
@@ -96,5 +147,32 @@ struct DefaultAccountTests {
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "claude")?.accountId == "busy")
         #expect(fleet.defaultAccount(on: "h", projectId: nil, provider: "claude")?.accountId == "idle")
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "codex")?.accountId == "gpt")
+    }
+
+    @Test func repliesOfDifferentTurnsKeepApartWhenTheAdapterReusesItemIds() {
+        var script = Script()
+        let model = script.model([
+            created(),
+            .turnStarted(turnId: "t1"),
+            item("u1", .userMessage(text: "asd", attachments: []), turn: "t1"),
+            item("item-2", .assistantMessage(text: "First."), turn: "t1"),
+            .turnCompleted(turnId: "t1"),
+            .turnStarted(turnId: "t2"),
+            item("u2", .userMessage(text: "asd", attachments: []), turn: "t2"),
+            item("item-2", .assistantMessage(text: "Second."), turn: "t2"),
+            .turnCompleted(turnId: "t2"),
+        ])
+        let blocks = Transcript.blocks(model)
+        #expect(Set(blocks.map(\.id)).count == blocks.count)
+        #expect(blocks.compactMap { if case .assistant(_, let text, _) = $0 { text } else { nil } } == ["First.", "Second."])
+    }
+
+    @Test func messagesQueuedBehindTheTurnLeaveTheTranscriptForTheTray() {
+        var script = Script()
+        var model = script.model([created(), .turnStarted(turnId: "t1")])
+        model.outbox = [Outgoing(text: "next", images: [], state: .delivered), Outgoing(text: "typing", images: [], state: .sending)]
+        let users = Transcript.blocks(model).compactMap { if case .user(_, let text, _, _) = $0 { text } else { nil } }
+        #expect(users == ["typing"])
+        #expect(Transcript.queued(model).map(\.text) == ["next"])
     }
 }

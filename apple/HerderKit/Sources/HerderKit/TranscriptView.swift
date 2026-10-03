@@ -22,46 +22,24 @@ struct TranscriptBlockView: View {
                         ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, data in Picture(data: data, height: 140) }
                     }
                 }
-                if let outgoing, case .delivered = outgoing.state, fleet.sessions[key]?.turn != nil {
-                    // Queued behind the running turn: a dashed bubble with its actions beside it.
-                    HStack(alignment: .center, spacing: 8) {
-                        Button { Task { await fleet.sendNow(key) } } label: {
-                            Label("Send now", systemImage: "arrow.up.circle.fill")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Theme.text)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Stop the running turn so this message runs now")
-                        Text(text)
-                            .font(.body)
-                            .foregroundStyle(Theme.text)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Theme.raised, in: .rect(cornerRadius: 18))
-                            .overlay(RoundedRectangle(cornerRadius: 18)
-                                .strokeBorder(Theme.tertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                    }
-                    Label("Queued", systemImage: "clock").font(.caption).foregroundStyle(Theme.tertiary)
-                } else {
-                    Text(text)
-                        .font(.body)
-                        .foregroundStyle(Theme.onBubble)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.7), in: .rect(cornerRadius: 18))
-                    if let outgoing {
-                        DeliveryLine(outgoing: outgoing) {
-                            fleet.discard(outgoing, from: key)
-                            Task { await fleet.submit(outgoing.text, to: key) }
-                        }
+                Text(text)
+                    .font(.body)
+                    .foregroundStyle(Theme.onBubble)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.6), in: .rect(cornerRadius: 18))
+                if let outgoing {
+                    DeliveryLine(outgoing: outgoing) {
+                        fleet.discard(outgoing, from: key)
+                        Task { await fleet.submit(outgoing.text, to: key) }
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 48)
         case .working(let since, let waiting):
-            WorkingLine(since: since, waiting: waiting) { Task { await fleet.interrupt(key) } }
+            WorkingLine(since: since, waiting: waiting)
         case .assistant(_, let text, let streaming):
             MarkdownText(text: text, streaming: streaming)
         case .reasoning(_, let text, let streaming):
@@ -302,8 +280,7 @@ private struct DeliveryLine: View {
                 ProgressView().controlSize(.mini).tint(Theme.tertiary)
                 Text("Sending…")
             case .delivered:
-                Image(systemName: "checkmark")
-                Text("Delivered")
+                EmptyView()
             case .failed(let reason):
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.failure)
                 Text("Not sent: \(reason)").foregroundStyle(Theme.failure).lineLimit(2)
@@ -322,7 +299,6 @@ private struct DeliveryLine: View {
 private struct WorkingLine: View {
     let since: Date?
     let waiting: Bool
-    let stop: () -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -335,17 +311,6 @@ private struct WorkingLine: View {
                         .formatted(.time(pattern: .minuteSecond)))
                         .monospacedDigit()
                         .foregroundStyle(Theme.tertiary)
-                }
-                Spacer()
-                if !waiting {
-                    Button(action: stop) {
-                        Image(systemName: "stop.fill").font(.caption2)
-                            .foregroundStyle(Theme.text)
-                            .frame(width: 24, height: 24)
-                            .background(Theme.raised, in: .circle)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Stop the turn")
                 }
             }
             .font(.footnote)

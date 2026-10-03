@@ -147,6 +147,19 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GetProjectIcon {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
+        command(CommandBody::GetVaultLink),
+        command(CommandBody::LinkVault {
+            addresses: vec!["vault.lan:7447".into(), "10.0.0.9:7447".into()],
+            fingerprint: "3f9a".repeat(16),
+            pairing_code: "ABCDE-FGHJK".into(),
+        }),
+        command(CommandBody::UnlinkVault),
+        command(CommandBody::PairVaultHost {
+            host_name: "devbox".into(),
+        }),
+        command(CommandBody::RevokeVaultHost {
+            host_id: HostId::new("01J9HOST"),
+        }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
             force: false,
@@ -343,6 +356,30 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::Attachment {
                 media_type: "image/png".into(),
                 data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::VaultLink {
+                is_vault: false,
+                vault: Some(LinkedVault {
+                    address: "vault.lan:7447".into(),
+                    fingerprint: "3f9a".repeat(16),
+                }),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::VaultLink {
+                is_vault: true,
+                vault: None,
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::HostPairing {
+                code: "ABCDE-FGHJK".into(),
+                expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -1398,6 +1435,40 @@ fn project_optional_fields_may_be_absent() {
     assert_eq!(
         serde_json::to_value(&icon).unwrap(),
         json!({ "type": "project_icon", "icon": "ab12", "media_type": "image/png", "data": "cG5n" })
+    );
+}
+
+#[test]
+fn vault_link_commands_have_their_wire_form() {
+    assert_eq!(
+        serde_json::to_value(CommandBody::GetVaultLink).unwrap(),
+        json!({ "type": "get_vault_link" })
+    );
+    assert_eq!(
+        serde_json::to_value(CommandBody::UnlinkVault).unwrap(),
+        json!({ "type": "unlink_vault" })
+    );
+    let link = CommandBody::LinkVault {
+        addresses: vec!["vault.lan:7447".into()],
+        fingerprint: "ab".into(),
+        pairing_code: "ABCDE-FGHJK".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&link).unwrap(),
+        json!({
+            "type": "link_vault",
+            "addresses": ["vault.lan:7447"],
+            "fingerprint": "ab",
+            "pairing_code": "ABCDE-FGHJK",
+        })
+    );
+    let unlinked = CommandResult::VaultLink {
+        is_vault: false,
+        vault: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&unlinked).unwrap(),
+        json!({ "type": "vault_link", "is_vault": false })
     );
 }
 

@@ -173,8 +173,15 @@
 //! session list. It is refused as `bad_request` for an invalid title and as a `conflict` once
 //! the session is read-only; renaming to the user title it already has journals nothing.
 //!
+//! Once [`SessionManager::generate_titles`] runs, a small model titles sessions from their
+//! conversation, automatically as `auto` and at a `retitle_session` as `ai_requested`
+//! ([`titles`]). Renames and generated titles are journaled one at a time, so a title generated
+//! meanwhile never replaces a rename it should not.
+//!
 //! `retitle_session`, from an owner or a member, is refused the same way for a read-only
-//! session, and as `unsupported` otherwise until the daemon can generate titles.
+//! session, and as `unsupported` while titles are not generated, are disabled, or no CLI can
+//! title the session; it is accepted once the run has started, and a run that fails changes
+//! nothing.
 //!
 //! # Recovery
 //!
@@ -199,6 +206,7 @@ mod recover;
 mod routing;
 mod setup;
 mod tasks;
+pub mod titles;
 
 pub use recover::Recovered;
 pub use routing::{Escalation, Notifier};
@@ -227,6 +235,8 @@ use failover::Limits;
 use journal::Journal;
 pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
+use titles::Titler;
+pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
 use crate::config::ProjectSettings;
 use crate::mcp::{self, Mcp};
@@ -367,6 +377,11 @@ struct Inner {
     projects: OnceLock<(HostId, Arc<Overrides>)>,
     /// Where turn-end checkpoints go, once set.
     checkpoints: OnceLock<checkpoint::Config>,
+    /// What generates session titles, once set.
+    titler: OnceLock<Titler>,
+    /// Held while a title is checked and journaled, so renames and generated titles apply one
+    /// at a time.
+    titling: Mutex<()>,
     shutdown: CancellationToken,
 }
 
@@ -473,6 +488,8 @@ impl SessionManager {
                 limits: Limits::default(),
                 projects: OnceLock::new(),
                 checkpoints: OnceLock::new(),
+                titler: OnceLock::new(),
+                titling: Mutex::new(()),
                 shutdown,
             }),
         })
@@ -595,7 +612,9 @@ impl SessionManager {
             CommandBody::RenameSession { session_id, title } => {
                 return self.rename(by, session_id, &title).await;
             }
-            CommandBody::RetitleSession { session_id } => return self.retitle(session_id).await,
+            CommandBody::RetitleSession { session_id } => {
+                return self.retitle(by, session_id).await;
+            }
             CommandBody::LinkPr { session_id, number } => {
                 return self.prs()?.link(by, session_id, number).await;
             }
@@ -636,6 +655,21 @@ impl SessionManager {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "the session manager does not handle this command yet",
+                ));
+            }
+            // The daemon's vault link answers these ([`crate::vault::Link`]).
+            CommandBody::GetVaultLink
+            | CommandBody::LinkVault { .. }
+            | CommandBody::UnlinkVault => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon cannot back up to a vault",
+                ));
+            }
+            CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
         };
@@ -743,6 +777,16 @@ impl SessionManager {
             .admission
             .set(admission)
             .map_err(|_| anyhow::anyhow!("turns are admitted already"))
+    }
+
+    /// Titles sessions as `config` says, with the CLI `clis` names for each provider
+    /// ([`titles`]); once per manager. Without it, sessions get only the titles users type and
+    /// `retitle_session` is unsupported.
+    pub fn generate_titles(&self, config: TitlesConfig, clis: TitleClis) -> anyhow::Result<()> {
+        self.inner
+            .titler
+            .set(Titler { config, clis })
+            .map_err(|_| anyhow::anyhow!("titles are generated already"))
     }
 
     /// Fails sessions over as `config` says ([`failover`]); once per manager. Without it,
@@ -1001,6 +1045,7 @@ impl SessionManager {
                 format!("a title is one line of 1 to {MAX_TITLE_CHARS} characters"),
             )
         })?;
+        let _titling = self.inner.titling.lock().await;
         let session = self.titleable(&session_id).await?;
         if session.title.as_deref() != Some(title)
             || session.title_source != Some(TitleSource::User)
@@ -1018,13 +1063,17 @@ impl SessionManager {
         Ok(CommandResult::Applied)
     }
 
-    /// Asks for the title of `session_id` to be generated again from its conversation.
-    pub async fn retitle(&self, session_id: SessionId) -> Result<CommandResult, ErrorInfo> {
-        self.titleable(&session_id).await?;
-        Err(error(
-            ErrorCode::Unsupported,
-            "this daemon cannot generate titles yet",
-        ))
+    /// Starts generating the title of `session_id` again from its conversation, as `by`
+    /// asked ([`titles`]).
+    pub async fn retitle(
+        &self,
+        by: UserId,
+        session_id: SessionId,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let session = self.titleable(&session_id).await?;
+        titles::request(&self.inner, by, &session)
+            .map_err(|why| error(ErrorCode::Unsupported, why))?;
+        Ok(CommandResult::Applied)
     }
 
     /// The session, if it exists and its title may change.
@@ -1470,6 +1519,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
         CommandBody::GetAttachment { .. }
             | CommandBody::ListDirectory { .. }
             | CommandBody::GetProjectIcon { .. }
+            | CommandBody::GetVaultLink
     )
 }
 

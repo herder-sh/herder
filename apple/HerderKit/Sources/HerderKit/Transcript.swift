@@ -49,15 +49,20 @@ struct ChildRef: Hashable {
 }
 
 enum Transcript {
-    /// The session's transcript: completed entries, then what is streaming, then queued prompts.
+    /// The session's transcript: completed entries, streaming content, and pending or failed sends.
     /// Consecutive tool calls and their results group into one block.
     static func blocks(_ model: SessionModel) -> [TranscriptBlock] {
         var blocks: [TranscriptBlock] = []
         var calls: [ToolCall] = []
+        var callsTurn = ""
+        var completedGroups: [TurnId: [ItemId: Int]] = [:]
         var children: [ChildRef] = []
 
         func flushCalls() {
-            if let first = calls.first { blocks.append(.tools(id: "tools-\(first.id)", calls: calls)) }
+            if let first = calls.first {
+                for call in calls { completedGroups[callsTurn, default: [:]][call.id] = blocks.count }
+                blocks.append(.tools(id: "tools-\(callsTurn)/\(first.id)", calls: calls))
+            }
             calls = []
         }
         func flushChildren() {
@@ -65,23 +70,33 @@ enum Transcript {
             children = []
         }
         func add(_ item: Item, streaming: Bool) {
+            // Adapters number items per turn, so an item id alone repeats across turns.
+            let id = "\(item.turnId)/\(item.id)"
             switch item.body {
             case .toolCall(let name, let input):
                 flushChildren()
+                if callsTurn != item.turnId { flushCalls() }
+                if calls.isEmpty { callsTurn = item.turnId }
                 calls.append(toolCall(id: item.id, name: name, input: input, running: streaming || model.turn == item.turnId))
             case .toolResult(let callId, let output, let isError):
-                if let index = calls.lastIndex(where: { $0.id == callId }) {
+                if callsTurn == item.turnId, let index = calls.lastIndex(where: { $0.id == callId }) {
                     calls[index].attach(output: output, isError: isError, streaming: streaming)
+                } else if let blockIndex = completedGroups[item.turnId]?[callId],
+                          case .tools(let id, var group) = blocks[blockIndex],
+                          let index = group.lastIndex(where: { $0.id == callId }) {
+                    // Approval notices and agent prose can separate a call from its result.
+                    group[index].attach(output: output, isError: isError, streaming: streaming)
+                    blocks[blockIndex] = .tools(id: id, calls: group)
                 }
             case .userMessage(let text, let attachments):
                 flushCalls(); flushChildren()
-                blocks.append(.user(id: item.id, text: text, attachments: attachments, outgoing: nil))
+                blocks.append(.user(id: id, text: text, attachments: attachments, outgoing: nil))
             case .assistantMessage(let text):
                 flushCalls(); flushChildren()
-                blocks.append(.assistant(id: item.id, text: text, streaming: streaming))
+                blocks.append(.assistant(id: id, text: text, streaming: streaming))
             case .reasoning(let text):
                 flushCalls(); flushChildren()
-                blocks.append(.reasoning(id: item.id, text: text, streaming: streaming))
+                blocks.append(.reasoning(id: id, text: text, streaming: streaming))
             case .unknown:
                 break
             }
@@ -107,13 +122,20 @@ enum Transcript {
         if model.turn != nil && !streamingVisible {
             blocks.append(.working(since: model.turnStartedAt, waiting: false))
         }
-        for outgoing in model.outbox {
+        // Messages waiting behind the running turn show above the composer, not here.
+        for outgoing in model.outbox where model.turn == nil || outgoing.state != .delivered {
             blocks.append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
         }
         if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {
             blocks.append(.working(since: nil, waiting: true))
         }
         return blocks
+    }
+
+    /// Messages the machine has taken that wait for the running turn to end.
+    static func queued(_ model: SessionModel) -> [Outgoing] {
+        guard model.turn != nil else { return [] }
+        return model.outbox.filter { $0.state == .delivered }
     }
 
     static func toolCall(id: ItemId, name: String, input: Json, running: Bool) -> ToolCall {

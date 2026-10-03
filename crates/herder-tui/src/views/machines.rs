@@ -28,6 +28,7 @@ use ratatui_textarea::TextArea;
 
 use crate::accounts::{self, AddAccount};
 use crate::app::App;
+use crate::backup::{self, Known};
 use crate::machines::{MachinePanel, PanelEdit};
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::palette::search_line;
@@ -49,10 +50,11 @@ pub(super) fn draw(
     hits: &mut Hits,
 ) {
     list(frame, area, app, panel, hits);
-    match (&panel.account, &panel.add) {
-        (Some(account), _) => account_dialog(frame, area, app, account),
-        (None, Some(add)) => super::add_machine::draw(frame, area, app, add, hits),
-        (None, None) => {}
+    match (&panel.account, &panel.add, &panel.backup) {
+        (Some(account), _, _) => account_dialog(frame, area, app, account),
+        (None, Some(add), _) => super::add_machine::draw(frame, area, app, add, hits),
+        (None, None, Some(backup)) => super::backup::draw(frame, area, app, backup),
+        (None, None, None) => {}
     }
 }
 
@@ -71,8 +73,9 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
     }
     let selected = panel.selected(&app.machines);
     let width = usize::from(area.width.saturating_sub(3)).saturating_sub(LABEL);
-    let mut details =
-        selected.map_or_else(Vec::new, |at| details(ui, app, &app.machines[at], width));
+    let mut details = selected.map_or_else(Vec::new, |at| {
+        details(ui, app, panel, &app.machines[at], width)
+    });
     match &panel.edit {
         Some(PanelEdit::Rename(name)) => {
             // The name being typed replaces the details' heading.
@@ -110,7 +113,12 @@ fn list(frame: &mut Frame, area: Rect, app: &App, panel: &MachinePanel, hits: &m
     let mut offset = 0;
     let placed = ListView::new(ui, rows)
         .select(selected)
-        .focused(panel.edit.is_none() && panel.add.is_none() && panel.account.is_none())
+        .focused(
+            panel.edit.is_none()
+                && panel.add.is_none()
+                && panel.account.is_none()
+                && panel.backup.is_none(),
+        )
         .render(list_area, frame.buffer_mut(), &mut offset);
     if panel.edit.is_none() {
         hits.wheel(list_area, Wheel::Keys);
@@ -210,7 +218,13 @@ fn short(ui: Ui, fingerprint: &str) -> String {
 }
 
 /// The selected machine in full: its name, then each fact, the values `width` wide.
-fn details(ui: Ui, app: &App, machine: &Machine, width: usize) -> Vec<Line<'static>> {
+fn details(
+    ui: Ui,
+    app: &App,
+    panel: &MachinePanel,
+    machine: &Machine,
+    width: usize,
+) -> Vec<Line<'static>> {
     let (_, style, state) = connection(ui, machine);
     let role = machine.role.map_or("not known until connected", role_name);
     let mut lines = vec![Line::styled(machine.name.clone(), ui.strong())];
@@ -222,6 +236,19 @@ fn details(ui: Ui, app: &App, machine: &Machine, width: usize) -> Vec<Line<'stat
         lines.extend(field(ui, "latency", &latency, ui.text(), width));
     }
     lines.extend(field(ui, "role", role, ui.text(), width));
+    if let Some(known) = panel.links.get(&machine.host_id) {
+        let vault = match known {
+            Known::Linked(linked) => app.paired_vault(linked),
+            _ => None,
+        };
+        let style = match known {
+            Known::Unlinked => Style::new().fg(ui.theme.warning),
+            Known::Asking | Known::Unknown(_) => ui.muted(),
+            Known::Vault | Known::Linked(_) => ui.text(),
+        };
+        let backup = backup::describe(known, vault);
+        lines.extend(field(ui, "backup", &backup, style, width));
+    }
     let accounts = machine
         .accounts
         .iter()

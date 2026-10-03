@@ -77,12 +77,14 @@ fn buttons(app: &App) -> Vec<Button> {
         && panel.add.is_none()
         && panel.edit.is_none()
         && panel.account.is_none()
+        && panel.backup.is_none()
     {
         return vec![
             button("a", "add", char('a')),
             button("n", "account", char('n')),
             button("e", "rename", char('e')),
             button("d", "forget", char('d')),
+            button("b", "backup", char('b')),
             esc(),
         ];
     }

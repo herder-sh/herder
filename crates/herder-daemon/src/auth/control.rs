@@ -23,7 +23,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, DeviceRole, PAIRING_TTL, Pairing};
-use crate::vault::recover::{self, Recovery};
+use crate::vault::Link;
+use crate::vault::recover;
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "control.sock";
@@ -131,8 +132,9 @@ pub struct Daemon {
     pub fingerprint: String,
     /// The address its WebSocket server is bound to.
     pub listen: SocketAddr,
-    /// Recovers sessions from the vault; `None` without a `[vault]`, and on the vault itself.
-    pub recovery: Option<Arc<Recovery>>,
+    /// The host's link to its vault, which recovers sessions from it; `None` on the vault
+    /// itself.
+    pub link: Option<Arc<Link>>,
     /// Whether it is a vault, the only daemon hosts pair with.
     pub vault: bool,
 }
@@ -201,7 +203,15 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
 }
 
 async fn recover(request: recover::Request, daemon: &Daemon) -> Response {
-    let Some(recovery) = &daemon.recovery else {
+    let recovery = match daemon.link.as_deref().map(Link::recovery).transpose() {
+        Ok(recovery) => recovery.flatten(),
+        Err(err) => {
+            return Response::Error {
+                message: format!("{err:#}"),
+            };
+        }
+    };
+    let Some(recovery) = recovery else {
         return Response::Error {
             message: "this daemon has no [vault] to recover sessions from".to_owned(),
         };
@@ -375,7 +385,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
-            recovery: None,
+            link: None,
             vault: false,
         };
         let shutdown = CancellationToken::new();
@@ -437,7 +447,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
-            recovery: None,
+            link: None,
             vault: true,
         };
         let pair_host = Request::PairHost {

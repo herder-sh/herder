@@ -15,7 +15,8 @@
 //!
 //! A host whose config has a `[vault]` table runs a [`Replicator`], which streams every
 //! session's journal there under [`herder_protocol::replication`], resuming from the cursors
-//! in the vault's hello.
+//! in the vault's hello. An owner links a host to a vault, or unlinks it, from a client while
+//! the host runs ([`Link`]).
 //!
 //! Another host can recover a session whose host died from the vault ([`recover`]); the vault
 //! then shows the session on that host, and the old host makes its copy read-only.
@@ -23,6 +24,7 @@
 mod client;
 mod conn;
 mod fleet;
+mod link;
 pub mod recover;
 mod replicator;
 mod store;
@@ -36,6 +38,7 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub use link::{Link, Setup as LinkSetup};
 pub use replicator::{Replicator, WakeOnEvent};
 pub use store::{HostRecord, Outcome, VaultStore};
 
@@ -97,7 +100,7 @@ impl Server {
     ) -> Self {
         let store = Arc::new(Mutex::new(store));
         let hub = Arc::new(Hub::default());
-        let fleet = Fleet::new(Arc::clone(&store), Arc::clone(&hub));
+        let fleet = Fleet::new(Arc::clone(&store), Arc::clone(&hub), Arc::clone(&auth));
         // No session has a worktree here, so no terminal ever opens.
         let terminals = Terminals::new(Arc::clone(&hub), terminal::login_shell());
         let clients = ws::Server::new(
@@ -189,7 +192,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
-            recovery: None,
+            link: None,
             vault: true,
         },
         shutdown.clone(),
@@ -242,6 +245,7 @@ mod tests {
             binaries: Default::default(),
             tasks: Default::default(),
             failover: Default::default(),
+            titles: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
             mode: crate::config::Mode::Vault,

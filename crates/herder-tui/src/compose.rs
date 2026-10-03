@@ -73,6 +73,8 @@ pub enum Origin {
     Prompt(SessionKey, String),
     /// The new-session dialog's create.
     NewSession(HostId),
+    /// A step of backing a machine up to a vault.
+    Backup(crate::backup::Sent),
     /// Fetching a transcript's image: its file name, and whether to open it or only save it.
     Image {
         key: SessionKey,
@@ -473,6 +475,7 @@ impl App {
                 }
                 self.session_result(key, result.err());
             }
+            Origin::Backup(sent) => return self.backup_sent(sent, result),
             Origin::NewSession(host_id) => match result {
                 Ok(CommandResult::SessionCreated { session_id }) => {
                     self.compose.dialog = None;

@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, Image,
+    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, HostId, Image,
     PermissionMode, ProjectId, Provider, QuestionId, Seq, SessionId, TerminalId,
 };
 
@@ -301,6 +301,39 @@ pub enum CommandBody {
     GetProjectIcon {
         /// The project, one of this daemon's.
         project_id: ProjectId,
+    },
+    /// Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.
+    /// It changes nothing, so a resend is answered afresh.
+    GetVaultLink,
+    /// Back this host's sessions up to a vault from now on, without a restart; owners only.
+    /// The daemon connects to the vault at the first of `addresses` that answers, pairs with
+    /// `pairing_code` and replicates every session there; only once the vault accepted it
+    /// does it keep the vault as the `[vault]` table of its config. Refused with `conflict`
+    /// while it backs up to a vault already, and with `unsupported` on a vault.
+    LinkVault {
+        /// The vault's addresses as `host:port`, tried in order.
+        addresses: Vec<String>,
+        /// SHA-256 of the vault's TLS certificate, lowercase hex.
+        fingerprint: String,
+        /// A host-only code from the vault's `pair_vault_host`.
+        pairing_code: String,
+    },
+    /// Stop backing this host's sessions up: stop replicating and remove the `[vault]` table
+    /// of its config; owners only. What the vault holds stays there. Refused with `not_found`
+    /// when it backs up nowhere.
+    UnlinkVault,
+    /// On a vault, mint a one-time code that pairs a host to replicate here and only that,
+    /// as `herder pair --host` does; owners only. Answered with `host_pairing`.
+    PairVaultHost {
+        /// The host's name; the user its device acts as on the vault.
+        host_name: String,
+    },
+    /// On a vault, unpair every device that replicates as `host_id`, closing its connections;
+    /// owners only. The host's sessions stay on the vault. Refused with `not_found` when no
+    /// paired device replicates as it.
+    RevokeVaultHost {
+        /// The host.
+        host_id: HostId,
     },
     /// Start streaming a terminal's output; owners only.
     AttachTerminal {

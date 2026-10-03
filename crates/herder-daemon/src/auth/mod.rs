@@ -429,8 +429,8 @@ impl Auth {
 }
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// bringing down containers, browsing the host's folders and changing projects are for owners
-/// only.
+/// bringing down containers, browsing the host's folders, changing projects and backing up to
+/// a vault are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -459,6 +459,19 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     if host && identity.role != Role::Owner {
         return Err(forbidden(
             "browsing folders and changing projects are for the daemon's owners only",
+        ));
+    }
+    let backup = matches!(
+        command,
+        CommandBody::GetVaultLink
+            | CommandBody::LinkVault { .. }
+            | CommandBody::UnlinkVault
+            | CommandBody::PairVaultHost { .. }
+            | CommandBody::RevokeVaultHost { .. }
+    );
+    if backup && identity.role != Role::Owner {
+        return Err(forbidden(
+            "backing up to a vault is for the daemon's owners only",
         ));
     }
     Ok(())
