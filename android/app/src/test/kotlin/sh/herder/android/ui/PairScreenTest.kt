@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -57,7 +58,9 @@ class PairScreenTest {
                 )
             }
         }
-        compose.onNodeWithText("Already paired as box: pairing again gives it a new key.").assertIsDisplayed()
+        compose.onNodeWithText("Already paired as box: pairing again gives it a new key.")
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 
     @Test

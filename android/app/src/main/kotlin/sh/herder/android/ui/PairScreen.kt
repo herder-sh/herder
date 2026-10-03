@@ -126,6 +126,12 @@ fun PairScreen(
         }
     }
 
+    LaunchedEffect(uri != null, error) {
+        if (uri != null || error != null) {
+            scroll.animateScrollTo(scroll.maxValue)
+        }
+    }
+
     if (scanning) {
         PairScanner(
             onScanned = { scanned ->
@@ -160,30 +166,41 @@ fun PairScreen(
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp) {
-                Button(
-                    onClick = ::pair,
-                    enabled = uri != null && !pairing,
-                    modifier = Modifier
+                Column(
+                    Modifier
                         .navigationBarsPadding()
                         .imePadding()
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
-                        .semantics { contentDescription = "Pair" },
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (pairing) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                            )
-                            Text("Pairing…")
+                    if (error != null) {
+                        Text(
+                            error!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Button(
+                        onClick = ::pair,
+                        enabled = uri != null && !pairing,
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Pair" },
+                    ) {
+                        if (pairing) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                                Text("Pairing…")
+                            }
+                        } else {
+                            Text("Pair")
                         }
-                    } else {
-                        Text("Pair")
                     }
                 }
             }
@@ -259,13 +276,6 @@ fun PairScreen(
                 } else if (link.isNotBlank()) {
                     Text(
                         "That is not a herder pairing link.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (error != null) {
-                    Text(
-                        error!!,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
