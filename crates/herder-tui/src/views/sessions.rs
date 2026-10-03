@@ -510,7 +510,7 @@ fn session_text(app: &App, key: &SessionKey, prs: bool) -> (Span<'static>, Line<
         ));
     }
     if prs && !session.prs.is_empty() {
-        let mut prs = super::prs::badge(session, true);
+        let mut prs = super::prs::badge(ui, session, true);
         if let Some(first) = prs.first_mut().filter(|span| span.content == " ") {
             first.content = "".into();
         }
@@ -633,10 +633,4 @@ pub(super) fn clip(text: &str, width: usize) -> String {
     let mut clipped: String = text.chars().take(width.saturating_sub(1)).collect();
     clipped.push('…');
     clipped
-}
-
-/// A status's label and colour.
-pub(super) fn badge(ui: Ui, status: SessionStatus) -> (&'static str, Style) {
-    let state = State::of(status, false);
-    (state.label(), state::style(ui, state))
 }

@@ -2,30 +2,24 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-|┌───────────────────────────────────────────┐|
-|│ /model <name>            switch the model │|
-|│ /mode <mode>      set the permission mode │|
-|│ /stop                  interrupt the turn │|
-|│ /switch        account, provider or model │|
-|└───────────────────────────────────────────┘|
+|                                             |
+|  /model <name>            switch the model  |
+|  /mode <mode>      set the permission mode  |
+|  /stop                  interrupt the turn  |
+|  /switch        account, provider or model  |
+|                                             |
 
- 0   0..45  fg=#c6cad3 bg=#eceef2
- 1   0..1   fg=#c6cad3 bg=#eceef2
- 1   1..27  fg=#1c1c1c bg=#eceef2
+ 0   0..45  fg=#1c1c1c bg=#eceef2
+ 1   0..27  fg=#1c1c1c bg=#eceef2
  1  27..43  fg=#6b6f7a bg=#eceef2
- 1  43..44  fg=#1c1c1c bg=#eceef2
- 1  44..45  fg=#c6cad3 bg=#eceef2
- 2   0..1   fg=#c6cad3 bg=#eceef2
+ 1  43..45  fg=#1c1c1c bg=#eceef2
+ 2   0..1   fg=#1c1c1c bg=#eceef2
  2   1..44  fg=#ffffff bg=#2f5bb7
- 2  44..45  fg=#c6cad3 bg=#eceef2
- 3   0..1   fg=#c6cad3 bg=#eceef2
- 3   1..25  fg=#1c1c1c bg=#eceef2
+ 2  44..45  fg=#1c1c1c bg=#eceef2
+ 3   0..25  fg=#1c1c1c bg=#eceef2
  3  25..43  fg=#6b6f7a bg=#eceef2
- 3  43..44  fg=#1c1c1c bg=#eceef2
- 3  44..45  fg=#c6cad3 bg=#eceef2
- 4   0..1   fg=#c6cad3 bg=#eceef2
- 4   1..17  fg=#1c1c1c bg=#eceef2
+ 3  43..45  fg=#1c1c1c bg=#eceef2
+ 4   0..17  fg=#1c1c1c bg=#eceef2
  4  17..43  fg=#6b6f7a bg=#eceef2
- 4  43..44  fg=#1c1c1c bg=#eceef2
- 4  44..45  fg=#c6cad3 bg=#eceef2
- 5   0..45  fg=#c6cad3 bg=#eceef2
+ 4  43..45  fg=#1c1c1c bg=#eceef2
+ 5   0..45  fg=#1c1c1c bg=#eceef2

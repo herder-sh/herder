@@ -2,30 +2,24 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-|┌───────────────────────────────────────────┐|
-|│ /model <name>            switch the model │|
-|│ /mode <mode>      set the permission mode │|
-|│ /stop                  interrupt the turn │|
-|│ /switch        account, provider or model │|
-|└───────────────────────────────────────────┘|
+|                                             |
+|  /model <name>            switch the model  |
+|  /mode <mode>      set the permission mode  |
+|  /stop                  interrupt the turn  |
+|  /switch        account, provider or model  |
+|                                             |
 
- 0   0..45  fg=#3b3f4a bg=#21242c
- 1   0..1   fg=#3b3f4a bg=#21242c
- 1   1..27  fg=#e6e6e6 bg=#21242c
+ 0   0..45  fg=#e6e6e6 bg=#21242c
+ 1   0..27  fg=#e6e6e6 bg=#21242c
  1  27..43  fg=#7f8492 bg=#21242c
- 1  43..44  fg=#e6e6e6 bg=#21242c
- 1  44..45  fg=#3b3f4a bg=#21242c
- 2   0..1   fg=#3b3f4a bg=#21242c
+ 1  43..45  fg=#e6e6e6 bg=#21242c
+ 2   0..1   fg=#e6e6e6 bg=#21242c
  2   1..44  fg=#111216 bg=#7aa2f7
- 2  44..45  fg=#3b3f4a bg=#21242c
- 3   0..1   fg=#3b3f4a bg=#21242c
- 3   1..25  fg=#e6e6e6 bg=#21242c
+ 2  44..45  fg=#e6e6e6 bg=#21242c
+ 3   0..25  fg=#e6e6e6 bg=#21242c
  3  25..43  fg=#7f8492 bg=#21242c
- 3  43..44  fg=#e6e6e6 bg=#21242c
- 3  44..45  fg=#3b3f4a bg=#21242c
- 4   0..1   fg=#3b3f4a bg=#21242c
- 4   1..17  fg=#e6e6e6 bg=#21242c
+ 3  43..45  fg=#e6e6e6 bg=#21242c
+ 4   0..17  fg=#e6e6e6 bg=#21242c
  4  17..43  fg=#7f8492 bg=#21242c
- 4  43..44  fg=#e6e6e6 bg=#21242c
- 4  44..45  fg=#3b3f4a bg=#21242c
- 5   0..45  fg=#3b3f4a bg=#21242c
+ 4  43..45  fg=#e6e6e6 bg=#21242c
+ 5   0..45  fg=#e6e6e6 bg=#21242c

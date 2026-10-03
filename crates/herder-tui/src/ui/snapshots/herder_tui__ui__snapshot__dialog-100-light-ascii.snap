@@ -4,64 +4,52 @@ expression: dump(&buffer)
 ---
 |behind the dialog: what it covers dims                                                              |
 |behind the dialog: what it covers dims                                                              |
-|behind the dialog: w┌ go to ────────────────────────────────────────────── esc ┐                    |
-|behind the dialog: w│                                                          │                    |
-|behind the dialog: w│  the body                                                │                    |
-|behind the dialog: w│  goes here                                               │                    |
-|behind the dialog: w│                                                          │                    |
-|behind the dialog: w│  enter open  esc close                                   │                    |
-|behind the dialog: w│                                                          │                    |
-|behind the dialog: w└──────────────────────────────────────────────────────────┘                    |
+|behind the dialog: w  go to                                                esc                      |
+|behind the dialog: w                                                                                |
+|behind the dialog: w   the body                                                                     |
+|behind the dialog: w   goes here                                                                    |
+|behind the dialog: w                                                                                |
+|behind the dialog: w   enter open  esc close                                                        |
+|behind the dialog: w                                                                                |
+|behind the dialog: w                                                                                |
 |behind the dialog: what it covers dims                                                              |
 |behind the dialog: what it covers dims                                                              |
 
  0   0..100 fg=#6b6f7a bg=#ffffff
  1   0..100 fg=#6b6f7a bg=#ffffff
  2   0..20  fg=#6b6f7a bg=#ffffff
- 2  20..22  fg=#f6f7f9 bg=#f6f7f9
+ 2  20..21  fg=#1c1c1c bg=#f6f7f9
+ 2  21..22  fg=#6b6f7a bg=#f6f7f9
  2  22..27  fg=#1c1c1c bg=#f6f7f9 BOLD
- 2  27..74  fg=#f6f7f9 bg=#f6f7f9
- 2  74..79  fg=#6b6f7a bg=#f6f7f9
- 2  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 2  27..79  fg=#6b6f7a bg=#f6f7f9
+ 2  79..80  fg=#1c1c1c bg=#f6f7f9
  2  80..100 fg=#6b6f7a bg=#ffffff
  3   0..20  fg=#6b6f7a bg=#ffffff
- 3  20..21  fg=#f6f7f9 bg=#f6f7f9
- 3  21..79  fg=#1c1c1c bg=#f6f7f9
- 3  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 3  20..80  fg=#1c1c1c bg=#f6f7f9
  3  80..100 fg=#6b6f7a bg=#ffffff
  4   0..20  fg=#6b6f7a bg=#ffffff
- 4  20..21  fg=#f6f7f9 bg=#f6f7f9
- 4  21..79  fg=#1c1c1c bg=#f6f7f9
- 4  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 4  20..80  fg=#1c1c1c bg=#f6f7f9
  4  80..100 fg=#6b6f7a bg=#ffffff
  5   0..20  fg=#6b6f7a bg=#ffffff
- 5  20..21  fg=#f6f7f9 bg=#f6f7f9
- 5  21..79  fg=#1c1c1c bg=#f6f7f9
- 5  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 5  20..80  fg=#1c1c1c bg=#f6f7f9
  5  80..100 fg=#6b6f7a bg=#ffffff
  6   0..20  fg=#6b6f7a bg=#ffffff
- 6  20..21  fg=#f6f7f9 bg=#f6f7f9
- 6  21..79  fg=#1c1c1c bg=#f6f7f9
- 6  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 6  20..80  fg=#1c1c1c bg=#f6f7f9
  6  80..100 fg=#6b6f7a bg=#ffffff
  7   0..20  fg=#6b6f7a bg=#ffffff
- 7  20..21  fg=#f6f7f9 bg=#f6f7f9
- 7  21..23  fg=#1c1c1c bg=#f6f7f9
+ 7  20..23  fg=#1c1c1c bg=#f6f7f9
  7  23..28  fg=#1c1c1c bg=#f6f7f9 BOLD
  7  28..33  fg=#6b6f7a bg=#f6f7f9
  7  33..35  fg=#1c1c1c bg=#f6f7f9
  7  35..38  fg=#1c1c1c bg=#f6f7f9 BOLD
  7  38..44  fg=#6b6f7a bg=#f6f7f9
- 7  44..79  fg=#1c1c1c bg=#f6f7f9
- 7  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 7  44..80  fg=#1c1c1c bg=#f6f7f9
  7  80..100 fg=#6b6f7a bg=#ffffff
  8   0..20  fg=#6b6f7a bg=#ffffff
- 8  20..21  fg=#f6f7f9 bg=#f6f7f9
- 8  21..79  fg=#1c1c1c bg=#f6f7f9
- 8  79..80  fg=#f6f7f9 bg=#f6f7f9
+ 8  20..80  fg=#1c1c1c bg=#f6f7f9
  8  80..100 fg=#6b6f7a bg=#ffffff
  9   0..20  fg=#6b6f7a bg=#ffffff
- 9  20..80  fg=#f6f7f9 bg=#f6f7f9
+ 9  20..80  fg=#1c1c1c bg=#f6f7f9
  9  80..100 fg=#6b6f7a bg=#ffffff
 10   0..100 fg=#6b6f7a bg=#ffffff
 11   0..100 fg=#6b6f7a bg=#ffffff

@@ -137,13 +137,13 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
     if !session.prs.is_empty() {
         section(&mut lines, ui, "Pull requests".to_owned());
         for pr in &session.prs {
-            lines.push(super::prs::line(pr));
+            lines.push(super::prs::line(ui, pr));
         }
     }
 
     // The machine's load, then the session's own.
     let host = machine
-        .map(|m| super::resources::row(m, true))
+        .map(|m| super::resources::row(ui, m, true))
         .unwrap_or_default();
     let resources = super::resources::lines(app, true);
     if !host.is_empty() || !resources.is_empty() {

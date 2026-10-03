@@ -54,7 +54,7 @@ mod transcript;
 
 use ratatui::backend::Backend;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui::{Frame, Terminal};
@@ -161,7 +161,7 @@ fn desktop_frame(
         status::draw(frame, bar, app, touch);
     }
     if app.machines.is_empty() {
-        pairing::draw(frame, body);
+        pairing::draw(frame, body, app.ui());
         rule_with_joints(frame, rule, &[], app.ui());
         return (body, body);
     }
@@ -266,7 +266,7 @@ fn phone_frame(
         );
     }
     if app.machines.is_empty() {
-        pairing::draw(frame, body);
+        pairing::draw(frame, body, app.ui());
     } else if app.focus == Focus::Sessions {
         sessions::switcher(frame, body, app, hits);
     } else {
@@ -401,6 +401,52 @@ fn edge(frame: &mut Frame, area: Rect, ui: crate::ui::Ui) {
     }
 }
 
+/// A main-pane view's heading, as the session's tab row sits: `title` bold and `meta` muted
+/// at the left, `right` muted at the right end, then a blank row. Returns the area under it.
+/// On a phone (`compact`) the header names the view, so the view starts at the top.
+fn heading(
+    frame: &mut Frame,
+    area: Rect,
+    ui: crate::ui::Ui,
+    title: &str,
+    meta: &str,
+    right: &str,
+    compact: bool,
+) -> Rect {
+    if compact || area.height < 3 {
+        return area;
+    }
+    let mut left = vec![Span::styled(title.to_owned(), ui.strong())];
+    if !meta.is_empty() {
+        left.push(Span::styled(ui.glyphs.separator, ui.muted()));
+        left.push(Span::styled(meta.to_owned(), ui.muted()));
+    }
+    let line = crate::ui::spread(
+        Line::from(left),
+        Line::from(Span::styled(right.to_owned(), ui.muted())),
+        usize::from(area.width),
+        ui.glyphs,
+    );
+    frame.render_widget(line, Rect { height: 1, ..area });
+    Rect {
+        y: area.y + 2,
+        height: area.height - 2,
+        ..area
+    }
+}
+
+/// What an empty view says, muted and centred in `area`.
+fn nothing(frame: &mut Frame, area: Rect, ui: crate::ui::Ui, text: &str) {
+    let line = Line::styled(text.to_owned(), ui.muted()).centered();
+    frame.render_widget(line, centered(area, area.width, 1));
+}
+
+/// Clears `area` to the screen's background, for a view drawn over the main pane.
+fn clear(frame: &mut Frame, area: Rect, ui: crate::ui::Ui) {
+    frame.render_widget(ratatui::widgets::Clear, area);
+    crate::ui::fill(frame.buffer_mut(), area, ui.base());
+}
+
 /// A pane's block: lined with the Unicode glyph set; with the ASCII set a panel without
 /// lines, as OpenCode's, since some phone fonts draw box drawing two columns wide.
 fn pane(app: &App) -> Block<'static> {
@@ -409,31 +455,6 @@ fn pane(app: &App) -> Block<'static> {
     } else {
         Block::new().padding(ratatui::widgets::Padding::horizontal(1))
     }
-}
-
-/// [`pane`], raised on the panel background where it has no lines: a strip, an answer.
-fn raised(app: &App) -> Block<'static> {
-    let block = pane(app);
-    if app.ui().glyphs == Glyphs::Unicode.set() {
-        block
-    } else {
-        block.style(app.ui().panel())
-    }
-}
-
-/// The border style of a pane: highlighted while it has focus.
-fn border(app: &App, pane: Focus) -> Style {
-    app.ui().border(app.focus == pane)
-}
-
-/// Style for secondary text.
-fn dim() -> Style {
-    Style::new().fg(Color::DarkGray)
-}
-
-/// Style for headings.
-fn bold() -> Style {
-    Style::new().add_modifier(Modifier::BOLD)
 }
 
 /// A `width` by `height` rect centred in `area`, clipped to it.
