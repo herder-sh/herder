@@ -70,7 +70,7 @@ impl<'a> Row<'a> {
     }
 
     /// Rows the row takes.
-    fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         match self {
             Self::Item { body, .. } => 1 + body.len(),
             _ => 1,

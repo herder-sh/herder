@@ -131,6 +131,12 @@ pub struct GlyphSet {
     pub separator: &'static str,
     /// Tools, by [`GlyphSet::tool`]: shell, read, write, search, web, todo, task, other.
     pub tools: [&'static str; 8],
+    /// Around a form's choice: the previous and next values.
+    pub choice: [&'static str; 2],
+    /// An approval request's header.
+    pub approval: &'static str,
+    /// A question's header.
+    pub question: &'static str,
 }
 
 /// The Unicode set: one column wide on desktop terminals.
@@ -166,6 +172,9 @@ pub const UNICODE: GlyphSet = GlyphSet {
     expand: "»",
     separator: " · ",
     tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "⚙"],
+    choice: ["‹", "›"],
+    approval: "△",
+    question: "?",
 };
 
 /// The ASCII set: what any terminal draws one column wide. Box drawing stays.
@@ -201,6 +210,9 @@ pub const ASCII: GlyphSet = GlyphSet {
     expand: ">>",
     separator: " - ",
     tools: ["$", ">", "<", "*", "@", "[]", "+", ">"],
+    choice: ["<", ">"],
+    approval: "^",
+    question: "?",
 };
 
 impl GlyphSet {
@@ -268,7 +280,7 @@ fn ascii(c: char) -> Option<char> {
         '✓' | '✔' => 'v',
         '‹' | '«' | '←' | '⌫' | '◀' | '◂' => '<',
         '›' | '»' | '→' | '⏎' | '▶' | '▸' | '⚙' => '>',
-        '↑' | '▲' | '▴' => '^',
+        '↑' | '▲' | '▴' | '△' => '^',
         '↓' | '▼' | '▾' => 'v',
         '▌' | '▏' | '▎' | '▍' | '¦' => '|',
         '█' | '▓' | '▒' => '#',

@@ -1,0 +1,81 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|┃ △ approval · Bash                                                                   asked 12s ago |
+|┃ $ rm -rf target/                                                                                  |
+|┃                                                                                                   |
+|┃   allow      deny                                                                 y allow  n deny |
+|┃                                                                                                   |
+|                                                                                                    |
+|┃ ? question · docs                                                                                 |
+|┃ Which heading level for the API page?                                                             |
+|┃ escalated: exceeds authority                                                                      |
+|┃                                                                                                   |
+|┃  1 h2 under Reference                                                                             |
+|┃  2 h1, its own page                                                                               |
+|┃  enter or type an answer                                                                          |
+|┃                                                                                                   |
+|                                                                                                    |
+|                                                                                                    |
+
+ 0   0..1   fg=Magenta bg=Reset
+ 0   1..2   fg=Reset bg=Reset
+ 0   2..12  fg=Magenta bg=Reset BOLD
+ 0  12..15  fg=DarkGray bg=Reset
+ 0  15..19  fg=Reset bg=Reset BOLD
+ 0  19..86  fg=Reset bg=Reset
+ 0  86..99  fg=DarkGray bg=Reset
+ 0  99..100 fg=Reset bg=Reset
+ 1   0..1   fg=Magenta bg=Reset
+ 1   1..100 fg=Reset bg=Reset
+ 2   0..1   fg=Magenta bg=Reset
+ 2   1..100 fg=Reset bg=Reset
+ 3   0..1   fg=Magenta bg=Reset
+ 3   1..2   fg=Reset bg=Reset
+ 3   2..11  fg=Black bg=Cyan BOLD
+ 3  11..84  fg=Reset bg=Reset
+ 3  84..85  fg=Reset bg=Reset BOLD
+ 3  85..93  fg=DarkGray bg=Reset
+ 3  93..94  fg=Reset bg=Reset BOLD
+ 3  94..99  fg=DarkGray bg=Reset
+ 3  99..100 fg=Reset bg=Reset
+ 4   0..1   fg=Magenta bg=Reset
+ 4   1..100 fg=Reset bg=Reset
+ 5   0..100 fg=Reset bg=Reset
+ 6   0..1   fg=Magenta bg=Reset
+ 6   1..2   fg=Reset bg=Reset
+ 6   2..12  fg=Magenta bg=Reset BOLD
+ 6  12..15  fg=DarkGray bg=Reset
+ 6  15..19  fg=Reset bg=Reset BOLD
+ 6  19..100 fg=Reset bg=Reset
+ 7   0..1   fg=Magenta bg=Reset
+ 7   1..2   fg=Reset bg=Reset
+ 7   2..99  fg=Reset bg=Reset BOLD
+ 7  99..100 fg=Reset bg=Reset
+ 8   0..1   fg=Magenta bg=Reset
+ 8   1..2   fg=Reset bg=Reset
+ 8   2..99  fg=DarkGray bg=Reset
+ 8  99..100 fg=Reset bg=Reset
+ 9   0..1   fg=Magenta bg=Reset
+ 9   1..100 fg=Reset bg=Reset
+10   0..1   fg=Magenta bg=Reset
+10   1..3   fg=Reset bg=Reset
+10   3..4   fg=Cyan bg=Reset BOLD
+10   4..100 fg=Reset bg=Reset
+11   0..1   fg=Magenta bg=Reset
+11   1..3   fg=Reset bg=Reset
+11   3..4   fg=Cyan bg=Reset BOLD
+11   4..5   fg=Reset bg=Reset
+11   5..21  fg=Reset bg=Reset BOLD
+11  21..100 fg=Reset bg=Reset
+12   0..1   fg=Magenta bg=Reset
+12   1..3   fg=Reset bg=Reset
+12   3..8   fg=Cyan bg=Reset BOLD
+12   8..9   fg=Reset bg=Reset
+12   9..26  fg=DarkGray bg=Reset
+12  26..100 fg=Reset bg=Reset
+13   0..1   fg=Magenta bg=Reset
+13   1..100 fg=Reset bg=Reset
+14   0..100 fg=Reset bg=Reset
+15   0..100 fg=Reset bg=Reset

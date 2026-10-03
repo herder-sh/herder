@@ -1,0 +1,22 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|account   claude-main  ‹ ›                   |
+|                                             |
+|mode      ask  ‹ ›                           |
+
+ 0   0..7   fg=#7aa2f7 bg=#111216 BOLD
+ 0   7..9   fg=#e6e6e6 bg=#111216
+ 0   9..23  fg=#e6e6e6 bg=#21242c
+ 0  23..24  fg=#7aa2f7 bg=#21242c
+ 0  24..25  fg=#e6e6e6 bg=#21242c
+ 0  25..26  fg=#7aa2f7 bg=#21242c
+ 0  26..45  fg=#e6e6e6 bg=#21242c
+ 1   0..45  fg=#e6e6e6 bg=#111216
+ 2   0..4   fg=#7f8492 bg=#111216
+ 2   4..15  fg=#e6e6e6 bg=#111216
+ 2  15..16  fg=#7f8492 bg=#111216
+ 2  16..17  fg=#e6e6e6 bg=#111216
+ 2  17..18  fg=#7f8492 bg=#111216
+ 2  18..45  fg=#e6e6e6 bg=#111216
