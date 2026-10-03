@@ -131,67 +131,120 @@ struct Draft: Hashable, Identifiable {
     }
 }
 
-/// Picks where a new session runs: a project (on the machine that has it), or a repository
-/// path on a machine for a new project.
+/// Picks where a new session runs, as a palette: one row per project, across machines, then a
+/// repository path on a machine for a new project. The chat opens on the machine the project
+/// was used on last; it can change there.
 struct ProjectPicker: View {
     let fleet: Fleet
     let newProject: Bool
     let picked: (Draft) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
     @State private var other = false
     @State private var hostId: HostId = ""
     @State private var repo = ""
+    @FocusState private var searching: Bool
 
     /// Machines that run sessions: connected, and not a vault.
     private var machines: [Machine] {
         fleet.machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
     }
 
-    var body: some View {
-        SheetScaffold(
-            title: newProject ? "New Project" : "New Session",
-            subtitle: newProject ? "Start in a repository on one of your machines." : "Pick where it runs.",
-            height: 480
-        ) {
-            if !newProject && !other {
-                VStack(spacing: 6) {
-                    ForEach(machines, id: \.hostId) { machine in
-                        ForEach(machine.projects, id: \.projectId) { project in
-                            PickRow(title: project.name, detail: machine.name, symbol: "shippingbox") {
-                                picked(Draft(hostId: machine.hostId, projectId: project.projectId))
-                                dismiss()
-                            }
-                        }
-                    }
-                    PickRow(title: "Other repository…", detail: "Any git repository on a machine", symbol: "folder") {
-                        other = true
-                    }
-                }
-            } else {
-                Field(label: "Machine") {
-                    ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
-                }
-                Field(label: "Repository", hint: "An absolute path to a git repository on the machine.") {
-                    InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
-                }
-            }
-        } footer: {
-            if newProject || other {
-                Spacer()
-                ActionButton(title: "Continue", style: .primary) {
-                    picked(Draft(hostId: hostId, repo: repo.trimmingCharacters(in: .whitespaces)))
-                    dismiss()
-                }
-                .frame(maxWidth: 200)
-                .disabled(!ready)
-                .opacity(ready ? 1 : 0.4)
-                .keyboardShortcut(.defaultAction)
+    /// Each project once, with the machines that have it.
+    private var projects: [(id: String, name: String, machines: [Machine])] {
+        var order: [String] = []
+        var groups: [String: (name: String, machines: [Machine])] = [:]
+        for machine in machines {
+            for project in machine.projects {
+                if groups[project.projectId] == nil { order.append(project.projectId) }
+                groups[project.projectId, default: (project.name, [])].machines.append(machine)
             }
         }
-        .onAppear { hostId = machines.first?.hostId ?? "" }
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return order.compactMap { id in groups[id].map { (id, $0.name, $0.machines) } }
+            .filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
-    private var ready: Bool { !hostId.isEmpty && repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") }
+    /// The machine a project's newest session ran on, else the first that has it.
+    private func machine(for projectId: String, among candidates: [Machine]) -> Machine? {
+        let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
+            .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
+            .max { $0.1 < $1.1 }?.0
+        return candidates.first { $0.hostId == newest } ?? candidates.first
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if newProject || other {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("New project").font(.headline).foregroundStyle(Theme.text)
+                    Field(label: "Machine") {
+                        ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
+                    }
+                    Field(label: "Repository", hint: "An absolute path to a git repository on the machine.") {
+                        InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                    }
+                    HStack {
+                        Spacer()
+                        ActionButton(title: "Continue", style: .primary) { submitPath() }
+                            .frame(maxWidth: 160)
+                            .disabled(!pathReady)
+                            .opacity(pathReady ? 1 : 0.4)
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding(20)
+            } else {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
+                    TextField("Start a session in…", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(.title3)
+                        .foregroundStyle(Theme.text)
+                        .focused($searching)
+                        .onSubmit {
+                            if let first = projects.first { pick(first.id, first.machines) }
+                        }
+                }
+                .padding(.horizontal, 18)
+                .frame(height: 56)
+                Rectangle().fill(Theme.stroke).frame(height: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(projects, id: \.id) { project in
+                            PickRow(title: project.name, detail: project.machines.map(\.name).joined(separator: ", "),
+                                    symbol: "shippingbox") { pick(project.id, project.machines) }
+                        }
+                        PickRow(title: "Other repository…", detail: "", symbol: "folder.badge.plus") { other = true }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: 360)
+            }
+        }
+        .frame(width: 520)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(Theme.surface)
+        .preferredColorScheme(.dark)
+        .onAppear {
+            hostId = machines.first?.hostId ?? ""
+            searching = true
+        }
+    }
+
+    private func pick(_ projectId: String, _ candidates: [Machine]) {
+        guard let machine = machine(for: projectId, among: candidates) else { return }
+        picked(Draft(hostId: machine.hostId, projectId: projectId))
+        dismiss()
+    }
+
+    private var pathReady: Bool { !hostId.isEmpty && repo.trimmingCharacters(in: .whitespaces).hasPrefix("/") }
+
+    private func submitPath() {
+        picked(Draft(hostId: hostId, repo: repo.trimmingCharacters(in: .whitespaces)))
+        dismiss()
+    }
 }
 
 private struct PickRow: View {
@@ -199,22 +252,23 @@ private struct PickRow: View {
     let detail: String
     let symbol: String
     let action: () -> Void
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: symbol).foregroundStyle(Theme.secondary).frame(width: 20)
-                Text(title).font(.body.weight(.semibold)).foregroundStyle(Theme.text)
+                Image(systemName: symbol).foregroundStyle(Theme.secondary).frame(width: 18)
+                Text(title).font(.body.weight(.medium)).foregroundStyle(Theme.text)
                 Spacer()
-                Text(detail).font(.footnote).foregroundStyle(Theme.tertiary)
-                Image(systemName: "chevron.right").font(.footnote).foregroundStyle(Theme.tertiary)
+                Text(detail).font(.footnote).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 48)
-            .background(Theme.raised, in: .rect(cornerRadius: Theme.corner))
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

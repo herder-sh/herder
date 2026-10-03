@@ -156,105 +156,68 @@ private struct FollowsGrowth: ViewModifier {
     }
 }
 
-/// The prompt input: model, account and mode up front; send, or stop while a turn runs.
+/// The prompt box of a session: model and permissions in the box, where it runs and on which
+/// account under it; with a question pending it answers it.
 private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
     let model: SessionModel
     @Binding var switching: Bool
     @State private var text = ""
-    @FocusState private var focused: Bool
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
-        let account = machine?.accounts.first { $0.accountId == model.accountId }
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Button { switching = true } label: {
-                    Chip(symbol: "sparkle", text: "\(model.provider ?? "") · \(model.model ?? "")")
-                }
-                .buttonStyle(.plain)
-                Button { switching = true } label: {
-                    Chip(symbol: "person.crop.circle", text: account?.label ?? model.accountId ?? "")
-                }
-                .buttonStyle(.plain)
-                Menu {
-                    ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { mode in
-                        Button {
-                            Task { await fleet.setMode(mode, of: key) }
-                        } label: {
-                            if mode == model.mode { Label(mode.label, systemImage: "checkmark") } else { Text(mode.label) }
-                        }
+        let accounts = machine?.accounts ?? []
+        let account = accounts.first { $0.accountId == model.accountId }
+        VStack(alignment: .leading, spacing: 6) {
+            ComposerBox(
+                text: $text,
+                placeholder: placeholder,
+                modelLabel: "\(model.provider ?? "") · \(model.model ?? "default")",
+                models: fleet.models(on: key.hostId, provider: model.provider),
+                providers: Array(Set(accounts.map(\.provider))).sorted(),
+                mode: model.mode,
+                running: model.turn != nil,
+                setModel: { name in
+                    guard let account else { return }
+                    Task { await fleet.switchSession(key, to: account, model: name) }
+                },
+                setProvider: { provider in
+                    guard provider != model.provider,
+                          let target = fleet.defaultAccount(on: key.hostId, projectId: nil, provider: provider) else { return }
+                    Task { await fleet.switchSession(key, to: target, model: "") }
+                },
+                setMode: { mode in Task { await fleet.setMode(mode, of: key) } },
+                send: send,
+                stop: { Task { await fleet.interrupt(key) } }
+            ) {
+                Label(machine?.name ?? "", systemImage: "desktopcomputer")
+                FooterItem(symbol: "person.crop.circle", text: account?.label ?? model.accountId ?? "") {
+                    ForEach(accounts.filter { $0.provider == model.provider }, id: \.accountId) { other in
+                        Button(other.label) { Task { await fleet.switchSession(key, to: other, model: "") } }
                     }
-                } label: {
-                    Chip(symbol: "lock.open", text: model.mode?.label ?? "")
                 }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
                 Spacer()
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...8)
-                    .focused($focused)
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(minHeight: 44)
-                    .background(Theme.raised, in: .rect(cornerRadius: 22))
-                    .onSubmit(send)
-                    .accessibilityIdentifier("composer")
-                if model.turn != nil && trimmed.isEmpty {
-                    RoundButton(symbol: "stop.fill", help: "Interrupt") { Task { await fleet.interrupt(key) } }
-                } else {
-                    RoundButton(symbol: "arrow.up", help: "Send", action: send)
-                        .disabled(trimmed.isEmpty)
-                        .opacity(trimmed.isEmpty ? 0.4 : 1)
-                        .keyboardShortcut(.return, modifiers: .command)
+                if let branch = model.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1)
                 }
             }
             if let refusal = fleet.refusals[key] {
-                Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
+                Text(refusal).font(.footnote).foregroundStyle(Theme.failure).padding(.horizontal, 18)
             }
         }
     }
 
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
     private var placeholder: String {
         if !model.questions.isEmpty { return "Type an answer…" }
-        return model.turn != nil ? "Queue a message…" : "Message…"
+        return model.turn != nil ? "Queue a follow-up…" : "Ask for changes or send a follow-up"
     }
 
     private func send() {
-        let text = trimmed
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         self.text = ""
         Task { await fleet.submit(text, to: key) }
-    }
-}
-
-/// A round 44-point button in the primary colour.
-private struct RoundButton: View {
-    let symbol: String
-    let help: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.body.weight(.bold))
-                .foregroundStyle(Theme.onPrimary)
-                .frame(width: 44, height: 44)
-                .background(Theme.primary, in: .circle)
-                .contentShape(.circle)
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .accessibilityLabel(help)
     }
 }
 
@@ -303,116 +266,90 @@ struct SwitchSheet: View {
     }
 }
 
-/// A new session's empty chat: where it runs, with its provider, model and permissions
-/// preselected as chips; the first message creates the session.
+/// A new session's empty chat: what it asks, the prompt box with the model and permissions
+/// preselected, and where it runs under it; the first message creates the session.
 struct DraftSessionView: View {
     let fleet: Fleet
     let draft: Draft
     let created: (SessionKey) -> Void
+    @State private var hostId: HostId = ""
     @State private var provider: Provider = ""
     @State private var model = ""
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
-    @State private var editingModel = false
     @State private var error: String?
-    @FocusState private var focused: Bool
 
-    private var machine: Machine? { fleet.machines.first { $0.hostId == draft.hostId } }
-    private var project: Project? { machine?.projects.first { $0.projectId == draft.projectId } }
-    private var place: String { project?.name ?? draft.repo.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "" }
+    private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
+    /// Machines the draft can run on: the connected ones with the project, or any for a path.
+    private var machines: [Machine] {
+        fleet.machines.filter { machine in
+            machine.connection == .connected && machine.hosts.isEmpty
+                && (draft.projectId == nil || machine.projects.contains { $0.projectId == draft.projectId })
+        }
+    }
+    private var place: String {
+        machine?.projects.first { $0.projectId == draft.projectId }?.name
+            ?? draft.repo.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+    }
 
     var body: some View {
-        let providers = Array(Set(machine?.accounts.map(\.provider) ?? [])).sorted()
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("New session").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
-                Text("\(place) · \(machine?.name ?? "")").font(.footnote.weight(.medium)).foregroundStyle(Theme.tertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            Rectangle().fill(Theme.stroke).frame(height: 1)
-            VStack(spacing: 10) {
-                Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(Theme.tertiary)
-                Text("What should the agent do in \(place)?").font(.headline).foregroundStyle(Theme.secondary)
-                Text("It starts on a fresh worktree and branch.").font(.footnote).foregroundStyle(Theme.tertiary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    if providers.count > 1 {
-                        Menu {
-                            ForEach(providers, id: \.self) { name in Button(name) { provider = name } }
-                        } label: { Chip(symbol: "sparkle", text: provider) }
-                            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                    }
-                    Button { editingModel = true } label: {
-                        Chip(symbol: "cpu", text: model.isEmpty ? "Default model" : model)
-                    }
-                    .buttonStyle(.plain)
-                    Menu {
-                        ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { option in
-                            Button(option.label) { mode = option }
-                        }
-                    } label: { Chip(symbol: "lock.open", text: mode.label) }
-                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                    Spacer()
+        VStack(spacing: 28) {
+            Spacer()
+            Text("What should we build in \(machine?.name ?? "")/\(place)?")
+                .font(.system(size: 30, weight: .medium))
+                .foregroundStyle(Theme.text)
+                .multilineTextAlignment(.center)
+            ComposerBox(
+                text: $text,
+                placeholder: "Ask for changes, or describe what to build",
+                modelLabel: model.isEmpty ? "\(provider) · default" : "\(provider) · \(model)",
+                models: fleet.models(on: hostId, provider: provider),
+                offersDefault: true,
+                providers: Array(Set(machine?.accounts.map(\.provider) ?? [])).sorted(),
+                mode: mode,
+                running: false,
+                setModel: { model = $0 },
+                setProvider: { provider = $0; model = "" },
+                setMode: { mode = $0 },
+                send: { Task { await start() } },
+                stop: {}
+            ) {
+                FooterItem(symbol: "desktopcomputer", text: machine?.name ?? "") {
+                    ForEach(machines, id: \.hostId) { other in Button(other.name) { hostId = other.hostId } }
                 }
-                HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Message…", text: $text, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...8)
-                        .foregroundStyle(Theme.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .frame(minHeight: 44)
-                        .background(Theme.raised, in: .rect(cornerRadius: 22))
-                        .focused($focused)
-                        .onSubmit { Task { await start() } }
-                        .accessibilityIdentifier("composer")
-                    RoundButton(symbol: "arrow.up", help: "Start") { Task { await start() } }
-                        .disabled(trimmed.isEmpty)
-                        .opacity(trimmed.isEmpty ? 0.4 : 1)
-                }
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
-                }
+                Label("New worktree", systemImage: "folder.badge.plus")
+                Spacer()
+                Label("From the default branch", systemImage: "arrow.triangle.branch")
             }
-            .frame(maxWidth: 784)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
+            .frame(maxWidth: 760)
+            if let error {
+                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+            }
+            Spacer()
+            Spacer()
         }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .alert("Model", isPresented: $editingModel) {
-            TextField("Provider's default", text: $model)
-            Button("Done") {}
-        } message: {
-            Text("A model in the provider's naming, or blank for its default.")
-        }
         .onAppear {
-            provider = fleet.defaultAccount(on: draft.hostId, projectId: draft.projectId, provider: nil)?.provider
-                ?? providers.first ?? ""
+            hostId = draft.hostId
+            provider = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: nil)?.provider ?? ""
             mode = ModePreference.mode(for: draft)
-            focused = true
         }
     }
 
-    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-
     private func start() async {
-        guard !trimmed.isEmpty,
-              let account = fleet.defaultAccount(on: draft.hostId, projectId: draft.projectId, provider: provider)
-        else {
-            error = "This machine has no account for \(provider)."
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        guard let account = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: provider) else {
+            error = "\(machine?.name ?? "This machine") has no \(provider) account."
             return
         }
         ModePreference.remember(mode, for: draft)
         do {
             created(try await fleet.createSession(
-                on: draft.hostId, repo: draft.repo, projectId: draft.projectId, accountId: account.accountId,
-                model: model.trimmingCharacters(in: .whitespaces), mode: mode, prompt: trimmed))
+                on: hostId, repo: draft.repo, projectId: draft.projectId, accountId: account.accountId,
+                model: model, mode: mode, prompt: prompt))
         } catch {
             self.error = describe(error)
         }
