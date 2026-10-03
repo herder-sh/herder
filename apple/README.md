@@ -23,6 +23,24 @@ open apple/herder.xcodeproj         # schemes herder-iOS and herder-macOS
 Run `build-ffi.sh` again whenever the Rust side changes. The xcframework has arm64 slices
 only, so the apps run on Apple silicon Macs and simulators.
 
+## Release
+
+`apple/scripts/build-mac-release.sh` (after `build-ffi.sh`) builds the macOS app in Release,
+ad-hoc signs it and zips it into `dist/herder-app-<version>-macos-arm64.zip`, with its
+`.sha256`. The `apple` workflow uploads that zip as the `herder-app-macos-arm64` artifact, and
+the `release` workflow attaches it to the GitHub Release of each `v*` tag, next to the CLI.
+
+The app is not signed with a Developer ID nor notarized yet, so Gatekeeper blocks it on first
+open. To install it on an Apple silicon Mac:
+
+1. Download the zip from the release (or the workflow run's artifacts) and unzip it.
+2. Move `herder.app` to `/Applications`.
+3. Clear the quarantine flag: `xattr -dr com.apple.quarantine /Applications/herder.app`.
+   Or right-click the app, choose **Open**, then **Open** again (on recent macOS: try to open
+   it once, then **System Settings › Privacy & Security › Open Anyway**).
+
+There is no iOS build to install yet: TestFlight needs an Apple Developer account.
+
 ## Test
 
 The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:
