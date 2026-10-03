@@ -73,3 +73,53 @@ private extension NSColor {
     }
 }
 #endif
+
+/// A rounded surface card.
+struct Card<Content: View>: View {
+    var padding: CGFloat = 14
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+    }
+}
+
+/// A small capsule label: model, account, machine, mode.
+struct Chip: View {
+    var symbol: String?
+    let text: String
+    var tint: Color = Theme.secondary
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let symbol { Image(systemName: symbol).imageScale(.small) }
+            Text(text).lineLimit(1)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Theme.raised, in: .capsule)
+    }
+}
+
+/// A section heading with an optional count.
+struct SectionHeading: View {
+    let title: String
+    var count: Int?
+    var tint: Color = Theme.secondary
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased())
+            if let count { Text("\(count)").foregroundStyle(Theme.tertiary) }
+        }
+        .font(.caption.weight(.semibold))
+        .tracking(0.6)
+        .foregroundStyle(tint)
+    }
+}
