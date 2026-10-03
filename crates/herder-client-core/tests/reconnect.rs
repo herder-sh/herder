@@ -65,10 +65,7 @@ echo "Logged in"
 }
 
 fn failover() -> FailoverSettings {
-    FailoverSettings {
-        pin: true,
-        providers: vec![Provider::Codex],
-    }
+    FailoverSettings { pin: true }
 }
 
 fn account() -> AccountId {

@@ -5,9 +5,9 @@
 //! prompt there, once ([`super::actor`]). An account is eligible when it opted in
 //! (`failover = true`), is not the failing one, has an adapter, and is not limited: no window of
 //! its usage ([`crate::usage`]) is at 100% before it resets, and it has not hit a limit since
-//! its reset time ([`Limits`]). Accounts of the session's provider come first, then those of each
-//! provider in [`FailoverConfig::providers`] in order; within a provider, most quota left first,
-//! then by id. A session pinned to its account (created with `failover_pin`, else by
+//! its reset time ([`Limits`]). Only accounts of the session's own provider qualify, most quota
+//! left first, then by id; the session keeps its model, so a failover never changes provider or
+//! model. A session pinned to its account (created with `failover_pin`, else by
 //! [`FailoverConfig::pin`]) never fails over.
 
 use std::collections::HashMap;
@@ -27,9 +27,6 @@ pub const UNKNOWN_RESET: Duration = Duration::from_secs(30 * 60);
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FailoverConfig {
-    /// Providers to fail over to once no account of the session's own provider is eligible,
-    /// in order; empty keeps sessions on their provider.
-    pub providers: Vec<Provider>,
     /// Whether sessions stay on their account when it hits a limit.
     pub pin: bool,
 }
@@ -37,10 +34,7 @@ pub struct FailoverConfig {
 impl FailoverConfig {
     /// The settings as clients see them.
     pub fn settings(&self) -> herder_protocol::FailoverSettings {
-        herder_protocol::FailoverSettings {
-            pin: self.pin,
-            providers: self.providers.clone(),
-        }
+        herder_protocol::FailoverSettings { pin: self.pin }
     }
 }
 
@@ -77,7 +71,6 @@ impl Limits {
 
 /// What failover picks from.
 pub(crate) struct Choice<'a> {
-    pub(crate) config: &'a FailoverConfig,
     pub(crate) accounts: &'a Accounts,
     pub(crate) adapters: &'a Adapters,
     pub(crate) usage: &'a Windows,
@@ -91,28 +84,20 @@ pub(crate) fn next(
     provider: &Provider,
     failing: &AccountId,
 ) -> Option<AccountId> {
-    let mut providers = vec![provider];
-    for fallback in &choice.config.providers {
-        if !providers.contains(&fallback) {
-            providers.push(fallback);
-        }
-    }
-    providers.into_iter().find_map(|provider| {
-        choice
-            .accounts
-            .iter()
-            .filter(|(id, account)| {
-                account.provider == *provider
-                    && account.failover
-                    && *id != failing
-                    && choice.adapters.get(provider).is_some()
-                    && !choice.limits.limited(id, choice.now)
-            })
-            .filter_map(|(id, _)| Some((left(choice.usage.get(id), choice.now)?, id)))
-            // Most quota left first; ids break ties, as the map is ordered by id.
-            .min_by(|(a, _), (b, _)| b.total_cmp(a))
-            .map(|(_, id)| id.clone())
-    })
+    choice.adapters.get(provider)?;
+    choice
+        .accounts
+        .iter()
+        .filter(|(id, account)| {
+            account.provider == *provider
+                && account.failover
+                && *id != failing
+                && !choice.limits.limited(id, choice.now)
+        })
+        .filter_map(|(id, _)| Some((left(choice.usage.get(id), choice.now)?, id)))
+        // Most quota left first; ids break ties, as the map is ordered by id.
+        .min_by(|(a, _), (b, _)| b.total_cmp(a))
+        .map(|(_, id)| id.clone())
 }
 
 /// Quota left on an account with `windows`: its fullest window's share left, in percent, or
@@ -176,7 +161,6 @@ mod tests {
     }
 
     struct Case {
-        config: FailoverConfig,
         accounts: Accounts,
         adapters: Adapters,
         usage: Windows,
@@ -187,7 +171,6 @@ mod tests {
     impl Case {
         fn new(entries: &[(&str, Provider, bool)]) -> Self {
             Self {
-                config: FailoverConfig::default(),
                 accounts: accounts(entries),
                 adapters: adapters(&[Provider::Claude, Provider::Codex, Provider::Cursor]),
                 usage: Windows::new(),
@@ -198,7 +181,6 @@ mod tests {
 
         fn next(&self, failing: &str) -> Option<String> {
             let choice = Choice {
-                config: &self.config,
                 accounts: &self.accounts,
                 adapters: &self.adapters,
                 usage: &self.usage,
@@ -235,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn other_providers_follow_in_the_configured_order_only() {
+    fn accounts_of_other_providers_are_never_chosen() {
         let mut case = Case::new(&[
             ("claude-a", Provider::Claude, true),
             ("claude-b", Provider::Claude, false),
@@ -243,11 +225,14 @@ mod tests {
             ("cursor", Provider::Cursor, true),
         ]);
         assert_eq!(case.next("claude-a"), None);
-        case.config.providers = vec![Provider::Cursor, Provider::Codex];
-        assert_eq!(case.next("claude-a").as_deref(), Some("cursor"));
-        // A provider with no adapter is passed over.
-        case.adapters = adapters(&[Provider::Claude, Provider::Codex]);
-        assert_eq!(case.next("claude-a").as_deref(), Some("codex"));
+        assert_eq!(case.next("codex"), None);
+        // Without its provider's adapter, a session has nowhere to go.
+        case.accounts = accounts(&[
+            ("claude-a", Provider::Claude, true),
+            ("claude-b", Provider::Claude, true),
+        ]);
+        case.adapters = adapters(&[Provider::Codex]);
+        assert_eq!(case.next("claude-a"), None);
     }
 
     #[test]

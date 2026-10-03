@@ -990,10 +990,7 @@ mod tests {
                 failover: true,
             }]
         };
-        let failover = FailoverSettings {
-            pin: true,
-            providers: vec![herder_protocol::Provider::Codex],
-        };
+        let failover = FailoverSettings { pin: true };
         hub.set_failover(failover.clone());
         let owner = Arc::new(Outbox::default());
         let member = Arc::new(Outbox::default());

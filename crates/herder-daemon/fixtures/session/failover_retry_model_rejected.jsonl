@@ -1,0 +1,4 @@
+# The account failover moved to has no access to the session's model.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-2", "error": {"class": "fatal", "message": "model claude-opus-4-5 is not available on this account"}}}

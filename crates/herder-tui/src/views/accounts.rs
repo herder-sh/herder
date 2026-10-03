@@ -19,9 +19,9 @@ const BAR: usize = 30;
 
 /// What the failover marks mean, and where they are set.
 const FAILOVER: &str = "A session whose account hits a limit moves to an account marked \
-                        failover, of its own provider, then of the providers after \"then\", \
-                        unless sessions are pinned. All are set in the machine's daemon config \
-                        (failover = true per account, [failover] pin and providers).";
+                        failover of the same provider, on the same model, unless sessions are \
+                        pinned. Both are set in the machine's daemon config (failover = true \
+                        per account, [failover] pin).";
 
 pub(super) fn draw(
     frame: &mut Frame,
@@ -117,15 +117,6 @@ fn machine_text(machine: &Machine, chosen: bool) -> Text<'static> {
     let mut facts = format!("  {state}");
     if machine.failover.pin {
         facts.push_str(" · pinned");
-    }
-    if !machine.failover.providers.is_empty() {
-        let providers: Vec<&str> = machine
-            .failover
-            .providers
-            .iter()
-            .map(|provider| provider.as_str())
-            .collect();
-        facts.push_str(&format!(" · then {}", providers.join(", ")));
     }
     let mut lines = vec![Line::from(vec![
         Span::styled(mark, Style::new().fg(color)),

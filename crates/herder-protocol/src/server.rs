@@ -215,9 +215,6 @@ pub struct FailoverSettings {
     /// Whether sessions stay on their account by default; a session created with
     /// `failover_pin` overrides it.
     pub pin: bool,
-    /// Providers to fail over to, in order, once no account of the session's own provider is
-    /// eligible; empty keeps sessions on their provider.
-    pub providers: Vec<Provider>,
 }
 
 /// Usage of one provider limit window, such as a five-hour or weekly limit.

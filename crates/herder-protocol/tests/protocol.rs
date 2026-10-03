@@ -536,10 +536,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             failover: true,
         })
         .collect(),
-        failover: FailoverSettings {
-            pin: true,
-            providers: vec![Provider::Codex],
-        },
+        failover: FailoverSettings { pin: true },
     });
     for code in [
         ErrorCode::BadRequest,
