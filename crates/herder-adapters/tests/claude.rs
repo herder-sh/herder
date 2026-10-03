@@ -727,15 +727,11 @@ async fn a_prompt_with_images_sends_them_as_base64_blocks_before_its_text() {
 }
 
 #[test]
-fn claude_takes_images_and_the_others_do_not() {
+fn claude_takes_images() {
     use herder_adapters::Adapter;
-    use herder_adapters::acp::{AcpAdapter, AgentProfile};
     use herder_adapters::claude::ClaudeAdapter;
-    use herder_adapters::codex::CodexAdapter;
 
     assert!(ClaudeAdapter::default().accepts_images());
-    assert!(!CodexAdapter::default().accepts_images());
-    assert!(!AcpAdapter::new(AgentProfile::cursor()).accepts_images());
 }
 
 #[tokio::test]

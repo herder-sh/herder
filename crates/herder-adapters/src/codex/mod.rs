@@ -5,7 +5,9 @@
 //! windows from `account/rateLimits/read`, and opens the thread with `thread/start`. A seed
 //! transcript is replayed into the new thread with `thread/inject_items`. Each prompt is one
 //! `turn/start`, which also carries the current model and permission mode, so both switch
-//! natively from the next turn on.
+//! natively from the next turn on. A prompt's images go in the same `input`, ahead of its
+//! text, each as an `image` input whose `url` is a `data:` URL of the bytes, so no file is
+//! written for them.
 //!
 //! The thread id is reported as [`AdapterEvent::SessionIdentified`] once the thread is open.
 //! With [`StartRequest::resume`] the thread is reopened with `thread/resume` instead of
@@ -95,6 +97,10 @@ impl Adapter for CodexAdapter {
             })?;
             start(transport, request).await
         })
+    }
+
+    fn accepts_images(&self) -> bool {
+        true
     }
 }
 

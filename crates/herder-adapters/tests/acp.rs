@@ -14,8 +14,8 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest,
 };
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, TurnError,
-    TurnId,
+    ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
+    TurnError, TurnId,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -590,4 +590,63 @@ async fn grok_asks_before_a_command_and_runs_it_once_allowed() {
         Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
     );
     shutdown(session).await;
+}
+
+fn png() -> Image {
+    Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\npng".to_vec()),
+    }
+}
+
+/// Starts `adapter` on its fixture and runs one prompt carrying [`png`] to its end.
+async fn prompt_with_image(adapter: &AcpAdapter) -> Vec<AdapterEvent> {
+    let mut session = timeout(TIMEOUT, adapter.start(request(PermissionMode::Ask)))
+        .await
+        .expect("start timed out")
+        .unwrap();
+    session
+        .commands
+        .send(AdapterCommand::SendPrompt {
+            turn_id: turn(),
+            text: "reply with the word ok".into(),
+            images: vec![png()],
+        })
+        .unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    shutdown(session).await;
+    events
+}
+
+#[tokio::test]
+async fn an_agent_that_advertises_images_gets_them_as_image_blocks() {
+    let adapter = AcpAdapter::replaying(AgentProfile::opencode(), fixture("opencode/image.jsonl"));
+    assert!(adapter.accepts_images());
+    // The recording only matches a prompt with the image block ahead of the text.
+    let events = prompt_with_image(&adapter).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+    );
+    assert!(adapter.accepts_images());
+}
+
+#[tokio::test]
+async fn an_agent_that_takes_no_images_gets_a_line_naming_each_and_is_believed() {
+    // A profile that guesses wrong is corrected by what the agent says in `initialize`.
+    let profile = AgentProfile {
+        images: true,
+        ..AgentProfile::grok()
+    };
+    let adapter = AcpAdapter::replaying(profile, fixture("grok/image.jsonl"));
+    assert!(adapter.accepts_images());
+    // The recording only matches a prompt whose text names the image.
+    let events = prompt_with_image(&adapter).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+    );
+    assert!(!adapter.accepts_images());
+    assert!(!AcpAdapter::new(AgentProfile::grok()).accepts_images());
+    assert!(!AcpAdapter::new(AgentProfile::cursor()).accepts_images());
 }

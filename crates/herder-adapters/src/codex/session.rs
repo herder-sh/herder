@@ -4,9 +4,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, Timestamp,
-    TurnError, TurnId, UsageWindow,
+    ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
+    Timestamp, TurnError, TurnId, UsageWindow,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -395,7 +398,11 @@ impl Session {
 
     async fn command(&mut self, command: AdapterCommand) {
         match command {
-            AdapterCommand::SendPrompt { turn_id, text, .. } => {
+            AdapterCommand::SendPrompt {
+                turn_id,
+                text,
+                images,
+            } => {
                 self.turn = Some(OpenTurn {
                     id: turn_id,
                     codex_id: None,
@@ -408,10 +415,7 @@ impl Session {
                 let model = self.model.clone();
                 let params = wire::TurnStartParams {
                     thread_id: &thread_id,
-                    input: [wire::UserInput::Text {
-                        text: &text,
-                        text_elements: [],
-                    }],
+                    input: input(&text, &images),
                     model: model.as_deref(),
                     approval_policy,
                     sandbox_policy: sandbox_policy(sandbox),
@@ -1043,6 +1047,23 @@ fn windows(snapshot: &wire::RateLimitSnapshot) -> Vec<UsageWindow> {
     .collect()
 }
 
+/// A prompt's `turn/start` input: its images as `data:` URLs, then its text.
+fn input<'a>(text: &'a str, images: &[Image]) -> Vec<wire::UserInput<'a>> {
+    let images = images.iter().map(|image| wire::UserInput::Image {
+        url: format!(
+            "data:{};base64,{}",
+            image.media_type,
+            STANDARD.encode(&image.data.0)
+        ),
+    });
+    images
+        .chain([wire::UserInput::Text {
+            text,
+            text_elements: [],
+        }])
+        .collect()
+}
+
 /// The seed transcript as Responses API items for `thread/inject_items`. Tool calls and
 /// results become assistant text: their Codex call ids are gone, and the model only needs to
 /// know what happened.
@@ -1050,7 +1071,11 @@ fn seed_items(seed: &[Item]) -> Vec<Value> {
     let message = |role: &str, kind: &str, text: &str| json!({"type": "message", "role": role, "content": [{"type": kind, "text": text}]});
     seed.iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text, .. } => Some(message("user", "input_text", text)),
+            ItemBody::UserMessage { text, attachments } => Some(message(
+                "user",
+                "input_text",
+                &crate::seed_user_text(text, attachments),
+            )),
             ItemBody::AssistantMessage { text } => Some(message("assistant", "output_text", text)),
             ItemBody::ToolCall { name, input } => Some(message(
                 "assistant",
@@ -1114,6 +1139,8 @@ mod tests {
 
     #[test]
     fn seed_becomes_messages() {
+        use herder_protocol::{Attachment, AttachmentId};
+
         let turn = TurnId::new("turn-1");
         let item = |body| Item {
             id: ItemId::new("i"),
@@ -1123,7 +1150,11 @@ mod tests {
         let seed = [
             item(ItemBody::UserMessage {
                 text: "hi".into(),
-                attachments: Vec::new(),
+                attachments: vec![Attachment {
+                    attachment_id: AttachmentId::new("a1"),
+                    media_type: "image/png".into(),
+                    size: 2048,
+                }],
             }),
             item(ItemBody::Reasoning { text: "hmm".into() }),
             item(ItemBody::AssistantMessage {
@@ -1142,7 +1173,7 @@ mod tests {
         assert_eq!(
             seed_items(&seed),
             [
-                json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}),
+                json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi\n[image attached: image/png, 2 KB; not part of this replay]"}]}),
                 json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}),
                 json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "[called tool shell with {\"command\":\"ls\"}]"}]}),
                 json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "[tool result: a.txt]"}]}),

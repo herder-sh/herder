@@ -122,7 +122,7 @@ pub struct ThreadInjectItemsParams<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams<'a> {
     pub thread_id: &'a str,
-    pub input: [UserInput<'a>; 1],
+    pub input: Vec<UserInput<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<&'a str>,
     pub approval_policy: AskForApproval,
@@ -136,6 +136,8 @@ pub enum UserInput<'a> {
         text: &'a str,
         text_elements: [(); 0],
     },
+    /// An image by URL; herder sends a `data:` URL, so no file is written for it.
+    Image { url: String },
 }
 
 #[derive(Debug, Serialize)]

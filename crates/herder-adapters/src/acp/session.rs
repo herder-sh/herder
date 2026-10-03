@@ -1,11 +1,12 @@
 //! Starting an ACP session and running it: commands in, `session/update`s out as events.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use herder_protocol::{
-    ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode, TurnError,
-    TurnId,
+    ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
+    TurnError, TurnId,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -112,10 +113,12 @@ fn model_option(options: &[ConfigOption]) -> Option<(String, String)> {
 }
 
 /// Runs `initialize` and `session/new`, sets the starting model, and spawns the session.
+/// Records in `images` whether the agent takes images, as it said in `initialize`.
 pub(super) async fn start(
     profile: &AgentProfile,
     request: StartRequest,
     transport: Transport,
+    images: &AtomicBool,
 ) -> Result<AdapterSession, TurnError> {
     let mut rpc = Rpc::new(transport);
     let setup = async {
@@ -130,6 +133,8 @@ pub(super) async fn start(
                 ),
             ));
         }
+        let takes_images = init.agent_capabilities.prompt_capabilities.image;
+        images.store(takes_images, Ordering::Relaxed);
         let new: NewSessionResponse =
             call(&mut rpc, "session/new", schema::new_session(&request.cwd)).await?;
         let mut option = model_option(&new.config_options);
@@ -157,9 +162,10 @@ pub(super) async fn start(
             new.session_id,
             option.map(|(config_id, _)| config_id),
             model,
+            takes_images,
         ))
     };
-    let (session_id, model_config, model) = tokio::time::timeout(START_TIMEOUT, setup)
+    let (session_id, model_config, model, images) = tokio::time::timeout(START_TIMEOUT, setup)
         .await
         .map_err(|_| error(ErrorClass::Transient, "the agent did not start in time"))??;
 
@@ -184,6 +190,7 @@ pub(super) async fn start(
         mode: request.permission_mode,
         model_config,
         model,
+        images,
         seed: render_seed(&request.seed),
         turn: None,
         approvals: HashMap::new(),
@@ -204,7 +211,10 @@ fn render_seed(seed: &[Item]) -> Option<String> {
     let entries: Vec<String> = seed
         .iter()
         .filter_map(|item| match &item.body {
-            ItemBody::UserMessage { text, .. } => Some(format!("[user]\n{text}")),
+            ItemBody::UserMessage { text, attachments } => Some(format!(
+                "[user]\n{}",
+                crate::seed_user_text(text, attachments)
+            )),
             ItemBody::AssistantMessage { text } => Some(format!("[assistant]\n{text}")),
             ItemBody::ToolCall { name, input } => Some(format!("[tool call: {name}]\n{input}")),
             ItemBody::ToolResult { output, .. } => Some(format!("[tool result]\n{output}")),
@@ -265,6 +275,8 @@ struct Session {
     /// The model config option's id, when the agent has one.
     model_config: Option<String>,
     model: Option<String>,
+    /// Whether the agent takes images, as it said in `initialize`.
+    images: bool,
     /// Transcript for the first prompt; taken by it.
     seed: Option<String>,
     turn: Option<Turn>,
@@ -397,7 +409,11 @@ impl Session {
 
     async fn command(&mut self, command: AdapterCommand) {
         match command {
-            AdapterCommand::SendPrompt { turn_id, text, .. } => self.prompt(turn_id, text).await,
+            AdapterCommand::SendPrompt {
+                turn_id,
+                text,
+                images,
+            } => self.prompt(turn_id, text, images).await,
             AdapterCommand::Interrupt => self.interrupt().await,
             AdapterCommand::SetModel { model } => self.set_model(model).await,
             AdapterCommand::SetPermissionMode { mode } => {
@@ -421,15 +437,23 @@ impl Session {
         }
     }
 
-    async fn prompt(&mut self, turn_id: TurnId, text: String) {
+    async fn prompt(&mut self, turn_id: TurnId, text: String, mut images: Vec<Image>) {
         if self.turn.is_some() {
             return;
         }
-        let text = match self.seed.take() {
+        let mut text = match self.seed.take() {
             Some(seed) => seed + &text,
             None => text,
         };
-        let prompt = schema::prompt(&self.session_id, &text);
+        if !self.images {
+            for image in images.drain(..) {
+                let size = image.data.0.len() as u64;
+                let why = "this agent cannot see images";
+                text.push('\n');
+                text.push_str(&crate::image_placeholder(&image.media_type, size, why));
+            }
+        }
+        let prompt = schema::prompt(&self.session_id, &text, &images);
         let request = self.rpc.request("session/prompt", prompt).await;
         self.turn = Some(Turn {
             id: turn_id.clone(),
@@ -846,6 +870,8 @@ mod tests {
 
     #[test]
     fn seed_renders_messages_and_tools() {
+        use herder_protocol::{Attachment, AttachmentId};
+
         let turn = TurnId::new("t");
         let item = |id: &str, body| Item {
             id: ItemId::new(id),
@@ -857,7 +883,11 @@ mod tests {
                 "1",
                 ItemBody::UserMessage {
                     text: "hi".into(),
-                    attachments: Vec::new(),
+                    attachments: vec![Attachment {
+                        attachment_id: AttachmentId::new("a1"),
+                        media_type: "image/png".into(),
+                        size: 2048,
+                    }],
                 },
             ),
             item("2", ItemBody::Reasoning { text: "hmm".into() }),
@@ -887,7 +917,7 @@ mod tests {
         assert_eq!(
             render_seed(&seed).unwrap(),
             "This conversation continues one from another session. Its transcript so far:\n\n\
-             <transcript>\n[user]\nhi\n\n[tool call: bash]\n{\"command\":\"ls\"}\n\n\
+             <transcript>\n[user]\nhi\n[image attached: image/png, 2 KB; not part of this replay]\n\n[tool call: bash]\n{\"command\":\"ls\"}\n\n\
              [tool result]\na.txt\n\n[assistant]\ndone\n</transcript>\n\n"
         );
     }
