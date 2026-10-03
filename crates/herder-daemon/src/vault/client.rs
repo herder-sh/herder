@@ -2,7 +2,8 @@
 //!
 //! The host connects with its own device key, paired with the vault, and speaks the client
 //! protocol: hello with the session to replay as its one cursor, then `sync`, which the vault
-//! answers once the lists and the replay are sent. Nothing is subscribed beyond that.
+//! answers once the lists and the replay are sent, then `get_attachment` for every image the
+//! journal names. Nothing is subscribed beyond that.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +12,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    ClientHello, ClientMessage, Cursor, Event, FleetHost, PROTOCOL_VERSION, ServerMessage,
-    SessionHead, SessionId,
+    AttachmentId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
+    Cursor, ErrorCode, Event, EventBody, FleetHost, Image, ItemBody, PROTOCOL_VERSION,
+    ServerMessage, SessionHead, SessionId,
 };
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
@@ -21,6 +23,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tracing::warn;
 
 use super::BUILD;
 use crate::config::VaultConfig;
@@ -40,6 +43,8 @@ pub(super) struct View {
     pub(super) hosts: Vec<FleetHost>,
     /// The journal asked for, oldest first.
     pub(super) events: Vec<Event>,
+    /// Every image the journal names that the vault holds.
+    pub(super) images: Vec<(AttachmentId, Image)>,
 }
 
 /// Opens a WebSocket to the vault over TLS, pinned through `connector`.
@@ -117,6 +122,69 @@ async fn read_view(
             _ => {}
         }
     }
+    if let Some(session_id) = journal {
+        view.images = images(&mut ws, session_id, &view.events).await?;
+    }
     let _ = ws.close(None).await;
     Ok(view)
+}
+
+/// Fetches every image a `user_message` of `events` names, one at a time; one the vault does
+/// not hold, such as one its host lost, is left out.
+async fn images(
+    ws: &mut Ws,
+    session_id: &SessionId,
+    events: &[Event],
+) -> Result<Vec<(AttachmentId, Image)>> {
+    let named = events.iter().flat_map(|event| match &event.body {
+        EventBody::ItemAdded { item } => match &item.body {
+            ItemBody::UserMessage { attachments, .. } => attachments.as_slice(),
+            _ => &[],
+        },
+        _ => &[],
+    });
+    let mut images = Vec::new();
+    for attachment in named {
+        let id = CommandId::new(format!("image-{}", attachment.attachment_id));
+        let command = ClientMessage::Command(Command {
+            id: id.clone(),
+            body: CommandBody::GetAttachment {
+                session_id: session_id.clone(),
+                attachment_id: attachment.attachment_id.clone(),
+            },
+        });
+        ws.send(Message::text(serde_json::to_string(&command)?))
+            .await?;
+        loop {
+            let text = match ws.next().await {
+                Some(Ok(Message::Text(text))) => text,
+                Some(Ok(Message::Close(_))) | None => bail!("the vault closed the connection"),
+                Some(Ok(_)) => continue,
+                Some(Err(err)) => return Err(err.into()),
+            };
+            match serde_json::from_str(&text)? {
+                ServerMessage::CommandAccepted {
+                    command_id,
+                    result: CommandResult::Attachment { media_type, data },
+                } if command_id == id => {
+                    images.push((attachment.attachment_id.clone(), Image { media_type, data }));
+                    break;
+                }
+                ServerMessage::CommandRejected { command_id, error } if command_id == id => {
+                    if error.code != ErrorCode::NotFound {
+                        bail!("the vault refused an image: {}", error.message);
+                    }
+                    warn!(
+                        %session_id,
+                        attachment_id = %attachment.attachment_id,
+                        "the vault holds no copy of this image; it is not recovered"
+                    );
+                    break;
+                }
+                ServerMessage::Error { error } => bail!("the vault refused: {}", error.message),
+                _ => {}
+            }
+        }
+    }
+    Ok(images)
 }

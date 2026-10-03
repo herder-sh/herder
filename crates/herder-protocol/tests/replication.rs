@@ -238,7 +238,8 @@ impl Vault {
                 Vec::new()
             }
             HostMessage::Batch(batch) => self.batch(host, batch),
-            HostMessage::Unknown => Vec::new(),
+            // Images are not modelled here; the daemon's vault tests cover them.
+            HostMessage::Attachment(_) | HostMessage::Unknown => Vec::new(),
         }
     }
 
