@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 2`
+`CLIENT_API_VERSION = 3`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -24,7 +24,8 @@ says what exists, why, and how it maps to foreign languages.
   version 4 (P0.10) changed them without changing this API: `Account.failover` is gone,
   `CreateSession` takes a `provider` and an optional `permission_mode`, and there are new
   commands and results for images, folders, projects and unarchiving. P0.12 added the
-  `RemoveProject` command, a compatible addition that keeps both versions.
+  `RemoveProject` command, a compatible addition that keeps both versions. P0.14 added
+  `Project.icon` and the `GetProjectIcon` command, compatible too.
 
 ## Shape, and how it maps to UniFFI
 
@@ -34,7 +35,7 @@ adapting anything:
 | Rust                                                          | UniFFI                          |
 | ------------------------------------------------------------- | ------------------------------- |
 | `Client`, `SessionSubscription`, `TerminalStream`, `Changes`  | objects (`Arc`, `Send + Sync`)  |
-| `Machine`, `SessionUpdate`, `NewAccount`, `PairingUri`        | records                         |
+| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `PairingUri` | records          |
 | `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
 | `Error`                                                       | error enum with named fields    |
 | `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
@@ -69,9 +70,9 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
-| Projects  | `Machine::projects`                                                  | owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
+| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
@@ -118,9 +119,15 @@ everything stops once the last clone is dropped.
 
 ### Records
 
-- `Machine` — `host_id`, `name`, `addresses`, `fingerprint`, `connection`, `role`,
+- `Machine` — `host_id`, `name`, `addresses`, `fingerprint`, `connection`, `quality`, `role`,
   `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
   `session_usage`.
+- `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
+  was established; `None` while not connected), `reconnects: u32` (connections established
+  after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
+  `max_rtt_ms: Option<u32>` (round trips of the last 20 pongs on the current connection, in
+  milliseconds; `None` until one came back), `missed_pongs: u32` (pings whose pong did not come
+  back before the next ping was due, late or lost, since the client opened).
 - `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
   `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
@@ -160,6 +167,23 @@ the last known state at once, offline too. Live data always wins: the cache is r
 a machine's supervisor starts, the daemon's lists replace the cached ones and its events extend
 the cached ones by seq. It is saved every 30 s while something changed, when a connection
 ends, and on `suspend()`; `forget` deletes it.
+
+## Connection quality
+
+A connection is pinged as soon as it is up and every 15 s after. Each ping carries a fresh
+payload and only its own pong answers it, so `Machine::quality` holds true round trips: the
+latest, and the mean, shortest and longest of the last 20, all cleared when the connection
+ends. A ping still unanswered when the next is due counts in `missed_pongs`; the probe a
+`wake()` sends counts its round trip too. `connected_since` and `reconnects` say how stable
+the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
+connected machine.
+
+## Changes in version 3
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Machine::quality: ConnectionQuality` | Apps show each machine's latency and stability, to diagnose a slow or flaky connection. |
+| a connection is first pinged 15 s after it is up | at once, with a payload its pong is matched by | The round trip is known as soon as the connection is. |
 
 ## Changes in version 2
 

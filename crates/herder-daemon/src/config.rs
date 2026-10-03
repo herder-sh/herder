@@ -74,6 +74,8 @@
 //! default_account = "claude-main"  # an `[[accounts]]` id
 //! default_permission_mode = "ask"  # read_only, ask, auto_edit or full_access
 //! setup_command = "make bootstrap" # run in each new worktree
+//! icon = "design/mark.svg"         # the project's icon, relative to its clone; found in the
+//!                                  # repository when absent or missing
 //! ```
 //!
 //! Owners add `[[project]]` entries and change their `default_permission_mode`,
@@ -259,6 +261,7 @@ struct ProjectFile {
     default_account: Option<String>,
     default_permission_mode: Option<PermissionMode>,
     setup_command: Option<String>,
+    icon: Option<PathBuf>,
 }
 
 /// One `[[accounts]]` entry as written.
@@ -413,6 +416,12 @@ fn resolve_projects(
                     "{which}: default_account {account} is not an account"
                 );
             }
+            if let Some(icon) = &entry.icon {
+                ensure!(
+                    icon.is_relative(),
+                    "{which}: icon must be relative to the project's clone"
+                );
+            }
             Ok(ProjectEntry {
                 name: entry.name,
                 remotes,
@@ -420,6 +429,7 @@ fn resolve_projects(
                 default_account,
                 default_permission_mode: entry.default_permission_mode,
                 setup_command: entry.setup_command,
+                icon: entry.icon,
             })
         })
         .collect::<Result<_>>()?;
@@ -1317,6 +1327,7 @@ mod tests {
             default_account = "claude-main"
             default_permission_mode = "auto_edit"
             setup_command = "make bootstrap"
+            icon = "design/mark.svg"
 
             [[project]]
             paths = ["/srv/scratch"]
@@ -1340,6 +1351,7 @@ mod tests {
                         default_account: Some(AccountId::new("claude-main")),
                         default_permission_mode: Some(PermissionMode::AutoEdit),
                         setup_command: Some("make bootstrap".to_owned()),
+                        icon: Some(PathBuf::from("design/mark.svg")),
                     },
                     ProjectEntry {
                         paths: vec![PathBuf::from("/srv/scratch")],
@@ -1378,6 +1390,10 @@ mod tests {
             (
                 "[[project]]\npaths = [\"/a\"]\ndefault_account = \"nope\"\n",
                 "default_account nope is not an account",
+            ),
+            (
+                "[[project]]\npaths = [\"/a\"]\nicon = \"/etc/logo.png\"\n",
+                "icon must be relative to the project's clone",
             ),
             ("[projects]\nroots = [\"rel\"]\n", "projects.roots"),
             ("[projects]\ndepth = 2\n", "unknown field `depth`"),

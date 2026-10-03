@@ -482,6 +482,7 @@ pub mod tests {
             addresses: vec!["127.0.0.1:7447".to_owned()],
             fingerprint: "ab".repeat(32),
             connection: ConnectionState::Connected,
+            quality: Default::default(),
             role: Some(Role::Owner),
             sessions,
             hosts: Vec::new(),
@@ -578,6 +579,7 @@ pub mod tests {
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
+            icon: None,
         }];
         let nas = machine("h2", "nas", vec![head("s1", Some("github.com/org/app"))]);
         let mut vault = machine(

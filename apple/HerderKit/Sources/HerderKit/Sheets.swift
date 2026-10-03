@@ -532,7 +532,7 @@ struct MachineSettingsSheet: View {
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == machine.name)
                     }
                 }
-                Field(label: "Connection", hint: "Since the app opened. Round-trip times need the client core to report them (proposed in P0.11).") {
+                Field(label: "Connection", hint: "Since the app opened. Round trips are pings every 15 seconds.") {
                     let log = fleet.connectionLog[hostId] ?? []
                     let health = ConnectionHealth(log: log, now: .now)
                     VStack(alignment: .leading, spacing: 8) {
@@ -542,6 +542,8 @@ struct MachineSettingsSheet: View {
                             stat("Disconnected", Self.duration(health.down))
                         }
                         .padding(.bottom, 4)
+                        LinkQualityView(quality: machine.quality, roundTrips: fleet.roundTrips[hostId] ?? [])
+                            .padding(.bottom, 4)
                         ForEach(Array(ConnectionHealth.runs(log, now: .now).reversed().enumerated()), id: \.offset) { _, run in
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 ConnectionMark(state: run.state)
@@ -637,6 +639,102 @@ struct MachineSettingsSheet: View {
 
     static func duration(_ seconds: TimeInterval) -> String {
         Duration.seconds(max(0, seconds)).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2))
+    }
+}
+
+/// How a link performs, judged from the client core's round trips: a verdict and what to
+/// look at when it is not good.
+struct LinkVerdict: Equatable {
+    enum Level { case good, fair, poor }
+    let level: Level
+    let summary: String
+    var advice = ""
+
+    init(level: Level, summary: String, advice: String = "") {
+        self.level = level
+        self.summary = summary
+        self.advice = advice
+    }
+
+    /// `nil` until a round trip has been measured.
+    init?(_ quality: ConnectionQuality) {
+        guard let average = quality.averageRttMs else { return nil }
+        let spread = (quality.maxRttMs ?? average) - (quality.minRttMs ?? average)
+        if quality.missedPongs > 0 {
+            self.init(level: .poor, summary: "\(quality.missedPongs) ping\(quality.missedPongs == 1 ? "" : "s") went unanswered",
+                      advice: "The network drops packets or the machine stalls. Check its load, and its network or VPN.")
+        } else if average >= 300 {
+            self.init(level: .poor, summary: "Slow: \(average) ms on average",
+                      advice: "Sending and streaming will lag. A direct route (not relayed) or a closer network helps.")
+        } else if spread >= 200 && spread > average {
+            self.init(level: .fair, summary: "Unsteady: \(quality.minRttMs ?? 0)–\(quality.maxRttMs ?? 0) ms",
+                      advice: "Round trips vary a lot, often Wi-Fi or a busy uplink.")
+        } else if average >= 120 {
+            self.init(level: .fair, summary: "Usable: \(average) ms on average")
+        } else {
+            self.init(level: .good, summary: "Fast: \(average) ms on average")
+        }
+    }
+}
+
+/// A machine's round trips: the numbers, a verdict, and the recent ones as bars.
+struct LinkQualityView: View {
+    let quality: ConnectionQuality
+    let roundTrips: [RoundTrip]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 18) {
+                stat("Round trip", quality.lastRttMs.map { "\($0) ms" } ?? "—")
+                stat("Average", quality.averageRttMs.map { "\($0) ms" } ?? "—")
+                stat("Range", quality.minRttMs.flatMap { min in quality.maxRttMs.map { "\(min)–\($0) ms" } } ?? "—")
+                stat("Missed", "\(quality.missedPongs)")
+            }
+            if roundTrips.count > 1 { bars }
+            if let verdict = LinkVerdict(quality) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Circle().fill(color(verdict.level)).frame(width: 8, height: 8)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verdict.summary).font(.footnote.weight(.semibold)).foregroundStyle(Theme.text)
+                        if !verdict.advice.isEmpty {
+                            Text(verdict.advice).font(.caption).foregroundStyle(Theme.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text("Measuring…").font(.footnote).foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
+    /// The last round trips, newest on the right, scaled to the slowest.
+    private var bars: some View {
+        let recent = Array(roundTrips.suffix(60))
+        let top = Double(max(recent.map(\.milliseconds).max() ?? 1, 50))
+        return HStack(alignment: .bottom, spacing: 2) {
+            ForEach(Array(recent.enumerated()), id: \.offset) { _, trip in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(trip.milliseconds >= 300 ? Theme.failure : trip.milliseconds >= 120 ? Theme.accent : Theme.success)
+                    .frame(width: 4, height: max(2, 36 * Double(trip.milliseconds) / top))
+                    .help("\(trip.milliseconds) ms at \(trip.at.formatted(date: .omitted, time: .standard))")
+            }
+        }
+        .frame(height: 36, alignment: .bottom)
+    }
+
+    private func color(_ level: LinkVerdict.Level) -> Color {
+        switch level {
+        case .good: Theme.success
+        case .fair: Theme.accent
+        case .poor: Theme.failure
+        }
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(.headline.monospacedDigit()).foregroundStyle(Theme.text)
+            Text(label).font(.caption).foregroundStyle(Theme.tertiary)
+        }
     }
 }
 

@@ -16,8 +16,11 @@ public final class Fleet {
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
     @ObservationIgnored private var fetching: Set<String> = []
+    @ObservationIgnored fileprivate var previousAverage: [HostId: UInt32?] = [:]
     /// Each machine's connection changes since the app opened, oldest first.
     private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
+    /// Each machine's ping round trips since the app opened, oldest first.
+    private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
 
     public init(client: Client) {
         self.client = client
@@ -45,6 +48,7 @@ public final class Fleet {
     private func update(_ machines: [Machine]) {
         self.machines = machines
         for machine in machines {
+            recordRoundTrip(machine)
             var log = connectionLog[machine.hostId] ?? []
             guard log.last?.state != machine.connection else { continue }
             log.append(ConnectionChange(at: .now, state: machine.connection))
@@ -308,6 +312,26 @@ public enum Profile {
 }
 
 /// A machine's connection changing state.
+/// One ping's round trip, as the client core reported it.
+struct RoundTrip: Hashable {
+    let at: Date
+    let milliseconds: UInt32
+}
+
+extension Fleet {
+    /// Keeps a machine's newest round trip; a report that changed neither the last nor the
+    /// average round trip is the same ping again.
+    fileprivate func recordRoundTrip(_ machine: Machine) {
+        guard let rtt = machine.quality.lastRttMs else { return }
+        var log = roundTrips[machine.hostId] ?? []
+        if let last = log.last, last.milliseconds == rtt,
+           previousAverage[machine.hostId] == machine.quality.averageRttMs { return }
+        previousAverage[machine.hostId] = machine.quality.averageRttMs
+        log.append(RoundTrip(at: .now, milliseconds: rtt))
+        roundTrips[machine.hostId] = Array(log.suffix(240))
+    }
+}
+
 struct ConnectionChange: Hashable {
     let at: Date
     let state: ConnectionState

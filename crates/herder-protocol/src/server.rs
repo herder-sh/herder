@@ -291,6 +291,15 @@ pub enum CommandResult {
         /// The project the repository belongs to.
         project_id: ProjectId,
     },
+    /// A project's icon, answering `get_project_icon`.
+    ProjectIcon {
+        /// The SHA-256 of `data` as lowercase hex, as a project's `icon` names it.
+        icon: String,
+        /// One of [`crate::PROJECT_ICON_MEDIA_TYPES`].
+        media_type: String,
+        /// The image file's bytes, at most [`crate::MAX_PROJECT_ICON_BYTES`].
+        data: Bytes,
+    },
 }
 
 /// One entry of a folder.
