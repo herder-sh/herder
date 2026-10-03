@@ -182,7 +182,12 @@ impl Gallery {
         .render(inset(next(&mut y, 1)), buf);
         y += 1;
 
-        heading(ui, next(&mut y, 1), buf, "usage · claude-main");
+        heading(
+            ui,
+            next(&mut y, 1),
+            buf,
+            &format!("usage{}claude-main", ui.glyphs.separator),
+        );
         let bar_width = width.saturating_sub(24).clamp(8, 30);
         for (window, percent, resets) in [
             ("5h", 38, "14:20"),
@@ -389,5 +394,16 @@ mod tests {
                 assert_eq!(text.contains("┌ go to"), dialog);
             }
         }
+    }
+
+    #[test]
+    fn the_ascii_gallery_draws_only_ascii_separators() {
+        let variant = snapshot::variants().remove(1);
+        assert_eq!(variant.glyphs, super::super::glyphs::Glyphs::Ascii);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 45, 40));
+        Gallery::default().draw(variant.ui(), buf.area, &mut buf, "dark - ascii");
+        let text: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("usage - claude-main"), "{text}");
+        assert!(!text.contains('·'), "{text}");
     }
 }
