@@ -2,11 +2,12 @@
 //! each machine and its sessions ([`crate::projects`]); children under their parent.
 //! A primary shows its child count and, when any child waits on the user, how many; `z`
 //! folds its children away. A vault's sessions come under the host they run on, marked
-//! offline with when the vault last heard from it. Compact rows, on a narrow screen, show the
+//! offline with when the vault last heard from it; a `moved` copy names the host it went to
+//! ([`crate::recover`]). Compact rows, on a narrow screen, show the
 //! status as one glyph, the branch's last part and one PR.
 
 use herder_client_core::ConnectionState;
-use herder_protocol::{SessionStatus, Timestamp};
+use herder_protocol::{FleetHost, SessionStatus, Timestamp};
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -99,11 +100,7 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             ];
             if !host.online {
                 spans.push(Span::styled(" offline", Style::new().fg(Color::Red)));
-                if !compact {
-                    let secs = Timestamp::now().duration_since(host.last_seen).as_secs();
-                    let ago = format!(" · {} ago", account_screen::until(secs));
-                    spans.push(Span::styled(ago, super::dim()));
-                }
+                spans.push(Span::styled(format!(" · {} ago", ago(host)), super::dim()));
             }
             ListItem::new(Line::from(spans))
         }
@@ -154,7 +151,12 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             // Grouped by project, each session says which machine it runs on.
             let machine = (app.grouping == Grouping::Projects)
                 .then(|| super::projects::machine_label(app, key));
-            let machine_width = machine.as_ref().map_or(0, Span::width);
+            // A moved copy says where the session went.
+            let moved = app
+                .moved_to(key)
+                .map(|to| Span::styled(format!(" → {to}"), Style::new().fg(Color::Blue)));
+            let machine_width =
+                machine.as_ref().map_or(0, Span::width) + moved.as_ref().map_or(0, Span::width);
             let room = width.saturating_sub(
                 label_width + 2 + indent.chars().count() + tree_width + prs_width + machine_width,
             );
@@ -173,9 +175,16 @@ fn item<'a>(app: &App, row: &Row, width: usize, compact: bool) -> ListItem<'a> {
             spans.extend(tree);
             spans.extend(prs);
             spans.extend(machine);
+            spans.extend(moved);
             ListItem::new(Line::from(spans))
         }
     }
+}
+
+/// How long ago the vault last heard from `host`.
+pub(super) fn ago(host: &FleetHost) -> String {
+    let secs = Timestamp::now().duration_since(host.last_seen).as_secs();
+    account_screen::until(secs)
 }
 
 /// `text` cut to `width` characters, with an ellipsis when cut.

@@ -69,6 +69,10 @@ pub enum Action {
     Switch(crate::switch::Input),
     /// Group the session list by project or by machine.
     Group,
+    /// Open the recover dialog of the open or selected session.
+    OpenRecover,
+    /// Input to the recover dialog.
+    Recover(crate::recover::Input),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -98,6 +102,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(switch) = &app.switch {
         return crate::switch::for_key(key, switch);
+    }
+    if app.recover.is_some() {
+        return crate::recover::for_key(key);
     }
     if app.terminals.is_some() {
         let action = match key.code {
@@ -167,6 +174,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
             Action::OpenSwitch
         }
         KeyCode::Char('v') => Action::Group,
+        KeyCode::Char('R') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
+            Action::OpenRecover
+        }
         _ => return None,
     };
     Some(action)
@@ -201,6 +211,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("A", "accounts: usage and limits; n adds one"),
     ("z", "fold or unfold the selected task's children"),
     ("v", "group sessions by project or by machine"),
+    ("R", "recover a session whose host is offline"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (
         "Enter / l",

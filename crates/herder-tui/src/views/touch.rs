@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::action::Action;
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, Row};
 use crate::compose::Act;
 use crate::inbox::{InboxAction, What};
 use crate::mouse::{self, Click, Hits};
@@ -155,17 +155,31 @@ fn buttons(app: &App) -> Vec<Button> {
     if app.switch.is_some() {
         return vec![button("⏎", "switch", enter()), esc()];
     }
+    if app.recover.is_some() {
+        return vec![esc()];
+    }
     if app.dialog_open() {
         return vec![button("⏎", "ok", enter()), esc()];
     }
     match app.focus {
-        Focus::Sessions => vec![
-            button("⏎", "open", enter()),
-            button("n", "new", char('n')),
-            button("s", "switch", char('s')),
-            button("t", "term", char('t')),
-            button(":", "cmd", char(':')),
-        ],
+        Focus::Sessions => {
+            let mut buttons = vec![button("⏎", "open", enter())];
+            let selected = app.selected();
+            if selected
+                .as_ref()
+                .and_then(Row::session)
+                .is_some_and(|key| app.recoverable(key).is_some())
+            {
+                buttons.push(button("R", "recover", Click::Act(Action::OpenRecover)));
+            }
+            buttons.extend([
+                button("n", "new", char('n')),
+                button("s", "switch", char('s')),
+                button("t", "term", char('t')),
+                button(":", "cmd", char(':')),
+            ]);
+            buttons
+        }
         Focus::Transcript | Focus::Composer => session_buttons(app),
         Focus::Inbox => inbox_buttons(app),
         Focus::Prs => vec![
@@ -184,11 +198,14 @@ fn buttons(app: &App) -> Vec<Button> {
 /// The open session's buttons: answers to what it asks, then writing, stopping, switching and
 /// a terminal. They act directly, so they work while the composer has the keys too.
 fn session_buttons(app: &App) -> Vec<Button> {
-    let Some(session) = app.open_session() else {
+    let (Some(key), Some(session)) = (&app.open, app.open_session()) else {
         return Vec::new();
     };
     let act = |act| Click::Act(Action::Compose(act));
     let mut buttons = Vec::new();
+    if app.recoverable(key).is_some() {
+        buttons.push(button("R", "recover", Click::Act(Action::OpenRecover)));
+    }
     if !session.approvals.is_empty() {
         buttons.push(button(
             "y",
@@ -205,7 +222,7 @@ fn session_buttons(app: &App) -> Vec<Button> {
     }
     if app.focus == Focus::Composer {
         buttons.push(button("⏎", "send", act(Act::Submit)));
-    } else if session.status != SessionStatus::Archived {
+    } else if session.status != SessionStatus::Archived && app.read_only(key).is_none() {
         buttons.push(button("i", "write", act(Act::Write)));
     }
     if session.turn.is_some() {

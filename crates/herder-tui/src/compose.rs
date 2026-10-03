@@ -259,10 +259,14 @@ impl App {
         }
         match act {
             Act::Write => {
-                if self
-                    .open_session()
-                    .is_some_and(|s| s.status != SessionStatus::Archived)
-                {
+                let writable = self.open.as_ref().is_some_and(|key| {
+                    self.read_only(key).is_none()
+                        && self
+                            .sessions
+                            .get(key)
+                            .is_some_and(|s| s.status != SessionStatus::Archived)
+                });
+                if writable {
                     self.focus = Focus::Composer;
                 }
             }

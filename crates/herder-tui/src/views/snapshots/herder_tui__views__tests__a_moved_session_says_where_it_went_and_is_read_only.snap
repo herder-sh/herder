@@ -1,0 +1,16 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 120, 12).backend()"
+---
+" laptop › app · herder/docs                                                                                  inbox 0  + "
+"┌ sessions ────────────────────────────┐┌ app · herder/docs moved ──────────────────── claude-main · claude-opus · ask ┐"
+"│● vault (1)                           ││                                                                              │"
+"│  ● devbox (1)                        ││                                                                              │"
+"│ idle      app · herder/docs          ││                                                                              │"
+"│  ● laptop (0)                        ││                                                                              │"
+"│● laptop (1)                          ││                                                                              │"
+"│ moved     app · herder/docs → devbox │└──────────────────────────────────────────────────────────────────────────────┘"
+"│                                      │┌──────────────────────────────────────────────────────────────────────────────┐"
+"│                                      ││ moved to devbox · read-only here                                             │"
+"└──────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘"
+" ● vault connected  ● laptop connected                                                                   ? help  q quit "
