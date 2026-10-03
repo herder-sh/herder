@@ -80,7 +80,7 @@ struct ProjectIconTests {
 
 @MainActor
 struct DraftModelTests {
-    private func fleet(_ hosts: [Machine]) -> Fleet? {
+    private func makeFleet(_ hosts: [Machine]) -> Fleet? {
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else { return nil }
         fleet.setMachinesForTesting(hosts)
         return fleet
@@ -94,7 +94,7 @@ struct DraftModelTests {
             Account(accountId: "main", provider: "claude", label: "main", usage: []),
             Account(accountId: "gpt", provider: "codex", label: "gpt", usage: []),
         ]
-        let fleet = try #require(fleet([host]))
+        let fleet = try #require(makeFleet([host]))
         #expect(fleet.draftChoice(on: "h", projectId: "p") == .init(provider: "claude", model: "claude-opus-5-5"))
         #expect(Set(fleet.providers(on: "h")) == ["claude", "codex"])
         let groups = fleet.modelGroups(on: "h", providers: fleet.providers(on: "h"),
@@ -113,7 +113,7 @@ struct DraftModelTests {
         ]
         var claudeOnly = machine("b", name: "b", sessions: [])
         claudeOnly.accounts = [Account(accountId: "other", provider: "claude", label: "other", usage: [])]
-        let fleet = try #require(fleet([both, claudeOnly]))
+        let fleet = try #require(makeFleet([both, claudeOnly]))
         let codex = ModelCatalog.Choice(provider: "codex", model: "gpt-6-luna")
         #expect(fleet.draftChoice(codex, movedTo: "a", projectId: nil) == codex)
         #expect(fleet.draftChoice(codex, movedTo: "b", projectId: nil) == .init(provider: "claude", model: "claude-opus-5-5"))
