@@ -1,6 +1,6 @@
 package sh.herder.android.ui
 
-import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -71,7 +71,7 @@ class PrsScreenshotsTest {
         compose.waitForIdle()
         compose.onNodeWithText("Link Pull Request…").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Link a Pull Request").assertExists()
+        compose.onNodeWithText("Link a Pull Request").assertIsDisplayed()
         capture("phone-$theme-link")
     }
 
