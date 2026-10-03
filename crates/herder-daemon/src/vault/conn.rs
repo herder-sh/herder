@@ -170,10 +170,19 @@ async fn serve(
     result
 }
 
-/// Handles the host's messages once it is connected.
+/// Handles the host's messages once it is connected, until another host recovers one of its
+/// sessions: then the connection is dropped, so the host reconnects and stops that session.
 async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
+    let mut superseded = shared.superseded.subscribe();
     loop {
-        let frame = match tokio::time::timeout(shared.liveness, ws.next()).await {
+        let frame = tokio::select! {
+            frame = tokio::time::timeout(shared.liveness, ws.next()) => frame,
+            other = superseded.recv() => match other {
+                Ok(other) if other != *host => continue,
+                _ => bail!("another host recovered one of this host's sessions"),
+            },
+        };
+        let frame = match frame {
             Err(_) => bail!("the host was silent for {:?}", shared.liveness),
             Ok(None) => return Ok(()),
             Ok(Some(frame)) => frame.context("reading from the host")?,
@@ -191,10 +200,13 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
             Ok(HostMessage::Hello(_)) => return fail(ws, bad("already said hello")).await,
             Ok(HostMessage::Session(summary)) => {
                 let host = host.clone();
-                blocking(&shared.store, move |store| {
-                    store.put_summary(&host, &summary)
+                let superseded = blocking(&shared.store, move |store| {
+                    let superseded = store.claim(&host, &summary.session_id)?;
+                    store.put_summary(&host, &summary)?;
+                    Ok(superseded)
                 })
                 .await?;
+                shared.supersede(superseded);
                 shared.fleet.refresh().await;
                 continue;
             }
@@ -202,19 +214,28 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId) -> Result<()> {
                 let session_id = batch.session_id.clone();
                 let owner = host.clone();
                 let stored = blocking(&shared.store, move |store| {
-                    Ok((store.append(&owner, &batch)?, batch))
+                    let superseded = store.claim(&owner, &batch.session_id)?;
+                    let outcome = store.append(&owner, &batch)?;
+                    let current = store.recovered_to(&owner, &batch.session_id)?.is_none();
+                    Ok((outcome, batch, superseded, current))
                 })
                 .await;
                 match stored {
-                    Ok((Outcome::Acked(after_seq), batch)) => {
-                        shared.fleet.publish(&batch);
+                    Ok((Outcome::Acked(after_seq), batch, superseded, current)) => {
+                        shared.supersede(superseded);
+                        // A recovered copy is kept but never shown: its session goes on
+                        // elsewhere at the same seqs.
+                        if current {
+                            shared.fleet.publish(&batch);
+                        }
                         shared.fleet.refresh().await;
                         VaultMessage::Ack(Cursor {
                             session_id,
                             after_seq,
                         })
                     }
-                    Ok((Outcome::Rejected { held, reason }, _)) => {
+                    Ok((Outcome::Rejected { held, reason }, _, superseded, _)) => {
+                        shared.supersede(superseded);
                         warn!(host_id = %host, %session_id, ?reason, "batch rejected");
                         VaultMessage::Rejected {
                             cursor: Cursor {

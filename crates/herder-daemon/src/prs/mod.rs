@@ -183,7 +183,10 @@ impl PrTracker {
         let installer = Arc::clone(&tracker);
         tokio::spawn(async move {
             for session in sessions {
-                if session.status != SessionStatus::Archived {
+                if !matches!(
+                    session.status,
+                    SessionStatus::Archived | SessionStatus::Moved
+                ) {
                     installer
                         .install(&session.session_id, Path::new(&session.worktree))
                         .await;
@@ -330,6 +333,12 @@ impl PrTracker {
                 "the session is archived and read-only",
             ));
         }
+        if session.status == SessionStatus::Moved {
+            return Err(error(
+                ErrorCode::Conflict,
+                "the session was recovered on another host and is read-only here",
+            ));
+        }
         Ok(session)
     }
 
@@ -404,6 +413,10 @@ impl PrTracker {
             .iter()
             .filter(open)
             .any(|pr| pr.ci == CiStatus::Pending || pr.mergeable == Mergeable::Unknown);
+        // The host that recovered it tracks its pull requests now.
+        if session.status == SessionStatus::Moved {
+            return None;
+        }
         let archived = session.status == SessionStatus::Archived;
         let discover =
             !archived || Timestamp::now().duration_since(session.updated_at) < ARCHIVED_DISCOVERY;

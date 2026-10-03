@@ -15,9 +15,14 @@
 //! A host whose config has a `[vault]` table runs a [`Replicator`], which streams every
 //! session's journal there under [`herder_protocol::replication`], resuming from the cursors
 //! in the vault's hello.
+//!
+//! Another host can recover a session whose host died from the vault ([`recover`]); the vault
+//! then shows the session on that host, and the old host makes its copy read-only.
 
+mod client;
 mod conn;
 mod fleet;
+pub mod recover;
 mod replicator;
 mod store;
 
@@ -62,6 +67,20 @@ struct Shared {
     clients: ws::Server<Fleet>,
     /// Silence after which a host is taken for gone; [`LIVENESS_TIMEOUT`] but in tests.
     liveness: Duration,
+    /// Hosts whose copy of a session another host just recovered; their connections drop.
+    superseded: tokio::sync::broadcast::Sender<HostId>,
+}
+
+impl Shared {
+    /// Drops the connections of `hosts`, whose copies of a session another host recovered,
+    /// so they reconnect and stop the session ([`recover`]).
+    fn supersede(&self, hosts: Vec<HostId>) {
+        for host in hosts {
+            info!(host_id = %host, "a session of this host was recovered on another host");
+            // No receiver means the host is not connected.
+            let _ = self.superseded.send(host);
+        }
+    }
 }
 
 impl Server {
@@ -98,6 +117,7 @@ impl Server {
                 fleet,
                 clients,
                 liveness,
+                superseded: tokio::sync::broadcast::channel(16).0,
             }),
         }
     }
@@ -161,6 +181,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
+            recovery: None,
         },
         shutdown.clone(),
     ));

@@ -96,6 +96,30 @@ impl Journal {
         .context("appending to the journal")
     }
 
+    /// Appends a session's whole journal as another host recorded it, keeping each event's
+    /// `at` and `by`, and publishes it with the session list. The session must be new here, so
+    /// its events keep their seqs.
+    pub(super) async fn import(&self, events: Vec<Event>) -> Result<()> {
+        let sink = self.sink.clone();
+        let projects = self.projects.clone();
+        self.with_store(move |store| {
+            for event in events {
+                let stored = store.append(NewEvent {
+                    session_id: event.session_id,
+                    at: event.at,
+                    by: event.by,
+                    body: event.body,
+                })?;
+                sink.event(&stored);
+            }
+            let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
+            sink.sessions_changed(&heads(store.sessions()?, &projects));
+            Ok(())
+        })
+        .await
+        .context("appending to the journal")
+    }
+
     pub(crate) async fn read_since(
         &self,
         session_id: SessionId,

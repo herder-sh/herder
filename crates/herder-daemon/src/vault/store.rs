@@ -3,6 +3,11 @@
 //!
 //! Journals are kept exactly as hosts stored them ([`JournalRecord`]), so event types newer
 //! than this build survive. The API is synchronous; the vault calls it from `spawn_blocking`.
+//!
+//! Copies are kept per host. A session recovered on another host keeps its id, so a second
+//! host replicating a session id is that host taking the session over: the copies other hosts
+//! hold are marked recovered ([`VaultStore::claim`]). They stay, and keep whatever their host
+//! sends when it returns, but the fleet shows only the current copy.
 
 use std::path::Path;
 
@@ -45,7 +50,20 @@ CREATE TABLE sessions (
     "
 CREATE INDEX events_type ON events (host_id, session_id, event_type, seq);
 ",
+    "
+CREATE TABLE recovered (
+    host_id    TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    to_host    TEXT NOT NULL,
+    at         TEXT NOT NULL,
+    PRIMARY KEY (host_id, session_id)
+) STRICT;
+",
 ];
+
+/// Leaves out copies of sessions another host recovered; `s` is the `sessions` row.
+const CURRENT: &str = "NOT EXISTS (SELECT 1 FROM recovered r
+                       WHERE r.host_id = s.host_id AND r.session_id = s.session_id)";
 
 /// Event types that set the account a session runs on; each body has an `account_id`.
 const ACCOUNT_EVENTS: &str = "'session_created', 'account_switched', 'provider_switched'";
@@ -213,7 +231,7 @@ impl VaultStore {
                 WHERE e.host_id = s.host_id AND e.session_id = s.session_id
                   AND e.event_type IN ({ACCOUNT_EVENTS})
                 ORDER BY seq DESC LIMIT 1)
-             FROM sessions s ORDER BY s.session_id, s.host_id"
+             FROM sessions s WHERE {CURRENT} ORDER BY s.session_id, s.host_id"
         ))?;
         let rows = stmt.query_map([], |row| {
             let summary: String = row.get(0)?;
@@ -256,12 +274,59 @@ impl VaultStore {
             .collect())
     }
 
-    /// The host whose session `session` is held here, if any.
+    /// The host that has `session` now, if it is held here.
     pub fn host_of(&self, session: &SessionId) -> Result<Option<HostId>> {
         Ok(self
             .conn
-            .prepare_cached("SELECT host_id FROM sessions WHERE session_id = ?1 LIMIT 1")?
+            .prepare_cached(&format!(
+                "SELECT host_id FROM sessions s WHERE session_id = ?1 AND {CURRENT} LIMIT 1"
+            ))?
             .query_row([session.as_str()], |row| row.get::<_, String>(0))
+            .optional()?
+            .map(HostId::new))
+    }
+
+    /// Records that `host` has `session` now: when other hosts hold copies not recovered yet,
+    /// `host` recovered it from them, and they are marked so. Returns those hosts. Nothing
+    /// changes when `host`'s own copy is a recovered one: a session never moves back.
+    pub fn claim(&mut self, host: &HostId, session: &SessionId) -> Result<Vec<HostId>> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (host_id, session_id) = (host.as_str(), session.as_str());
+        let superseded = tx
+            .prepare_cached("SELECT 1 FROM recovered WHERE host_id = ?1 AND session_id = ?2")?
+            .exists([host_id, session_id])?;
+        if superseded {
+            return Ok(Vec::new());
+        }
+        let others = tx
+            .prepare_cached(
+                "SELECT host_id FROM sessions WHERE session_id = ?2 AND host_id != ?1
+                 UNION SELECT DISTINCT host_id FROM events WHERE session_id = ?2 AND host_id != ?1
+                 EXCEPT SELECT host_id FROM recovered WHERE session_id = ?2",
+            )?
+            .query_map([host_id, session_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let now = Timestamp::now();
+        for other in &others {
+            tx.prepare_cached(
+                "INSERT INTO recovered (host_id, session_id, to_host, at) VALUES (?1, ?2, ?3, ?4)",
+            )?
+            .execute(params![other, session_id, host_id, now])?;
+        }
+        tx.commit()?;
+        Ok(others.into_iter().map(HostId::new).collect())
+    }
+
+    /// The host that recovered `host`'s copy of `session`, if one did.
+    pub fn recovered_to(&self, host: &HostId, session: &SessionId) -> Result<Option<HostId>> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT to_host FROM recovered WHERE host_id = ?1 AND session_id = ?2")?
+            .query_row([host.as_str(), session.as_str()], |row| {
+                row.get::<_, String>(0)
+            })
             .optional()?
             .map(HostId::new))
     }
@@ -554,6 +619,64 @@ mod tests {
         assert_eq!(heads[1].parent.as_ref().unwrap().as_str(), "s1");
         assert_eq!(store.host_of(&SessionId::new("s2")).unwrap(), Some(host));
         assert_eq!(store.host_of(&SessionId::new("nope")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_session_another_host_replicates_is_recovered_and_never_moves_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (a, b, c) = (HostId::new("a"), HostId::new("b"), HostId::new("c"));
+        let s1 = SessionId::new("s1");
+        let created = serde_json::json!({
+            "type": "session_created", "repo": "/repo", "worktree": "/wt", "branch": "b",
+            "provider": "claude", "account_id": "main", "model": "m",
+            "permission_mode": "ask"
+        });
+        let journal = |records: Vec<JournalRecord>| Batch {
+            session_id: s1.clone(),
+            events: records,
+        };
+        assert!(store.claim(&a, &s1).unwrap().is_empty());
+        store
+            .put_summary(&a, &summary("s1", None, SessionStatus::Running))
+            .unwrap();
+        store
+            .append(&a, &journal(vec![event(1, created.clone())]))
+            .unwrap();
+        assert_eq!(store.host_of(&s1).unwrap(), Some(a.clone()));
+
+        // B recovers it: A's copy is superseded once, and the fleet shows B's.
+        assert_eq!(store.claim(&b, &s1).unwrap(), std::slice::from_ref(&a));
+        assert!(store.claim(&b, &s1).unwrap().is_empty());
+        store
+            .put_summary(&b, &summary("s1", None, SessionStatus::Idle))
+            .unwrap();
+        store
+            .append(&b, &journal(vec![event(1, created.clone())]))
+            .unwrap();
+        assert_eq!(store.recovered_to(&a, &s1).unwrap(), Some(b.clone()));
+        assert_eq!(store.recovered_to(&b, &s1).unwrap(), None);
+        assert_eq!(store.host_of(&s1).unwrap(), Some(b.clone()));
+        let fleet = store.fleet().unwrap();
+        assert_eq!(fleet.len(), 1);
+        assert_eq!(fleet[0].host_id, Some(b.clone()));
+        assert_eq!(fleet[0].status, SessionStatus::Idle);
+
+        // A comes back and replicates what it had: kept, but the session stays B's.
+        assert!(store.claim(&a, &s1).unwrap().is_empty());
+        store.append(&a, &journal(vec![record(2, "late")])).unwrap();
+        assert_eq!(store.records(&a, &s1, 0, 10).unwrap().len(), 2);
+        assert_eq!(store.host_of(&s1).unwrap(), Some(b.clone()));
+
+        // C recovers it from B.
+        assert_eq!(store.claim(&c, &s1).unwrap(), std::slice::from_ref(&b));
+        assert_eq!(store.recovered_to(&a, &s1).unwrap(), Some(b));
+        store
+            .put_summary(&c, &summary("s1", None, SessionStatus::Idle))
+            .unwrap();
+        store.append(&c, &journal(vec![event(1, created)])).unwrap();
+        assert_eq!(store.host_of(&s1).unwrap(), Some(c));
+        assert_eq!(store.fleet().unwrap().len(), 1);
     }
 
     #[test]

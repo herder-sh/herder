@@ -8,7 +8,7 @@
 //! unreachable it retries with a backoff of up to [`BACKOFF_CAP`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,19 +19,15 @@ use herder_protocol::{
     Account, Batch, Cursor, Event, HostHello, HostMessage, Item, ItemId, MAX_BATCH_EVENTS,
     REPLICATION_VERSION, RejectReason, Seq, SessionHead, SessionId, SessionSummary, VaultMessage,
 };
-use rustls::pki_types::ServerName;
-use tokio::net::TcpStream;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use super::BUILD;
+use super::client::{self, Ws};
+use super::{BUILD, recover};
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
@@ -57,8 +53,6 @@ const SILENCE: Duration = Duration::from_secs(60);
 
 /// Events of one session sent but not yet acknowledged, at most.
 const WINDOW: Seq = 4 * MAX_BATCH_EVENTS as Seq;
-
-type Ws = WebSocketStream<TlsStream<TcpStream>>;
 
 /// Passes everything on to `next`, and wakes the replicator on every durable event.
 pub struct WakeOnEvent {
@@ -105,6 +99,8 @@ pub struct Replicator {
     pub sessions: SessionManager,
     /// Notified when the journal grows; see [`WakeOnEvent`].
     pub changed: Arc<Notify>,
+    /// The data dir, which keeps where recovered sessions came from ([`recover`]).
+    pub data_dir: PathBuf,
 }
 
 impl Replicator {
@@ -164,6 +160,10 @@ impl Replicator {
             .map_err(|_| anyhow!("no answer in {CONNECT_TIMEOUT:?}"))??;
         *connected = true;
         info!(vault = %self.vault.address, sessions = acked.len(), "replicating to the vault");
+        // Sessions recovered elsewhere while this host was gone stop here before they
+        // replicate again, retried on every keepalive until it worked; the vault drops this
+        // connection when one is recovered later.
+        let mut released = self.release_recovered().await;
         let mut link = Link::new(acked);
         let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
         let mut heard = Instant::now();
@@ -176,6 +176,9 @@ impl Replicator {
                         bail!("the vault stopped answering");
                     }
                     ws.send(Message::Ping(Default::default())).await?;
+                    if !released {
+                        released = self.release_recovered().await;
+                    }
                 }
                 frame = ws.next() => {
                     heard = Instant::now();
@@ -189,18 +192,28 @@ impl Replicator {
         }
     }
 
+    /// Makes this host's sessions that another host recovered read-only ([`recover`]);
+    /// returns whether that worked.
+    async fn release_recovered(&self) -> bool {
+        let released = recover::release_recovered(
+            &self.vault,
+            &self.device,
+            &self.host,
+            &self.sessions,
+            &self.data_dir,
+        );
+        match released.await {
+            Ok(()) => true,
+            Err(err) => {
+                warn!("cannot check for sessions recovered on other hosts: {err:#}");
+                false
+            }
+        }
+    }
+
     /// Connects and exchanges hellos; returns the vault's cursors.
     async fn connect(&self, connector: &TlsConnector) -> Result<(Ws, Vec<Cursor>)> {
-        let address = &self.vault.address;
-        let tcp = TcpStream::connect(address).await.context("connecting")?;
-        tcp.set_nodelay(true)?;
-        // The certificate is pinned by fingerprint, so the name is never checked.
-        let name = ServerName::try_from("herder").context("the TLS server name")?;
-        let tls = connector.connect(name, tcp).await.context("TLS")?;
-        let request = format!("wss://{address}/").into_client_request()?;
-        let (mut ws, _) = tokio_tungstenite::client_async(request, tls)
-            .await
-            .context("the WebSocket upgrade")?;
+        let mut ws = client::dial(&self.vault, connector).await?;
         let hello = HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
             host_id: self.host.id.clone(),
