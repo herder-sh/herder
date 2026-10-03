@@ -13,6 +13,8 @@ public struct HerderScene: Scene {
             switch profile {
             case .opened(let fleet):
                 FleetView(fleet: fleet)
+                    // Dark only for now; light mode comes later.
+                    .preferredColorScheme(.dark)
             case .failed(let message):
                 ContentUnavailableView(
                     "Cannot open the profile", systemImage: "exclamationmark.triangle",

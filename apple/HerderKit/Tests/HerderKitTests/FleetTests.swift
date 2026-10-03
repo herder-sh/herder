@@ -56,4 +56,33 @@ struct FleetTests {
         defer { following.cancel() }
         #expect(await eventually { fleet.machines.first?.connection == .connected })
     }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aSessionsTurnShowsLiveInTheLists() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(link: daemon.link)
+        try await fleet.client.synced(hostId: machine.hostId)
+
+        let created = try await fleet.client.send(
+            hostId: machine.hostId,
+            command: .createSession(
+                repo: daemon.repo, projectId: nil, branch: nil, accountId: daemon.account, model: nil,
+                permissionMode: .ask, maxChildren: nil, failoverPin: nil))
+        guard case .sessionCreated(let sessionId) = created else {
+            Issue.record("expected a session, got \(created)")
+            return
+        }
+        _ = try await fleet.client.send(hostId: machine.hostId, command: .sendPrompt(sessionId: sessionId, text: "Say hello."))
+
+        #expect(await eventually {
+            fleet.lists.recent.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
+        })
+        #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
+    }
 }
