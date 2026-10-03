@@ -27,6 +27,10 @@
 //! where it stands, and [`Client::synced`] waits until a connection is up and the daemon has
 //! sent its lists and the replay of every subscription.
 //!
+//! A connection is pinged as soon as it is up and every 15 s after; [`Machine::quality`]
+//! holds the round trips of the last 20 pongs, how many pongs did not come back before the
+//! next ping, when the connection was established and how often it was re-established.
+//!
 //! # App lifecycle
 //!
 //! An app calls [`Client::suspend`] when it goes to the background and [`Client::wake`] when
@@ -97,7 +101,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
     Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
-    Provider, Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
+    Provider, Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId, Timestamp,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -111,7 +115,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 2;
+pub const CLIENT_API_VERSION: u32 = 3;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +183,8 @@ pub struct Machine {
     pub fingerprint: String,
     /// Where the connection stands.
     pub connection: ConnectionState,
+    /// How the connection performs.
+    pub quality: ConnectionQuality,
     /// This device's user's role, from the latest hello; `None` until the first connection.
     pub role: Option<Role>,
     /// The daemon's sessions, as last listed. A vault's are every host's, each naming its
@@ -215,6 +221,29 @@ pub enum ConnectionState {
         /// Why the last attempt failed or the connection ended.
         error: String,
     },
+}
+
+/// How a machine's connection performs: round trips of the pings the client sends as soon as
+/// a connection is up and every 15 s after, and how stable the connection is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionQuality {
+    /// When the current connection was established; `None` while not connected.
+    pub connected_since: Option<Timestamp>,
+    /// How many times a connection was established again after the first, since the client
+    /// opened.
+    pub reconnects: u32,
+    /// Round trip of the latest pong, in milliseconds; `None` until one came back on the
+    /// current connection.
+    pub last_rtt_ms: Option<u32>,
+    /// Mean round trip of the last 20 pongs on the current connection, in milliseconds.
+    pub average_rtt_ms: Option<u32>,
+    /// Shortest round trip of the last 20 pongs on the current connection, in milliseconds.
+    pub min_rtt_ms: Option<u32>,
+    /// Longest round trip of the last 20 pongs on the current connection, in milliseconds.
+    pub max_rtt_ms: Option<u32>,
+    /// Pings whose pong did not come back before the next ping was due, late or lost, since
+    /// the client opened.
+    pub missed_pongs: u32,
 }
 
 /// What changed in a session since the subscription's previous update.

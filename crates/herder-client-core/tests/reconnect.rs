@@ -1007,6 +1007,47 @@ async fn host_and_session_resources_stay_current_while_connected() {
     .await;
 }
 
+/// A connection is pinged as soon as it is up: its round trip, when it was established and how
+/// often it was re-established are reported, and the round trips go with the connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_quality_reports_round_trips_and_reconnects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("daemon");
+    let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::default()).await;
+    let port = daemon.addr.port();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    client.pair(daemon.pairing_link()).await.unwrap();
+    wait_machine(&client, |m| m.quality.last_rtt_ms.is_some()).await;
+    let quality = client.machines()[0].quality.clone();
+    assert!(connected(&client.machines()[0].connection));
+    assert!(quality.connected_since.is_some());
+    assert_eq!(quality.reconnects, 0);
+    assert_eq!(quality.missed_pongs, 0);
+    let rtt = quality.last_rtt_ms.unwrap();
+    assert_eq!(quality.average_rtt_ms, Some(rtt));
+    assert_eq!(quality.min_rtt_ms, Some(rtt));
+    assert_eq!(quality.max_rtt_ms, Some(rtt));
+
+    daemon.kill().await;
+    wait_machine(&client, |m| {
+        !connected(&m.connection)
+            && m.quality.connected_since.is_none()
+            && m.quality.last_rtt_ms.is_none()
+    })
+    .await;
+    let _daemon = Daemon::start(&data, port, "mid_turn.jsonl", Arc::default()).await;
+    wait_machine(&client, |m| {
+        m.quality.reconnects == 1
+            && m.quality.connected_since.is_some()
+            && m.quality.last_rtt_ms.is_some()
+    })
+    .await;
+}
+
 async fn create_session(client: &Client, host: &HostId, repo: String) -> SessionId {
     let created = client
         .send(

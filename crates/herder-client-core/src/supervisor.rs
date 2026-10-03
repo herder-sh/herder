@@ -9,11 +9,15 @@
 //! replaced right away, any other is pinged and replaced if nothing comes back within
 //! [`PROBE_TIMEOUT`].
 //!
+//! A connection is pinged as soon as it is up and every [`PING_INTERVAL`] after; each ping
+//! carries a fresh payload, so its pong gives the round trip, and a ping still unanswered when
+//! the next one is due counts as a missed pong.
+//!
 //! Terminal attachments belong to a connection on the daemon, so the task re-attaches every
 //! terminal this client holds a stream for on each new connection, with fresh command ids (a
 //! resent id would be answered from the daemon's memory without attaching anything).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -24,13 +28,13 @@ use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
     FailoverSettings, PROTOCOL_VERSION, Project, Role, ServerHello, ServerMessage, SessionId,
-    TerminalId,
+    TerminalId, Timestamp,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, watch};
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tokio_tungstenite::WebSocketStream;
@@ -44,7 +48,7 @@ use crate::cache::SessionLog;
 use crate::offline::{self, Cached};
 use crate::profile::SavedMachine;
 use crate::terminal::{TerminalEvent, TerminalStream};
-use crate::{ConnectionState, Error, Machine, SessionUpdate, new_command_id};
+use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, new_command_id};
 
 /// Time one address gets for TCP, TLS, the WebSocket upgrade and the hellos.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,7 +59,10 @@ const BACKOFF_BASE: Duration = Duration::from_millis(250);
 /// Longest wait between attempts.
 const BACKOFF_CAP: Duration = Duration::from_secs(30);
 
-/// How often an idle connection is pinged.
+/// How many of the latest round trips [`ConnectionQuality`] sums up.
+const RECENT_PONGS: usize = 20;
+
+/// How often a connection is pinged.
 const PING_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Silence after which a connection is considered dead, though TCP has not noticed yet.
@@ -120,6 +127,7 @@ struct State {
     /// The machine's display name, once renamed.
     name: Option<String>,
     connection: Option<ConnectionState>,
+    quality: Quality,
     role: Option<Role>,
     sessions: Vec<herder_protocol::SessionHead>,
     hosts: Vec<herder_protocol::FleetHost>,
@@ -185,6 +193,55 @@ impl State {
             accounts: self.accounts.clone(),
             failover: self.failover.clone(),
             logs: logs.into_iter().map(<[_]>::to_vec).collect(),
+        }
+    }
+}
+
+/// What [`ConnectionQuality`] is made of.
+#[derive(Default)]
+struct Quality {
+    /// When the current connection was established.
+    connected_since: Option<Timestamp>,
+    /// Connections established so far.
+    connections: u32,
+    /// Round trips of the latest pongs on the current connection, oldest first.
+    rtts: VecDeque<Duration>,
+    missed_pongs: u32,
+}
+
+impl Quality {
+    fn connected(&mut self) {
+        self.connections = self.connections.saturating_add(1);
+        self.connected_since = Some(Timestamp::now());
+        self.rtts.clear();
+    }
+
+    fn disconnected(&mut self) {
+        self.connected_since = None;
+        self.rtts.clear();
+    }
+
+    fn pong(&mut self, rtt: Duration) {
+        if self.rtts.len() == RECENT_PONGS {
+            self.rtts.pop_front();
+        }
+        self.rtts.push_back(rtt);
+    }
+
+    fn view(&self) -> ConnectionQuality {
+        let ms = |rtt: Duration| u32::try_from(rtt.as_millis()).unwrap_or(u32::MAX);
+        let average = u32::try_from(self.rtts.len())
+            .ok()
+            .filter(|&count| count > 0)
+            .map(|count| self.rtts.iter().sum::<Duration>() / count);
+        ConnectionQuality {
+            connected_since: self.connected_since,
+            reconnects: self.connections.saturating_sub(1),
+            last_rtt_ms: self.rtts.back().copied().map(ms),
+            average_rtt_ms: average.map(ms),
+            min_rtt_ms: self.rtts.iter().min().copied().map(ms),
+            max_rtt_ms: self.rtts.iter().max().copied().map(ms),
+            missed_pongs: self.missed_pongs,
         }
     }
 }
@@ -317,6 +374,7 @@ impl Supervisor {
                 .connection
                 .clone()
                 .unwrap_or(ConnectionState::Connecting),
+            quality: state.quality.view(),
             role: state.role,
             sessions: state.sessions.clone(),
             hosts: state.hosts.clone(),
@@ -621,11 +679,28 @@ impl Supervisor {
     fn set_connection(&self, connection: ConnectionState) {
         let mut state = self.lock();
         // Resource figures are live; a new connection sends them afresh.
-        if connection != ConnectionState::Connected {
+        if connection == ConnectionState::Connected {
+            state.quality.connected();
+        } else {
             state.resources = None;
             state.session_usage.clear();
+            state.quality.disconnected();
         }
         state.connection = Some(connection);
+        drop(state);
+        self.notify();
+    }
+
+    /// Records a pong that came back `rtt` after its ping.
+    fn pong(&self, rtt: Duration) {
+        self.lock().quality.pong(rtt);
+        self.notify();
+    }
+
+    /// Records a ping whose pong did not come back before the next ping was due.
+    fn missed_pong(&self) {
+        let mut state = self.lock();
+        state.quality.missed_pongs = state.quality.missed_pongs.saturating_add(1);
         drop(state);
         self.notify();
     }
@@ -956,16 +1031,20 @@ async fn serve(
             return Ended::Lost(error);
         }
     }
+    // Its first tick is now: the first round trip is known as soon as the connection is up.
     let mut ping = tokio::time::interval(PING_INTERVAL);
-    ping.reset();
+    ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // The payload of the latest steady ping and when it went out, until its pong comes back.
+    let mut pinged: Option<(String, Instant)> = None;
     let mut save = tokio::time::interval(SAVE_INTERVAL);
     save.reset();
     let mut heard = Instant::now();
-    // The payload of the ping a wake sent, and when its pong must have come back by. Only that
-    // pong clears it: frames read before it may have been buffered before a suspension.
+    // The payload of the ping a wake sent, and when it went out; its pong must come back within
+    // PROBE_TIMEOUT. Only that pong clears it: frames read before it may have been buffered
+    // before a suspension.
     let mut probe: Option<(String, Instant)> = None;
     loop {
-        let deadline = probe.as_ref().map(|(_, deadline)| *deadline);
+        let deadline = probe.as_ref().map(|(_, sent)| *sent + PROBE_TIMEOUT);
         let probed = async {
             match deadline {
                 Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -985,7 +1064,13 @@ async fn serve(
                 if heard.elapsed() > SILENCE_LIMIT {
                     return Ended::Lost("the daemon stopped answering".to_owned());
                 }
-                if let Err(error) = write(&mut sink, Message::Ping(Default::default())).await {
+                if pinged.is_some() {
+                    supervisor.missed_pong();
+                }
+                let payload = ulid::Ulid::new().to_string();
+                let message = Message::Ping(payload.clone().into_bytes().into());
+                pinged = Some((payload, Instant::now()));
+                if let Err(error) = write(&mut sink, message).await {
                     return Ended::Lost(error);
                 }
                 continue;
@@ -1042,7 +1127,7 @@ async fn serve(
                         if probe.is_none() {
                             let payload = ulid::Ulid::new().to_string();
                             let ping = Message::Ping(payload.clone().into_bytes().into());
-                            probe = Some((payload, Instant::now() + PROBE_TIMEOUT));
+                            probe = Some((payload, Instant::now()));
                             if let Err(error) = write(&mut sink, ping).await {
                                 return Ended::Lost(error);
                             }
@@ -1069,11 +1154,11 @@ async fn serve(
             }
             Some(Ok(Message::Text(text))) => text,
             Some(Ok(Message::Pong(payload))) => {
-                if probe
-                    .as_ref()
-                    .is_some_and(|(sent, _)| *payload == *sent.as_bytes())
-                {
-                    probe = None;
+                for ping in [&mut pinged, &mut probe] {
+                    if let Some((_, sent)) = ping.take_if(|(sent, _)| *payload == *sent.as_bytes())
+                    {
+                        supervisor.pong(sent.elapsed());
+                    }
                 }
                 continue;
             }
@@ -1309,5 +1394,43 @@ mod tests {
         }
         assert!(backoff(0) <= BACKOFF_BASE);
         assert!(backoff(30) >= BACKOFF_CAP / 2);
+    }
+
+    #[test]
+    fn quality_sums_up_the_latest_round_trips_of_the_current_connection() {
+        let ms = Duration::from_millis;
+        let mut quality = Quality::default();
+        assert_eq!(quality.view(), ConnectionQuality::default());
+
+        quality.connected();
+        assert!(quality.view().connected_since.is_some());
+        for rtt in [30, 10, 20] {
+            quality.pong(ms(rtt));
+        }
+        quality.missed_pongs = 1;
+        let view = quality.view();
+        assert_eq!(view.reconnects, 0);
+        assert_eq!(view.last_rtt_ms, Some(20));
+        assert_eq!(view.average_rtt_ms, Some(20));
+        assert_eq!(view.min_rtt_ms, Some(10));
+        assert_eq!(view.max_rtt_ms, Some(30));
+
+        // Only the latest RECENT_PONGS count.
+        for _ in 0..RECENT_PONGS {
+            quality.pong(ms(5));
+        }
+        let view = quality.view();
+        assert_eq!((view.min_rtt_ms, view.max_rtt_ms), (Some(5), Some(5)));
+
+        // Round trips belong to a connection; the counters to the client.
+        quality.disconnected();
+        let view = quality.view();
+        assert_eq!(view.connected_since, None);
+        assert_eq!(view.last_rtt_ms, None);
+        quality.connected();
+        let view = quality.view();
+        assert_eq!(view.reconnects, 1);
+        assert_eq!(view.missed_pongs, 1);
+        assert_eq!(view.average_rtt_ms, None);
     }
 }
