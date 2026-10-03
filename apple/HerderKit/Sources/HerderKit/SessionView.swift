@@ -416,7 +416,6 @@ struct DraftSessionView: View {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
             }
             Spacer()
-            Spacer()
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

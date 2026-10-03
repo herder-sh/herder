@@ -43,12 +43,19 @@ struct FleetView: View {
         .task { await fleet.follow() }
         .onChange(of: draft) {
             // A draft shows in a list's session pane; Machines has none.
-            if draft != nil {
+            if let draft {
                 session = nil
-                if item == .machines { item = .home }
+                // The list beside the chat is the draft's project, or Home for a path.
+                let shown = draft.projectId.map { id in fleet.lists.projects.contains { $0.id == id } } ?? false
+                item = shown ? .project(draft.projectId ?? "") : .home
             }
         }
         .onChange(of: session) { if session != nil { draft = nil } }
+        // A draft belongs to Home or its own project; leaving for elsewhere drops it.
+        .onChange(of: item) {
+            guard let draft else { return }
+            if item != .home && item != .project(draft.projectId ?? "") { self.draft = nil }
+        }
     }
 
     private var shell: some View {
