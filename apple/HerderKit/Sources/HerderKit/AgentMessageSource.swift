@@ -10,11 +10,20 @@ struct AgentMessageSource: View {
 
     private var source: SessionKey { SessionKey(hostId: hostId, sessionId: message.senderSessionId) }
 
+    private var senderAvailable: Bool {
+        fleet.machines.first { $0.hostId == hostId }?.sessions.contains {
+            $0.sessionId == message.senderSessionId
+        } == true
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 3) {
             Label("Sent by another agent", systemImage: "bubble.left.and.bubble.right")
                 .font(.caption).foregroundStyle(Theme.secondary)
-            if let open {
+            // Replayed or forked history may name a session unavailable on this host.
+            if !senderAvailable {
+                senderLabel
+            } else if let open {
                 Button { open(source) } label: { senderLabel }.buttonStyle(.plain)
             } else {
                 NavigationLink(value: source) { senderLabel }.buttonStyle(.plain)
