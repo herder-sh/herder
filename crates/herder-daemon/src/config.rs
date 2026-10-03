@@ -663,6 +663,27 @@ pub fn set_project_settings(
     })
 }
 
+/// Sets the `[vault]` table of the config file at `path` to `vault`, or removes it when
+/// `None`; the rest of the file is kept as written, and only a file that still loads replaces
+/// it. A `pairing_code` is never written: the host is paired by the time it is kept.
+pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
+    edit_config(path, |doc, _| {
+        match vault {
+            Some(vault) => {
+                let mut table = toml_edit::Table::new();
+                table.insert("address", toml_edit::value(vault.address.as_str()));
+                table.insert("fingerprint", toml_edit::value(vault.fingerprint.as_str()));
+                doc.insert("vault", toml_edit::Item::Table(table));
+            }
+            None => {
+                doc.remove("vault");
+            }
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// The `[[project]]` entry `entry` of `doc`, the config file at `path`, counted in file order,
 /// or a new entry appended when `None`.
 fn project_table<'a>(
@@ -1036,6 +1057,50 @@ mod tests {
                 vault: None,
             }
         );
+    }
+
+    #[test]
+    fn the_vault_table_is_set_and_removed_keeping_the_rest_of_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let original = "# my daemon\nlisten = \"127.0.0.1:7447\"  # loopback only\n\n\
+                        [log]\nlevel = \"debug\"\n";
+        std::fs::write(&path, original).unwrap();
+        let vault = VaultConfig {
+            address: "vault.lan:7447".into(),
+            fingerprint: "ab".repeat(32),
+            pairing_code: Some("ABCDE-FGHJK".into()),
+        };
+        set_vault(&path, Some(&vault)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(original), "{text}");
+        assert!(!text.contains("ABCDE"), "the code is never kept: {text}");
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(
+            config.vault,
+            Some(VaultConfig {
+                pairing_code: None,
+                ..vault.clone()
+            })
+        );
+
+        // Setting it again replaces it; removing it gives the file back as it was.
+        let moved = VaultConfig {
+            address: "10.0.0.9:7447".into(),
+            ..vault
+        };
+        set_vault(&path, Some(&moved)).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("[vault]").count(), 1, "{text}");
+        assert!(text.contains("10.0.0.9:7447"), "{text}");
+        set_vault(&path, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+        // A host with no config file gets one.
+        let fresh = tmp.path().join("new/daemon.toml");
+        set_vault(&fresh, Some(&moved)).unwrap();
+        let config = Config::load_with_env(Some(&fresh), env(&[("HOME", "/home/dev")])).unwrap();
+        assert_eq!(config.vault.unwrap().address, "10.0.0.9:7447");
     }
 
     #[test]

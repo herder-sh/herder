@@ -99,10 +99,9 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
     let stop = act("ctrl+c", "stop", Action::Compose(Act::CtrlC));
     match app.mode() {
         // The fleet and the accounts are views, whose keys the bar shows.
-        None if app
-            .machine_panel
-            .as_ref()
-            .is_some_and(|panel| panel.add.is_none() && panel.account.is_none()) =>
+        None if app.machine_panel.as_ref().is_some_and(|panel| {
+            panel.add.is_none() && panel.account.is_none() && panel.backup.is_none()
+        }) =>
         {
             match app
                 .machine_panel
@@ -122,6 +121,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("n", "add account", char('n')),
                     tap("e", "rename", char('e')),
                     tap("d", "forget", char('d')),
+                    tap("b", "backup", char('b')),
                     tap("r", "reconnect", char('r')),
                     tap("esc", "back", KeyCode::Esc),
                 ],

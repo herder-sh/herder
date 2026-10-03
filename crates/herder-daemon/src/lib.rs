@@ -103,13 +103,12 @@ pub async fn serve(
         }),
         terminals: terminals.clone(),
     });
+    // Always woken, as an owner may link a vault while the daemon runs.
     let journal_grew = Arc::new(tokio::sync::Notify::new());
-    if config.vault.is_some() {
-        sink = Arc::new(vault::WakeOnEvent {
-            next: sink,
-            notify: Arc::clone(&journal_grew),
-        });
-    }
+    sink = Arc::new(vault::WakeOnEvent {
+        next: sink,
+        notify: Arc::clone(&journal_grew),
+    });
     let setup = session::Setup {
         store,
         adapters,
@@ -130,25 +129,17 @@ pub async fn serve(
         keep: worktree::checkpoint::KEEP,
         push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
     })?;
-    let mut recovery = None;
-    if let Some(vault) = &config.vault {
-        let replicator = vault::Replicator {
-            vault: vault.clone(),
-            device: vault::Replicator::device_key(data_dir.root())?,
+    let link = Arc::new(vault::Link::start(
+        vault::LinkSetup {
+            config_file: config.path.clone(),
             host: host.clone(),
             sessions: sessions.clone(),
             changed: journal_grew,
             data_dir: data_dir.root().to_owned(),
-        };
-        tokio::spawn(replicator.run(shutdown.clone()));
-        recovery = Some(Arc::new(vault::recover::Recovery {
-            vault: vault.clone(),
-            device: vault::Replicator::device_key(data_dir.root())?,
-            host: host.clone(),
-            sessions: sessions.clone(),
-            data_dir: data_dir.root().to_owned(),
-        }));
-    }
+            shutdown: shutdown.clone(),
+        },
+        config.vault.clone(),
+    )?);
     tokio::spawn(
         projects::Discovery {
             host: host.id.clone(),
@@ -227,7 +218,7 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
-            recovery,
+            link: Some(Arc::clone(&link)),
             vault: false,
         },
         shutdown.clone(),
@@ -244,9 +235,9 @@ pub async fn serve(
         config.path.clone(),
         sessions.clone(),
     );
-    ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host)
-        .run(listener, shutdown)
-        .await;
+    let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
+    server.link_vault(link)?;
+    server.run(listener, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");
     Ok(())
