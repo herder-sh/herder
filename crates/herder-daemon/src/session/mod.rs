@@ -200,10 +200,10 @@ use std::sync::{Arc, OnceLock, PoisonError, RwLock};
 use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
-    Account, AccountId, AttachmentId, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
-    Event, EventBody, HostId, Item, ItemId, JournalRecord, PermissionMode, Project, ProjectId,
-    Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
-    UsageWindow, UserId,
+    Account, AccountId, Attachment, AttachmentId, CommandBody, CommandId, CommandResult, ErrorCode,
+    ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord, PermissionMode,
+    Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary,
+    Timestamp, TurnId, UsageWindow, UserId,
 };
 use herder_store::Store;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -733,6 +733,15 @@ impl SessionManager {
             .projects
             .set((host, projects))
             .map_err(|_| anyhow::anyhow!("projects are managed already"))
+    }
+
+    /// The bytes of `attachment`, an image a prompt of `session_id` carried.
+    pub(crate) async fn image(
+        &self,
+        session_id: &SessionId,
+        attachment: &Attachment,
+    ) -> Result<Image, ErrorInfo> {
+        attachments::load(&self.inner.attachments, session_id, attachment).await
     }
 
     /// The bytes of the image `attachment_id` a prompt of `session_id` carried.

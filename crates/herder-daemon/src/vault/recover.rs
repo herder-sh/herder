@@ -5,8 +5,9 @@
 //! or cut off. The session keeps its id. This host reads the session's journal from the vault
 //! as a client ([`client`]), and the session manager takes it over
 //! ([`SessionManager::recover`]): a new worktree restored from the latest checkpoint on
-//! `origin`, and the next prompt replayed on one of this host's accounts. Checkpoints the dead
-//! host could only bundle stay on it: bundles are not uploaded to the vault.
+//! `origin`, and the next prompt replayed on one of this host's accounts. The images its
+//! prompts carried come from the vault too. Checkpoints the dead host could only bundle stay
+//! on it: bundles are not uploaded to the vault.
 //!
 //! Once this host replicates the session, the vault takes its copy as the session and the old
 //! host's as recovered ([`super::VaultStore`]): clients see the session on this host, and
@@ -110,7 +111,7 @@ impl Recovery {
         };
         let session = self
             .sessions
-            .recover(view.events, project_id, request.account_id)
+            .recover(view.events, view.images, project_id, request.account_id)
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
         let origin = Origin {

@@ -44,9 +44,75 @@
       "required": [
         "type"
       ]
+    },
+    {
+      "description": "An image a `user_message` of the next batch names; sent just before that batch.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "attachment"
+        }
+      },
+      "$ref": "#/$defs/AttachmentData",
+      "required": [
+        "type"
+      ]
     }
   ],
   "$defs": {
+    "Attachment": {
+      "description": "An image a prompt carried, kept on the session's host.",
+      "type": "object",
+      "properties": {
+        "attachment_id": {
+          "description": "Fetches the bytes with `get_attachment`.",
+          "$ref": "#/$defs/AttachmentId"
+        },
+        "media_type": {
+          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size of the image in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "attachment_id",
+        "media_type",
+        "size"
+      ]
+    },
+    "AttachmentData": {
+      "description": "The bytes of an image a prompt of a session carried.",
+      "type": "object",
+      "properties": {
+        "attachment": {
+          "description": "The image as the `user_message` names it. The vault refuses it as a bad request unless\n`media_type` is one of [`crate::IMAGE_MEDIA_TYPES`] and `size` is the length of `data`,\nat most [`crate::MAX_IMAGE_BYTES`], or when it holds different bytes under its id.",
+          "$ref": "#/$defs/Attachment"
+        },
+        "data": {
+          "description": "The image file's bytes.",
+          "$ref": "#/$defs/Bytes"
+        },
+        "session_id": {
+          "description": "Session whose prompt carried the image.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "attachment",
+        "data"
+      ]
+    },
+    "AttachmentId": {
+      "description": "Identifies an image a prompt carried, within its session; a ULID string, opaque.",
+      "type": "string"
+    },
     "Batch": {
       "description": "Events of one session with consecutive seqs, oldest first.",
       "type": "object",
@@ -67,6 +133,11 @@
         "session_id",
         "events"
       ]
+    },
+    "Bytes": {
+      "description": "Raw bytes, encoded as a standard padded base64 string.",
+      "type": "string",
+      "contentEncoding": "base64"
     },
     "CiStatus": {
       "description": "Combined status of a pull request's checks.",

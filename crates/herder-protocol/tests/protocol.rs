@@ -1522,6 +1522,15 @@ fn host_fixtures() -> Vec<HostMessage> {
             ),
         ],
     }));
+    messages.push(HostMessage::Attachment(AttachmentData {
+        session_id: SessionId::new("01J9SESSION"),
+        attachment: Attachment {
+            attachment_id: AttachmentId::new("01J9IMAGE"),
+            media_type: "image/png".into(),
+            size: 8,
+        },
+        data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+    }));
     messages
 }
 

@@ -8,15 +8,20 @@
 //! host replicating a session id is that host taking the session over: the copies other hosts
 //! hold are marked recovered ([`VaultStore::claim`]). They stay, and keep whatever their host
 //! sends when it returns, but the fleet shows only the current copy.
+//!
+//! Images prompts carried are kept per host the same way, beside the journals, by session and
+//! attachment id ([`VaultStore::put_attachment`]).
 
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Batch, Cursor, DeviceId, HostId, JournalRecord, MAX_BATCH_EVENTS, RawEventBody,
+    AccountId, AttachmentData, AttachmentId, Batch, Bytes, Cursor, DeviceId, HostId,
+    IMAGE_MEDIA_TYPES, Image, JournalRecord, MAX_BATCH_EVENTS, MAX_IMAGE_BYTES, RawEventBody,
     RejectReason, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only.
 const MIGRATIONS: &[&str] = &[
@@ -59,6 +64,17 @@ CREATE TABLE recovered (
     PRIMARY KEY (host_id, session_id)
 ) STRICT;
 ",
+    "
+CREATE TABLE attachments (
+    host_id       TEXT    NOT NULL,
+    session_id    TEXT    NOT NULL,
+    attachment_id TEXT    NOT NULL,
+    media_type    TEXT    NOT NULL,
+    sha256        BLOB    NOT NULL,
+    data          BLOB    NOT NULL,
+    PRIMARY KEY (host_id, session_id, attachment_id)
+) STRICT;
+",
 ];
 
 /// Leaves out copies of sessions another host recovered; `s` is the `sessions` row.
@@ -99,7 +115,8 @@ pub enum Outcome {
     },
 }
 
-/// A batch that breaks the protocol's rules; the connection fails with a bad request.
+/// A batch or attachment that breaks the protocol's rules; the connection fails with a bad
+/// request.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct BadBatch(&'static str);
@@ -116,7 +133,7 @@ pub enum Error {
     /// The database was written by a newer herder.
     #[error("vault schema version {0} is newer than this build supports")]
     TooNew(u32),
-    /// The batch is malformed.
+    /// The batch or attachment is malformed.
     #[error(transparent)]
     BadBatch(#[from] BadBatch),
 }
@@ -408,6 +425,88 @@ impl VaultStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Keeps an image of `host`'s session durably. A re-send with the same bytes changes
+    /// nothing; one with other bytes under the same id is malformed.
+    pub fn put_attachment(&mut self, host: &HostId, image: &AttachmentData) -> Result<()> {
+        let attachment = &image.attachment;
+        let data = &image.data.0;
+        if !IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) {
+            return Err(BadBatch("an attachment's media type is not an image type").into());
+        }
+        if attachment.size != data.len() as u64 || data.len() > MAX_IMAGE_BYTES {
+            return Err(
+                BadBatch("an attachment's size is not that of its bytes, or too big").into(),
+            );
+        }
+        let sha256 = Sha256::digest(data).to_vec();
+        let key = [
+            host.as_str(),
+            image.session_id.as_str(),
+            attachment.attachment_id.as_str(),
+        ];
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let held: Option<(String, Vec<u8>)> = tx
+            .prepare_cached(
+                "SELECT media_type, sha256 FROM attachments
+                 WHERE host_id = ?1 AND session_id = ?2 AND attachment_id = ?3",
+            )?
+            .query_row(key, |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        match held {
+            Some((media_type, held)) if media_type == attachment.media_type && held == sha256 => {
+                return Ok(());
+            }
+            Some(_) => {
+                return Err(
+                    BadBatch("an attachment differs from the one held under its id").into(),
+                );
+            }
+            None => {}
+        }
+        tx.prepare_cached(
+            "INSERT INTO attachments
+               (host_id, session_id, attachment_id, media_type, sha256, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?
+        .execute(params![
+            key[0],
+            key[1],
+            key[2],
+            attachment.media_type,
+            sha256,
+            data
+        ])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The image `attachment_id` of `host`'s `session`, if it is held here.
+    pub fn attachment(
+        &self,
+        host: &HostId,
+        session: &SessionId,
+        attachment_id: &AttachmentId,
+    ) -> Result<Option<Image>> {
+        Ok(self
+            .conn
+            .prepare_cached(
+                "SELECT media_type, data FROM attachments
+                 WHERE host_id = ?1 AND session_id = ?2 AND attachment_id = ?3",
+            )?
+            .query_row(
+                [host.as_str(), session.as_str(), attachment_id.as_str()],
+                |row| {
+                    Ok(Image {
+                        media_type: row.get(0)?,
+                        data: Bytes(row.get(1)?),
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     /// Stores a batch of `host`'s events in one transaction: skips the ones already held when
     /// they are equal, rejects it whole on a gap or a conflict.
     pub fn append(&mut self, host: &HostId, batch: &Batch) -> Result<Outcome> {
@@ -548,6 +647,54 @@ mod tests {
             }]
         );
         assert!(store.cursors(&HostId::new("h2")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn attachments_are_kept_once_and_refused_when_they_differ() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = VaultStore::open(dir.path().join("vault.db")).unwrap();
+        let (host, session) = (HostId::new("h1"), SessionId::new("s1"));
+        let image = |media_type: &str, data: &[u8]| AttachmentData {
+            session_id: session.clone(),
+            attachment: herder_protocol::Attachment {
+                attachment_id: AttachmentId::new("img1"),
+                media_type: media_type.into(),
+                size: data.len() as u64,
+            },
+            data: Bytes(data.to_vec()),
+        };
+        let png = image("image/png", b"\x89PNG\r\n\x1a\nA");
+        store.put_attachment(&host, &png).unwrap();
+        store.put_attachment(&host, &png).unwrap();
+        let held = store
+            .attachment(&host, &session, &AttachmentId::new("img1"))
+            .unwrap();
+        assert_eq!(
+            held,
+            Some(Image {
+                media_type: "image/png".into(),
+                data: png.data.clone()
+            })
+        );
+        let other = AttachmentId::new("img2");
+        assert_eq!(store.attachment(&host, &session, &other).unwrap(), None);
+        assert_eq!(
+            store
+                .attachment(&HostId::new("h2"), &session, &AttachmentId::new("img1"))
+                .unwrap(),
+            None
+        );
+        let refused = |store: &mut VaultStore, image: AttachmentData| {
+            matches!(store.put_attachment(&host, &image), Err(Error::BadBatch(_)))
+        };
+        assert!(refused(
+            &mut store,
+            image("image/png", b"\x89PNG\r\n\x1a\nB")
+        ));
+        assert!(refused(&mut store, image("image/svg+xml", b"<svg")));
+        let mut wrong_size = png.clone();
+        wrong_size.attachment.size += 1;
+        assert!(refused(&mut store, wrong_size));
     }
 
     fn summary(id: &str, parent: Option<&str>, status: SessionStatus) -> SessionSummary {

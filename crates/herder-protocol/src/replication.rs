@@ -17,14 +17,21 @@
 //! 3. The vault handles messages in order. It acknowledges a batch only once its events are
 //!    durable, with a cumulative [`VaultMessage::Ack`].
 //!
+//! Images a prompt carried travel ahead of the events that name them: before each batch, the
+//! host sends a [`HostMessage::Attachment`] for every attachment of a `user_message` in it.
+//! The vault keeps each durably before it handles the next message, so the batch's ack covers
+//! the images too, and a batch re-sent after a reconnect brings them again. Re-sending one is
+//! idempotent: the vault holds one image per session and attachment id, and skips a re-send
+//! with the same content hash. Only image bytes the host still has are sent.
+//!
 //! Re-sending is idempotent: events at seqs the vault already holds are compared with what it
 //! holds and, when equal, skipped and acknowledged again. A batch that leaves a gap, or that
 //! holds a different event at a seq the vault already has, changes nothing and is answered
 //! with [`VaultMessage::Rejected`].
 //!
 //! The vault never writes to a host's sessions: [`VaultMessage`] carries no events and no
-//! commands, only acknowledgements and errors. Only durable journal events are replicated;
-//! deltas, snapshots, terminals and resource usage never are.
+//! commands, only acknowledgements and errors. Only durable journal events and the images
+//! they name are replicated; deltas, snapshots, terminals and resource usage never are.
 //!
 //! Events travel as stored ([`JournalRecord`]), with the body as raw JSON, so the vault keeps
 //! event types newer than its own build intact instead of decoding them to
@@ -40,8 +47,8 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
 use crate::{
-    Cursor, Event, EventBody, HostId, ProjectId, PullRequest, Seq, SessionId, SessionStatus,
-    Timestamp, UserId,
+    Attachment, Bytes, Cursor, Event, EventBody, HostId, ProjectId, PullRequest, Seq, SessionId,
+    SessionStatus, Timestamp, UserId,
 };
 
 /// Replication protocol version, exchanged in both hellos; peers with different versions
@@ -62,6 +69,8 @@ pub enum HostMessage {
     Session(SessionSummary),
     /// Consecutive journal events of one session.
     Batch(Batch),
+    /// An image a `user_message` of the next batch names; sent just before that batch.
+    Attachment(AttachmentData),
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -119,6 +128,19 @@ pub struct Batch {
     pub session_id: SessionId,
     /// One to [`MAX_BATCH_EVENTS`] events, each seq one more than the one before.
     pub events: Vec<JournalRecord>,
+}
+
+/// The bytes of an image a prompt of a session carried.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AttachmentData {
+    /// Session whose prompt carried the image.
+    pub session_id: SessionId,
+    /// The image as the `user_message` names it. The vault refuses it as a bad request unless
+    /// `media_type` is one of [`crate::IMAGE_MEDIA_TYPES`] and `size` is the length of `data`,
+    /// at most [`crate::MAX_IMAGE_BYTES`], or when it holds different bytes under its id.
+    pub attachment: Attachment,
+    /// The image file's bytes.
+    pub data: Bytes,
 }
 
 /// One event of a session's journal, exactly as the host stored it.

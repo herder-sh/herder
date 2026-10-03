@@ -6,7 +6,8 @@
 //! session's latest checkpoint on `origin` ([`checkpoint::fetch_latest`]), on the session's
 //! own branch. A turn the dead host left open is closed as after a restart, and the session
 //! moves to an account of this host by `account_switched` when its own is not here; its next
-//! prompt starts the CLI seeded with the transcript, as after any switch.
+//! prompt starts the CLI seeded with the transcript, as after any switch. The images its
+//! prompts carried are kept here under their ids, so `get_attachment` answers as before.
 //!
 //! The host it came from, if it comes back, makes its own copy read-only
 //! ([`SessionManager::moved_away`]).
@@ -14,12 +15,12 @@
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, ErrorCode, ErrorInfo, Event, EventBody, ProjectId, Provider, SessionId,
-    SessionStatus,
+    AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, Image, ProjectId, Provider,
+    SessionId, SessionStatus,
 };
 use tracing::info;
 
-use super::{SessionManager, actor, error, internal, worktree_error};
+use super::{SessionManager, actor, attachments, error, internal, worktree_error};
 use crate::worktree::{self, checkpoint};
 
 /// A session recovered here.
@@ -40,12 +41,14 @@ pub struct Recovered {
 
 impl SessionManager {
     /// Takes over a session from another host: `events` is its whole journal, as the vault
-    /// holds it, and `project_id` its project, whose clone here it works in. It runs on
+    /// holds it, `images` the images its prompts carried, by attachment id, and `project_id`
+    /// its project, whose clone here it works in. It runs on
     /// `account_id`, or else on its own account, its project's default account or this host's
     /// first account of its provider.
     pub async fn recover(
         &self,
         events: Vec<Event>,
+        images: Vec<(AttachmentId, Image)>,
         project_id: ProjectId,
         account_id: Option<AccountId>,
     ) -> Result<Recovered, ErrorInfo> {
@@ -139,6 +142,7 @@ impl SessionManager {
             )
             .await
             .map_err(worktree_error)?;
+        attachments::keep(&inner.attachments, &session_id, images).await?;
         let mut events = events;
         if let EventBody::SessionCreated {
             repo: created_repo,
