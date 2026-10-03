@@ -32,13 +32,13 @@ struct NativeAgentTests {
         #expect(agents[0].result == "Permissions pass")
         #expect(agents[1].outcome == .running)
         #expect(Transcript.blocks(model, parent: agents[0].id) == [
-            .assistant(id: "a-text", text: "Checking permissions", streaming: false),
+            .assistant(id: "t1/a-text", text: "Checking permissions", streaming: false),
         ])
         #expect(Transcript.blocks(model, parent: agents[1].id) == [
-            .assistant(id: "b-text", text: "Checking contrast", streaming: false),
+            .assistant(id: "t1/b-text", text: "Checking contrast", streaming: false),
         ])
         #expect(model.lastMessage == "Both reviews started")
-        #expect(!blocks.contains(.assistant(id: "a-text", text: "Checking permissions", streaming: false)))
+        #expect(!blocks.contains(.assistant(id: "t1/a-text", text: "Checking permissions", streaming: false)))
     }
 
     @Test func nestedToolResultsSurviveInterleavedProseAndGrandchildren() {
@@ -59,7 +59,7 @@ struct NativeAgentTests {
         #expect(calls[0].outcome == .ok)
         #expect(calls[0].output == "owner guard")
         #expect(Transcript.blocks(model, parent: nested[0].id) == [
-            .assistant(id: "deep", text: "Deep review", streaming: false),
+            .assistant(id: "t1/deep", text: "Deep review", streaming: false),
         ])
     }
 
@@ -80,7 +80,7 @@ struct NativeAgentTests {
         #expect(new?.outcome == .running)
         #expect(old?.id != new?.id)
         #expect(Transcript.blocks(model, parent: .init(turnId: "t2", callId: "a")) == [
-            .assistant(id: "new", text: "New work", streaming: false),
+            .assistant(id: "t2/new", text: "New work", streaming: false),
         ])
     }
 
