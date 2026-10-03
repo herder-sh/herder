@@ -69,7 +69,223 @@ pub(super) fn mid_turn() -> App {
     let streaming = vec![item("i6", assistant("Now the docs: the endpoint is"))];
     fake::feed(&mut app, "h1", "s2", update("s2", 8, Vec::new(), streaming));
     press(&mut app, KeyCode::Enter);
+    // Opening lands in the prompt: leave it for NAVIGATE.
+    press(&mut app, KeyCode::Esc);
     app
+}
+
+/// The herd of the design spec's mockups: on `box`, `app` with `fix-login` (its turn just
+/// ended: done), `api` (running, open mid-turn, PR #12) and its tasks `write tests`
+/// (running) and `docs` (asking a question), and `infra`'s `k3s` (idle); on `m2`,
+/// `herder`'s `p2d-1-design` (running). `claude-main` has used 38% of its 5h window.
+pub(super) fn herd() -> App {
+    use herder_protocol::{
+        Account, AccountId, CiStatus, EventBody, PrState, Provider, SessionStatus, UsageWindow,
+    };
+    let project = |name: &str| format!("github.com/acme/{name}");
+    let sessions = [
+        ("h1", "s1", "app", "herder/fix-login", None, None),
+        ("h1", "s2", "app", "herder/api", None, None),
+        (
+            "h1",
+            "s3",
+            "app",
+            "herder/api-tests",
+            Some("s2"),
+            Some("write tests"),
+        ),
+        (
+            "h1",
+            "s4",
+            "app",
+            "herder/api-docs",
+            Some("s2"),
+            Some("docs"),
+        ),
+        ("h2", "s5", "herder", "herder/p2d-1-design", None, None),
+        ("h1", "s6", "infra", "herder/k3s", None, None),
+    ];
+    let mut machines = vec![
+        fake::machine("h1", "box", &[]),
+        fake::machine("h2", "m2", &[]),
+    ];
+    for machine in &mut machines {
+        for (host, id, name, ..) in &sessions {
+            if machine.host_id.as_str() == *host {
+                machine.sessions.push(fake::head(id, Some(&project(name))));
+            }
+        }
+    }
+    let window = |name: &str, used_percent| UsageWindow {
+        window: name.to_owned(),
+        used_percent,
+        resets_at: None,
+    };
+    machines[0].accounts = vec![Account {
+        account_id: AccountId::new("claude-main"),
+        provider: Provider::Claude,
+        label: "claude-main".to_owned(),
+        usage: vec![window("five_hour", 38.0), window("seven_day", 12.0)],
+        failover: true,
+    }];
+    machines[1].accounts = machines[0].accounts.clone();
+    machines[0].resources = Some(fake::host_resources(2));
+    machines[0]
+        .session_usage
+        .insert(herder_protocol::SessionId::new("s2"), fake::session_usage());
+    let mut app = App {
+        theme: crate::ui::theme::Theme::herder(crate::ui::theme::Mode::Dark),
+        ..App::default()
+    };
+    app.update(Msg::Machines(machines));
+    for (host, id, name, branch, parent, task) in sessions {
+        let created = fake::created_in(&format!("/home/ann/src/{name}"), branch, parent, task);
+        let status = match id {
+            "s6" => SessionStatus::Idle,
+            _ => SessionStatus::Running,
+        };
+        let mut bodies = vec![created, fake::status(status)];
+        if status == SessionStatus::Running {
+            bodies.push(fake::started("turn-1"));
+        }
+        fake::feed(&mut app, host, id, update(id, 1, bodies, Vec::new()));
+    }
+    // fix-login's turn ends while another session is in view: done.
+    let ended = vec![
+        EventBody::TurnCompleted {
+            turn_id: herder_protocol::TurnId::new("turn-1"),
+        },
+        fake::status(SessionStatus::Idle),
+    ];
+    fake::feed(&mut app, "h1", "s1", update("s1", 4, ended, Vec::new()));
+    let asked = vec![
+        fake::question(
+            "q1",
+            "Which heading level for the API page?",
+            &["h2 under Reference", "h1, its own page"],
+        ),
+        fake::status(SessionStatus::NeedsYou),
+    ];
+    fake::feed(&mut app, "h1", "s4", update("s4", 4, asked, Vec::new()));
+    let mut twelve = fake::pr(12, "Add health endpoint", PrState::Open);
+    twelve.ci = CiStatus::Passing;
+    fake::feed(
+        &mut app,
+        "h1",
+        "s2",
+        update(
+            "s2",
+            4,
+            vec![EventBody::PrLinked { pr: twelve }],
+            Vec::new(),
+        ),
+    );
+    let events = vec![
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Add a health endpoint and test it.".into(),
+            },
+        ),
+        added(
+            "i2",
+            ItemBody::Reasoning {
+                text: "Where the router lives.".into(),
+            },
+        ),
+        added(
+            "i3",
+            ItemBody::ToolCall {
+                name: "Bash".into(),
+                input: json!({"command": "cargo test --workspace"}),
+            },
+        ),
+        added(
+            "i4",
+            ItemBody::ToolResult {
+                call_id: ItemId::new("i3"),
+                output: "running 12 tests\ntest health::ok ... ok\n\ntest result: ok".into(),
+                is_error: false,
+            },
+        ),
+        added(
+            "i5",
+            assistant(
+                "I added `GET /health`; it returns 200 with the build version so load balancers can probe it.",
+            ),
+        ),
+    ];
+    fake::feed(&mut app, "h1", "s2", update("s2", 5, events, Vec::new()));
+    app.open_key(fake::key("h1", "s2"));
+    app
+}
+
+#[test]
+fn the_shell_reproduces_the_mockups_at_phone_laptop_and_wide_widths() {
+    for (width, height) in [(45, 30), (100, 30), (160, 34)] {
+        let mut app = herd();
+        insta::assert_snapshot!(
+            format!("shell_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+    }
+}
+
+fn ctrl(c: char) -> Msg {
+    Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+}
+
+#[test]
+fn the_phone_switcher_lists_attention_projects_views_and_the_menu() {
+    let mut app = herd();
+    // The header's switch button, as a tap would press it.
+    app.act(crate::action::Action::GoTo);
+    insta::assert_snapshot!(render(&mut app, 45, 34).backend());
+}
+
+#[test]
+fn the_leader_popup_lists_its_keys_over_the_mode_bar() {
+    let mut app = herd();
+    app.update(ctrl('x'));
+    insta::assert_snapshot!(render(&mut app, 100, 30).backend());
+}
+
+#[test]
+fn the_sidebar_collapses_to_glyphs_and_the_details_lay_over_the_main_pane() {
+    let mut app = herd();
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    for c in ['b', 'd'] {
+        app.update(ctrl('x'));
+        press(&mut app, KeyCode::Char(c));
+    }
+    insta::assert_snapshot!(render(&mut app, 100, 30).backend());
+}
+
+#[test]
+fn a_pending_approval_puts_the_shell_in_approval_mode() {
+    for (width, height) in [(45, 30), (100, 30)] {
+        let mut app = herd();
+        fake::feed(
+            &mut app,
+            "h1",
+            "s2",
+            update(
+                "s2",
+                20,
+                vec![fake::approval("a1", "rm -rf target/")],
+                Vec::new(),
+            ),
+        );
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.mode(), Some(crate::nav::Mode::Approval));
+        insta::assert_snapshot!(
+            format!("approval_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+    }
 }
 
 #[test]
@@ -83,10 +299,12 @@ fn sessions_show_status_and_the_task_tree() {
     let mut app = fake::tree();
     let terminal = render(&mut app, 80, 12);
     insta::assert_snapshot!(terminal.backend());
-    // Badges carry their colour: "needs you" stands out.
+    // A state is a glyph in its colour: "needs you" stands out.
     let buffer = terminal.backend().buffer();
-    let needs_you = (0..80).find(|&x| buffer[(x, 3)].symbol() == "n").unwrap();
-    assert_eq!(buffer[(needs_you, 3)].fg, Color::Magenta);
+    let row = |y: u16| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    let y = (0..12).find(|&y| row(y).contains("◉ app · api")).unwrap();
+    let x = (0..80).find(|&x| buffer[(x, y)].symbol() == "◉").unwrap();
+    assert_eq!(buffer[(x, y)].fg, Color::Magenta);
 }
 
 #[test]
@@ -207,7 +425,7 @@ fn an_approval_is_prompted_and_badged() {
     let terminal = render(&mut app, 100, 20);
     insta::assert_snapshot!(terminal.backend());
     let screen = terminal.backend().to_string();
-    assert!(screen.contains("approve?"), "{screen}");
+    assert!(screen.contains("APPROVAL"), "{screen}");
 }
 
 #[test]
@@ -270,12 +488,14 @@ fn the_new_session_dialog() {
 #[test]
 fn the_session_list_badges_each_sessions_prs() {
     let mut app = fake::with_prs();
+    // A sidebar of 30 columns or more has room for the badges.
+    app.layout.sidebar = 34;
     let terminal = render(&mut app, 80, 10);
     insta::assert_snapshot!(terminal.backend());
     // The badge's number takes its PR state's colour, its marks the checks'.
     let buffer = terminal.backend().buffer();
     let row = |y: u16| (0..40).map(|x| buffer[(x, y)].symbol()).collect::<String>();
-    let s2 = (0..12).find(|&y| row(y).contains("#7")).unwrap();
+    let s2 = (0..10).find(|&y| row(y).contains("#7")).unwrap();
     let at = row(s2).find("#7").unwrap();
     let x = u16::try_from(row(s2)[..at].chars().count()).unwrap();
     assert_eq!(buffer[(x, s2)].fg, Color::Green);
@@ -283,17 +503,17 @@ fn the_session_list_badges_each_sessions_prs() {
 }
 
 #[test]
-fn the_open_session_shows_its_prs_over_the_transcript() {
+fn p_shows_the_open_sessions_prs_tab() {
     let mut app = fake::with_prs();
     press(&mut app, KeyCode::Char('p'));
     press(&mut app, KeyCode::Char('j'));
-    insta::assert_snapshot!(render(&mut app, 110, 14).backend());
-    // Out of the strip, the strip stays and only hints at its key.
+    insta::assert_snapshot!(render(&mut app, 110, 24).backend());
+    // Back in the chat, the tab row counts them.
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.focus, Focus::Transcript);
-    let terminal = render(&mut app, 110, 14);
+    let terminal = render(&mut app, 110, 24);
     let screen = terminal.backend().to_string();
-    assert!(screen.contains("pull requests (2)"), "{screen}");
+    assert!(screen.contains("prs 2"), "{screen}");
     assert!(!screen.contains("x unlink"), "{screen}");
 }
 
@@ -340,10 +560,10 @@ fn a_notice_replaces_the_connections_until_the_next_key() {
     ));
     let screen = render(&mut app, 90, 8).backend().to_string();
     assert!(screen.contains("#4 does not exist"), "{screen}");
-    assert!(!screen.contains("connected"), "{screen}");
     press(&mut app, KeyCode::Char('j'));
     let screen = render(&mut app, 90, 8).backend().to_string();
-    assert!(screen.contains("connected"), "{screen}");
+    assert!(!screen.contains("#4 does not exist"), "{screen}");
+    assert!(screen.contains("● box"), "{screen}");
 }
 
 fn typed(app: &mut App, text: &str) {
@@ -419,11 +639,21 @@ fn the_add_dialog_shows_the_fingerprint_to_check() {
 #[test]
 fn a_primary_counts_its_children_and_badges_the_ones_waiting_on_you() {
     let mut app = fake::escalated();
-    let screen = render(&mut app, 80, 10).backend().to_string();
-    assert!(screen.contains("(2) !1"), "{screen}");
-    // Folded, the badge still tells.
+    let terminal = render(&mut app, 80, 10);
+    // The primary's row counts the task that waits on the user.
+    let buffer = terminal.backend().buffer();
+    let sidebar = |y: u16| (0..25).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    let y = (0..10).find(|&y| sidebar(y).contains("app · api")).unwrap();
+    assert!(
+        sidebar(y).trim_end().ends_with('1'),
+        "{}",
+        terminal.backend()
+    );
+    // Folded, the row says how many it hides, and the count stays.
     press(&mut app, KeyCode::Char('z'));
     insta::assert_snapshot!(render(&mut app, 80, 10).backend());
+    let screen = render(&mut app, 80, 10).backend().to_string();
+    assert!(screen.contains("▸2 1"), "{screen}");
 }
 
 #[test]
@@ -500,6 +730,7 @@ fn a_narrow_screen_shows_ascii_unless_glyphs_chose_unicode() {
     let events = vec![added("i1", assistant(text))];
     fake::feed(&mut app, "h1", "s2", update("s2", 3, events, Vec::new()));
     press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
     let ascii = render(&mut app, 45, 20).backend().to_string();
     let borders = '\u{2500}'..='\u{257f}';
     assert!(

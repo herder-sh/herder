@@ -2,7 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" < back  box > app - api         inbox 0  +  "
+" ~ api - app - box             1/4  │ switch "
+" x 1 error  * 1  ~ 1                │        "
+"──────────────────────────────────────────── "
 "┌ resources ───────────────────────────────┐ "
 "│ waiting for capacity - 4/4 turns         │ "
 "│ cpu 12% - mem 768 MiB - 3 processes      │ "
@@ -35,10 +37,8 @@ expression: terminal.backend()
 "│                                          │ "
 "│                                          │ "
 "│                                          │ "
-"│                                          │ "
 "└──────────────────────────────────────────┘ "
 "┌ message ─────────────────────────────────┐ "
 "│ Write a prompt.                          │ "
-"└────────────────────────────── i to write ┘ "
-" i write   s switch   t term                 "
-" ? help                               * box  "
+"└──────────────────── Enter send - < leave ┘ "
+" > send   s switch   t term                  "

@@ -6,15 +6,15 @@ use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
 use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId};
-use ratatui::crossterm::event::{KeyEvent, MouseEvent};
-use ratatui::widgets::ListState;
+use ratatui::crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
-use crate::compose::{Compose, Origin};
+use crate::compose::{Act, Compose, Origin};
 use crate::inbox::Inbox;
 use crate::machines::MachinePanel;
 use crate::mouse::{Click, Hits};
+use crate::nav::Layout;
 use crate::projects::Grouping;
 use crate::prs::Prs;
 use crate::recover::Recover;
@@ -61,6 +61,8 @@ pub enum Msg {
     Paired(Result<Box<Machine>, String>),
     /// An attached terminal gave the screen back.
     TerminalEnded(terminal::Ended),
+    /// Time passed: an armed leader may lapse.
+    Tick(std::time::Instant),
 }
 
 /// Something the event loop does for the app.
@@ -122,6 +124,8 @@ pub enum Focus {
     AllPrs,
     /// Everything waiting on the user, in the main pane.
     Inbox,
+    /// The open session's task children, in its tasks tab.
+    Tasks,
 }
 
 /// A row of the session list.
@@ -215,8 +219,6 @@ pub struct App {
     pub help_scroll: usize,
     /// Where the open transcript is scrolled.
     pub scroll: Scroll,
-    /// The session list's scroll position, kept between draws.
-    pub list: ListState,
     /// The composer, palette and new-session dialog.
     pub compose: Compose,
     /// The pull request strip, view and link prompt.
@@ -257,6 +259,18 @@ pub struct App {
     pub(crate) bar: Vec<Click>,
     /// The action bar button Tab moved to, which Enter presses.
     pub bar_focus: Option<usize>,
+    /// When `ctrl+x` was pressed, while it waits for its key.
+    pub leader: Option<std::time::Instant>,
+    /// Sessions whose turn ended since the user last opened them: *done*, on this client.
+    pub done: HashSet<SessionKey>,
+    /// The sidebar's width and fold, and the details panel's toggle.
+    pub layout: Layout,
+    /// The selected row of the open session's tasks tab.
+    pub task_cursor: usize,
+    /// The first drawn line of the sidebar's project tree.
+    pub tree_offset: usize,
+    /// A drag on the sidebar's edge is resizing it.
+    pub(crate) resizing: bool,
 }
 
 impl Default for App {
@@ -270,7 +284,6 @@ impl Default for App {
             help: false,
             help_scroll: 0,
             scroll: Scroll::default(),
-            list: ListState::default(),
             compose: Compose::default(),
             prs: Prs::default(),
             notice: None,
@@ -291,6 +304,12 @@ impl Default for App {
             dragged: None,
             bar: Vec::new(),
             bar_focus: None,
+            leader: None,
+            done: HashSet::new(),
+            layout: Layout::default(),
+            task_cursor: 0,
+            tree_offset: 0,
+            resizing: false,
         }
     }
 }
@@ -306,6 +325,12 @@ impl App {
         match msg {
             Msg::Key(key) => {
                 self.notice = None;
+                if key.kind != KeyEventKind::Release && self.leader.take().is_some() {
+                    return match action::for_leader(key) {
+                        Some(action) => self.act(action),
+                        None => Vec::new(),
+                    };
+                }
                 if let Some(effects) = self.bar_key(key) {
                     return effects;
                 }
@@ -327,8 +352,14 @@ impl App {
             }
             Msg::Session { key, update } => {
                 if let Some(session) = self.sessions.get_mut(&key) {
+                    let (before, was_loaded) = (session.status, session.loaded);
                     session.apply(update);
+                    self.observe(&key, before, was_loaded);
                 }
+                Vec::new()
+            }
+            Msg::Tick(now) => {
+                self.tick(now);
                 Vec::new()
             }
             Msg::Paste(text) => {
@@ -409,6 +440,26 @@ impl App {
             Action::Group => self.toggle_grouping(),
             Action::OpenRecover => self.open_recover(),
             Action::Recover(input) => self.recover_input(input),
+            Action::Leader => self.arm_leader(std::time::Instant::now()),
+            Action::GoTo => self.focus = Focus::Sessions,
+            Action::Resume => {
+                if self.open.is_some() {
+                    self.focus = Focus::Transcript;
+                }
+            }
+            Action::Parent => self.select_parent(),
+            Action::ToggleSidebar => {
+                self.toggle_sidebar();
+                return vec![Effect::Save];
+            }
+            Action::ToggleDetails => self.layout.details = !self.layout.details,
+            Action::Attention(at) => self.open_attention(at),
+            Action::Tab(tab) => self.show_tab(tab),
+            Action::Open if self.focus == Focus::Tasks => {
+                if let Some(key) = self.tasks().into_iter().nth(self.task_cursor) {
+                    self.open_key(key);
+                }
+            }
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {
@@ -418,8 +469,13 @@ impl App {
                     }
                     // Pin the row, so new sessions listed above it do not move the selection.
                     self.chosen = selected;
+                    self.done.remove(&key);
                     self.open = Some(key);
+                    // Into the prompt, as OpenCode does; to the request, if one waits.
                     self.focus = Focus::Transcript;
+                    if !self.asking() {
+                        self.compose(Act::Write);
+                    }
                 }
             }
             Action::SwitchPane => {
@@ -428,6 +484,7 @@ impl App {
                     _ => Focus::Sessions,
                 };
             }
+            Action::Back if self.focus == Focus::Tasks => self.focus = Focus::Transcript,
             Action::Back => self.focus = Focus::Sessions,
             Action::Up | Action::Down | Action::PageUp | Action::PageDown => {
                 let (step, page) = match action {
@@ -438,6 +495,10 @@ impl App {
                 };
                 match self.focus {
                     Focus::Sessions => self.select_by(if page { step * 10 } else { step }),
+                    Focus::Tasks => {
+                        let last = self.tasks().len().saturating_sub(1);
+                        self.task_cursor = self.task_cursor.saturating_add_signed(step).min(last);
+                    }
                     Focus::Transcript | Focus::Composer => {
                         let lines = if page {
                             step * self.scroll.page()
@@ -452,11 +513,13 @@ impl App {
             }
             Action::Top => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().into_iter().next(),
+                Focus::Tasks => self.task_cursor = 0,
                 Focus::Transcript | Focus::Composer => self.scroll.top = Some(0),
                 Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
             },
             Action::Bottom => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().pop(),
+                Focus::Tasks => self.task_cursor = self.tasks().len().saturating_sub(1),
                 Focus::Transcript | Focus::Composer => self.scroll.top = None,
                 Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
             },
@@ -465,7 +528,7 @@ impl App {
     }
 
     /// Opens the terminal picker for the selected session, or says why it cannot.
-    fn open_picker(&mut self) {
+    pub(crate) fn open_picker(&mut self) {
         let Some(session) = self.selected().as_ref().and_then(Row::session).cloned() else {
             return;
         };
@@ -735,6 +798,12 @@ mod tests {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
     }
 
+    /// Opens the selected session and leaves its prompt for NAVIGATE.
+    fn open(app: &mut App) {
+        press(app, KeyCode::Enter);
+        press(app, KeyCode::Esc);
+    }
+
     fn session(host: &str, id: &str, depth: usize) -> Row {
         Row::Session {
             key: key(host, id),
@@ -804,7 +873,7 @@ mod tests {
     fn every_listed_session_is_wanted_and_unlisted_ones_are_dropped() {
         let mut app = fake::tree();
         assert_eq!(app.wanted().len(), 4);
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         assert_eq!(app.open, Some(key("h1", "s2")));
 
         app.update(Msg::Machines(vec![machine("h1", "box", &["s1"])]));
@@ -831,11 +900,11 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         assert_eq!(app.selected(), Some(Row::Machine(HostId::new("h1"))));
         // A machine row opens nothing.
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         assert_eq!(app.open, None);
         press(&mut app, KeyCode::Up);
         press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         assert_eq!(app.open, Some(key("h1", "s2")));
         assert_eq!(app.focus, Focus::Transcript);
 
@@ -853,7 +922,7 @@ mod tests {
     #[test]
     fn an_opened_session_stays_selected_when_a_newer_one_is_listed() {
         let mut app = fake::tree();
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         let listed = machine("h1", "box", &["s1", "s2", "s3", "s4", "s5"]);
         app.update(Msg::Machines(vec![listed]));
         assert_eq!(app.rows()[1], session("h1", "s5", 0));
@@ -889,7 +958,7 @@ mod tests {
     #[test]
     fn the_transcript_follows_its_end_until_scrolled_up() {
         let mut app = fake::tree();
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         app.scroll.total = 100;
         app.scroll.height = 10;
         assert_eq!(app.scroll.first_line(), 90);
@@ -921,7 +990,7 @@ mod tests {
     #[test]
     fn opening_another_session_starts_at_its_end() {
         let mut app = fake::tree();
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         app.scroll = Scroll {
             top: Some(3),
             total: 50,
@@ -929,7 +998,7 @@ mod tests {
         };
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         assert_eq!(app.open, Some(key("h1", "s3")));
         assert_eq!(app.scroll.top, None);
         assert_eq!(
@@ -974,7 +1043,7 @@ mod tests {
     fn plain_keys_go_back_from_every_view_a_session_list_opens() {
         let mut app = fake::with_prs();
         for back in [KeyCode::Backspace, KeyCode::Char('h')] {
-            press(&mut app, KeyCode::Enter);
+            open(&mut app);
             assert_eq!(app.focus, Focus::Transcript);
             press(&mut app, back);
             assert_eq!(app.focus, Focus::Sessions);
@@ -999,7 +1068,7 @@ mod tests {
     #[test]
     fn b_scrolls_the_transcript_up_a_page() {
         let mut app = fake::tree();
-        press(&mut app, KeyCode::Enter);
+        open(&mut app);
         app.scroll.total = 100;
         app.scroll.height = 10;
         press(&mut app, KeyCode::Char('b'));

@@ -24,6 +24,7 @@ mod fake;
 mod inbox;
 mod machines;
 mod mouse;
+mod nav;
 mod projects;
 mod prs;
 mod recover;
@@ -86,6 +87,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
     let mut app = App {
         mouse: settings.mouse,
         glyphs: settings.glyphs,
+        layout: settings.layout,
         theme,
         notice,
         ..App::default()
@@ -125,9 +127,12 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         if let Err(err) = paint(&mut terminal, &mut app, std::mem::take(&mut repaint)) {
             break Err(err);
         }
-        let msg = match tokio::time::timeout(IDLE_REPAINT, rx.recv()).await {
+        // An armed leader wakes the loop when it lapses, so its badge goes.
+        let leader = app.leader_left(std::time::Instant::now());
+        let msg = match tokio::time::timeout(leader.unwrap_or(IDLE_REPAINT), rx.recv()).await {
             Ok(Some(msg)) => msg,
             Ok(None) => break Ok(()),
+            Err(_) if leader.is_some() => Msg::Tick(std::time::Instant::now()),
             Err(_) => {
                 repaint = true;
                 continue;

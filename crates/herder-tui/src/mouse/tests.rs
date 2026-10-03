@@ -101,6 +101,15 @@ fn wheel(app: &mut App, size: (u16, u16), text: &str, steps: i32) -> Vec<Effect>
         .collect()
 }
 
+/// What closes a dialog: on a phone the header's back, on a desktop the mode bar's esc.
+fn close(size: (u16, u16)) -> &'static str {
+    if size.0 < crate::views::NARROW {
+        "‹ back"
+    } else {
+        "esc close"
+    }
+}
+
 fn on(session: &str, command: CommandBody) -> Effect {
     Effect::Send {
         host_id: HostId::new("h1"),
@@ -114,25 +123,35 @@ fn open_s2(bodies: Vec<EventBody>) -> App {
     let mut app = fake::tree();
     fake::feed(&mut app, "h1", "s2", update("s2", 3, bodies, Vec::new()));
     press(&mut app, KeyCode::Enter);
+    if app.focus == Focus::Composer {
+        // Opening lands in the prompt: leave it for NAVIGATE.
+        press(&mut app, KeyCode::Esc);
+    }
     app
 }
 
 #[test]
-fn a_tap_opens_a_session_and_back_returns_to_the_list() {
+fn a_tap_opens_a_session_and_switch_returns_to_the_list() {
     for size in SIZES {
         let mut app = fake::tree();
         tap_last(&mut app, size, "fix-login");
         assert_eq!(app.open, Some(key("h1", "s1")), "{size:?}");
-        assert_eq!(app.focus, Focus::Transcript);
+        assert_eq!(app.focus, Focus::Composer);
         if size.0 < crate::views::NARROW {
-            tap(&mut app, size, "‹ back");
+            // The header's switch opens the switcher; close x goes back.
+            tap(&mut app, size, "switch");
             assert_eq!(app.focus, Focus::Sessions);
+            tap(&mut app, size, "close x");
+            assert_eq!(app.focus, Focus::Transcript);
+            tap(&mut app, size, "switch");
         } else {
             press(&mut app, KeyCode::Esc);
+            press(&mut app, KeyCode::Esc);
         }
-        // The title in the header shows the open session again.
-        tap(&mut app, size, "fix-login");
-        assert_eq!(app.focus, Focus::Transcript);
+        assert_eq!(app.focus, Focus::Sessions);
+        // The session's row opens it again.
+        tap_last(&mut app, size, "fix-login");
+        assert_eq!(app.focus, Focus::Composer);
     }
 }
 
@@ -140,7 +159,13 @@ fn a_tap_opens_a_session_and_back_returns_to_the_list() {
 fn a_tap_on_a_machine_selects_it_without_opening_anything() {
     for size in SIZES {
         let mut app = fake::tree();
-        tap(&mut app, size, "● box");
+        // Its state rolls up from its sessions: s2 needs you.
+        let row = if size.0 < crate::views::NARROW {
+            "! box"
+        } else {
+            "◉ box"
+        };
+        tap(&mut app, size, row);
         assert_eq!(
             app.selected(),
             Some(crate::app::Row::Machine(HostId::new("h1")))
@@ -174,7 +199,7 @@ fn the_wheel_scrolls_the_view_under_the_pointer() {
 
         // The session list scrolls its selection, where it shows.
         if size.0 < crate::views::NARROW {
-            tap(&mut app, size, "‹ back");
+            tap(&mut app, size, "switch");
         }
         let before = app.selected();
         wheel(&mut app, size, "fix-login", 1);
@@ -243,19 +268,27 @@ fn the_bar_stops_a_turn_and_sends_the_composer_on_a_phone() {
 }
 
 #[test]
-fn the_header_opens_the_inbox_and_new_session() {
+fn the_sidebar_and_the_switcher_open_the_inbox_and_new_session() {
     for size in SIZES {
         let mut app = fake::escalated();
-        tap(&mut app, size, "inbox 2");
+        let phone = size.0 < crate::views::NARROW;
+        // The sidebar's header; on a phone the switcher's views.
+        tap_last(&mut app, size, "inbox 2");
         assert_eq!(app.focus, Focus::Inbox, "{size:?}");
-        tap(&mut app, size, "inbox 2");
+        if phone {
+            tap(&mut app, size, "< back");
+        } else {
+            tap(&mut app, size, "inbox 2");
+        }
         assert_ne!(app.focus, Focus::Inbox);
-        tap(&mut app, size, " + ");
+        let new = if phone { "+ new session" } else { "+ new" };
+        tap(&mut app, size, new);
         assert!(app.compose.dialog.is_some(), "{size:?}");
         // The dialog covers the screen: the list under it takes no taps.
-        tap(&mut app, size, "● box");
+        draw(&mut app, size);
+        tap_at(&mut app, (3, 4));
         assert_eq!(app.open, None);
-        tap(&mut app, size, "‹ back");
+        tap(&mut app, size, close(size));
         assert!(app.compose.dialog.is_none());
     }
 }
@@ -325,12 +358,15 @@ fn pull_requests_select_by_tap_and_wheel_and_open_on_a_second_tap() {
             "{effects:?}"
         );
 
-        // The strip over a transcript takes the keys on a tap.
+        // The session's prs tab takes the keys on a tap.
         press(&mut app, KeyCode::Esc);
         let mut app = fake::with_prs();
         press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('p'));
         wheel(&mut app, size, "Add a health endpoint", 1);
-        assert_eq!(app.prs.strip, 1, "{size:?}");
+        let screen = draw(&mut app, size).backend().to_string();
+        assert_eq!(app.prs.strip, 1, "{size:?}\n{screen}");
         tap(&mut app, size, "Add a health endpoint");
         assert_eq!(app.focus, Focus::Prs, "{size:?}");
         assert_eq!(app.pr_index(), 0);
@@ -367,12 +403,17 @@ fn the_accounts_screen_selects_by_tap_and_wheel_and_closes_by_back() {
             crate::account_screen::Pick::Account(HostId::new("h1"), AccountId::new("claude-work"));
         wheel(&mut app, size, "Main", 1);
         assert_eq!(chosen(&app), Some(work.clone()), "{size:?}");
-        tap(&mut app, size, "laptop");
+        // The screen's own row, right of the sidebar on a desktop.
+        let laptop = spots(&mut app, size, "laptop")
+            .into_iter()
+            .find(|(x, _)| size.0 < crate::views::NARROW || *x > 26)
+            .unwrap();
+        tap_at(&mut app, laptop);
         assert_eq!(
             chosen(&app),
             Some(crate::account_screen::Pick::Machine(HostId::new("h2")))
         );
-        tap(&mut app, size, "‹ back");
+        tap(&mut app, size, close(size));
         assert!(app.account_screen.is_none());
     }
 }
@@ -388,7 +429,7 @@ fn the_machines_panel_selects_by_tap() {
         wheel(&mut app, size, "0 sessions", -1);
         let panel = app.machine_panel.as_ref().unwrap();
         assert_eq!(panel.selected(&app.machines), Some(0));
-        tap(&mut app, size, "‹ back");
+        tap(&mut app, size, close(size));
         assert!(app.machine_panel.is_none());
     }
 }
@@ -398,6 +439,7 @@ fn the_switch_dialog_picks_an_account_by_tap_and_switches_on_a_second() {
     for size in SIZES {
         let mut app = with_accounts();
         press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('s'));
         tap(&mut app, size, "Work");
         assert_eq!(app.switch.as_ref().unwrap().selected, 1, "{size:?}");

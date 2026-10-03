@@ -797,6 +797,10 @@ mod tests {
         fake::feed(&mut app, "h1", "s2", update("s2", 3, bodies, Vec::new()));
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.open, Some(key("h1", "s2")));
+        if app.focus == Focus::Composer {
+            // Opening lands in the prompt: leave it for NAVIGATE.
+            press(&mut app, KeyCode::Esc);
+        }
         app
     }
 

@@ -2,7 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" < back  herder                  inbox 2  +  "
+" inbox 2                    < back  │ switch "
+" ! 3 need you  x 1 error            │    !   "
+"──────────────────────────────────────────── "
 "┌ inbox - 2 waiting on you ────────────────┐ "
 "│> question box - app - herder/api > write │ "
 "│    Which port should the server use?     │ "
@@ -38,7 +40,5 @@ expression: terminal.backend()
 "│                                          │ "
 "│                                          │ "
 "│                                          │ "
-"│                                          │ "
 "└/n - 1-9 - Enter answer - l open - < back ┘ "
 " 1 8080   2 3000   > answer   l open         "
-" 2 waiting - I  ? help                * box  "

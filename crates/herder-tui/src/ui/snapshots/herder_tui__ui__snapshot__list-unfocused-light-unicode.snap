@@ -21,7 +21,9 @@ expression: dump(&buffer)
  2  44..45  fg=#1c1c1c bg=#ffffff
  3   0..1   fg=#6b6f7a bg=#ffffff
  3   1..2   fg=#1c1c1c bg=#ffffff
- 3   2..19  fg=#1c1c1c bg=#ffffff BOLD
+ 3   2..3   fg=#00739e bg=#ffffff BOLD
+ 3   3..13  fg=#1c1c1c bg=#ffffff BOLD
+ 3  13..19  fg=#6b6f7a bg=#ffffff BOLD
  3  19..41  fg=#1c1c1c bg=#ffffff
  3  41..44  fg=#6b6f7a bg=#ffffff
  3  44..45  fg=#1c1c1c bg=#ffffff

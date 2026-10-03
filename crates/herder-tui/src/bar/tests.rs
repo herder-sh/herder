@@ -12,7 +12,8 @@ use crate::fake::{self, started, update};
 /// A phone in portrait, as small as herder lays out for.
 const PHONE: (u16, u16) = (45, 24);
 
-/// Draws the screen as the event loop does after every input; returns its bottom bar row.
+/// Draws the screen as the event loop does after every input; returns its button bar, the
+/// last row.
 fn draw(app: &mut App, (width, height): (u16, u16)) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal
@@ -20,7 +21,7 @@ fn draw(app: &mut App, (width, height): (u16, u16)) -> String {
         .unwrap();
     let buffer = terminal.backend().buffer();
     (0..width)
-        .map(|x| buffer[(x, height - 2)].symbol())
+        .map(|x| buffer[(x, height - 1)].symbol())
         .collect()
 }
 
@@ -125,11 +126,11 @@ fn tab_wraps_round_the_bar_and_any_other_key_drops_its_focus() {
     press(&mut app, KeyCode::BackTab);
     assert_eq!(app.bar_focus, Some(last));
 
-    // Down moves the list, as ever, and Enter then opens.
+    // Down moves the list, as ever, and Enter then opens, into the prompt.
     press(&mut app, KeyCode::Down);
     assert_eq!(app.bar_focus, None);
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.focus, Focus::Transcript);
+    assert_eq!(app.focus, Focus::Composer);
 }
 
 #[test]

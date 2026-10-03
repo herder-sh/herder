@@ -256,6 +256,8 @@ mod tests {
         ];
         app.update(Msg::Machines(machines));
         press(&mut app, KeyCode::Enter);
+        // Opening lands in the prompt: leave it for NAVIGATE.
+        press(&mut app, KeyCode::Esc);
         app
     }
 

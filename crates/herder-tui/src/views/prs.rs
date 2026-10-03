@@ -18,18 +18,8 @@ use crate::app::{App, Focus};
 use crate::mouse::{Click, Hits, List as Rows, Wheel};
 use crate::session::Session;
 
-/// Most PRs the strip shows at once; more scroll.
-const STRIP_ROWS: usize = 4;
 /// Most PRs a session-list badge names; the rest are counted.
 const BADGE_PRS: usize = 2;
-
-/// Rows the strip takes over the transcript: none when the open session has no PRs.
-pub(super) fn strip_height(app: &App) -> u16 {
-    match app.strip_prs().len() {
-        0 => 0,
-        n => u16::try_from(n.min(STRIP_ROWS) + 2).unwrap_or(u16::MAX),
-    }
-}
 
 /// The open session's PRs, one row each; `compact` on a narrow screen.
 pub(super) fn strip(frame: &mut Frame, area: Rect, app: &App, compact: bool, hits: &mut Hits) {
@@ -248,6 +238,11 @@ pub(super) fn prompt(frame: &mut Frame, area: Rect, app: &App) {
     ]);
     frame.render_widget(Clear, popup);
     frame.render_widget(Paragraph::new(line).block(block), popup);
+}
+
+/// One PR on one compact line, as the details panel lists it.
+pub(super) fn line(pr: &PullRequest) -> Line<'static> {
+    row(pr, number_width(std::iter::once(pr)), true)
 }
 
 /// One PR on one line: number, state, checks, review, mergeability, title. `compact` keeps

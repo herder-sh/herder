@@ -2,7 +2,9 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: terminal.backend()
 ---
-" < back  herder                  inbox 0  +  "
+" prs 3                      < back  │ switch "
+" ! 1 need you  x 1  * 1             │    !   "
+"──────────────────────────────────────────── "
 "┌ pull requests - every session ───────────┐ "
 "│box - app - herder/api  needs you         │ "
 "│  #7 v Add a health endpoint              │ "
@@ -38,7 +40,5 @@ expression: terminal.backend()
 "│                                          │ "
 "│                                          │ "
 "│                                          │ "
-"│                                          │ "
 "└───────── Enter open - l session - < back ┘ "
 " > open   l session   x unlink               "
-" ? help                               * box  "

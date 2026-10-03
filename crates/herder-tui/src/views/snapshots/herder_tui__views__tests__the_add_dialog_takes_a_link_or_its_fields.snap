@@ -2,7 +2,6 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 90, 20).backend()"
 ---
-" ‹ back  herder                                                               inbox 0  +  "
 "                                                                                          "
 "                                                                                          "
 "  ┌ add a machine ────────────────────────────────────────────────────────────────────┐   "
@@ -21,4 +20,5 @@ expression: "render(&mut app, 90, 20).backend()"
 "  └──────────────────────── Enter next  Tab field  Esc cancel ────────────────────────┘   "
 "                                                                                          "
 "                                                                                          "
-" ? help  q quit                                                                           "
+"───────────────────────────────────────────────────────────────────────────────────────── "
+" esc close                                                                                "

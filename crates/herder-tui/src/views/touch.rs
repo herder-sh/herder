@@ -1,14 +1,10 @@
-//! What a finger reaches: the header over every screen, and on a narrow screen the bar of
-//! buttons over the status line. Each button shows its key too, and its tap reaches one row
-//! further than it is drawn: into the border under the header, the status line under the bar.
+//! What a finger reaches on a phone: the bar of buttons, the last row. Each button shows its
+//! key too; the header's `switch` is [`super::phone`]'s.
 
 use herder_protocol::{ApprovalDecision, SessionStatus};
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::layout::Rect;
 
 use crate::action::Action;
 use crate::app::{App, Focus, Row};
@@ -36,85 +32,6 @@ fn button(key: &str, label: &str, click: Click) -> Button {
     }
 }
 
-/// `area` and the row under it.
-fn and_below(area: Rect) -> Rect {
-    Rect {
-        height: area.height + 1,
-        ..area
-    }
-}
-
-/// The header: `‹ back` where there is somewhere to go back to, the machine and session in
-/// view, how many requests wait in the inbox, and `+` for a new session. While a dialog is
-/// open, only `‹ back` takes taps: it closes the dialog.
-pub(super) fn header(frame: &mut Frame, area: Rect, app: &App, narrow: bool, hits: &mut Hits) {
-    let dialog = app.dialog_open();
-    let back = dialog || (narrow && app.focus != Focus::Sessions);
-    let back_label = if back { " ‹ back " } else { "" };
-    let waiting = app.waiting().len();
-    let inbox = format!(" inbox {waiting} ");
-    let new = " + ";
-    let width = |text: &str| u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
-    let [back_area, title_area, inbox_area, new_area] = Layout::horizontal([
-        Constraint::Length(width(back_label)),
-        Constraint::Fill(1),
-        Constraint::Length(width(&inbox)),
-        Constraint::Length(width(new)),
-    ])
-    .areas(area);
-
-    let ui = app.ui();
-    let button = ui.accent().add_modifier(Modifier::BOLD);
-    frame.render_widget(Line::styled(back_label, button), back_area);
-    frame.render_widget(Paragraph::new(title(app, narrow)), title_area);
-    let inbox_style = if waiting > 0 {
-        Style::new()
-            .fg(ui.theme.attention)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        super::dim()
-    };
-    frame.render_widget(Line::styled(inbox, inbox_style), inbox_area);
-    frame.render_widget(Line::styled(new, button), new_area);
-
-    if back {
-        hits.click(and_below(back_area), mouse::key(KeyCode::Esc));
-    }
-    if dialog {
-        return;
-    }
-    hits.click(and_below(title_area), Click::Open);
-    hits.click(
-        and_below(inbox_area),
-        Click::Act(Action::Inbox(InboxAction::Toggle)),
-    );
-    hits.click(
-        and_below(new_area),
-        Click::Act(Action::Compose(Act::NewSession)),
-    );
-}
-
-/// The machine and the session in view, else the brand.
-fn title(app: &App, narrow: bool) -> Line<'static> {
-    let Some((key, session)) = app.open.as_ref().zip(app.open_session()) else {
-        return Line::styled(" herder", super::bold());
-    };
-    let machine = app
-        .machines
-        .iter()
-        .find(|machine| machine.host_id == key.host_id)
-        .map_or("", |machine| machine.name.as_str());
-    let name = if narrow {
-        session.short_title()
-    } else {
-        session.title()
-    };
-    Line::from(vec![
-        Span::styled(format!(" {machine} › "), super::dim()),
-        Span::styled(name, super::bold()),
-    ])
-}
-
 /// What the bar's buttons do, in order, as [`bar`] draws them.
 pub(super) fn clicks(app: &App) -> Vec<Click> {
     buttons(app)
@@ -135,7 +52,7 @@ pub(super) fn bar(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
         .focus(app.bar_focus)
         .render(area, frame.buffer_mut());
     for (at, rect) in placed {
-        hits.click(and_below(rect), buttons[at].click.clone());
+        hits.click(rect, buttons[at].click.clone());
     }
 }
 
@@ -203,6 +120,10 @@ fn buttons(app: &App) -> Vec<Button> {
             buttons
         }
         Focus::Transcript | Focus::Composer => session_buttons(app),
+        Focus::Tasks => vec![
+            button("⏎", "open", enter()),
+            button("‹", "back", mouse::key(KeyCode::Esc)),
+        ],
         Focus::Inbox => inbox_buttons(app),
         Focus::Prs => vec![
             button("⏎", "open", enter()),
@@ -246,6 +167,9 @@ fn session_buttons(app: &App) -> Vec<Button> {
         buttons.push(button("⏎", "send", act(Act::Submit)));
     } else if session.status != SessionStatus::Archived && app.read_only(key).is_none() {
         buttons.push(button("i", "write", act(Act::Write)));
+    }
+    if app.focus != Focus::Composer {
+        buttons.push(button("‹", "back", mouse::key(KeyCode::Esc)));
     }
     if session.turn.is_some() {
         buttons.push(button("^c", "stop", act(Act::CtrlC)));

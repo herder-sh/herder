@@ -118,6 +118,8 @@ impl App {
             PrAction::FocusStrip => {
                 if self.focus == Focus::Sessions || self.focus == Focus::AllPrs {
                     self.act(Action::Open);
+                    // For its PRs, not its prompt.
+                    self.focus = Focus::Transcript;
                 }
                 match self.open_session() {
                     Some(session) if !session.prs.is_empty() => self.focus = Focus::Prs,
@@ -524,6 +526,8 @@ mod tests {
     fn pr_keys_type_into_the_composer() {
         let mut app = fake::with_prs();
         press(&mut app, KeyCode::Enter);
+        // Opening lands in the prompt: leave it for NAVIGATE.
+        press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('i'));
         typed(&mut app, "pPLx");
         assert_eq!(app.focus, Focus::Composer);
