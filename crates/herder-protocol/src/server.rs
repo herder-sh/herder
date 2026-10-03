@@ -16,7 +16,7 @@ pub enum ServerMessage {
     /// First message on every connection, answering the client's hello.
     Hello(ServerHello),
     /// Every session on this daemon; sent after hello and whenever a session is created or
-    /// its status, account or project changes.
+    /// its status, account, project or title changes.
     Sessions {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
@@ -185,6 +185,9 @@ pub struct SessionHead {
     /// Short label of the session's task, shown in the task tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+    /// The session's current title, from its latest `title_changed`; absent until it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Project of the session's repository, as resolved under the daemon's current config;
     /// absent until the daemon's project discovery has seen the repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -166,6 +166,16 @@
 //! fails otherwise, as when the account rejects the model, it is `needs_you` with that error,
 //! and nothing else is tried.
 //!
+//! # Titles
+//!
+//! `rename_session`, from an owner or a member, journals `title_changed` with source `user`
+//! `by` that user, trimmed as [`herder_protocol::clean_title`] accepts it, and resends the
+//! session list. It is refused as `bad_request` for an invalid title and as a `conflict` once
+//! the session is read-only; renaming to the user title it already has journals nothing.
+//!
+//! `retitle_session`, from an owner or a member, is refused the same way for a read-only
+//! session, and as `unsupported` otherwise until the daemon can generate titles.
+//!
 //! # Recovery
 //!
 //! A session whose host died can go on on another host from the journal its vault holds
@@ -202,10 +212,11 @@ use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord,
-    PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus,
-    SessionSummary, Timestamp, TurnId, UsageWindow, UserId,
+    MAX_TITLE_CHARS, PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId,
+    SessionStatus, SessionSummary, Timestamp, TitleSource, TurnId, UsageWindow, UserId,
+    clean_title,
 };
-use herder_store::Store;
+use herder_store::{Session, Store};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -569,6 +580,10 @@ impl SessionManager {
             CommandBody::ArchiveSession { session_id, force } => {
                 return self.archive(by, session_id, force).await;
             }
+            CommandBody::RenameSession { session_id, title } => {
+                return self.rename(by, session_id, &title).await;
+            }
+            CommandBody::RetitleSession { session_id } => return self.retitle(session_id).await,
             CommandBody::LinkPr { session_id, number } => {
                 return self.prs()?.link(by, session_id, number).await;
             }
@@ -959,6 +974,66 @@ impl SessionManager {
     ) -> Result<CommandResult, ErrorInfo> {
         self.send(session_id, Some(by), Request::Archive { force })
             .await
+    }
+
+    /// Sets the title of `session_id` as `by` chose it.
+    pub async fn rename(
+        &self,
+        by: UserId,
+        session_id: SessionId,
+        title: &str,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let title = clean_title(title).ok_or_else(|| {
+            error(
+                ErrorCode::BadRequest,
+                format!("a title is one line of 1 to {MAX_TITLE_CHARS} characters"),
+            )
+        })?;
+        let session = self.titleable(&session_id).await?;
+        if session.title.as_deref() != Some(title)
+            || session.title_source != Some(TitleSource::User)
+        {
+            let body = EventBody::TitleChanged {
+                title: title.to_owned(),
+                source: TitleSource::User,
+            };
+            self.inner
+                .journal
+                .record(session_id, Some(by), body)
+                .await
+                .map_err(internal)?;
+        }
+        Ok(CommandResult::Applied)
+    }
+
+    /// Asks for the title of `session_id` to be generated again from its conversation.
+    pub async fn retitle(&self, session_id: SessionId) -> Result<CommandResult, ErrorInfo> {
+        self.titleable(&session_id).await?;
+        Err(error(
+            ErrorCode::Unsupported,
+            "this daemon cannot generate titles yet",
+        ))
+    }
+
+    /// The session, if it exists and its title may change.
+    async fn titleable(&self, session_id: &SessionId) -> Result<Session, ErrorInfo> {
+        let session = self
+            .inner
+            .journal
+            .session(session_id.clone())
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| not_found(session_id))?;
+        if matches!(
+            session.status,
+            SessionStatus::Archived | SessionStatus::Moved
+        ) {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!("session {session_id} is read-only"),
+            ));
+        }
+        Ok(session)
     }
 
     /// Every branch `session_id` owns, its own first, in the order first checked out: the

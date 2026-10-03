@@ -145,7 +145,7 @@ struct SessionModel {
             }
         case .prUnlinked(let number):
             prs.removeAll { $0.number == number }
-        case .childSpawned, .childReported, .unknown:
+        case .childSpawned, .childReported, .titleChanged, .unknown:
             break
         }
     }
@@ -214,7 +214,8 @@ struct SessionModel {
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
-        case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated, .unknown:
+        case .sessionCreated, .sessionStatusChanged, .turnStarted, .turnCompleted, .prUpdated,
+             .titleChanged, .unknown:
             break
         }
     }
@@ -280,6 +281,7 @@ struct SessionModel {
         case .prLinked(let pr): return "PR #\(pr.number) linked"
         case .prUpdated(let pr): return "PR #\(pr.number) \(pr.state.word.lowercased()), CI \(pr.ci)"
         case .prUnlinked(let number): return "PR #\(number) unlinked"
+        case .titleChanged(let title, _): return "Title: \(title)"
         case .unknown: return "Event"
         }
     }
