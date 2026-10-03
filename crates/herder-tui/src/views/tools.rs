@@ -104,6 +104,15 @@ fn relative(worktree: &str, path: &str) -> String {
         .to_owned()
 }
 
+/// `text` with the worktree's paths relative to it, as a shell command run there reads.
+pub(super) fn in_worktree(text: &str, worktree: &str) -> String {
+    let worktree = worktree.trim_end_matches('/');
+    if worktree.is_empty() {
+        return text.to_owned();
+    }
+    text.replace(&format!("{worktree}/"), "")
+}
+
 /// The path a call works on.
 fn path(input: &Value, worktree: &str) -> String {
     ["file_path", "path", "notebook_path"]
@@ -136,7 +145,10 @@ fn matches(output: &str) -> usize {
 fn summary(name: &str, input: &Value, output: Option<&str>, worktree: &str) -> (String, String) {
     let kind = kind(name);
     match kind {
-        Kind::Shell => (String::new(), first_line(&command(input)).to_owned()),
+        Kind::Shell => (
+            String::new(),
+            in_worktree(first_line(&command(input)), worktree),
+        ),
         Kind::Read => ("Read".into(), path(input, worktree)),
         Kind::Write => ("Write".into(), path(input, worktree)),
         Kind::Edit => {
@@ -414,7 +426,7 @@ pub(super) fn tool(
         Kind::Shell if details && has_output => {
             b.start(true);
             b.select(&item.id);
-            let command = command(input);
+            let command = in_worktree(&command(input), b.worktree);
             let mut body = Vec::new();
             let title = match arg(input, "description") {
                 Some(description) => {
@@ -926,6 +938,15 @@ mod tests {
                 Diff::Removed("y".into()),
                 Diff::Added("z".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn commands_show_worktree_paths_relative() {
+        let input = json!({"command": "cat /w/api/src/main.rs /etc/hosts"});
+        assert_eq!(
+            summary("Bash", &input, None, "/w/api/").1,
+            "cat src/main.rs /etc/hosts"
         );
     }
 

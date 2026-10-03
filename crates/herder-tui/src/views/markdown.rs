@@ -160,36 +160,41 @@ pub(super) fn inline(ui: Ui, text: &str, base: Style) -> Vec<Run> {
         }
     };
     while let Some(c) = rest.chars().next() {
-        let styled = match c {
+        // What starts here: its runs, and how many bytes it takes.
+        let styled: Option<(Vec<Run>, usize)> = match c {
             '`' => rest[1..].find('`').map(|end| {
                 let code = Style::new().fg(theme.markdown_code);
-                (rest[1..=end].to_owned(), code, end + 2)
+                (vec![(rest[1..=end].to_owned(), code)], end + 2)
             }),
+            // Strong and emphasis may hold code or links: their text is Markdown too.
             '*' if rest.starts_with("**") => {
                 rest[2..].find("**").filter(|&end| end > 0).map(|end| {
-                    let strong = base.fg(theme.markdown_strong).add_modifier(Modifier::BOLD);
-                    (rest[2..2 + end].to_owned(), strong, end + 4)
+                    let strong = base.fg(theme.markdown_strong);
+                    (
+                        nested(ui, &rest[2..2 + end], strong, Modifier::BOLD),
+                        end + 4,
+                    )
                 })
             }
             '*' => rest[1..]
                 .find('*')
                 .filter(|&end| end > 0 && !rest[1..].starts_with(' '))
                 .map(|end| {
-                    let emph = base.fg(theme.markdown_emph).add_modifier(Modifier::ITALIC);
-                    (rest[1..=end].to_owned(), emph, end + 2)
+                    let emph = base.fg(theme.markdown_emph);
+                    (nested(ui, &rest[1..=end], emph, Modifier::ITALIC), end + 2)
                 }),
             '[' => link(rest).map(|(label, len)| {
                 let style = Style::new()
                     .fg(theme.markdown_link_text)
                     .add_modifier(Modifier::UNDERLINED);
-                (label.to_owned(), style, len)
+                (vec![(label.to_owned(), style)], len)
             }),
             _ => None,
         };
         match styled {
-            Some((text, style, len)) => {
+            Some((styled, len)) => {
                 flush(&mut plain, &mut runs);
-                runs.push((text, style));
+                runs.extend(styled);
                 rest = &rest[len..];
             }
             None => {
@@ -200,6 +205,14 @@ pub(super) fn inline(ui: Ui, text: &str, base: Style) -> Vec<Run> {
     }
     flush(&mut plain, &mut runs);
     runs
+}
+
+/// `text`'s inline Markdown over `base`, every run also in `modifier`.
+fn nested(ui: Ui, text: &str, base: Style, modifier: Modifier) -> Vec<Run> {
+    inline(ui, text, base)
+        .into_iter()
+        .map(|(text, style)| (text, style.add_modifier(modifier)))
+        .collect()
 }
 
 /// A `[label](url)` at the start of `text`: the label, and the link's length.
@@ -327,6 +340,11 @@ mod tests {
         assert_eq!(runs[1].1.fg, Some(theme.markdown_code));
         assert!(runs[3].1.add_modifier.contains(Modifier::BOLD));
         assert!(runs[7].1.add_modifier.contains(Modifier::UNDERLINED));
+        // Code inside strong is code, in bold.
+        let runs = inline(ui, "**`ls -la`**: listed", Style::new());
+        assert_eq!(runs[0].0, "ls -la");
+        assert_eq!(runs[0].1.fg, Some(theme.markdown_code));
+        assert!(runs[0].1.add_modifier.contains(Modifier::BOLD));
         let rows = markdown(ui, "# Plan\n1. one\n- two\n```\ncode\n```\n\n", 2, 30);
         let lines: Vec<Line> = rows.into_iter().map(|row| row.line).collect();
         assert_eq!(text(&lines), ["  Plan", "  1. one", "  • two", "    code"]);
