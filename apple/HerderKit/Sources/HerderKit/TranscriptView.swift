@@ -99,9 +99,9 @@ struct MarkdownText: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 switch part {
-                case .code(let code):
+                case .code(let code, let language):
                     ScrollView(.horizontal, showsIndicators: false) {
-                        Text(code).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+                        Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
                             .padding(12)
                     }
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
@@ -140,18 +140,23 @@ struct MarkdownText: View {
             ?? AttributedString(text)
     }
 
-    private enum Part { case line(String), code(String) }
+    enum Part: Equatable { case line(String), code(String, language: String) }
 
     /// Fenced code blocks, and the non-blank lines between them.
-    private var parts: [Part] {
+    private var parts: [Part] { Self.parse(text, streaming: streaming) }
+
+    static func parse(_ text: String, streaming: Bool = false) -> [Part] {
+        var language = ""
         var parts: [Part] = []
         var code: [Substring]?
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                 if let lines = code {
-                    parts.append(.code(lines.joined(separator: "\n")))
+                    parts.append(.code(lines.joined(separator: "\n"), language: language))
                     code = nil
                 } else {
+                    language = String(line.trimmingCharacters(in: .whitespaces).dropFirst(3))
+                        .split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
                     code = []
                 }
             } else if code != nil {
@@ -160,7 +165,7 @@ struct MarkdownText: View {
                 parts.append(.line(String(line)))
             }
         }
-        if let lines = code { parts.append(.code(lines.joined(separator: "\n"))) }
+        if let lines = code { parts.append(.code(lines.joined(separator: "\n"), language: language)) }
         if parts.isEmpty && streaming { parts.append(.line("")) }
         return parts
     }
