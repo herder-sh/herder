@@ -124,6 +124,7 @@ pub async fn serve(
         keep: worktree::checkpoint::KEEP,
         push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
     })?;
+    let mut recovery = None;
     if let Some(vault) = &config.vault {
         let replicator = vault::Replicator {
             vault: vault.clone(),
@@ -131,8 +132,16 @@ pub async fn serve(
             host: host.clone(),
             sessions: sessions.clone(),
             changed: journal_grew,
+            data_dir: data_dir.root().to_owned(),
         };
         tokio::spawn(replicator.run(shutdown.clone()));
+        recovery = Some(Arc::new(vault::recover::Recovery {
+            vault: vault.clone(),
+            device: vault::Replicator::device_key(data_dir.root())?,
+            host: host.clone(),
+            sessions: sessions.clone(),
+            data_dir: data_dir.root().to_owned(),
+        }));
     }
     tokio::spawn(
         projects::Discovery {
@@ -212,6 +221,7 @@ pub async fn serve(
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
             listen: listener.local_addr()?,
+            recovery,
         },
         shutdown.clone(),
     ));

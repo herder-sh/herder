@@ -29,6 +29,9 @@
 //! push fails, the checkpoint is written as a git bundle to
 //! `<data_dir>/checkpoints/<session>/<turn>.bundle` instead, leaving out commits already on a
 //! remote-tracking branch; the latest [`KEEP`] bundles are kept.
+//!
+//! A host recovering the session after its host died fetches the pushed refs from `origin`
+//! ([`fetch_latest`]); bundles stay on the host that wrote them.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -165,6 +168,30 @@ pub async fn publish(
     bundle(config, worktree, session_id, turn_id)
         .await
         .map(Published::Bundled)
+}
+
+/// Fetches `session_id`'s checkpoint refs from `repo`'s `origin`, as another host pushed them,
+/// within `timeout`; returns the latest, or `None` when the repository has no `origin` or
+/// `origin` has none. Bundles stay on the host that wrote them and are not looked for.
+pub async fn fetch_latest(
+    repo: &Path,
+    session_id: &SessionId,
+    timeout: Duration,
+) -> Result<Option<String>, Error> {
+    if git(repo, ["remote", "get-url", "origin"]).await.is_err() {
+        return Ok(None);
+    }
+    let refspec = format!("+refs/herder/{session_id}/*:refs/herder/{session_id}/*");
+    let env = [("GIT_TERMINAL_PROMPT", OsStr::new("0"))];
+    let fetch = run(
+        repo,
+        ["fetch", "--quiet", "--no-tags", "origin", &refspec],
+        &env,
+    );
+    tokio::time::timeout(timeout, fetch)
+        .await
+        .map_err(|_| Error::Git(format!("fetching from origin took over {timeout:?}")))??;
+    Ok(refs(repo, session_id).await?.pop())
 }
 
 async fn bundle(

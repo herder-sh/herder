@@ -153,6 +153,13 @@
 //! fails otherwise, as when the account rejects the model, it is `needs_you` with that error,
 //! and nothing else is tried.
 //!
+//! # Recovery
+//!
+//! A session whose host died can go on on another host from the journal its vault holds
+//! ([`SessionManager::recover`], see [`crate::vault`]); it keeps its id. When the host it
+//! came from returns, that copy is stopped and made `moved`, read-only
+//! ([`SessionManager::moved_away`]).
+//!
 //! # Restart
 //!
 //! Sessions are read from the store. A turn left open by a daemon that stopped is closed with
@@ -164,10 +171,12 @@
 mod actor;
 pub mod failover;
 pub(crate) mod journal;
+mod recover;
 mod routing;
 mod setup;
 mod tasks;
 
+pub use recover::Recovered;
 pub use routing::{Escalation, Notifier};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

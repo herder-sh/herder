@@ -1,0 +1,5 @@
+# The same session recovered on another host: its next prompt runs on a CLI seeded with the transcript.
+{"expect": {"type": "send_prompt", "turn_id": "b-turn-1", "text": "Third."}}
+{"emit": {"type": "turn_started", "turn_id": "b-turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "b-turn-1", "body": {"type": "assistant_message", "text": "Three."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "b-turn-1"}}

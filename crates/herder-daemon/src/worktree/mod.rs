@@ -92,6 +92,52 @@ impl Worktrees {
         slug: &str,
         branch: Option<String>,
     ) -> Result<Worktree, Error> {
+        self.add(repo, slug, branch, None).await
+    }
+
+    /// Adds a worktree of `repo` for the session `slug`, recovered from another host, on a new
+    /// branch `branch`: at the parent of the commit `checkpoint` (see [`checkpoint`]), with the
+    /// checkpoint's files on disk as uncommitted changes, so the worktree is as the session
+    /// left it. Without a checkpoint it starts at the default base, as [`Self::create`] does.
+    pub async fn restore(
+        &self,
+        repo: &Path,
+        slug: &str,
+        branch: String,
+        checkpoint: Option<&str>,
+    ) -> Result<Worktree, Error> {
+        let Some(checkpoint) = checkpoint else {
+            return self.add(repo, slug, Some(branch), None).await;
+        };
+        let parent = format!("{checkpoint}^");
+        let base = git(repo, ["rev-parse", "--verify", "--quiet", &parent])
+            .await
+            .ok();
+        let worktree = self.add(repo, slug, Some(branch), base).await?;
+        // No-overlay: files the checkpoint does not have are removed too.
+        git(
+            &worktree.path,
+            [
+                "restore",
+                "--no-overlay",
+                &format!("--source={checkpoint}"),
+                "--worktree",
+                "--",
+                ".",
+            ],
+        )
+        .await?;
+        Ok(worktree)
+    }
+
+    /// Adds the worktree on a new branch starting at `base`, or the default base.
+    async fn add(
+        &self,
+        repo: &Path,
+        slug: &str,
+        branch: Option<String>,
+        base: Option<String>,
+    ) -> Result<Worktree, Error> {
         if !repo.is_absolute() || !repo.is_dir() {
             return Err(Error::BadRequest(format!(
                 "{} is not an absolute path to a directory",
@@ -119,7 +165,10 @@ impl Worktrees {
         if is_branch(repo, &branch).await? {
             return Err(Error::Conflict(format!("branch {branch} already exists")));
         }
-        let base = default_base(repo).await?;
+        let base = match base {
+            Some(base) => base,
+            None => default_base(repo).await?,
+        };
         // One mkdir; not worth a blocking-pool hop.
         std::fs::create_dir_all(&self.root)
             .map_err(|err| Error::Git(format!("creating {}: {err}", self.root.display())))?;

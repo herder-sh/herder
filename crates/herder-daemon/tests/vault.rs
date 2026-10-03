@@ -200,6 +200,7 @@ impl HostDaemon {
                     },
                     sessions: sessions.clone(),
                     changed,
+                    data_dir: dir.clone(),
                 };
                 tokio::spawn(replicator.run(shutdown));
                 sessions

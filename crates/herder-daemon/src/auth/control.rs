@@ -1,4 +1,5 @@
-//! The local control socket `herder pair` talks to, at `<data_dir>/control.sock`.
+//! The local control socket `herder pair` and `herder recover` talk to, at
+//! `<data_dir>/control.sock`.
 //!
 //! Only this user can reach it: the data dir is private to them. Each connection carries one
 //! JSON request line and gets one JSON response line back. Both ends are the same binary, so
@@ -22,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::{Auth, PAIRING_TTL};
+use crate::vault::recover::{self, Recovery};
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "control.sock";
@@ -29,10 +31,13 @@ pub const SOCKET: &str = "control.sock";
 /// Longest request line accepted.
 const MAX_REQUEST: u64 = 64 * 1024;
 
-/// Time a request gets to arrive.
+/// Time a request gets to arrive, and to be answered.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// What `herder pair` asks the daemon.
+/// Time a recovery gets to be answered: it reads the vault and fetches from `origin`.
+const RECOVER_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// What `herder pair` and `herder recover` ask the daemon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -50,6 +55,8 @@ pub enum Request {
         /// The device.
         device_id: DeviceId,
     },
+    /// Recover a session from the vault onto this host (`herder recover`).
+    Recover(recover::Request),
 }
 
 /// The daemon's answer.
@@ -65,6 +72,8 @@ pub enum Response {
     },
     /// The device was unpaired and disconnected.
     Revoked,
+    /// The session was recovered onto this host.
+    Recovered(recover::Outcome),
     /// The request failed.
     Error {
         /// Why.
@@ -106,13 +115,15 @@ pub struct DeviceInfo {
     pub role: Role,
 }
 
-/// What the daemon tells `herder pair` about itself.
-#[derive(Clone, Debug)]
+/// What the daemon tells `herder pair` about itself, and how it recovers sessions.
+#[derive(Clone)]
 pub struct Daemon {
     /// SHA-256 of its TLS certificate.
     pub fingerprint: String,
     /// The address its WebSocket server is bound to.
     pub listen: SocketAddr,
+    /// Recovers sessions from the vault; `None` without a `[vault]`, and on the vault itself.
+    pub recovery: Option<Arc<Recovery>>,
 }
 
 /// Binds the socket in `data_dir`, replacing a stale one; the caller holds the data-dir lock,
@@ -167,7 +178,7 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
     .await
     .context("no request in time")??;
     let response = match serde_json::from_str(&line) {
-        Ok(request) => handle(request, auth, daemon),
+        Ok(request) => handle(request, auth, daemon).await,
         Err(err) => Response::Error {
             message: format!("invalid request: {err}"),
         },
@@ -178,7 +189,21 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
     Ok(())
 }
 
-fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
+async fn recover(request: recover::Request, daemon: &Daemon) -> Response {
+    let Some(recovery) = &daemon.recovery else {
+        return Response::Error {
+            message: "this daemon has no [vault] to recover sessions from".to_owned(),
+        };
+    };
+    match recovery.recover(request).await {
+        Ok(outcome) => Response::Recovered(outcome),
+        Err(err) => Response::Error {
+            message: format!("{err:#}"),
+        },
+    }
+}
+
+async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
     let failed = |err: anyhow::Error| Response::Error {
         message: format!("{err:#}"),
     };
@@ -215,6 +240,7 @@ fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             },
             Err(err) => failed(err),
         },
+        Request::Recover(request) => recover(request, daemon).await,
     }
 }
 
@@ -227,7 +253,11 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
             path.display()
         )
     })?;
-    stream.set_read_timeout(Some(TIMEOUT))?;
+    let timeout = match request {
+        Request::Recover(_) => RECOVER_TIMEOUT,
+        _ => TIMEOUT,
+    };
+    stream.set_read_timeout(Some(timeout))?;
     let mut text = serde_json::to_string(request)?;
     text.push('\n');
     stream.write_all(text.as_bytes())?;
@@ -321,6 +351,7 @@ mod tests {
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
             listen: "127.0.0.1:7447".parse().unwrap(),
+            recovery: None,
         };
         let shutdown = CancellationToken::new();
         let server = tokio::spawn(serve(listener, auth, daemon, shutdown.clone()));
@@ -354,6 +385,15 @@ mod tests {
             device_id: DeviceId::new("nope"),
         };
         assert!(matches!(ask(revoke).await.unwrap(), Response::Error { .. }));
+        let recover = Request::Recover(recover::Request {
+            session_id: herder_protocol::SessionId::new("s1"),
+            account_id: None,
+            force: false,
+        });
+        let Response::Error { message } = ask(recover).await.unwrap() else {
+            panic!("expected a refusal");
+        };
+        assert!(message.contains("no [vault]"), "{message}");
         shutdown.cancel();
         server.await.unwrap();
     }

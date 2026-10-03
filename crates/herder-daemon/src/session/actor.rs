@@ -92,6 +92,8 @@ pub(super) enum Request {
         command: String,
         timeout: Duration,
     },
+    /// The session was recovered on another host: stop it and make it read-only here.
+    MovedAway,
 }
 
 /// What a switch to another account changes.
@@ -227,7 +229,10 @@ impl Actor {
             }
             Err(err) => warn!(%session_id, "cannot read the queued prompts: {err:#}"),
         }
-        if self.session.status == SessionStatus::Archived {
+        if matches!(
+            self.session.status,
+            SessionStatus::Archived | SessionStatus::Moved
+        ) {
             self.queue.clear();
         }
         self.save_queue().await;
@@ -360,6 +365,15 @@ impl Actor {
                 "the session is archived and read-only",
             ));
         }
+        if self.session.status == SessionStatus::Moved {
+            if matches!(request, Request::MovedAway) {
+                return Ok(CommandResult::Applied);
+            }
+            return Err(error(
+                ErrorCode::Conflict,
+                "the session was recovered on another host and is read-only here",
+            ));
+        }
         match request {
             Request::SendPrompt { text, queued } => {
                 let busy = self.turn.is_some() || !self.queue.is_empty();
@@ -435,6 +449,7 @@ impl Actor {
             Request::Archive { force } => self.archive(by, force).await?,
             Request::Switch { account_id, to } => self.switch(by, account_id, to).await?,
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
+            Request::MovedAway => self.moved_away().await,
             Request::FromPrimary { .. } => {}
         }
         Ok(CommandResult::Applied)
@@ -889,6 +904,39 @@ impl Actor {
         self.waiting = None;
         self.permit = None;
         Ok(())
+    }
+
+    /// The session was recovered on another host, which goes on with it: stops the CLI, the
+    /// setup command and whatever the session left running, fails the open turn and makes the
+    /// session read-only here. The worktree stays as the session left it.
+    async fn moved_away(&mut self) {
+        let mut open = self.turn.take();
+        if let Some(setup) = self.setup.take() {
+            setup.cancel.cancel();
+            open = open.or(Some(setup.turn_id));
+        }
+        if let Some(adapter) = self.adapter.take() {
+            let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
+        }
+        self.void_requests().await;
+        if let Some(turn_id) = open {
+            let error = TurnError {
+                class: ErrorClass::Fatal,
+                message: "the session was recovered on another host".to_owned(),
+            };
+            self.log(EventBody::TurnFailed { turn_id, error }).await;
+        }
+        if let Some(scopes) = self.inner.scopes.get() {
+            scopes.stop(&self.session.session_id).await;
+        }
+        if let Some(mcp) = self.inner.mcp.get() {
+            mcp.revoke(&self.session.session_id);
+        }
+        self.queue.clear();
+        self.prompt = None;
+        self.waiting = None;
+        self.permit = None;
+        self.set_status(SessionStatus::Moved).await;
     }
 
     /// Moves the session to `account_id` as `to` says, between turns: stops the current CLI
