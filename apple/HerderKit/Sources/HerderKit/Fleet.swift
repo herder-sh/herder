@@ -16,7 +16,9 @@ public final class Fleet {
 
     /// Follows the client's changes until it stops; runs for as long as the fleet is shown.
     public func follow() async {
+        // Subscribe before reading, so a change between `init` and now is not missed.
         let changes = client.changes()
+        machines = client.machines()
         while await changes.next() {
             machines = client.machines()
         }
