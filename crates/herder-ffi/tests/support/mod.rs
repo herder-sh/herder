@@ -88,6 +88,10 @@ impl FakeDaemon {
             id: HostId::new("fake-host"),
             name: "fake-host".into(),
         };
+        sessions.fork_from(session::fork::Forks {
+            host: host.id.clone(),
+            vault: None,
+        })?;
         let server = Server::new(tls, auth, hub, sessions, terminals, logins, host);
         let server = tokio::spawn(server.run(listener, shutdown.clone()));
         Ok(Self {

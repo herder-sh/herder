@@ -29,6 +29,28 @@ private func vault(_ sessions: [(SessionId, host: HostId, status: SessionStatus,
 }
 
 struct VaultStatsTests {
+    @Test func emptyVaultStillShowsStorageAndReplicationStatus() throws {
+        var machine = machine("vault", name: "vault", sessions: [])
+        machine.vault = VaultStatus(sessions: 0, events: 12, storageBytes: 4096, hosts: [])
+        let stats = try #require(VaultStats(machine: machine, sessions: [:]))
+        #expect(stats.hosts.isEmpty)
+        #expect(stats.storedEvents == 12)
+        #expect(stats.storageBytes == 4096)
+    }
+
+    @Test func replicationLagUsesReportedBatchNotTimeSinceLastEvent() throws {
+        var machine = vault([])
+        machine.vault = VaultStatus(sessions: 0, events: 12, storageBytes: 4096, hosts: [
+            HostReplication(hostId: "h1", sessions: 0, events: 12, lastEventAt: "2026-01-01T00:00:00Z", lagMs: 23),
+            HostReplication(hostId: "h2", sessions: 0, events: 0, lastEventAt: nil, lagMs: nil),
+        ])
+        let stats = try #require(VaultStats(machine: machine, sessions: [:]))
+        let online = try #require(stats.hosts.first { $0.id == "h1" })
+        #expect(online.replicationSummary == "12 events · Last batch lag: 23 ms")
+        let offline = try #require(stats.hosts.first { $0.id == "h2" })
+        #expect(offline.replicationSummary.contains("No batch received since vault restart"))
+    }
+
     @Test func aMachineWithoutHostsIsNoVault() {
         #expect(VaultStats(machine: machine("host-a", name: "a", sessions: ["01A"]), sessions: [:]) == nil)
     }

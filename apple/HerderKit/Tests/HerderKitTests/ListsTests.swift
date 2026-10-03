@@ -16,7 +16,7 @@ func machine(
                         title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0)
         },
         hosts: hosts, projects: projects, accounts: [], failover: FailoverSettings(pin: false), terminals: [],
-        resources: nil, sessionUsage: [:])
+        resources: nil, sessionUsage: [:], vault: nil)
 }
 
 struct ListsTests {

@@ -24,6 +24,16 @@ struct VaultStats: Hashable, Identifiable {
         /// Its projects with the most sessions, at most three.
         let topProjects: [ProjectCount]
 
+        var replicatedEvents: UInt64?
+        var replicationLagMs: UInt64?
+        var lastReplicatedEvent: String?
+
+        var replicationSummary: String {
+            guard let replicatedEvents else { return "Replication status unavailable" }
+            let lag = replicationLagMs.map { "Last batch lag: \($0) ms" } ?? "No batch received since vault restart"
+            return "\(replicatedEvents) events · \(lag)"
+        }
+
         var sessions: Int { byState.values.reduce(0, +) }
         var needsYou: Int { byState[.needsYou] ?? 0 }
     }
@@ -38,6 +48,8 @@ struct VaultStats: Hashable, Identifiable {
     let openPRs: Int
     /// Projects it knows or runs sessions in.
     let projects: Int
+    let storedEvents: UInt64?
+    let storageBytes: UInt64?
 
     var hostsOnline: Int { hosts.filter(\.online).count }
     var sessions: Int { byState.values.reduce(0, +) }
@@ -46,7 +58,7 @@ struct VaultStats: Hashable, Identifiable {
 
     /// `nil` unless the machine is a vault, which replicates hosts.
     init?(machine: Machine, sessions: [SessionKey: SessionModel], now: Date = .now) {
-        guard !machine.hosts.isEmpty else { return nil }
+        guard !machine.hosts.isEmpty || machine.vault != nil else { return nil }
         let entries = machine.sessions.map { head in
             let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
             var model = sessions[key] ?? SessionModel(key: key)
@@ -61,11 +73,14 @@ struct VaultStats: Hashable, Identifiable {
         hostId = machine.hostId
         name = machine.name
         connection = machine.connection
+        storedEvents = machine.vault?.events
+        storageBytes = machine.vault?.storageBytes
         byState = tally(entries)
         openPRs = entries.flatMap(\.model.prs).filter { $0.state.rank == 0 }.count
         projects = Set(machine.projects.map(\.projectId) + entries.compactMap(\.projectId)).count
         hosts = machine.hosts.map { host in
             let own = entries.filter { $0.head.hostId == host.hostId }
+            let replication = machine.vault?.hosts.first { $0.hostId == host.hostId }
             let byProject = Dictionary(grouping: own.compactMap(\.projectId), by: { $0 }).mapValues(\.count)
             return Host(
                 id: host.hostId, name: host.hostName, online: host.online,
@@ -75,7 +90,10 @@ struct VaultStats: Hashable, Identifiable {
                     .map { ProjectCount(name: Lists.projectName($0.key, machines: [machine]), sessions: $0.value) }
                     .sorted { ($1.sessions, $0.name.lowercased()) < ($0.sessions, $1.name.lowercased()) }
                     .prefix(3)
-                    .map { $0 })
+                    .map { $0 },
+                replicatedEvents: replication?.events,
+                replicationLagMs: replication?.lagMs,
+                lastReplicatedEvent: replication?.lastEventAt)
         }
         .sorted { ($1.online ? 1 : 0, $0.name.lowercased()) < ($0.online ? 1 : 0, $1.name.lowercased()) }
     }
@@ -118,6 +136,10 @@ struct VaultSection: View {
         VStack(alignment: .leading, spacing: 18) {
             header
             totals
+            if let events = vault.storedEvents, let bytes = vault.storageBytes {
+                Text("\(events) replicated events · \(ByteCountFormatter.string(fromByteCount: Int64(clamping: bytes), countStyle: .file)) stored")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+            }
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeading(title: "Hosts", count: vault.hosts.count)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
@@ -207,6 +229,12 @@ private struct HostCard: View {
                     }
                 }
                 .font(.subheadline.weight(.medium))
+                Text(host.replicationSummary)
+                    .font(.caption).foregroundStyle(Theme.secondary)
+                if let at = host.lastReplicatedEvent {
+                    Text("Newest stored event: \(at)")
+                        .font(.caption).foregroundStyle(Theme.tertiary)
+                }
                 if host.sessions > 0 {
                     StateBar(byState: host.byState)
                     FlowCounts(byState: host.byState)
