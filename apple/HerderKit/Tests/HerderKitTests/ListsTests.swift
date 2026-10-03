@@ -7,7 +7,10 @@ func machine(
     _ hostId: HostId, name: String, sessions: [SessionId], projects: [Project] = [], hosts: [FleetHost] = []
 ) -> Machine {
     Machine(
-        hostId: hostId, name: name, addresses: [], fingerprint: "", connection: .connected, role: .owner,
+        hostId: hostId, name: name, addresses: [], fingerprint: "", connection: .connected,
+        quality: ConnectionQuality(connectedSince: nil, reconnects: 0, lastRttMs: nil, averageRttMs: nil, minRttMs: nil,
+                                   maxRttMs: nil, missedPongs: 0),
+        role: .owner,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, task: nil,
                         projectId: nil, accountId: "main", childrenNeedYou: 0)

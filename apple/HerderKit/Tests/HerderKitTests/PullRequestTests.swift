@@ -168,3 +168,19 @@ struct FolderTypingTests {
         #expect(FolderBrowser.split("/ho") == ("/", "ho"))
     }
 }
+
+struct LinkVerdictTests {
+    private func quality(average: UInt32?, min: UInt32? = nil, max: UInt32? = nil, missed: UInt32 = 0) -> ConnectionQuality {
+        ConnectionQuality(connectedSince: nil, reconnects: 0, lastRttMs: average, averageRttMs: average,
+                          minRttMs: min ?? average, maxRttMs: max ?? average, missedPongs: missed)
+    }
+
+    @Test func aLinkIsJudgedByItsRoundTrips() {
+        #expect(LinkVerdict(quality(average: nil)) == nil)
+        #expect(LinkVerdict(quality(average: 30))?.level == .good)
+        #expect(LinkVerdict(quality(average: 150))?.level == .fair)
+        #expect(LinkVerdict(quality(average: 80, min: 20, max: 400))?.summary == "Unsteady: 20–400 ms")
+        #expect(LinkVerdict(quality(average: 450))?.level == .poor)
+        #expect(LinkVerdict(quality(average: 30, missed: 2))?.summary == "2 pings went unanswered")
+    }
+}
