@@ -34,6 +34,8 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
@@ -102,6 +104,7 @@ import sh.herder.android.ToolApproval
 import sh.herder.android.ToolKind
 import sh.herder.android.command
 import sh.herder.android.description
+import sh.herder.android.driveable
 import sh.herder.android.duration
 import sh.herder.android.editLines
 import sh.herder.android.firstLine
@@ -134,6 +137,8 @@ import org.json.JSONObject
 // The session view: the open session's transcript above what waits on the user or the
 // composer, as docs/tui-design.md §2.1 lays out the chat and the GTK app's session view draws it.
 //
+// - Its pull requests sit over the transcript (docs/tui-design.md §2.4, linux/src/prs.rs):
+//   number, title, branch, state, CI, review and mergeable; a tap opens the PR in the browser.
 // - The transcript streams: the agent's text grows with a cursor. A tool call is one row,
 //   `→ Read src/api.rs`, that expands on tap to its command, diff or output; reasoning is one
 //   `+ Thought:` row that expands the same way.
@@ -160,6 +165,8 @@ private val SwipeDistance = 120.dp
  * The session [key], as [session] says it, of [machine]. [recent] are the models the model
  * picker offers; [send] sends the session's commands; [onOpen] opens a child session and
  * [onBack], when there is somewhere to go back to, leaves. [clock] is what time is counted from.
+ * [compact] is a phone: the PR strip is one line. [onOpenUrl] opens a PR; the default uses
+ * the browser.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -172,9 +179,14 @@ fun SessionScreen(
     onOpen: (SessionKey) -> Unit,
     onBack: (() -> Unit)?,
     clock: () -> Instant = Instant::now,
+    compact: Boolean = false,
+    onOpenUrl: ((String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbars = remember { SnackbarHostState() }
+    val openUrl = rememberOpenUrl(onOpenUrl)
+    var menu by remember { mutableStateOf(false) }
+    var linking by remember { mutableStateOf(false) }
     // Prompts sent from here that are not in the transcript yet.
     val pending = remember(key) { mutableStateListOf<String>() }
     var seen by remember(key) { mutableIntStateOf(session.entries.size) }
@@ -196,6 +208,7 @@ fun SessionScreen(
         status == SessionStatus.MOVED -> "This session moved to another host and is read-only here."
         else -> null
     }
+    val canLink = driveable(machine, status)
     val now = rememberNow(clock, ticking = session.running || session.approvals.isNotEmpty() || session.questions.isNotEmpty())
 
     fun command(body: CommandBody, prompt: String? = null, done: (Boolean) -> Unit = {}) {
@@ -240,6 +253,23 @@ fun SessionScreen(
                         }
                     }
                 },
+                actions = {
+                    Box {
+                        IconButton(onClick = { menu = true }) {
+                            Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "Session")
+                        }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Link Pull Request…") },
+                                enabled = canLink,
+                                onClick = {
+                                    menu = false
+                                    linking = true
+                                },
+                            )
+                        }
+                    }
+                },
             )
         },
         snackbarHost = { SnackbarHost(snackbars) },
@@ -248,6 +278,17 @@ fun SessionScreen(
             Modifier.fillMaxSize().padding(top = padding.calculateTopPadding()).imePadding(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            PrStrip(
+                prs = session.prs,
+                compact = compact,
+                unlink = if (canLink) {
+                    { number -> command(CommandBody.UnlinkPr(key.sessionId, number)) }
+                } else {
+                    null
+                },
+                onOpenUrl = openUrl,
+                modifier = Modifier.widthIn(max = 840.dp).fillMaxWidth(),
+            )
             Transcript(
                 session = session,
                 pending = pending,
@@ -324,6 +365,16 @@ fun SessionScreen(
                 }
             }
         }
+    }
+    if (linking) {
+        LinkPrDialog(
+            title = if (session.loaded) session.title else key.sessionId,
+            onDismiss = { linking = false },
+            onLink = { number ->
+                linking = false
+                command(CommandBody.LinkPr(key.sessionId, number))
+            },
+        )
     }
 }
 

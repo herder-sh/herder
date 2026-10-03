@@ -229,10 +229,6 @@ fun badge(pr: PullRequest): String = buildString {
     }
 }
 
-/** The pull requests a list shows, open ones first, each group in link order. */
-private fun ordered(prs: List<PullRequest>): List<PullRequest> =
-    prs.sortedBy { it.state == PrState.MERGED || it.state == PrState.CLOSED }
-
 private fun key(machine: Machine, head: SessionHead) = SessionKey(machine.hostId, head.sessionId)
 
 /** The name of a project no machine lists: the last segment of its id. */

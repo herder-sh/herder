@@ -72,6 +72,7 @@ import sh.herder.android.glyph
 import sh.herder.android.hostState
 import sh.herder.android.keys
 import sh.herder.android.label
+import sh.herder.android.prSubtitle
 import sh.herder.android.sampleFleet
 import sh.herder.android.scopeTitle
 import sh.herder.android.scopes
@@ -79,8 +80,6 @@ import sh.herder.android.sessions
 import sh.herder.android.summary
 import sh.herder.ffi.ConnectionState
 import sh.herder.ffi.Machine
-import sh.herder.ffi.PrState
-import sh.herder.ffi.PullRequest
 import sh.herder.ffi.SessionStatus
 
 /** From this width the machines and the sessions sit side by side; below it they are pages. */
@@ -94,6 +93,14 @@ private val Indent = 20.dp
 /** Most PRs a session row names; the rest are counted. */
 private const val ROW_PRS = 2
 
+/** What the machines list's selection shows in the content pane. */
+private sealed interface SidebarPick {
+    data class Sessions(val scope: Scope) : SidebarPick
+
+    /** Every session's PRs, as the TUI's `P` view and the GTK sidebar row. */
+    data object Prs : SidebarPick
+}
+
 /**
  * Draws the open session [key]: [onOpen] opens another, [onBack] returns to where it was opened
  * from; [compact] on a phone.
@@ -103,58 +110,80 @@ typealias SessionContent = @Composable (key: SessionKey, compact: Boolean, onOpe
 /**
  * The paired machines, each with its connection and a vault's hosts under it, online or
  * offline; and the sessions of the selected one, or of all, grouped by project or by machine,
- * each with its status, its task tree and its PRs. Wide, the two sit side by side; narrow, the
- * sessions are a page of their own and rows show less, as the TUI's compact rows do. A session
+ * each with its status, its task tree and its PRs. The sidebar's Pull requests lists every
+ * session's PRs the same way. Wide, the two sit side by side; narrow, the sessions and the
+ * PR list are a page of their own and rows show less, as the TUI's compact rows do. A session
  * opens on a tap, drawn by [session]: in place of the list beside the machines, or as a page.
  */
 @Composable
 fun MachinesScreen(
     profile: Profile,
     now: Instant = remember(profile) { Instant.now() },
+    send: Sender? = null,
+    onOpenUrl: ((String) -> Unit)? = null,
     session: SessionContent = { _, _, _, _ -> },
 ) {
     // What the user picked; on a phone, `null` shows the machines page.
-    var picked by remember { mutableStateOf<Scope?>(null) }
+    var picked by remember { mutableStateOf<SidebarPick?>(null) }
     // The sessions opened, the last one shown; a child opened from its parent goes on top.
     var opened by remember { mutableStateOf<List<SessionKey>>(emptyList()) }
     val back = { opened = opened.dropLast(1) }
     val open: (SessionKey) -> Unit = { opened = opened + it }
     var grouping by rememberSaveable { mutableStateOf(Grouping.Projects) }
     val listed = (profile as? Profile.Open)?.takeIf { it.machines.isNotEmpty() }
-    // A machine or host gone from the list falls back to all machines.
-    val scope = picked?.let { if (listed != null && it in scopes(listed.machines)) it else Scope.All }
+    // A machine or host gone from the list falls back to all machines; the PR list stays.
+    val sidebar = picked?.let { pick ->
+        when (pick) {
+            is SidebarPick.Sessions ->
+                if (listed != null && pick.scope in scopes(listed.machines)) pick else SidebarPick.Sessions(Scope.All)
+            SidebarPick.Prs -> pick
+        }
+    }
+    val scope = (sidebar as? SidebarPick.Sessions)?.scope
     val shown = opened.lastOrNull()
+    fun select(pick: SidebarPick) {
+        picked = pick
+        opened = emptyList()
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         when {
             listed == null -> MachinesPane(profile, selected = null, now = now, onSelect = {})
             maxWidth >= TwoPanes -> Row(Modifier.fillMaxSize()) {
+                val shownSidebar = sidebar ?: SidebarPick.Sessions(Scope.All)
                 Box(Modifier.width(MachinesPaneWidth).fillMaxHeight()) {
-                    MachinesPane(
-                        listed,
-                        selected = scope ?: Scope.All,
-                        now = now,
-                        onSelect = {
-                            picked = it
-                            opened = emptyList()
-                        },
-                    )
+                    MachinesPane(listed, selected = shownSidebar, now = now, onSelect = ::select)
                 }
                 VerticalDivider()
                 if (shown != null) {
                     BackHandler(onBack = back)
                     session(shown, false, open, back)
+                } else if (shownSidebar is SidebarPick.Prs) {
+                    PrsScreen(listed, grouping, { grouping = it }, compact = false, now, send, open, null, onOpenUrl)
                 } else {
-                    SessionsPane(listed, scope ?: Scope.All, grouping, { grouping = it }, compact = false, now, null, open)
+                    SessionsPane(
+                        listed,
+                        (shownSidebar as SidebarPick.Sessions).scope,
+                        grouping,
+                        { grouping = it },
+                        compact = false,
+                        now,
+                        null,
+                        open,
+                    )
                 }
             }
             shown != null -> {
                 BackHandler(onBack = back)
                 session(shown, true, open, back)
             }
-            scope == null -> MachinesPane(listed, selected = null, now = now, onSelect = { picked = it })
+            sidebar == null -> MachinesPane(listed, selected = null, now = now, onSelect = { picked = it })
+            sidebar is SidebarPick.Prs -> {
+                BackHandler { picked = null }
+                PrsScreen(listed, grouping, { grouping = it }, compact = true, now, send, open, { picked = null }, onOpenUrl)
+            }
             else -> {
                 BackHandler { picked = null }
-                SessionsPane(listed, scope, grouping, { grouping = it }, compact = true, now, { picked = null }, open)
+                SessionsPane(listed, scope ?: Scope.All, grouping, { grouping = it }, compact = true, now, { picked = null }, open)
             }
         }
     }
@@ -163,7 +192,7 @@ fun MachinesScreen(
 /** The machines list, or why there is none; [selected] is highlighted. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MachinesPane(profile: Profile, selected: Scope?, now: Instant, onSelect: (Scope) -> Unit) {
+private fun MachinesPane(profile: Profile, selected: SidebarPick?, now: Instant, onSelect: (SidebarPick) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -190,8 +219,18 @@ private fun MachinesPane(profile: Profile, selected: Scope?, now: Instant, onSel
                         subtitle = sessions(keys(profile.machines).size),
                         mark = null,
                         depth = 0,
-                        selected = selected == Scope.All,
-                        onClick = { onSelect(Scope.All) },
+                        selected = selected == SidebarPick.Sessions(Scope.All),
+                        onClick = { onSelect(SidebarPick.Sessions(Scope.All)) },
+                    )
+                }
+                item {
+                    ScopeItem(
+                        title = "Pull requests",
+                        subtitle = prSubtitle(profile.summaries),
+                        mark = null,
+                        depth = 0,
+                        selected = selected == SidebarPick.Prs,
+                        onClick = { onSelect(SidebarPick.Prs) },
                     )
                 }
                 for (machine in profile.machines) {
@@ -204,8 +243,8 @@ private fun MachinesPane(profile: Profile, selected: Scope?, now: Instant, onSel
                             subtitle = "${hostState(host, now)} · ${sessions(count)}",
                             mark = if (host.online) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                             depth = 1,
-                            selected = selected == scope,
-                            onClick = { onSelect(scope) },
+                            selected = selected == SidebarPick.Sessions(scope),
+                            onClick = { onSelect(SidebarPick.Sessions(scope)) },
                         )
                     }
                 }
@@ -215,15 +254,15 @@ private fun MachinesPane(profile: Profile, selected: Scope?, now: Instant, onSel
 }
 
 @Composable
-private fun MachineItem(machine: Machine, selected: Scope?, onSelect: (Scope) -> Unit) {
-    val scope = Scope.Machine(machine.hostId)
+private fun MachineItem(machine: Machine, selected: SidebarPick?, onSelect: (SidebarPick) -> Unit) {
+    val pick = SidebarPick.Sessions(Scope.Machine(machine.hostId))
     ScopeItem(
         title = machine.name,
         subtitle = "${machine.connection.label()} · ${sessions(machine.sessions.size)}",
         mark = machine.connection.color(),
         depth = 0,
-        selected = selected == scope,
-        onClick = { onSelect(scope) },
+        selected = selected == pick,
+        onClick = { onSelect(pick) },
     )
 }
 
@@ -322,7 +361,7 @@ private fun SessionsPane(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GroupingButtons(grouping: Grouping, onGrouping: (Grouping) -> Unit) {
+internal fun GroupingButtons(grouping: Grouping, onGrouping: (Grouping) -> Unit) {
     // Wide enough for either label beside the selected one's check mark.
     SingleChoiceSegmentedButtonRow(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).width(360.dp)) {
         Grouping.entries.forEachIndexed { index, option ->
@@ -344,7 +383,7 @@ private fun GroupingButtons(grouping: Grouping, onGrouping: (Grouping) -> Unit) 
 
 /** A group's heading: the state its sessions roll up to, its name and what it holds. */
 @Composable
-private fun GroupHeader(group: Group) {
+internal fun GroupHeader(group: Group) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -425,14 +464,8 @@ private fun Trailing(row: SessionRow) {
 
 /** A PR in its state's colour: open, draft, merged or closed. */
 @Composable
-internal fun PrPill(pr: PullRequest) {
-    val color = when (pr.state) {
-        PrState.OPEN -> MaterialTheme.colorScheme.primary
-        PrState.DRAFT -> MaterialTheme.colorScheme.onSurfaceVariant
-        PrState.MERGED -> MaterialTheme.colorScheme.tertiary
-        PrState.CLOSED -> MaterialTheme.colorScheme.error
-    }
-    Pill(badge(pr), color, fill = null)
+internal fun PrPill(pr: sh.herder.ffi.PullRequest) {
+    Pill(badge(pr), pr.state.color(), fill = null)
 }
 
 /** A short label in a rounded outline, or on [fill]. */
