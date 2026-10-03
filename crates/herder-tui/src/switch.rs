@@ -1,9 +1,12 @@
-//! The switch dialog of a session: move it to another account of its machine, of its own
-//! provider or another one, or change its model.
+//! The switch picker of a session: move it to another account of its machine, of its own
+//! provider or another one, or change its model (OpenCode's model picker, reshaped around
+//! herder's switches).
 //!
 //! An account of the session's provider takes over the conversation as it is; another
-//! provider's replays the transcript from herder's log. The daemon applies a switch between
-//! turns and journals it, so the transcript shows it once it happened.
+//! provider's replays the transcript from herder's log, so the picker lists them apart. The
+//! search filters the accounts as it is typed; Tab moves to the model, which is typed, with
+//! the models the machine's sessions use offered. The daemon applies a switch between turns
+//! and journals it, so the transcript shows it once it happened.
 
 use herder_protocol::{Account, CommandBody, SessionStatus};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -13,13 +16,17 @@ use crate::app::{App, Effect, Focus, Row};
 use crate::compose::Origin;
 use crate::session::{Session, SessionKey};
 
-/// The switch dialog.
+/// The switch picker.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Switch {
     /// The session to switch.
     pub session: SessionKey,
-    /// Index of the chosen account in its machine's accounts.
+    /// The search over the accounts.
+    pub search: String,
+    /// The cursor, by index into [`App::switch_rows`].
     pub selected: usize,
+    /// The list's scroll, kept between draws.
+    pub offset: usize,
     /// The model to switch to; empty keeps the current one, or takes the new provider's
     /// default.
     pub model: String,
@@ -51,18 +58,18 @@ pub fn kind(session: &Session, account: &Account) -> Kind {
     }
 }
 
-/// Input to the dialog.
+/// Input to the picker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
-    /// Close the dialog.
+    /// Close the picker.
     Close,
-    /// Choose the previous account.
+    /// The cursor to the previous account.
     Up,
-    /// Choose the next account.
+    /// The cursor to the next account.
     Down,
-    /// Choose the first account.
+    /// The cursor to the first account.
     Top,
-    /// Choose the last account.
+    /// The cursor to the last account.
     Bottom,
     /// Type into the model.
     EditModel,
@@ -70,44 +77,45 @@ pub enum Input {
     Accounts,
     /// Switch.
     Submit,
-    /// Type a character into the model.
+    /// Type a character into the search or the model.
     Char(char),
-    /// Delete the model's last character.
+    /// Delete the last character of the search or the model.
     Backspace,
-    /// Clear the model.
+    /// Clear the search or the model.
     Clear,
+    /// Take the model the chosen account's machine uses: by index into
+    /// [`App::recent_models`].
+    Recent(usize),
 }
 
-/// The action a key asks for while the dialog is open.
+/// The action a key asks for while the picker is open.
 pub fn for_key(key: KeyEvent, switch: &Switch) -> Option<Action> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let input = if switch.editing {
-        match key.code {
-            KeyCode::Enter => Input::Submit,
-            KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab | KeyCode::Up => Input::Accounts,
-            KeyCode::Backspace if switch.model.is_empty() => Input::Accounts,
-            KeyCode::Backspace => Input::Backspace,
-            KeyCode::Char('u') if ctrl => Input::Clear,
-            KeyCode::Char(c) if !ctrl => Input::Char(c),
-            _ => return None,
-        }
-    } else {
-        match key.code {
-            KeyCode::Enter => Input::Submit,
-            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q' | 's') => Input::Close,
-            KeyCode::Char('k') | KeyCode::Up => Input::Up,
-            KeyCode::Char('j') | KeyCode::Down => Input::Down,
-            KeyCode::Home | KeyCode::PageUp => Input::Top,
-            KeyCode::End | KeyCode::PageDown => Input::Bottom,
-            KeyCode::Char('m' | 'i') | KeyCode::Tab => Input::EditModel,
-            _ => return None,
-        }
+    let input = match key.code {
+        KeyCode::Enter => Input::Submit,
+        KeyCode::Esc if switch.editing => Input::Accounts,
+        KeyCode::Esc => Input::Close,
+        KeyCode::Tab | KeyCode::BackTab if switch.editing => Input::Accounts,
+        KeyCode::Tab | KeyCode::BackTab => Input::EditModel,
+        KeyCode::Backspace if switch.editing && switch.model.is_empty() => Input::Accounts,
+        KeyCode::Backspace if !switch.editing && switch.search.is_empty() => Input::Close,
+        KeyCode::Backspace => Input::Backspace,
+        KeyCode::Char('u') if ctrl => Input::Clear,
+        KeyCode::Up if switch.editing => Input::Accounts,
+        KeyCode::Up => Input::Up,
+        KeyCode::Down => Input::Down,
+        KeyCode::Char('p' | 'k') if ctrl => Input::Up,
+        KeyCode::Char('n' | 'j') if ctrl => Input::Down,
+        KeyCode::Home | KeyCode::PageUp => Input::Top,
+        KeyCode::End | KeyCode::PageDown => Input::Bottom,
+        KeyCode::Char(c) if !ctrl => Input::Char(c),
+        _ => return None,
     };
     Some(Action::Switch(input))
 }
 
 impl App {
-    /// Opens the switch dialog for the open session, or the selected one in the session list.
+    /// Opens the switch picker for the open session, or the selected one in the session list.
     pub(crate) fn open_switch(&mut self) {
         let key = match self.focus {
             Focus::Sessions => self.selected().as_ref().and_then(Row::session).cloned(),
@@ -123,18 +131,32 @@ impl App {
             self.notice = Some("an archived session cannot switch".to_owned());
             return;
         }
-        let selected = self
-            .accounts_of(&key)
-            .iter()
-            .position(|account| session.account_id.as_ref() == Some(&account.account_id))
-            .unwrap_or(0);
         self.switch = Some(Switch {
             session: key,
-            selected,
+            search: String::new(),
+            selected: 0,
+            offset: 0,
             model: String::new(),
             editing: false,
             error: None,
         });
+        // The cursor starts on the session's account.
+        let accounts = self.switch.as_ref().map(|s| self.accounts_of(&s.session));
+        let current = self.switch_rows().iter().position(|at| {
+            accounts
+                .and_then(|accounts| accounts.get(*at))
+                .is_some_and(|account| self.open_switch_kind(account) == Some(Kind::Current))
+        });
+        if let Some(switch) = &mut self.switch {
+            switch.selected = current.unwrap_or(0);
+        }
+    }
+
+    /// What switching the picker's session to `account` does.
+    fn open_switch_kind(&self, account: &Account) -> Option<Kind> {
+        let switch = self.switch.as_ref()?;
+        let session = self.sessions.get(&switch.session)?;
+        Some(kind(session, account))
     }
 
     /// The accounts of `key`'s machine.
@@ -145,46 +167,130 @@ impl App {
             .map_or(&[], |machine| machine.accounts.as_slice())
     }
 
-    /// Carries out one input to the switch dialog.
-    pub(crate) fn switch_input(&mut self, input: Input) -> Vec<Effect> {
+    /// The accounts the picker lists, by index into its machine's: those its search keeps,
+    /// the session's provider's first, the session's own leading them.
+    pub fn switch_rows(&self) -> Vec<usize> {
         let Some(switch) = &self.switch else {
             return Vec::new();
         };
-        let last = self.accounts_of(&switch.session).len().saturating_sub(1);
+        let Some(session) = self.sessions.get(&switch.session) else {
+            return Vec::new();
+        };
+        let accounts = self.accounts_of(&switch.session);
+        let mut kept = crate::fuzzy::filter(&switch.search, accounts, |account| {
+            format!(
+                "{} {} {}",
+                account.label,
+                account.account_id.as_str(),
+                account.provider.as_str()
+            )
+        });
+        // With no search, by kind; with one, best match first within each group.
+        let group = |at: &usize| match kind(session, &accounts[*at]) {
+            Kind::Current if switch.search.is_empty() => 0,
+            Kind::Current | Kind::Account => 1,
+            Kind::Provider => 2,
+        };
+        kept.sort_by_key(group);
+        kept
+    }
+
+    /// The models to offer for `account`: those the sessions of its machine on its provider
+    /// use, the newest session's first.
+    pub fn recent_models(&self, key: &SessionKey, account: &Account) -> Vec<String> {
+        let mut sessions: Vec<(&SessionKey, &Session)> = self
+            .sessions
+            .iter()
+            .filter(|(other, session)| {
+                other.host_id == key.host_id
+                    && session.provider.as_ref() == Some(&account.provider)
+                    && !session.model.is_empty()
+            })
+            .collect();
+        sessions.sort_by(|a, b| b.0.session_id.cmp(&a.0.session_id));
+        let mut models: Vec<String> = Vec::new();
+        for (_, session) in sessions {
+            if !models.contains(&session.model) {
+                models.push(session.model.clone());
+            }
+        }
+        models.truncate(3);
+        models
+    }
+
+    /// The models offered for the account under the picker's cursor.
+    pub fn switch_recent(&self) -> Vec<String> {
+        let Some(switch) = &self.switch else {
+            return Vec::new();
+        };
+        let rows = self.switch_rows();
+        rows.get(switch.selected.min(rows.len().saturating_sub(1)))
+            .and_then(|at| self.accounts_of(&switch.session).get(*at))
+            .map_or_else(Vec::new, |account| {
+                self.recent_models(&switch.session, account)
+            })
+    }
+
+    /// Carries out one input to the switch picker.
+    pub(crate) fn switch_input(&mut self, input: Input) -> Vec<Effect> {
+        let rows = self.switch_rows();
+        let last = rows.len().saturating_sub(1);
+        let recent = self.switch_recent();
         let Some(switch) = &mut self.switch else {
             return Vec::new();
         };
         switch.error = None;
+        fn typing(switch: &mut Switch) -> &mut String {
+            if switch.editing {
+                &mut switch.model
+            } else {
+                switch.selected = 0;
+                &mut switch.search
+            }
+        }
         match input {
             Input::Close => self.switch = None,
-            Input::Up => switch.selected = switch.selected.saturating_sub(1),
+            Input::Up => switch.selected = switch.selected.min(last).saturating_sub(1),
             Input::Down => switch.selected = (switch.selected + 1).min(last),
             Input::Top => switch.selected = 0,
             Input::Bottom => switch.selected = last,
             Input::EditModel => switch.editing = true,
             Input::Accounts => switch.editing = false,
-            Input::Char(c) => switch.model.push(c),
+            Input::Char(c) => typing(switch).push(c),
             Input::Backspace => {
-                switch.model.pop();
+                typing(switch).pop();
             }
-            Input::Clear => switch.model.clear(),
+            Input::Clear => typing(switch).clear(),
+            Input::Recent(at) => {
+                if let Some(model) = recent.get(at) {
+                    switch.model.clone_from(model);
+                    switch.editing = true;
+                }
+            }
             Input::Submit => return self.switch_submit(),
         }
         Vec::new()
     }
 
-    /// The commands the dialog asks for, or why there are none.
+    /// The commands the picker asks for, or why there are none.
     fn switch_submit(&mut self) -> Vec<Effect> {
+        let rows = self.switch_rows();
         let Some(switch) = self.switch.take() else {
             return Vec::new();
         };
         let key = switch.session.clone();
+        let chosen = rows.get(switch.selected.min(rows.len().saturating_sub(1)));
         let (Some(session), Some(account)) = (
             self.sessions.get(&key),
-            self.accounts_of(&key).get(switch.selected),
+            chosen.and_then(|at| self.accounts_of(&key).get(*at)),
         ) else {
+            let error = if self.accounts_of(&key).is_empty() {
+                "this machine has no accounts"
+            } else {
+                "no account matches"
+            };
             self.switch = Some(Switch {
-                error: Some("this machine has no accounts".to_owned()),
+                error: Some(error.to_owned()),
                 ..switch
             });
             return Vec::new();
@@ -278,7 +384,8 @@ mod tests {
         let mut app = app();
         press(&mut app, KeyCode::Char('s'));
         assert_eq!(app.switch.as_ref().unwrap().selected, 0);
-        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.switch_rows(), [0, 1, 2]);
+        press(&mut app, KeyCode::Down);
         assert_eq!(
             press(&mut app, KeyCode::Enter),
             [on_s2(CommandBody::SwitchAccount {
@@ -293,9 +400,10 @@ mod tests {
     fn another_provider_replays_with_the_model_typed() {
         let mut app = app();
         press(&mut app, KeyCode::Char('s'));
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Char('m'));
+        // The search keeps codex alone.
+        fake::type_text(&mut app, "codex");
+        assert_eq!(app.switch_rows(), [2]);
+        press(&mut app, KeyCode::Tab);
         fake::type_text(&mut app, "gpt-5");
         assert_eq!(
             press(&mut app, KeyCode::Enter),
@@ -327,19 +435,56 @@ mod tests {
     }
 
     #[test]
-    fn backspace_leaves_the_model_then_closes() {
+    fn backspace_leaves_the_model_then_the_search_then_closes() {
         let mut app = app();
         press(&mut app, KeyCode::Char('s'));
-        press(&mut app, KeyCode::Char('m'));
+        fake::type_text(&mut app, "w");
+        press(&mut app, KeyCode::Tab);
         fake::type_text(&mut app, "jq");
         assert_eq!(app.switch.as_ref().unwrap().model, "jq");
         press(&mut app, KeyCode::Backspace);
         press(&mut app, KeyCode::Backspace);
         press(&mut app, KeyCode::Backspace);
         assert!(!app.switch.as_ref().unwrap().editing);
+        assert_eq!(app.switch.as_ref().unwrap().search, "w");
+        press(&mut app, KeyCode::Backspace);
         press(&mut app, KeyCode::Backspace);
         assert_eq!(app.switch, None);
         assert_eq!(app.focus, Focus::Transcript);
+    }
+
+    #[test]
+    fn the_machines_models_are_offered_and_a_tapped_one_is_taken() {
+        let mut app = app();
+        let accounts = app.machines[0].accounts.clone();
+        fake::feed(
+            &mut app,
+            "h1",
+            "s1",
+            update(
+                "s1",
+                9,
+                vec![EventBody::ModelSwitched {
+                    model: "claude-sonnet".into(),
+                }],
+                vec![],
+            ),
+        );
+        let models = app.recent_models(&key("h1", "s2"), &accounts[0]);
+        assert!(models.contains(&"claude-sonnet".to_owned()), "{models:?}");
+        assert!(app.recent_models(&key("h1", "s2"), &accounts[2]).is_empty());
+        press(&mut app, KeyCode::Char('s'));
+        let at = app
+            .switch_recent()
+            .iter()
+            .position(|m| m == "claude-sonnet")
+            .unwrap();
+        app.act(Action::Switch(Input::Recent(at)));
+        let switch = app.switch.as_ref().unwrap();
+        assert_eq!(
+            (switch.model.as_str(), switch.editing),
+            ("claude-sonnet", true)
+        );
     }
 
     #[test]
@@ -387,10 +532,11 @@ mod tests {
         assert_eq!(session.provider, Some(Provider::Codex));
         assert_eq!(session.account_id, Some(AccountId::new("codex")));
         assert_eq!(session.model, "gpt-5");
-        // The dialog now starts on the new account, and offers Claude by replay.
+        // The picker now starts on the new account, and offers Claude by replay.
         press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.switch_rows(), [2, 0, 1]);
         let switch = app.switch.as_ref().unwrap();
-        assert_eq!(switch.selected, 2);
+        assert_eq!(switch.selected, 0);
         let accounts = app.accounts_of(&switch.session);
         let session = &app.sessions[&key("h1", "s2")];
         assert_eq!(kind(session, &accounts[0]), Kind::Provider);

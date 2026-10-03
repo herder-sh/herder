@@ -189,6 +189,8 @@ pub(super) fn badge(session: &Session, compact: bool) -> Vec<Span<'static>> {
         if live(pr) {
             let (mark, style) = ci(pr.ci);
             if pr.ci != CiStatus::None {
+                // Apart from the number, so `#7 v` never reads as one word.
+                spans.push(Span::raw(" "));
                 spans.push(Span::styled(mark, style));
             }
             if pr.mergeable == Mergeable::Conflicting || pr.review == ReviewStatus::ChangesRequested

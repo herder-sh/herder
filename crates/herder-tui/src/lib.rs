@@ -22,10 +22,13 @@ mod chat;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod fuzzy;
 mod inbox;
 mod machines;
 mod mouse;
 mod nav;
+mod new_session;
+mod palette;
 mod projects;
 mod prompt;
 mod prs;

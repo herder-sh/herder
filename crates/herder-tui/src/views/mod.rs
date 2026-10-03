@@ -28,6 +28,7 @@
 //! [`crate::ui::glyphs::fold`].
 
 mod accounts;
+mod add_machine;
 mod composer;
 mod details;
 mod help;
@@ -113,7 +114,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.dialog_open() {
         hits.cover(area);
     }
-    new_session::draw(frame, area, app);
     if let Some(screen) = &app.account_screen {
         accounts::draw(frame, main, app, screen, &mut hits);
     }
@@ -123,6 +123,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         machines::draw(frame, main, app, panel, &mut hits);
     }
     terminals::draw(frame, body, app, &mut hits);
+    new_session::draw(frame, area, app, &mut hits);
+    palette::draw(frame, area, app, &mut hits);
     if app.help {
         help::draw(frame, area, app, &mut hits);
     }
@@ -155,7 +157,7 @@ fn desktop_frame(
         app.bar.clear();
         app.bar_focus = None;
     }
-    if !palette::draw(frame, bar, app) {
+    if !palette::quit_hint(frame, bar, app) {
         status::draw(frame, bar, app, touch);
     }
     if app.machines.is_empty() {
@@ -275,7 +277,7 @@ fn phone_frame(
             },
         );
     }
-    if !palette::draw(frame, bar, app) {
+    if !palette::quit_hint(frame, bar, app) {
         touch::bar(frame, bar, app, touch);
     }
     body

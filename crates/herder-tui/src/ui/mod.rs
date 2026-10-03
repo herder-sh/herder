@@ -11,7 +11,9 @@
 //! | key-hint bar | [`hints`] | [`hints::ModeBar`] on a desktop, [`hints::ButtonBar`] on a phone, from one hint list |
 //! | dialog | [`dialog`] | a centred box: title, `esc`, body, footer hints, dimmed backdrop |
 //! | list | [`list`] | headers, items with a status dot, right-aligned meta, cursor, scrolling |
-//! | input editor | [`input`] | the prompt (`┃` bar, meta line, cap) and one-line fields |
+//! | input editor | [`input`] | the prompt (`┃` bar, meta line, cap), one-line fields and choices |
+//! | picker | [`select`] | a dialog with a search field over a filtered list |
+//! | request panel | [`request`] | an approval or a question, in place of the prompt |
 //! | usage bar | [`usage`] | `█████░░░ 38%` coloured by how full |
 //! | autocomplete | [`popup`] | the `/` command and `@` mention popup over the prompt |
 //! | request panel | [`request`] | an approval or question, inline where the prompt was |
@@ -31,6 +33,7 @@ pub mod input;
 pub mod list;
 pub mod popup;
 pub mod request;
+pub mod select;
 pub mod state;
 pub mod theme;
 pub mod usage;

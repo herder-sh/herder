@@ -339,7 +339,99 @@ impl<'a, 'b> Field<'a, 'b> {
             ..value
         };
         style(ui, self.editor, self.focused, background);
-        (&*self.editor).render(inner, buf);
+        if self.editor.is_empty() {
+            // The placeholder starts where the text will, under the cursor.
+            Line::styled(self.editor.placeholder_text().to_owned(), ui.muted()).render(inner, buf);
+            if self.focused && inner.width > 0 {
+                buf[(inner.x, inner.y)].modifier.insert(Modifier::REVERSED);
+            }
+        } else {
+            (&*self.editor).render(inner, buf);
+        }
+    }
+}
+
+/// A form's choice: `label`, the value where a [`Field`]'s text would be, then `‹ ›` to
+/// change it, tappable; on the element background while focused.
+pub struct Choice<'a> {
+    ui: Ui<'a>,
+    label: &'a str,
+    value: Line<'a>,
+    focused: bool,
+}
+
+impl<'a> Choice<'a> {
+    pub fn new(ui: Ui<'a>, label: &'a str, value: impl Into<Line<'a>>) -> Self {
+        Self {
+            ui,
+            label,
+            value: value.into(),
+            focused: false,
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Draws on the first row of `area`, the label `label_width` columns wide as a
+    /// [`Field`]'s; returns where the previous arrow is, and the value, which a tap moves
+    /// forward.
+    pub fn render(self, area: Rect, buf: &mut Buffer, label_width: u16) -> [Rect; 2] {
+        let ui = self.ui;
+        let area = Rect { height: 1, ..area }.intersection(buf.area);
+        let label_width = label_width.min(area.width);
+        let label_style = if self.focused {
+            ui.accent().add_modifier(Modifier::BOLD)
+        } else {
+            ui.muted()
+        };
+        fit(
+            Line::from(Span::styled(self.label, label_style)),
+            usize::from(label_width),
+            ui.glyphs,
+        )
+        .render(
+            Rect {
+                width: label_width,
+                ..area
+            },
+            buf,
+        );
+        let value = Rect {
+            x: area.x + label_width,
+            width: area.width - label_width,
+            ..area
+        };
+        if self.focused {
+            fill(buf, value, Style::new().bg(ui.theme.background_element));
+        }
+        let [prev, next] = ui.glyphs.choice;
+        let arrows = u16::try_from(super::width(prev) + 1 + super::width(next)).unwrap_or(3);
+        // The value as a field's text sits, then the arrows after a gap.
+        let room = usize::from(value.width.saturating_sub(arrows + 4));
+        let shown = fit(self.value, room, ui.glyphs);
+        let shown_width = u16::try_from(super::line_width(&shown)).unwrap_or(u16::MAX);
+        shown.render(
+            Rect::new(value.x + 1, value.y, shown_width, 1).intersection(value),
+            buf,
+        );
+        let arrow = if self.focused {
+            ui.accent()
+        } else {
+            ui.muted()
+        };
+        let x = value.x + 1 + shown_width + 2;
+        let prev_width = u16::try_from(super::width(prev)).unwrap_or(1);
+        let prev_at = Rect::new(x, value.y, prev_width, 1).intersection(value);
+        Span::styled(prev, arrow).render(prev_at, buf);
+        let next_at =
+            Rect::new(x + prev_width + 1, value.y, arrows - prev_width - 1, 1).intersection(value);
+        Span::styled(next, arrow).render(next_at, buf);
+        // A tap on the left arrow goes back; anywhere else on the value, forward. The arrow
+        // is inside the value: record it after, so it is on top.
+        [prev_at, value]
     }
 }
 
@@ -423,6 +515,26 @@ mod tests {
         assert_eq!(wrapped.rows.len(), 2);
         assert_eq!(wrapped.cursor, (1, 0));
         assert_eq!(Prompt::height(&editor, 7, 6, false), 3);
+    }
+
+    #[test]
+    fn choices() {
+        snapshot::each("choice", |variant| {
+            snapshot::render(variant, 45, 3, |ui, area, buf| {
+                let [prev, value] = Choice::new(ui, "account", "claude-main")
+                    .focused(true)
+                    .render(area, buf, 9);
+                assert!(value.contains(prev.as_position()));
+                Choice::new(ui, "mode", "ask").render(
+                    Rect {
+                        y: area.y + 2,
+                        ..area
+                    },
+                    buf,
+                    9,
+                );
+            })
+        });
     }
 
     #[test]

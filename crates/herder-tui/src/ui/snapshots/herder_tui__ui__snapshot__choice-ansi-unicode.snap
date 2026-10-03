@@ -1,0 +1,21 @@
+---
+source: crates/herder-tui/src/ui/snapshot.rs
+expression: dump(&buffer)
+---
+|account   claude-main  ‹ ›                   |
+|                                             |
+|mode      ask  ‹ ›                           |
+
+ 0   0..7   fg=Cyan bg=Reset BOLD
+ 0   7..23  fg=Reset bg=Reset
+ 0  23..24  fg=Cyan bg=Reset
+ 0  24..25  fg=Reset bg=Reset
+ 0  25..26  fg=Cyan bg=Reset
+ 0  26..45  fg=Reset bg=Reset
+ 1   0..45  fg=Reset bg=Reset
+ 2   0..4   fg=DarkGray bg=Reset
+ 2   4..15  fg=Reset bg=Reset
+ 2  15..16  fg=DarkGray bg=Reset
+ 2  16..17  fg=Reset bg=Reset
+ 2  17..18  fg=DarkGray bg=Reset
+ 2  18..45  fg=Reset bg=Reset

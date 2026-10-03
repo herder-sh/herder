@@ -168,11 +168,22 @@ fn a_form_keeps_tab_for_its_fields() {
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Tab);
     press(&mut app, KeyCode::Enter);
+    // Tab moves the pickers' cursor, then the form's fields.
     let dialog = app.compose.dialog.as_ref().expect("the new-session dialog");
-    let field = dialog.field;
+    let selected = dialog.selected;
     press(&mut app, KeyCode::Tab);
     assert_eq!(app.bar_focus, None);
-    assert_ne!(app.compose.dialog.as_ref().map(|d| d.field), Some(field));
+    assert_ne!(
+        app.compose.dialog.as_ref().map(|d| d.selected),
+        Some(selected)
+    );
+    press(&mut app, KeyCode::BackTab);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    let field = app.compose.dialog.as_ref().map(|d| d.field);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.bar_focus, None);
+    assert_ne!(app.compose.dialog.as_ref().map(|d| d.field), field);
     press(&mut app, KeyCode::Esc);
     assert!(app.compose.dialog.is_none());
 }
@@ -220,7 +231,8 @@ fn every_dialog_moves_jumps_and_closes_with_gesture_keys() {
 
 #[test]
 fn the_composer_pages_the_transcript() {
-    let mut app = asking();
+    let mut app = fake::with_prs();
+    draw(&mut app, PHONE);
     press(&mut app, KeyCode::Enter);
     app.compose(crate::compose::Act::Write);
     assert_eq!(app.focus, Focus::Composer);

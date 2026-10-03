@@ -486,6 +486,8 @@ impl App {
                     self.open_key(key);
                 }
             }
+            Action::Palette(input) => return self.palette_input(input),
+            Action::NewSession(input) => return self.new_session_input(input),
             Action::Open => {
                 let selected = self.selected();
                 if let Some(key) = selected.as_ref().and_then(Row::session).cloned() {

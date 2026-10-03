@@ -2,20 +2,20 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-|│                                                           |
-|│ ^ approval - Bash                           asked 12s ago |
-|│ $ rm -rf target/                                          |
-|│                                                           |
-|│  allow    deny                           y allow · n deny |
-|│                                                           |
+||                                                           |
+|| ^ approval - Bash                           asked 12s ago |
+|| $ rm -rf target/                                          |
+||                                                           |
+||  allow    deny                           y allow · n deny |
+||                                                           |
 |                                                            |
-|│ ? question                                                |
-|│ Which heading level for the API page?                     |
-|│  1 h2 under Reference                                     |
-|│  2 h1, its own page                                       |
-|│ ^ approval                                                |
-|│                                                           |
-|│  allow    deny                                            |
+|| ? question                                                |
+|| Which heading level for the API page?                     |
+||  1 h2 under Reference                                     |
+||  2 h1, its own page                                       |
+|| ^ approval                                                |
+||                                                           |
+||  allow    deny                                            |
 
  0   0..1   fg=#e879c6 bg=#181a20
  0   1..60  fg=#e6e6e6 bg=#181a20

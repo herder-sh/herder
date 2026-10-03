@@ -2,16 +2,16 @@
 source: crates/herder-tui/src/ui/snapshot.rs
 expression: dump(&buffer)
 ---
-|│ write the docs page too, and link it from  |
-|│ @README.md                                 |
-|│                                            |
-|│ claude-main - opus - ask                   |
-|│                                            |
+|| write the docs page too, and link it from  |
+|| @README.md                                 |
+||                                            |
+|| claude-main - opus - ask                   |
+||                                            |
 |                                             |
-|│ Write a prompt…                            |
-|│                                            |
-|│ claude-main - opus - ask                   |
-|│                                            |
+|| Write a prompt…                            |
+||                                            |
+|| claude-main - opus - ask                   |
+||                                            |
 |                                             |
 
  0   0..1   fg=#2f5bb7 bg=#f6f7f9

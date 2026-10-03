@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 14] = [
+const SCENES: [Scene; 22] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -109,16 +109,88 @@ const SCENES: [Scene; 14] = [
     }),
     ("help", |theme, _, width, height| {
         let mut app = fake::tree();
+        press(&mut app, KeyCode::Char('?'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("palette", |theme, _, width, height| {
+        let mut app = super::tests::mid_turn();
         app.update(Msg::Key(KeyEvent::new(
-            KeyCode::Char('?'),
-            KeyModifiers::NONE,
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
         )));
+        app_buffer(app, theme, width, height)
+    }),
+    ("palette-search", |theme, _, width, height| {
+        let mut app = super::tests::mid_turn();
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char(':'));
+        fake::type_text(&mut app, "mode");
+        app_buffer(app, theme, width, height)
+    }),
+    ("new-session-project", |theme, _, width, height| {
+        let mut app = fake::projects();
+        press(&mut app, KeyCode::Char('v'));
+        press(&mut app, KeyCode::Char('n'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("new-session-machine", |theme, _, width, height| {
+        let mut app = fake::projects();
+        press(&mut app, KeyCode::Char('n'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("new-session-form", |theme, _, width, height| {
+        let mut app = fake::projects();
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Enter);
+        app_buffer(app, theme, width, height)
+    }),
+    ("switch", |theme, _, width, height| {
+        let mut app = super::tests::mid_turn();
+        super::tests::add_accounts(&mut app);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('s'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("add-machine", |theme, _, width, height| {
+        let mut app = fake::tree();
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Tab);
+        fake::type_text(&mut app, "10.0.0.4");
+        app_buffer(app, theme, width, height)
+    }),
+    ("add-machine-confirm", |theme, _, width, height| {
+        let mut app = fake::tree();
+        app.update(Msg::Paste(super::tests::LINK.to_owned()));
         app_buffer(app, theme, width, height)
     }),
 ];
 
+/// Presses `code`.
 fn press(app: &mut App, code: KeyCode) {
     app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+}
+
+/// [`super::tests::mid_turn`], waiting on an approval, or with `question`, a question.
+fn asking(question: bool) -> App {
+    let mut app = super::tests::mid_turn();
+    let since = herder_protocol::Timestamp::now().as_second() - 12;
+    let body = if question {
+        fake::question(
+            "q1",
+            "Which heading level for the API page?",
+            &["h2 under Reference", "h1, its own page"],
+        )
+    } else {
+        fake::approval("a1", "Bash: rm -rf target/")
+    };
+    fake::feed(
+        &mut app,
+        "h1",
+        "s2",
+        fake::at(fake::update("s2", 20, vec![body], Vec::new()), since),
+    );
+    app
 }
 
 fn gallery(theme: &Theme, mode: Mode, width: u16, height: u16, dialog: bool) -> Buffer {
@@ -276,4 +348,75 @@ fn screenshots() {
             }
         }
     }
+}
+
+/// Writes `frame-NN.png` into `$HERDER_FRAMES`: the dialogs driven key by key at 100
+/// columns in the dark theme, for `scripts/screenshots.sh`'s GIF.
+#[test]
+#[ignore = "run by hand for a PR's GIF: needs freeze"]
+fn frames() {
+    let out = std::env::var_os("HERDER_FRAMES").expect("set HERDER_FRAMES");
+    let out = Path::new(&out);
+    std::fs::create_dir_all(out).unwrap();
+    let theme = Theme::herder(Mode::Dark);
+    let mut app = asking(false);
+    super::tests::add_accounts(&mut app);
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let mut keys = vec![
+        None,
+        Some(key(KeyCode::Right)),
+        Some(key(KeyCode::Left)),
+        Some(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+        Some(key(KeyCode::Char('s'))),
+        Some(key(KeyCode::Char('w'))),
+        Some(key(KeyCode::Enter)),
+        Some(key(KeyCode::Down)),
+        Some(key(KeyCode::Down)),
+        Some(key(KeyCode::Tab)),
+    ];
+    keys.extend("gpt-5".chars().map(|c| Some(key(KeyCode::Char(c)))));
+    keys.extend(
+        [
+            KeyCode::Esc,
+            KeyCode::Esc,
+            KeyCode::Esc,
+            KeyCode::Char('n'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Right,
+            KeyCode::Tab,
+            KeyCode::Tab,
+            KeyCode::Right,
+        ]
+        .map(|code| Some(key(code))),
+    );
+    for (at, pressed) in keys.into_iter().enumerate() {
+        if let Some(pressed) = pressed {
+            app.update(Msg::Key(pressed));
+        }
+        let buffer = app_buffer_ref(&mut app, &theme, 100, 30);
+        let source = out.join(format!("frame-{at:02}.ansi"));
+        std::fs::write(&source, ansi(&buffer, &theme)).unwrap();
+        let status = Command::new("freeze")
+            .arg(&source)
+            .args(["--language", "ansi", "--window=false"])
+            .args(["--background", &hex(theme.background)])
+            .args(["--padding", "16", "--margin", "0", "--border.radius", "0"])
+            .args(["--font.size", "14", "--line-height", "1.15"])
+            .arg("--output")
+            .arg(out.join(format!("frame-{at:02}.png")))
+            .stdin(Stdio::null())
+            .status()
+            .expect("run freeze");
+        assert!(status.success());
+        std::fs::remove_file(&source).unwrap();
+    }
+}
+
+/// [`app_buffer`] without giving `app` up.
+fn app_buffer_ref(app: &mut App, theme: &Theme, width: u16, height: u16) -> Buffer {
+    app.theme = theme.clone();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| super::draw(frame, app)).unwrap();
+    terminal.backend().buffer().clone()
 }
