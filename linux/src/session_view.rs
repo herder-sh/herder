@@ -6,6 +6,9 @@
 //! - The composer sends with Enter and adds a line with Shift+Enter. Its controls show and
 //!   switch the session's account, model and permission mode; another provider's account
 //!   replays the transcript there, as the TUI's switch picker says.
+//! - Images join the prompt pasted with Ctrl+V, dropped on the view or picked with the
+//!   composer's attach button ([`crate::images`]); they wait over the editor, each removable,
+//!   and show in the prompt's card in the transcript, where a click opens one full size.
 //! - While a turn runs, a status line counts its time and the composer can stop it;
 //!   prompts sent meanwhile wait, marked queued, until the daemon starts them.
 //! - Its pull requests are listed over the transcript ([`crate::prs`]); the header's menu
@@ -23,10 +26,12 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib, pango};
 use herder_client_core::Machine;
 use herder_protocol::{
-    Account, Answer, ApprovalDecision, CommandBody, ItemBody, ItemId, PermissionMode, PullRequest,
-    Route, SessionId, SessionStatus, Timestamp,
+    Account, Answer, ApprovalDecision, CommandBody, CommandResult, ItemBody, ItemId,
+    MAX_PROMPT_IMAGE_BYTES, PermissionMode, PullRequest, Route, SessionId, SessionStatus,
+    Timestamp,
 };
 
+use crate::images::{self, Attached, Gallery, Thumb};
 use crate::lists::SessionKey;
 use crate::session::{
     PendingApproval, PendingQuestion, Session, duration, first_line, mode_description, mode_name,
@@ -37,7 +42,7 @@ use crate::transcript::{self, Context, hbox, line_label, vbox, wrapped};
 /// Sends a command to a machine; the error says why the daemon refused it.
 pub type Sender = Rc<dyn Fn(herder_protocol::HostId, CommandBody) -> Reply>;
 /// What [`Sender`] answers.
-pub type Reply = Pin<Box<dyn Future<Output = Result<(), String>>>>;
+pub type Reply = Pin<Box<dyn Future<Output = Result<CommandResult, String>>>>;
 
 /// Lines of a request's command shown before it scrolls.
 const REQUEST_LINES: i32 = 15;
@@ -86,8 +91,14 @@ pub struct SessionView {
 /// The composer's widgets.
 #[derive(Clone)]
 struct Composer {
+    /// The composer's frame: the images, the editor, the controls.
+    frame: gtk::Box,
     text: gtk::TextView,
     placeholder: gtk::Label,
+    /// The images attached, over the editor.
+    images: gtk::Box,
+    images_row: gtk::ScrolledWindow,
+    attach: gtk::Button,
     send: gtk::Button,
     stop: gtk::Button,
     account: gtk::MenuButton,
@@ -119,8 +130,12 @@ struct State {
     full: Rc<RefCell<HashSet<ItemId>>>,
     /// What the PR list was drawn from: the PRs, narrow, read-only.
     drawn_prs: Option<(Vec<PullRequest>, bool, bool)>,
-    /// Prompts sent from here not in the transcript yet.
-    pending: Vec<String>,
+    /// Prompts sent from here not in the transcript yet, with their images.
+    pending: Vec<(String, Vec<Attached>)>,
+    /// The images the next prompt carries, in the order they were attached.
+    attached: Vec<Attached>,
+    /// The session's images, fetched for its prompts' thumbnails.
+    gallery: Gallery,
     /// The request the card shows, so a redraw keeps what the user typed.
     request: Option<String>,
     /// The request card's age label, and when the request was put.
@@ -185,6 +200,51 @@ impl SessionView {
 
         let composer = Composer::new();
         let request = vbox(0);
+        let state: Rc<RefCell<State>> = Rc::new_cyclic(|weak: &std::rc::Weak<RefCell<State>>| {
+            let weak = weak.clone();
+            RefCell::new(State {
+                key: None,
+                session: Session::default(),
+                machine_name: String::new(),
+                accounts: Vec::new(),
+                read_only: None,
+                status: SessionStatus::Unknown,
+                recent: Vec::new(),
+                drawn: Vec::new(),
+                expanded: Rc::default(),
+                full: Rc::default(),
+                drawn_prs: None,
+                pending: Vec::new(),
+                attached: Vec::new(),
+                gallery: Gallery::new(Rc::new(move |attachment_id| {
+                    let state = weak.clone();
+                    // Asked while the transcript is drawn, with the state borrowed: it sends
+                    // once that is done.
+                    Box::pin(async move {
+                        let target = state.upgrade().and_then(|state| {
+                            let state = state.borrow();
+                            state.sender.clone().zip(state.key.clone())
+                        });
+                        let Some((sender, key)) = target else {
+                            return Err("This session is closed.".to_owned());
+                        };
+                        let command = CommandBody::GetAttachment {
+                            session_id: key.session_id,
+                            attachment_id,
+                        };
+                        match sender(key.host_id, command).await? {
+                            CommandResult::Attachment { data, .. } => Ok(data.0),
+                            _ => Err("The machine sent no image.".to_owned()),
+                        }
+                    })
+                })),
+                request: None,
+                ages: Vec::new(),
+                compact: false,
+                sender: None,
+                opener: None,
+            })
+        });
         let read_only = gtk::Label::builder()
             .wrap(true)
             .justify(gtk::Justification::Center)
@@ -195,7 +255,7 @@ impl SessionView {
             .vhomogeneous(false)
             .interpolate_size(true)
             .build();
-        bottom.add_named(&composer.frame(), Some("composer"));
+        bottom.add_named(&composer.frame, Some("composer"));
         bottom.add_named(&request, Some("request"));
         bottom.add_named(&read_only, Some("read-only"));
         let bottom_column = vbox(0);
@@ -249,25 +309,7 @@ impl SessionView {
             request,
             read_only,
             composer,
-            state: Rc::new(RefCell::new(State {
-                key: None,
-                session: Session::default(),
-                machine_name: String::new(),
-                accounts: Vec::new(),
-                read_only: None,
-                status: SessionStatus::Unknown,
-                recent: Vec::new(),
-                drawn: Vec::new(),
-                expanded: Rc::default(),
-                full: Rc::default(),
-                drawn_prs: None,
-                pending: Vec::new(),
-                request: None,
-                ages: Vec::new(),
-                compact: false,
-                sender: None,
-                opener: None,
-            })),
+            state,
             follow: Rc::new(Cell::new(true)),
         };
         this.wire();
@@ -326,6 +368,7 @@ impl SessionView {
                 state.expanded.borrow_mut().clear();
                 state.full.borrow_mut().clear();
                 state.drawn_prs = None;
+                state.gallery.clear();
                 while let Some(child) = self.transcript.first_child() {
                     self.transcript.remove(&child);
                 }
@@ -357,7 +400,7 @@ impl SessionView {
             {
                 if let crate::session::Entry::Item(item) = entry
                     && let ItemBody::UserMessage { text, .. } = &item.body
-                    && let Some(at) = state.pending.iter().position(|p| p == text)
+                    && let Some(at) = state.pending.iter().position(|(p, _)| p == text)
                 {
                     state.pending.remove(at);
                 }
@@ -385,6 +428,7 @@ impl SessionView {
             expanded: &state.expanded,
             full: &state.full,
             open_child: opener,
+            gallery: &state.gallery,
         }
     }
 
@@ -458,10 +502,24 @@ impl SessionView {
             }
         }
         let running = state.session.running();
-        for prompt in &state.pending {
+        for (prompt, attached) in &state.pending {
             let badge = if running { "QUEUED" } else { "SENDING" };
-            self.streaming
-                .append(&transcript::user_message(prompt, Some(badge)));
+            let images = (!attached.is_empty()).then(|| {
+                let row = images::images_row();
+                for image in attached {
+                    row.append(&images::opener(
+                        &Thumb::message(&image.texture),
+                        &image.texture,
+                        image.image.data.0.len() as u64,
+                    ));
+                }
+                row
+            });
+            self.streaming.append(&transcript::user_message(
+                prompt,
+                Some(badge),
+                images.as_ref(),
+            ));
         }
         self.streaming
             .set_visible(self.streaming.first_child().is_some());
@@ -1084,27 +1142,180 @@ impl SessionView {
         });
     }
 
-    /// Sends the composer's text as a prompt.
+    /// Sends the composer's text and images as a prompt.
     fn send_prompt(&self) {
         let buffer = self.composer.text.buffer();
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && self.state.borrow().attached.is_empty() {
             return;
         }
         let Some(key) = self.key() else { return };
         if self.state.borrow().read_only.is_some() {
             return;
         }
-        self.state.borrow_mut().pending.push(text.to_owned());
+        let attached = std::mem::take(&mut self.state.borrow_mut().attached);
+        let images = attached.iter().map(|a| a.image.clone()).collect();
+        self.state
+            .borrow_mut()
+            .pending
+            .push((text.to_owned(), attached));
         self.send(CommandBody::SendPrompt {
             session_id: key.session_id,
             text: text.to_owned(),
-            images: Vec::new(),
+            images,
         });
         buffer.set_text("");
         self.follow.set(true);
         self.redraw_streaming();
+        self.redraw_attached();
+    }
+
+    /// Adds an image to the next prompt once `loading` has it ready; why it cannot shows
+    /// as a toast.
+    fn attach(&self, loading: impl Future<Output = Result<Attached, String>> + 'static) {
+        let view = self.clone();
+        glib::spawn_future_local(async move {
+            let result = loading.await.and_then(|attached| {
+                let carried: usize = view
+                    .state
+                    .borrow()
+                    .attached
+                    .iter()
+                    .map(|a| a.image.data.0.len())
+                    .sum();
+                if carried + attached.image.data.0.len() > MAX_PROMPT_IMAGE_BYTES {
+                    Err(format!(
+                        "A prompt carries at most {} of images.",
+                        images::size(MAX_PROMPT_IMAGE_BYTES as u64)
+                    ))
+                } else {
+                    Ok(attached)
+                }
+            });
+            match result {
+                Ok(attached) => {
+                    view.state.borrow_mut().attached.push(attached);
+                    view.redraw_attached();
+                }
+                Err(message) => view.toast(&message),
+            }
+        });
+    }
+
+    /// Attaches the image files of `files`.
+    fn attach_files(&self, files: Vec<gio::File>) {
+        for file in files {
+            self.attach(images::load_file(file));
+        }
+    }
+
+    /// Attaches the clipboard's image or image files, if it holds any; whether it did.
+    fn paste_images(&self) -> bool {
+        let clipboard = self.composer.text.clipboard();
+        let formats = clipboard.formats();
+        if formats.contains_type(gdk::FileList::static_type()) {
+            let view = self.clone();
+            glib::spawn_future_local(async move {
+                let files = clipboard
+                    .read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT)
+                    .await
+                    .ok()
+                    .and_then(|value| value.get::<gdk::FileList>().ok());
+                if let Some(files) = files {
+                    view.attach_files(files.files());
+                }
+            });
+            return true;
+        }
+        if formats.contains_type(gdk::Texture::static_type()) {
+            let view = self.clone();
+            glib::spawn_future_local(async move {
+                match clipboard.read_texture_future().await {
+                    Ok(Some(texture)) => {
+                        view.attach(async move { images::load_texture(&texture).await })
+                    }
+                    _ => view.toast("The clipboard's image cannot be read."),
+                }
+            });
+            return true;
+        }
+        false
+    }
+
+    /// Asks for image files to attach.
+    fn pick_images(&self) {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Images"));
+        for media_type in herder_protocol::IMAGE_MEDIA_TYPES {
+            filter.add_mime_type(media_type);
+        }
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title("Attach Images")
+            .accept_label("Attach")
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        let window = self.page.root().and_downcast::<gtk::Window>();
+        let view = self.clone();
+        glib::spawn_future_local(async move {
+            let Ok(files) = dialog.open_multiple_future(window.as_ref()).await else {
+                // Dismissed.
+                return;
+            };
+            let files = (0..files.n_items())
+                .filter_map(|at| files.item(at).and_downcast::<gio::File>())
+                .collect();
+            view.attach_files(files);
+        });
+    }
+
+    /// Redraws the images waiting over the editor.
+    fn redraw_attached(&self) {
+        let c = &self.composer;
+        while let Some(child) = c.images.first_child() {
+            c.images.remove(&child);
+        }
+        let attached = self.state.borrow().attached.clone();
+        for (at, image) in attached.iter().enumerate() {
+            let thumb = images::opener(
+                &Thumb::square(&image.texture, images::PENDING_SIDE),
+                &image.texture,
+                image.image.data.0.len() as u64,
+            );
+            let remove = gtk::Button::builder()
+                .icon_name("window-close-symbolic")
+                .tooltip_text("Remove")
+                .halign(gtk::Align::End)
+                .valign(gtk::Align::Start)
+                .css_classes(["circular", "remove-image"])
+                .build();
+            let view = self.clone();
+            remove.connect_clicked(move |_| {
+                let mut state = view.state.borrow_mut();
+                if at < state.attached.len() {
+                    state.attached.remove(at);
+                }
+                drop(state);
+                view.redraw_attached();
+                view.composer.text.grab_focus();
+            });
+            let overlay = gtk::Overlay::builder().child(&thumb).build();
+            overlay.add_overlay(&remove);
+            c.images.append(&overlay);
+        }
+        c.images_row.set_visible(!attached.is_empty());
+    }
+
+    fn toast(&self, message: &str) {
+        self.toasts.add_toast(
+            adw::Toast::builder()
+                .title(glib::markup_escape_text(message))
+                .timeout(10)
+                .build(),
+        );
     }
 
     fn interrupt(&self) {
@@ -1133,15 +1344,13 @@ impl SessionView {
         glib::spawn_future_local(async move {
             if let Err(message) = reply.await {
                 if let Some(prompt) = prompt {
-                    view.state.borrow_mut().pending.retain(|p| *p != prompt);
+                    view.state
+                        .borrow_mut()
+                        .pending
+                        .retain(|(p, _)| *p != prompt);
                     view.redraw_streaming();
                 }
-                view.toasts.add_toast(
-                    adw::Toast::builder()
-                        .title(glib::markup_escape_text(&message))
-                        .timeout(10)
-                        .build(),
-                );
+                view.toast(&message);
             }
         });
     }
@@ -1158,6 +1367,13 @@ impl SessionView {
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let view = self.clone();
         keys.connect_key_pressed(move |_, key, _, modifiers| {
+            // Ctrl+V of an image attaches it; of text, the editor pastes it.
+            if matches!(key, gdk::Key::v | gdk::Key::V)
+                && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && view.paste_images()
+            {
+                return glib::Propagation::Stop;
+            }
             let enter = matches!(key, gdk::Key::Return | gdk::Key::KP_Enter);
             if enter
                 && !modifiers
@@ -1177,6 +1393,40 @@ impl SessionView {
         c.send.connect_clicked(move |_| view.send_prompt());
         let view = self.clone();
         c.stop.connect_clicked(move |_| view.interrupt());
+        let view = self.clone();
+        c.attach.connect_clicked(move |_| view.pick_images());
+
+        // Images and image files dropped anywhere on the view join the prompt; ahead of the
+        // editor, which would take a file list as text.
+        let drop = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY);
+        drop.set_types(&[gdk::FileList::static_type(), gdk::Texture::static_type()]);
+        drop.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let view = self.clone();
+        drop.connect_enter(move |_, _, _| {
+            if view.bottom.visible_child_name().as_deref() != Some("composer") {
+                return gdk::DragAction::empty();
+            }
+            view.composer.frame.add_css_class("dropping");
+            gdk::DragAction::COPY
+        });
+        let view = self.clone();
+        drop.connect_leave(move |_| view.composer.frame.remove_css_class("dropping"));
+        let view = self.clone();
+        drop.connect_drop(move |_, value, _, _| {
+            view.composer.frame.remove_css_class("dropping");
+            if view.bottom.visible_child_name().as_deref() != Some("composer") {
+                return false;
+            }
+            if let Ok(files) = value.get::<gdk::FileList>() {
+                view.attach_files(files.files());
+            } else if let Ok(texture) = value.get::<gdk::Texture>() {
+                view.attach(async move { images::load_texture(&texture).await });
+            } else {
+                return false;
+            }
+            true
+        });
+        self.toasts.add_controller(drop);
 
         let view = self.clone();
         c.model_entry
@@ -1240,6 +1490,90 @@ impl SessionView {
     pub fn scroll_to_end(&self) {
         let adjustment = self.scroller.vadjustment();
         adjustment.set_value(adjustment.upper() - adjustment.page_size());
+    }
+
+    /// Types `text` into the composer, not sending it.
+    #[cfg(test)]
+    pub fn type_text(&self, text: &str) {
+        self.composer.text.buffer().set_text(text);
+    }
+
+    /// Attaches the image `data`, as a paste or a drop of it does.
+    #[cfg(test)]
+    pub fn attach_image(&self, data: Vec<u8>) {
+        self.attach(images::load(data));
+    }
+
+    /// Attaches the image file at `path`, as the file picker does.
+    #[cfg(test)]
+    pub fn attach_file(&self, path: &std::path::Path) {
+        self.attach_files(vec![gio::File::for_path(path)]);
+    }
+
+    /// The images the next prompt carries, as their media types.
+    #[cfg(test)]
+    pub fn attached(&self) -> Vec<String> {
+        let shown = self.composer.images_row.get_visible();
+        let attached = self.state.borrow().attached.clone();
+        assert_eq!(shown, !attached.is_empty(), "the row shows while any wait");
+        attached.into_iter().map(|a| a.image.media_type).collect()
+    }
+
+    /// Clicks the remove button of the attached image `at`.
+    #[cfg(test)]
+    pub fn remove_attached(&self, at: usize) {
+        let mut child = self.composer.images.first_child();
+        for _ in 0..at {
+            child = child.and_then(|c| c.next_sibling());
+        }
+        let overlay = child.expect("the image is attached");
+        overlay
+            .last_child()
+            .and_downcast::<gtk::Button>()
+            .expect("its remove button")
+            .emit_clicked();
+    }
+
+    /// The thumbnails of the transcript's prompts: whether each shows its picture.
+    #[cfg(test)]
+    pub fn message_thumbs(&self) -> Vec<bool> {
+        fn collect(widget: &gtk::Widget, out: &mut Vec<bool>) {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(thumb) = widget.downcast_ref::<Thumb>() {
+                    out.push(thumb.has_picture());
+                }
+                collect(&widget, out);
+                child = widget.next_sibling();
+            }
+        }
+        let mut out = Vec::new();
+        collect(self.transcript.upcast_ref(), &mut out);
+        collect(self.streaming.upcast_ref(), &mut out);
+        out
+    }
+
+    /// Clicks the transcript's first thumbnail that shows a picture.
+    #[cfg(test)]
+    pub fn open_image(&self) {
+        fn find(widget: &gtk::Widget) -> Option<gtk::Button> {
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.has_css_class("thumb-button")
+                {
+                    return Some(button.clone());
+                }
+                if let Some(found) = find(&widget) {
+                    return Some(found);
+                }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        find(self.transcript.upcast_ref())
+            .expect("a thumbnail")
+            .emit_clicked();
     }
 
     /// Types `text` into the composer and presses Enter.
@@ -1460,6 +1794,21 @@ impl Composer {
         let (mode, mode_label) = control("");
         model_label.set_ellipsize(pango::EllipsizeMode::Middle);
         model_label.set_max_width_chars(24);
+        let attach = gtk::Button::builder()
+            .icon_name("mail-attachment-symbolic")
+            .tooltip_text("Attach images (or paste or drop them)")
+            .css_classes(["flat", "control"])
+            .valign(gtk::Align::Center)
+            .build();
+        let images = hbox(6);
+        let images_row = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .child(&images)
+            .css_classes(["attached"])
+            .visible(false)
+            .build();
         let send = gtk::Button::builder()
             .icon_name("go-up-symbolic")
             .tooltip_text("Send (Enter)")
@@ -1536,9 +1885,13 @@ impl Composer {
         mode_box.append(&modes);
         mode.set_popover(Some(&gtk::Popover::builder().child(&mode_box).build()));
 
-        Self {
+        let mut composer = Self {
+            frame: vbox(4),
             text,
             placeholder,
+            images,
+            images_row,
+            attach,
             send,
             stop,
             account,
@@ -1551,13 +1904,16 @@ impl Composer {
             mode,
             mode_label,
             modes,
-        }
+        };
+        composer.frame = composer.build_frame();
+        composer
     }
 
-    /// The composer's frame: the editor above its controls.
-    fn frame(&self) -> gtk::Box {
+    /// The composer's frame: the images attached and the editor above its controls.
+    fn build_frame(&self) -> gtk::Box {
         let frame = vbox(4);
         frame.add_css_class("composer");
+        frame.append(&self.images_row);
         let scroller = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             // A scrollbar's own minimum would make an empty editor two lines tall: it
@@ -1581,6 +1937,7 @@ impl Composer {
         overlay.add_overlay(&self.placeholder);
         frame.append(&overlay);
         let controls = hbox(2);
+        controls.append(&self.attach);
         controls.append(&self.account);
         controls.append(&self.model);
         controls.append(&self.mode);

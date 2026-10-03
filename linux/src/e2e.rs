@@ -2,7 +2,8 @@
 //! the window wired to the client as `main` wires it. The session is opened from its row; a
 //! prompt typed in the composer starts a turn whose reply streams, whose tool call waits on
 //! the approval card's Allow, and which ends with the agent's answer; then the model is
-//! switched from the composer.
+//! switched from the composer. Another attaches an image file, sends it with a prompt the
+//! fake checks carries its bytes, and sees it back in the transcript.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gtk::glib;
+use herder_adapters::AdapterCommand;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::{Client, PairingUri};
 use herder_daemon::Hub;
@@ -20,7 +22,9 @@ use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, Sessi
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_protocol::{AccountId, CommandBody, HostId, PermissionMode, Provider, TurnId};
+use herder_protocol::{
+    AccountId, Bytes, CommandBody, HostId, Image, PermissionMode, Provider, TurnId,
+};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
@@ -122,51 +126,84 @@ fn until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
+/// A daemon whose sessions run `script`, the window wired to a client paired with it, and
+/// the session `herder/health` open in it.
+struct App {
+    runtime: tokio::runtime::Runtime,
+    _tmp: tempfile::TempDir,
+    shutdown: CancellationToken,
+    _window: MainWindow,
+    view: crate::session_view::SessionView,
+}
+
+impl App {
+    fn open(script: PathBuf) -> Self {
+        adw::init().expect("libadwaita initializes");
+        let runtime = tokio::runtime::Runtime::new().expect("a tokio runtime");
+        let tmp = tempfile::tempdir().expect("a temp dir");
+        let shutdown = CancellationToken::new();
+        let (window, view) = {
+            let _runtime = runtime.enter();
+            let link = runtime.block_on(daemon(&tmp.path().join("box"), script, &shutdown));
+            let client = Client::open(
+                tmp.path().join("client").display().to_string(),
+                "herder-gtk-test".to_owned(),
+            )
+            .expect("the profile opens");
+            let host_id = runtime
+                .block_on(client.pair(link))
+                .expect("pairing")
+                .host_id;
+            runtime
+                .block_on(client.send(
+                    host_id.clone(),
+                    CommandBody::CreateSession {
+                        repo: Some(repo(&tmp.path().join("app"))),
+                        project_id: None,
+                        branch: Some("herder/health".to_owned()),
+                        account_id: Some(AccountId::new("account-1")),
+                        model: None,
+                        provider: None,
+                        permission_mode: Some(PermissionMode::Ask),
+                        max_children: None,
+                        failover_pin: None,
+                    },
+                ))
+                .expect("the session is created");
+
+            let window = MainWindow::new(None);
+            crate::wire(&window, &client);
+            let view = window.session_view().clone();
+            until("the session's row", || window.has_row("herder/health"));
+            window.activate_row("herder/health");
+            let key: SessionKey = view.key().expect("the session opens");
+            assert_eq!(key.host_id, host_id);
+            until("the composer", || {
+                view.bottom_child().as_deref() == Some("composer")
+            });
+            (window, view)
+        };
+        Self {
+            runtime,
+            _tmp: tmp,
+            shutdown,
+            _window: window,
+            view,
+        }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
+}
+
 #[gtk::test]
 fn a_full_turn_from_the_app() {
-    adw::init().expect("libadwaita initializes");
-    let runtime = tokio::runtime::Runtime::new().expect("a tokio runtime");
-    let _runtime = runtime.enter();
-    let tmp = tempfile::tempdir().expect("a temp dir");
-    let shutdown = CancellationToken::new();
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/turn.jsonl");
-    let link = runtime.block_on(daemon(&tmp.path().join("box"), script, &shutdown));
-    let client = Client::open(
-        tmp.path().join("client").display().to_string(),
-        "herder-gtk-test".to_owned(),
-    )
-    .expect("the profile opens");
-    let host_id = runtime
-        .block_on(client.pair(link))
-        .expect("pairing")
-        .host_id;
-    runtime
-        .block_on(client.send(
-            host_id.clone(),
-            CommandBody::CreateSession {
-                repo: Some(repo(&tmp.path().join("app"))),
-                project_id: None,
-                branch: Some("herder/health".to_owned()),
-                account_id: Some(AccountId::new("account-1")),
-                model: None,
-                provider: None,
-                permission_mode: Some(PermissionMode::Ask),
-                max_children: None,
-                failover_pin: None,
-            },
-        ))
-        .expect("the session is created");
-
-    let window = MainWindow::new(None);
-    crate::wire(&window, &client);
-    let view = window.session_view().clone();
-    until("the session's row", || window.has_row("herder/health"));
-    window.activate_row("herder/health");
-    let key: SessionKey = view.key().expect("the session opens");
-    assert_eq!(key.host_id, host_id);
-    until("the composer", || {
-        view.bottom_child().as_deref() == Some("composer")
-    });
+    let app = App::open(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/turn.jsonl"));
+    let _runtime = app.runtime.enter();
+    let view = &app.view;
 
     view.submit("Run the tests.");
     until("the approval card", || {
@@ -201,5 +238,47 @@ fn a_full_turn_from_the_app() {
             .any(|text| text == "switched to fake-large")
     });
     assert_eq!(view.controls().1, "fake-large");
-    shutdown.cancel();
+}
+
+#[gtk::test]
+fn an_image_attached_in_the_app_goes_with_the_turn() {
+    // The fake checks the prompt carries the image's very bytes.
+    let image = crate::images::tests::png(48, 32, 0x7aa2_f7ff);
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let script = dir.path().join("image.jsonl");
+    let send = AdapterCommand::SendPrompt {
+        turn_id: TurnId::new("turn-1"),
+        text: "What is wrong here?".to_owned(),
+        images: vec![Image {
+            media_type: "image/png".to_owned(),
+            data: Bytes(image.clone()),
+        }],
+    };
+    let steps = [
+        serde_json::json!({ "expect": send }),
+        serde_json::json!({"emit": {"type": "turn_started", "turn_id": "turn-1"}}),
+        serde_json::json!({"emit": {"type": "item_completed", "item": {"id": "item-1",
+            "turn_id": "turn-1", "body": {"type": "assistant_message",
+            "text": "A blue rectangle, nothing wrong."}}}}),
+        serde_json::json!({"emit": {"type": "turn_completed", "turn_id": "turn-1"}}),
+    ];
+    let lines: Vec<String> = steps.iter().map(ToString::to_string).collect();
+    std::fs::write(&script, lines.join("\n")).expect("the script is written");
+
+    let app = App::open(script);
+    let _runtime = app.runtime.enter();
+    let view = &app.view;
+    let file = dir.path().join("screen.png");
+    std::fs::write(&file, &image).expect("the image is written");
+    view.attach_file(&file);
+    until("the image to attach", || view.attached().len() == 1);
+    view.submit("What is wrong here?");
+    assert!(view.attached().is_empty());
+    until("the reply", || {
+        view.transcript_texts()
+            .iter()
+            .any(|text| text == "A blue rectangle, nothing wrong.")
+    });
+    // The prompt in the transcript shows the image the daemon kept, fetched back.
+    until("the prompt's thumbnail", || view.message_thumbs() == [true]);
 }

@@ -19,6 +19,7 @@ use herder_protocol::{
 };
 use serde_json::Value;
 
+use crate::images::Gallery;
 use crate::markdown::{self, Block};
 use crate::session::{Entry, Session, ToolApproval, duration, first_line};
 use crate::tools::{self, Diff, Kind};
@@ -32,6 +33,8 @@ pub struct Context<'a> {
     pub full: &'a Rc<RefCell<HashSet<ItemId>>>,
     /// Opens a child session, from its task line.
     pub open_child: &'a Rc<dyn Fn(SessionId)>,
+    /// The session's images, for its prompts' thumbnails.
+    pub gallery: &'a Gallery,
 }
 
 /// What an entry's drawing depends on beyond the entry itself, which never changes: a
@@ -166,7 +169,10 @@ pub fn entry(cx: &Context, entry: &Entry) -> Option<gtk::Widget> {
 /// The widget of `item`; `streaming` marks text still being written.
 pub fn item(cx: &Context, item: &Item, streaming: bool) -> Option<gtk::Widget> {
     let widget: gtk::Widget = match &item.body {
-        ItemBody::UserMessage { text, .. } => user_message(text, None).upcast(),
+        ItemBody::UserMessage { text, attachments } => {
+            let images = (!attachments.is_empty()).then(|| cx.gallery.row(attachments));
+            user_message(text, None, images.as_ref()).upcast()
+        }
         ItemBody::AssistantMessage { text } => assistant(text, streaming).upcast(),
         ItemBody::Reasoning { text } => thought(cx, &item.id, text, streaming),
         ItemBody::ToolCall { name, input } => tool(cx, &item.id, name, input),
@@ -190,8 +196,9 @@ pub fn item(cx: &Context, item: &Item, streaming: bool) -> Option<gtk::Widget> {
     Some(widget)
 }
 
-/// A prompt on a card behind the accent bar; `badge` marks one not in the transcript yet.
-pub fn user_message(text: &str, badge: Option<&str>) -> gtk::Box {
+/// A prompt on a card behind the accent bar, its `images` over its text; `badge` marks one
+/// not in the transcript yet.
+pub fn user_message(text: &str, badge: Option<&str>, images: Option<&gtk::FlowBox>) -> gtk::Box {
     let card = vbox(6);
     card.add_css_class("user-message");
     card.add_css_class("block");
@@ -204,7 +211,12 @@ pub fn user_message(text: &str, badge: Option<&str>) -> gtk::Box {
             .build();
         card.append(&label);
     }
-    card.append(&wrapped(text, true));
+    if let Some(images) = images {
+        card.append(images);
+    }
+    if !text.is_empty() {
+        card.append(&wrapped(text, true));
+    }
     card
 }
 

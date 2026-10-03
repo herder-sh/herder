@@ -13,7 +13,10 @@ session's pull requests, each with its state, checks, review, mergeability and b
 open in the browser, and whose menu copies or unlinks them (the header's menu links another);
 and below it the composer (<kbd>Enter</kbd> sends, <kbd>Shift</kbd>+<kbd>Enter</kbd>
 adds a line) with the session's account, model and permission mode, each a picker that
-switches it. An approval or a question replaces the composer with a card, answered with its
+switches it. Images join the prompt pasted with <kbd>Ctrl</kbd>+<kbd>V</kbd>, dropped on the
+session or picked with the composer's attach button; they wait over the editor, each removable,
+and show as thumbnails in the prompt's card, which open full size on a click. An image the
+machine no longer has shows as a quiet placeholder. An approval or a question replaces the composer with a card, answered with its
 buttons, <kbd>y</kbd> / <kbd>n</kbd> or the digits. Archived and moved sessions, and a vault's,
 are read-only. The sidebar's "Pull requests" lists every session's PRs, grouped by project
 or by machine, each session opening from its group.
@@ -29,4 +32,5 @@ cargo run
 The tests build the window and need a display: run them under `xvfb-run cargo test`, or with
 `GDK_BACKEND=broadway` and `gtk4-broadwayd` running. One drives a full turn against a real
 daemon with the fake adapter. `cargo test screenshots -- --ignored` renders the screenshots in
-`docs/screenshots/p8-4/`; under broadway, keep a browser open on the display so it draws.
+`docs/screenshots/p8-4/` and `p8-7/`; under broadway, keep a browser open on the display so it
+draws (the image screenshots need none).

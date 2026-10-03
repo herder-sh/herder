@@ -1,23 +1,30 @@
 //! A demo fleet and session for the screenshots in the PR and docs, rendered from the real
 //! window: `cargo test screenshots -- --ignored` with a display (broadway or a headless X
-//! server) writes them to `docs/screenshots/p8-4/`.
+//! server) writes them to `docs/screenshots/p8-4/`, and the images' to `p8-7/`.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use adw::prelude::*;
 use gtk::{glib, graphene};
 use herder_client_core::{Machine, SessionUpdate};
 use herder_protocol::{
-    Account, AccountId, ApprovalId, CiStatus, Event, EventBody, Item, ItemBody, ItemId, Mergeable,
-    PermissionMode, PrState, Provider, PullRequest, QuestionId, ReviewStatus, Route, SessionHead,
-    SessionId, SessionStatus, Timestamp, TurnId, UsageWindow, UserId,
+    Account, AccountId, ApprovalId, Attachment, AttachmentId, CiStatus, CommandBody, CommandResult,
+    Event, EventBody, Item, ItemBody, ItemId, Mergeable, PermissionMode, PrState, Provider,
+    PullRequest, QuestionId, ReviewStatus, Route, SessionHead, SessionId, SessionStatus, Timestamp,
+    TurnId, UsageWindow, UserId,
 };
 use serde_json::json;
 
 use crate::lists::SessionKey;
 use crate::lists::tests::{created, head, machine, pr};
 use crate::window::MainWindow;
+
+/// The `images` moment's prompt's images: two the machine has, one it does not.
+pub const IMAGE_WIDE: &str = "01JIMAGEWIDE";
+pub const IMAGE_NARROW: &str = "01JIMAGENARROW";
+pub const IMAGE_GONE: &str = "01JIMAGEGONE";
 
 /// Runs the main loop for `time`, so the window lays out and draws.
 pub fn settle(time: Duration) {
@@ -344,6 +351,49 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
             ));
             SessionStatus::NeedsYou
         }
+        "images" => {
+            bodies.push((
+                60,
+                None,
+                EventBody::TurnStarted {
+                    turn_id: TurnId::new("t2"),
+                },
+            ));
+            let attachment = |id: &str, media_type: &str| Attachment {
+                attachment_id: AttachmentId::new(id),
+                media_type: media_type.to_owned(),
+                size: 0,
+            };
+            bodies.push((
+                60,
+                Some("dev"),
+                item(
+                    "u2",
+                    "t2",
+                    ItemBody::UserMessage {
+                        text: "The PR list looks off next to the chat: compare the two. Match \
+                               the chat's spacing."
+                            .to_owned(),
+                        attachments: vec![
+                            attachment(IMAGE_WIDE, "image/png"),
+                            attachment(IMAGE_NARROW, "image/png"),
+                            attachment(IMAGE_GONE, "image/jpeg"),
+                        ],
+                    },
+                ),
+            ));
+            bodies.push((20, None, item("a2", "t2", ItemBody::AssistantMessage {
+                text: "The list's rows pad 9 px where the chat's cards pad 10, and its headings sit 3 px higher. I aligned both to the chat's 6 px grid.".to_owned(),
+            })));
+            bodies.push((
+                18,
+                None,
+                EventBody::TurnCompleted {
+                    turn_id: TurnId::new("t2"),
+                },
+            ));
+            SessionStatus::Idle
+        }
         "switched" => {
             bodies.push((
                 90,
@@ -407,8 +457,8 @@ pub fn capture(widget: &impl IsA<gtk::Widget>, path: &Path) {
         .expect("the screenshot is written");
 }
 
-fn out_dir() -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/screenshots/p8-4");
+fn out_dir(todo: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../docs/screenshots/{todo}"));
     std::fs::create_dir_all(&dir).expect("the screenshot dir");
     dir
 }
@@ -419,7 +469,7 @@ fn screenshots() {
     adw::init().expect("libadwaita initializes");
     crate::theme::load();
     let style = adw::StyleManager::default();
-    let dir = out_dir();
+    let dir = out_dir("p8-4");
     // One window for every shot: a display without a client draws new windows late.
     let window = MainWindow::new(None);
     window.present();
@@ -494,6 +544,90 @@ fn screenshots() {
                     settle(Duration::from_millis(600));
                 }
             }
+        }
+    }
+}
+
+#[gtk::test]
+#[ignore = "writes the PR's screenshots; needs a display"]
+fn image_screenshots() {
+    adw::init().expect("libadwaita initializes");
+    crate::theme::load();
+    let style = adw::StyleManager::default();
+    let dir = out_dir("p8-7");
+    // A display with no client runs no frames, so an animation never ends: the viewer
+    // opens at once.
+    if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_enable_animations(false);
+    }
+    // The demo's images are the app's own screenshots.
+    let shots = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/screenshots/p8-4");
+    let read = |name: &str| std::fs::read(shots.join(name)).expect("a screenshot");
+    let (wide, narrow) = (read("chat-wide-dark.png"), read("list-narrow-light.png"));
+    let window = MainWindow::new(None);
+    window.set_sender(Rc::new(move |_, command| {
+        let reply = match command {
+            CommandBody::GetAttachment { attachment_id, .. } => match attachment_id.as_str() {
+                IMAGE_WIDE => Ok(wide.clone()),
+                IMAGE_NARROW => Ok(narrow.clone()),
+                _ => Err("the vault holds no image 01JIMAGEGONE".to_owned()),
+            }
+            .map(|data| CommandResult::Attachment {
+                media_type: "image/png".to_owned(),
+                data: herder_protocol::Bytes(data),
+            }),
+            _ => Ok(CommandResult::Applied),
+        };
+        Box::pin(async move { reply })
+    }));
+    window.present();
+    let (status, update) = moment("images");
+    let machines = machines(status);
+    let key = SessionKey {
+        host_id: machines[0].host_id.clone(),
+        session_id: SessionId::new("s-api"),
+    };
+    window.show_machines(&machines);
+    window.apply(&key, &update);
+    window.open(&key);
+    let view = window.session_view();
+    view.attach_file(&shots.join("prs-wide-light.png"));
+    view.attach_file(&shots.join("tools-narrow-dark.png"));
+    view.type_text("And the PR list on a phone:");
+    // A display with no client lays out only on a change such as the scheme's: one first,
+    // for the images that loaded.
+    style.set_color_scheme(adw::ColorScheme::ForceLight);
+    settle(Duration::from_millis(500));
+    for (width, size) in [(1000, "wide"), (400, "narrow")] {
+        window.set_size(width, 760);
+        for (scheme, name) in [
+            (adw::ColorScheme::ForceDark, "dark"),
+            (adw::ColorScheme::ForceLight, "light"),
+        ] {
+            style.set_color_scheme(scheme);
+            // Twice: the images loading make the transcript and the composer taller.
+            for _ in 0..2 {
+                settle(Duration::from_millis(1000));
+                window.scroll_to_end();
+            }
+            settle(Duration::from_millis(300));
+            assert_eq!(window.root().width(), width, "the window takes its size");
+            assert_eq!(view.attached().len(), 2, "the images are attached");
+            capture(
+                &window.root(),
+                &dir.join(format!("attach-{size}-{name}.png")),
+            );
+            view.open_image();
+            settle(Duration::from_millis(800));
+            let dialog = window.root().visible_dialog().expect("the image opens");
+            // Its content alone: without frames libadwaita never shows the sheet over the
+            // window.
+            capture(
+                &dialog.child().expect("the viewer"),
+                &dir.join(format!("viewer-{size}-{name}.png")),
+            );
+            dialog.force_close();
+            settle(Duration::from_millis(600));
         }
     }
 }

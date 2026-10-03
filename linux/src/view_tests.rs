@@ -8,12 +8,13 @@ use std::time::Duration;
 use adw::prelude::*;
 
 use herder_protocol::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, CommandBody, EventBody, HostId,
-    PermissionMode, QuestionId, SessionId, SessionStatus, Timestamp,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Bytes, CommandBody, CommandResult, EventBody,
+    HostId, Image, PermissionMode, QuestionId, SessionId, SessionStatus, Timestamp,
 };
 
+use crate::images::tests::png;
 use crate::lists::SessionKey;
-use crate::screenshots::{machines, moment, settle};
+use crate::screenshots::{IMAGE_GONE, IMAGE_NARROW, IMAGE_WIDE, machines, moment, settle};
 use crate::window::MainWindow;
 
 fn api() -> SessionKey {
@@ -32,7 +33,7 @@ fn open(name: &str) -> (MainWindow, Rc<RefCell<Vec<CommandBody>>>) {
     window.set_sender(Rc::new(move |host_id, command| {
         assert_eq!(host_id, HostId::new("h1"));
         log.borrow_mut().push(command);
-        Box::pin(async { Ok(()) })
+        Box::pin(async { Ok(CommandResult::Applied) })
     }));
     let (status, update) = moment(name);
     window.show_machines(&machines(status));
@@ -241,6 +242,113 @@ fn the_composer_sends_prompts_which_wait_marked_until_they_join() {
     assert!(has(&view.transcript_texts(), "One more."));
     settle(Duration::from_millis(50));
     assert!(!has(&view.transcript_texts(), "One more."));
+}
+
+/// Runs the main loop until `done` holds, for at most 10 s.
+fn until(what: &str, done: impl Fn() -> bool) {
+    let end = std::time::Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < end,
+            "timed out waiting for {what}"
+        );
+        settle(Duration::from_millis(10));
+    }
+}
+
+#[gtk::test]
+fn the_composer_attaches_images_and_sends_them_with_the_prompt() {
+    let (window, sent) = open("chat");
+    let view = window.session_view();
+    let red = png(40, 30, 0xf776_8eff);
+    let blue = png(30, 40, 0x7aa2_f7ff);
+    view.attach_image(red.clone());
+    until("the first image", || view.attached().len() == 1);
+    view.attach_image(blue.clone());
+    until("the second image", || view.attached().len() == 2);
+    // What is not an image is refused, with a toast, and nothing joins.
+    view.attach_image(b"not an image".to_vec());
+    settle(Duration::from_millis(200));
+    assert_eq!(view.attached().len(), 2);
+
+    view.remove_attached(0);
+    assert_eq!(view.attached(), ["image/png"]);
+    view.submit("The layout is off here.");
+    // An image alone is a prompt too.
+    view.attach_image(red.clone());
+    until("the image", || view.attached().len() == 1);
+    view.submit("");
+    settle(Duration::from_millis(50));
+    assert!(view.attached().is_empty());
+    let image = |data: Vec<u8>| Image {
+        media_type: "image/png".to_owned(),
+        data: Bytes(data),
+    };
+    assert_eq!(
+        *sent.borrow(),
+        [
+            CommandBody::SendPrompt {
+                session_id: SessionId::new("s-api"),
+                text: "The layout is off here.".to_owned(),
+                images: vec![image(blue)],
+            },
+            CommandBody::SendPrompt {
+                session_id: SessionId::new("s-api"),
+                text: String::new(),
+                images: vec![image(red)],
+            },
+        ]
+    );
+    // While they wait, queued, the prompts show their images.
+    assert_eq!(view.message_thumbs(), [true, true]);
+}
+
+#[gtk::test]
+fn a_prompts_images_are_fetched_once_and_open_full_size() {
+    adw::init().expect("libadwaita initializes");
+    let window = MainWindow::new(None);
+    let fetched = Rc::new(RefCell::new(Vec::new()));
+    let log = Rc::clone(&fetched);
+    window.set_sender(Rc::new(move |_, command| {
+        let CommandBody::GetAttachment { attachment_id, .. } = command else {
+            return Box::pin(async { Ok(CommandResult::Applied) });
+        };
+        log.borrow_mut().push(attachment_id.to_string());
+        let reply = if attachment_id.as_str() == IMAGE_GONE {
+            Err("the vault holds no image".to_owned())
+        } else {
+            Ok(CommandResult::Attachment {
+                media_type: "image/png".to_owned(),
+                data: Bytes(png(64, 48, 0x9ece_6aff)),
+            })
+        };
+        Box::pin(async move { reply })
+    }));
+    let (status, update) = moment("images");
+    window.show_machines(&machines(status));
+    window.apply(&api(), &update);
+    window.open(&api());
+    let view = window.session_view();
+    // A card each while they load.
+    assert_eq!(view.message_thumbs(), [false, false, false]);
+    until("the images", || {
+        view.message_thumbs() == [true, true]
+            && has(&view.transcript_texts(), "Image not available")
+    });
+    // Redrawn, the session fetches none again.
+    window.apply(&api(), &update);
+    settle(Duration::from_millis(100));
+    assert_eq!(
+        *fetched.borrow(),
+        [IMAGE_WIDE, IMAGE_NARROW, IMAGE_GONE],
+        "each once"
+    );
+
+    assert!(window.root().visible_dialog().is_none());
+    view.open_image();
+    settle(Duration::from_millis(100));
+    let dialog = window.root().visible_dialog().expect("the image opens");
+    assert_eq!(dialog.title(), "Image");
 }
 
 #[gtk::test]
