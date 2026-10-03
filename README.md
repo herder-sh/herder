@@ -21,6 +21,33 @@ herder update            # replace herder with the latest release
 The script installs a static binary to `~/.local/bin/herder` after checking its sha256.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
+## Using herder from a phone
+
+Run bare `herder` over SSH or mosh from a phone SSH app. Below 65 columns the TUI shows one
+pane at a time, with a bar of buttons for what can be done now over the status line. Every
+view works with only these keys:
+
+| Key                  | Does                                                    |
+| -------------------- | ------------------------------------------------------- |
+| ↑ / ↓                | move the selection, or scroll                           |
+| PgUp / PgDn          | page                                                    |
+| Home / End           | first / last; End follows the transcript again          |
+| Tab / Shift-Tab      | next / previous button of the bar (forms: next field)   |
+| Enter                | open, or press the button Tab moved to                  |
+| Esc / Backspace      | back, or close a dialog                                 |
+
+So approving a tool call is Tab, Enter. The letter shortcuts (`?` lists them) still work.
+
+**Termius** sends gestures as keys, never as mouse events. In its keyboard settings, map:
+
+- swipe up / down → Up / Down arrow
+- two-finger swipe up / down → PgUp / PgDn
+- swipe left / right → Shift-Tab / Tab
+
+**Moshi** sends taps and swipes as mouse events once Mouse Mode is on; herder takes them,
+so a tap opens a row or presses a button and a swipe scrolls. `:mouse off` hands the mouse
+back to the app, to select text.
+
 ## Build and test
 
 Requires Rust (the toolchain is pinned in `rust-toolchain.toml`).

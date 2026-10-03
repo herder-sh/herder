@@ -15,6 +15,7 @@ use crate::app::{App, Focus, Row};
 use crate::compose::Act;
 use crate::inbox::{InboxAction, What};
 use crate::mouse::{self, Click, Hits};
+use crate::prs::PrAction;
 
 /// Most characters of a question's choice its button shows.
 const CHOICE: usize = 10;
@@ -110,21 +111,53 @@ fn title(app: &App, narrow: bool) -> Line<'static> {
     ])
 }
 
-/// The bar of buttons for what can be done now, as many as fit, the most pressing first.
+/// What the bar's buttons do, in order, as [`bar`] draws them.
+pub(super) fn clicks(app: &App) -> Vec<Click> {
+    buttons(app)
+        .into_iter()
+        .map(|button| button.click)
+        .collect()
+}
+
+/// The bar of buttons for what can be done now, the most pressing first: as many as fit,
+/// from the first, or so the one Tab moved to shows, which is drawn reversed.
 pub(super) fn bar(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
+    let buttons: Vec<(Button, u16)> = buttons(app)
+        .into_iter()
+        .map(|button| {
+            // The key, the label and the gap after them.
+            let width = button.key.chars().count() + button.label.chars().count() + 4;
+            (button, u16::try_from(width).unwrap_or(u16::MAX))
+        })
+        .collect();
+    let mut first = 0;
+    if let Some(focus) = app.bar_focus.filter(|at| *at < buttons.len()) {
+        let fits = |first: usize| {
+            buttons[first..=focus]
+                .iter()
+                .map(|(_, width)| u32::from(*width))
+                .sum::<u32>()
+                <= u32::from(area.width) + 1
+        };
+        while first < focus && !fits(first) {
+            first += 1;
+        }
+    }
     let mut spans = Vec::new();
     let mut x = area.x;
-    let key_style = Style::new()
-        .fg(Color::Yellow)
-        .bg(Color::DarkGray)
-        .add_modifier(Modifier::BOLD);
-    let label_style = Style::new().fg(Color::White).bg(Color::DarkGray);
-    for button in buttons(app) {
-        let key = format!(" {} ", button.key);
-        let label = format!("{} ", button.label);
-        let width = u16::try_from(key.chars().count() + label.chars().count()).unwrap_or(u16::MAX);
+    for (at, (button, width)) in buttons.into_iter().enumerate().skip(first) {
+        let width = width - 1;
         if x + width > area.right() {
             break;
+        }
+        let mut key_style = Style::new()
+            .fg(Color::Yellow)
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD);
+        let mut label_style = Style::new().fg(Color::White).bg(Color::DarkGray);
+        if app.bar_focus == Some(at) {
+            key_style = key_style.add_modifier(Modifier::REVERSED);
+            label_style = label_style.add_modifier(Modifier::REVERSED);
         }
         // The gap after a button is its own, so every spot of the bar taps something.
         hits.click(
@@ -132,8 +165,8 @@ pub(super) fn bar(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
             button.click,
         );
         spans.extend([
-            Span::styled(key, key_style),
-            Span::styled(label, label_style),
+            Span::styled(format!(" {} ", button.key), key_style),
+            Span::styled(format!("{} ", button.label), label_style),
             Span::raw(" "),
         ]);
         x += width + 1;
@@ -158,6 +191,26 @@ fn buttons(app: &App) -> Vec<Button> {
     if app.recover.is_some() {
         return vec![esc()];
     }
+    if let Some(panel) = &app.machine_panel
+        && panel.add.is_none()
+        && panel.edit.is_none()
+        && panel.account.is_none()
+    {
+        return vec![
+            button("a", "add", char('a')),
+            button("n", "account", char('n')),
+            button("e", "rename", char('e')),
+            button("d", "forget", char('d')),
+            esc(),
+        ];
+    }
+    if app
+        .account_screen
+        .as_ref()
+        .is_some_and(|screen| screen.adding.is_none())
+    {
+        return vec![button("n", "add", char('n')), esc()];
+    }
     if app.dialog_open() {
         return vec![button("⏎", "ok", enter()), esc()];
     }
@@ -177,6 +230,10 @@ fn buttons(app: &App) -> Vec<Button> {
                 button("s", "switch", char('s')),
                 button("t", "term", char('t')),
                 button(":", "cmd", char(':')),
+                button("I", "inbox", char('I')),
+                button("P", "prs", char('P')),
+                button("A", "accts", char('A')),
+                button("m", "machines", char('m')),
             ]);
             buttons
         }
@@ -230,6 +287,13 @@ fn session_buttons(app: &App) -> Vec<Button> {
     }
     buttons.push(button("s", "switch", Click::Act(Action::OpenSwitch)));
     buttons.push(button("t", "term", Click::Act(Action::Terminals)));
+    if !session.prs.is_empty() {
+        buttons.push(button(
+            "p",
+            "prs",
+            Click::Act(Action::Pr(PrAction::FocusStrip)),
+        ));
+    }
     buttons
 }
 

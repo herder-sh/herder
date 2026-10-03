@@ -60,6 +60,10 @@ pub enum Input {
     Up,
     /// Choose the next account.
     Down,
+    /// Choose the first account.
+    Top,
+    /// Choose the last account.
+    Bottom,
     /// Type into the model.
     EditModel,
     /// Stop typing into the model.
@@ -93,6 +97,8 @@ pub fn for_key(key: KeyEvent, switch: &Switch) -> Option<Action> {
             KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q' | 's') => Input::Close,
             KeyCode::Char('k') | KeyCode::Up => Input::Up,
             KeyCode::Char('j') | KeyCode::Down => Input::Down,
+            KeyCode::Home | KeyCode::PageUp => Input::Top,
+            KeyCode::End | KeyCode::PageDown => Input::Bottom,
             KeyCode::Char('m' | 'i') | KeyCode::Tab => Input::EditModel,
             _ => return None,
         }
@@ -153,6 +159,8 @@ impl App {
             Input::Close => self.switch = None,
             Input::Up => switch.selected = switch.selected.saturating_sub(1),
             Input::Down => switch.selected = (switch.selected + 1).min(last),
+            Input::Top => switch.selected = 0,
+            Input::Bottom => switch.selected = last,
             Input::EditModel => switch.editing = true,
             Input::Accounts => switch.editing = false,
             Input::Char(c) => switch.model.push(c),
