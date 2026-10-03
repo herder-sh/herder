@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 38] = [
+const SCENES: [Scene; 43] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -262,6 +262,35 @@ const SCENES: [Scene; 38] = [
     ("limit-reset", |theme, _, width, height| {
         app_buffer(super::tests::limit_reset(), theme, width, height)
     }),
+    ("backup-fleet", |theme, _, width, height| {
+        let mut app = fake::backups();
+        press(&mut app, KeyCode::Char('j'));
+        app_buffer(app, theme, width, height)
+    }),
+    ("backup-pick", |theme, _, width, height| {
+        app_buffer(backup(0, &[]), theme, width, height)
+    }),
+    ("backup-linked", |theme, _, width, height| {
+        app_buffer(backup(1, &[]), theme, width, height)
+    }),
+    ("backup-stop", |theme, _, width, height| {
+        app_buffer(backup(1, &[KeyCode::Enter]), theme, width, height)
+    }),
+    ("backup-done", |theme, _, width, height| {
+        let mut app = backup(0, &[]);
+        let mut effects = app.update(Msg::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        let code = Ok(herder_protocol::CommandResult::HostPairing {
+            code: "ABCDE-FGHJK".into(),
+            expires_at: herder_protocol::Timestamp::UNIX_EPOCH,
+        });
+        for result in [code, Ok(herder_protocol::CommandResult::Applied)] {
+            let Some(crate::app::Effect::Send { origin, .. }) = effects.pop() else {
+                break;
+            };
+            effects = app.update(Msg::Sent { origin, result });
+        }
+        app_buffer(app, theme, width, height)
+    }),
     ("resources", |theme, _, width, height| {
         let mut app = super::tests::mid_turn();
         fake::with_resources(&mut app, fake::host_resources(2), true);
@@ -318,6 +347,24 @@ fn attached(app: &mut App, bytes: Result<usize, &str>) {
 }
 
 /// Presses `code`.
+/// [`fake::backups`] with the backup dialog open on machine `at`, then `keys` pressed.
+fn backup(at: usize, keys: &[KeyCode]) -> App {
+    let mut app = fake::backups();
+    for _ in 0..at {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let links = app.machine_panel.as_ref().map(|p| p.links.clone());
+    press(&mut app, KeyCode::Char('b'));
+    // As the machines answer again.
+    if let (Some(panel), Some(links)) = (&mut app.machine_panel, links) {
+        panel.links = links;
+    }
+    for key in keys {
+        press(&mut app, *key);
+    }
+    app
+}
+
 fn press(app: &mut App, code: KeyCode) {
     app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)));
 }

@@ -155,6 +155,18 @@ impl Replicator {
         }
     }
 
+    /// Connects once and exchanges hellos, pairing with the vault's code if this host is not
+    /// paired yet, then hangs up: whether the vault takes this host.
+    pub(super) async fn check(&self) -> Result<()> {
+        let config = client_config(&self.vault.fingerprint, &self.device)?;
+        let connector = TlsConnector::from(Arc::new(config));
+        let (mut ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(&connector))
+            .await
+            .map_err(|_| anyhow!("no answer in {CONNECT_TIMEOUT:?}"))??;
+        let _ = ws.close(None).await;
+        Ok(())
+    }
+
     /// One connection, until it fails; sets `connected` once the vault said hello.
     async fn connection(&self, connector: &TlsConnector, connected: &mut bool) -> Result<()> {
         let (mut ws, acked) = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(connector))

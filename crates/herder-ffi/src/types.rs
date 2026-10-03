@@ -13,10 +13,10 @@ use herder_protocol::{
     Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
     ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
     EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image, Item, ItemBody, ItemId,
-    Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider, PullRequest,
-    QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus, SessionUsage,
-    Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId, UsageWindow,
-    UserId,
+    LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider,
+    PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
+    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
+    UsageWindow, UserId,
 };
 use serde_json::Value as Json;
 
@@ -525,6 +525,19 @@ pub enum CommandBody {
     GetProjectIcon {
         project_id: ProjectId,
     },
+    GetVaultLink,
+    LinkVault {
+        addresses: Vec<String>,
+        fingerprint: String,
+        pairing_code: String,
+    },
+    UnlinkVault,
+    PairVaultHost {
+        host_name: String,
+    },
+    RevokeVaultHost {
+        host_id: HostId,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -581,6 +594,20 @@ pub enum CommandResult {
         media_type: String,
         data: Bytes,
     },
+    VaultLink {
+        is_vault: bool,
+        vault: Option<LinkedVault>,
+    },
+    HostPairing {
+        code: String,
+        expires_at: Timestamp,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct LinkedVault {
+    pub address: String,
+    pub fingerprint: String,
 }
 
 #[uniffi::remote(Record)]
