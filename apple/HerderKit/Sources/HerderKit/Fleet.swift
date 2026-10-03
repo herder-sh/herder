@@ -15,6 +15,8 @@ public final class Fleet {
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
+    /// Project icons the machines found in their clones, by the icon's hash.
+    private(set) var projectIcons: [String: Data] = [:]
     @ObservationIgnored private var fetching: Set<String> = []
     @ObservationIgnored fileprivate var previousAverage: [HostId: UInt32?] = [:]
     /// Each machine's connection changes since the app opened, oldest first.
@@ -47,6 +49,7 @@ public final class Fleet {
 
     private func update(_ machines: [Machine]) {
         self.machines = machines
+        fetchProjectIcons(machines)
         for machine in machines {
             recordRoundTrip(machine)
             var log = connectionLog[machine.hostId] ?? []
@@ -180,6 +183,35 @@ public final class Fleet {
         if case .attachment(_, let data)? = try? await client.send(
             hostId: key.hostId, command: .getAttachment(sessionId: key.sessionId, attachmentId: id)) {
             attachments[id] = data
+        }
+    }
+
+    /// A project's icon, once fetched from a machine that has one.
+    func projectIcon(_ projectId: ProjectId?) -> Data? {
+        Self.icon(of: projectId, on: machines, fetched: projectIcons)
+    }
+
+    /// The first fetched icon any machine lists for the project.
+    nonisolated static func icon(of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]) -> Data? {
+        guard let projectId else { return nil }
+        return machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId }?.icon }
+            .compactMap { fetched[$0] }.first
+    }
+
+    /// Fetches each icon the machines list and this app has not got, once per hash.
+    private func fetchProjectIcons(_ machines: [Machine]) {
+        for machine in machines where machine.connection == .connected {
+            for project in machine.projects {
+                guard let icon = project.icon, projectIcons[icon] == nil, !fetching.contains(icon) else { continue }
+                fetching.insert(icon)
+                Task {
+                    defer { fetching.remove(icon) }
+                    if case .projectIcon(let hash, _, let data)? = try? await client.send(
+                        hostId: machine.hostId, command: .getProjectIcon(projectId: project.projectId)) {
+                        projectIcons[hash] = data
+                    }
+                }
+            }
         }
     }
 
