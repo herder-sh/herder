@@ -68,14 +68,20 @@ struct Lists {
     }
 
     private static func projects(_ entries: [Entry], machines: [Machine], now: Date) -> [ProjectGroup] {
-        let grouped = Dictionary(grouping: entries, by: \.projectId)
+        var grouped: [String?: [Entry]] = Dictionary(grouping: entries, by: \.projectId)
+        // Projects the machines list but no session runs in yet still show.
+        for project in machines.flatMap(\.projects) where grouped[project.projectId] == nil {
+            grouped[project.projectId] = []
+        }
         return grouped.map { projectId, members in
             let name = projectId.map { id in
                 machines.lazy.flatMap(\.projects).first { $0.projectId == id }?.name
                     ?? String(id.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? Substring(id))
             } ?? "No project yet"
             let ordered = forest(members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) })
-            var machineNames: [String] = []
+            var machineNames = machines.filter { machine in
+                projectId != nil && machine.projects.contains { $0.projectId == projectId }
+            }.map(\.name)
             for entry in members where !machineNames.contains(entry.machineName) {
                 machineNames.append(entry.machineName)
             }

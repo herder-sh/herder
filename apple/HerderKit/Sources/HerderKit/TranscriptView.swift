@@ -12,8 +12,16 @@ struct TranscriptBlockView: View {
 
     var body: some View {
         switch block {
-        case .user(_, let text, let outgoing):
+        case .user(_, let text, let attachments, let outgoing):
             VStack(alignment: .trailing, spacing: 6) {
+                if !attachments.isEmpty {
+                    MessageImages(fleet: fleet, key: key, attachments: attachments)
+                }
+                if let outgoing, !outgoing.images.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, data in Picture(data: data, height: 140) }
+                    }
+                }
                 if let outgoing, case .delivered = outgoing.state, fleet.sessions[key]?.turn != nil {
                     // Queued behind the running turn: a dashed bubble with its actions beside it.
                     HStack(alignment: .center, spacing: 8) {

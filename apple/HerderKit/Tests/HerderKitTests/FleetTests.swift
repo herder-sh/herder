@@ -105,7 +105,7 @@ struct FleetTests {
             return Transcript.blocks(model).contains { $0 == .assistant(id: $0.id, text: "Hello, world.", streaming: false) }
         })
         let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
-        #expect(blocks.contains { if case .user(_, "Say hello.", nil) = $0 { true } else { false } })
+        #expect(blocks.contains { if case .user(_, "Say hello.", _, nil) = $0 { true } else { false } })
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
@@ -130,5 +130,44 @@ struct FleetTests {
         shell.input(Array("echo herder-$((40+2))\n".utf8)[...])
         #expect(await eventually { String(decoding: shell.pending, as: UTF8.self).contains("herder-42") })
         shell.detach()
+    }
+
+    /// A fake daemon paired and synced, with a session that has answered once.
+    private func pairedSession() async throws -> (FakeDaemon, Fleet, Task<Void, Never>, SessionKey) {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            throw CocoaError(.fileReadUnknown)
+        }
+        let following = Task { await fleet.follow() }
+        let machine = try await fleet.pair(link: daemon.link)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .fullAccess, prompt: "Say hello.")
+        _ = await eventually { fleet.sessions[key]?.lastMessage == "Hello, world." }
+        return (daemon, fleet, following, key)
+    }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func sendingToAnArchivedSessionBringsItBack() async throws {
+        let (daemon, fleet, following, key) = try await pairedSession()
+        defer { following.cancel(); _ = daemon }
+        await fleet.archive(key)
+        #expect(await eventually { fleet.sessions[key]?.state == .archived })
+        await fleet.unarchiveAndSubmit("Say hello.", images: [], to: key)
+        #expect(fleet.refusals[key] == nil)
+        #expect(await eventually { fleet.sessions[key]?.state != .archived })
+    }
+
+    /// Adding a project and its settings need a daemon with a config file, which the fake one
+    /// lacks; browsing is all it can show.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aMachinesFoldersAreBrowsedWithRepositoriesMarked() async throws {
+        let (daemon, fleet, following, key) = try await pairedSession()
+        defer { following.cancel() }
+        let parent = (daemon.repo as NSString).deletingLastPathComponent
+        let name = (daemon.repo as NSString).lastPathComponent
+        let listing = try await fleet.listDirectory(parent, on: key.hostId)
+        #expect(listing.entries.contains { $0.name == name && $0.isRepo })
     }
 }

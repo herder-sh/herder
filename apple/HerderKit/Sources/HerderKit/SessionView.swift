@@ -196,7 +196,6 @@ struct SessionView: View {
     /// Why the session cannot be driven from here, if it cannot.
     private func readOnly(_ model: SessionModel, _ summary: SessionSummary?) -> String? {
         switch model.state {
-        case .archived: return "Archived · read-only"
         case .moved: return "Moved to another host · read-only here"
         default: return summary?.machineOffline == true ? "\(summary?.machine ?? "The host") is offline · read-only" : nil
         }
@@ -222,14 +221,20 @@ private struct Composer: View {
     let model: SessionModel
     @Binding var switching: Bool
     @State private var text = ""
+    @State private var images: [Herder.Image] = []
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
         let accounts = machine?.accounts ?? []
         let account = accounts.first { $0.accountId == model.accountId }
         VStack(alignment: .leading, spacing: 6) {
+            if model.state == .archived {
+                Label("Archived · sending a message brings it back", systemImage: "archivebox")
+                    .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
+            }
             ComposerBox(
                 text: $text,
+                images: $images,
                 placeholder: placeholder,
                 provider: model.provider,
                 model: model.model ?? "",
@@ -274,9 +279,15 @@ private struct Composer: View {
 
     private func send() {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let images = images
+        guard !text.isEmpty || !images.isEmpty else { return }
         self.text = ""
-        Task { await fleet.submit(text, to: key) }
+        self.images = []
+        if model.state == .archived {
+            Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }
+        } else {
+            Task { await fleet.submit(text, images: images, to: key) }
+        }
     }
 }
 
@@ -336,6 +347,7 @@ struct DraftSessionView: View {
     @State private var model = ""
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
+    @State private var images: [Herder.Image] = []
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
@@ -376,6 +388,7 @@ struct DraftSessionView: View {
                 .multilineTextAlignment(.center)
             ComposerBox(
                 text: $text,
+                images: $images,
                 placeholder: "Ask for changes, or describe what to build",
                 provider: provider,
                 model: model,
@@ -412,13 +425,14 @@ struct DraftSessionView: View {
             hostId = draft.hostId
             provider = fleet.defaultProvider(on: hostId, projectId: draft.projectId) ?? ""
             model = ModelCatalog.defaultModel(provider)
-            mode = ModePreference.mode(for: draft)
+            mode = fleet.machines.first { $0.hostId == draft.hostId }?.projects
+                .first { $0.projectId == draft.projectId }?.defaultPermissionMode ?? ModePreference.mode(for: draft)
         }
     }
 
     private func start() async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
+        guard !prompt.isEmpty || !images.isEmpty else { return }
         guard let account = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: provider) else {
             error = "\(machine?.name ?? "This machine") has no \(provider) account."
             return
@@ -429,7 +443,7 @@ struct DraftSessionView: View {
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.repo, projectId: draft.projectId, accountId: account.accountId,
-                model: model, mode: mode, prompt: prompt))
+                model: model, mode: mode, prompt: prompt, images: images))
         } catch {
             self.error = describe(error)
         }

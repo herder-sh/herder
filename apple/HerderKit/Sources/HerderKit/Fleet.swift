@@ -13,6 +13,9 @@ public final class Fleet {
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
+    /// Images of user messages, fetched once: by attachment id.
+    private(set) var attachments: [String: Data] = [:]
+    @ObservationIgnored private var fetching: Set<String> = []
     /// Each machine's connection changes since the app opened, oldest first.
     private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
 
@@ -124,7 +127,7 @@ public final class Fleet {
     /// Creates a session, prompts it when a prompt is given, and returns it.
     func createSession(
         on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
-        mode: PermissionMode, prompt: String
+        mode: PermissionMode, prompt: String, images: [Herder.Image] = []
     ) async throws -> SessionKey {
         let result = try await client.send(
             hostId: hostId,
@@ -135,27 +138,67 @@ public final class Fleet {
             throw HerderError.Local(detail: "the machine did not create a session")
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
-        if !prompt.isEmpty {
-            await send(.sendPrompt(sessionId: sessionId, text: prompt, images: []), about: key)
+        if !prompt.isEmpty || !images.isEmpty {
+            await send(.sendPrompt(sessionId: sessionId, text: prompt, images: images), about: key)
         }
         return key
     }
 
     /// Sends what the user typed: the answer to the session's oldest question when one is
     /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
-    func submit(_ text: String, to key: SessionKey) async {
+    func submit(_ text: String, images: [Herder.Image] = [], to key: SessionKey) async {
         guard let session = sessions[key] else { return }
-        if let question = session.questions.first {
+        if let question = session.questions.first, images.isEmpty {
             await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
                        about: key)
             return
         }
-        let outgoing = Outgoing(text: text)
+        let outgoing = Outgoing(text: text, images: images.map(\.data))
         sessions[key]?.outbox.append(outgoing)
-        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: []), about: key)
+        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images), about: key)
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
             sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }
+    }
+
+    /// Brings an archived session back, then sends the prompt; a refusal is shown with it.
+    func unarchiveAndSubmit(_ text: String, images: [Herder.Image], to key: SessionKey) async {
+        await send(.unarchiveSession(sessionId: key.sessionId), about: key)
+        guard refusals[key] == nil else { return }
+        await submit(text, images: images, to: key)
+    }
+
+    /// Fetches a user message's image once; views read it from `attachments`.
+    func fetchAttachment(_ id: AttachmentId, of key: SessionKey) async {
+        guard attachments[id] == nil, !fetching.contains(id) else { return }
+        fetching.insert(id)
+        defer { fetching.remove(id) }
+        if case .attachment(_, let data)? = try? await client.send(
+            hostId: key.hostId, command: .getAttachment(sessionId: key.sessionId, attachmentId: id)) {
+            attachments[id] = data
+        }
+    }
+
+    /// A folder on a machine, to pick a repository; owners only.
+    func listDirectory(_ path: String, on hostId: HostId) async throws -> (path: String, entries: [DirectoryEntry]) {
+        guard case .directory(let path, let entries) = try await client.send(hostId: hostId, command: .listDirectory(path: path))
+        else { throw HerderError.Local(detail: "the machine did not list the folder") }
+        return (path, entries)
+    }
+
+    /// Registers a repository on a machine as a project; owners only.
+    func addProject(_ path: String, on hostId: HostId) async throws -> ProjectId {
+        guard case .projectAdded(let projectId) = try await client.send(hostId: hostId, command: .addProject(path: path))
+        else { throw HerderError.Local(detail: "the machine did not add the project") }
+        return projectId
+    }
+
+    /// Replaces a project's settings on a machine; owners only.
+    func setProjectSettings(
+        _ projectId: ProjectId, on hostId: HostId, mode: PermissionMode?, account: AccountId?, setupCommand: String?
+    ) async throws {
+        _ = try await client.send(hostId: hostId, command: .setProjectSettings(
+            projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand))
     }
 
     /// Runs a queued prompt now: interrupts the turn, so the daemon starts the queue.
