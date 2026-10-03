@@ -128,7 +128,8 @@ fn an_approval_replaces_the_composer_and_its_buttons_answer_it() {
     for wanted in [
         "△ approval",
         "Bash",
-        "asked 12s ago",
+        // Asked 12 s before the fixture was built; a second may have passed since.
+        "asked 1",
         "$ rm -rf target/",
         "Allow",
         "Deny",
@@ -206,6 +207,7 @@ fn the_composer_sends_prompts_which_wait_marked_until_they_join() {
         [CommandBody::SendPrompt {
             session_id: SessionId::new("s-api"),
             text: "Also add a changelog entry.".to_owned(),
+            images: Vec::new(),
         }]
     );
     // A turn runs: the prompt waits, queued.
@@ -215,6 +217,7 @@ fn the_composer_sends_prompts_which_wait_marked_until_they_join() {
         "u3",
         herder_protocol::ItemBody::UserMessage {
             text: "Also add a changelog entry.".to_owned(),
+            attachments: Vec::new(),
         },
     );
     let mut update = crate::session::tests::events(vec![(Some("dev"), message)]);

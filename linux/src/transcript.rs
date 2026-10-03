@@ -166,7 +166,7 @@ pub fn entry(cx: &Context, entry: &Entry) -> Option<gtk::Widget> {
 /// The widget of `item`; `streaming` marks text still being written.
 pub fn item(cx: &Context, item: &Item, streaming: bool) -> Option<gtk::Widget> {
     let widget: gtk::Widget = match &item.body {
-        ItemBody::UserMessage { text } => user_message(text, None).upcast(),
+        ItemBody::UserMessage { text, .. } => user_message(text, None).upcast(),
         ItemBody::AssistantMessage { text } => assistant(text, streaming).upcast(),
         ItemBody::Reasoning { text } => thought(cx, &item.id, text, streaming),
         ItemBody::ToolCall { name, input } => tool(cx, &item.id, name, input),

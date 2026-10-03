@@ -356,7 +356,7 @@ impl SessionView {
             for entry in &session.entries[state.session.entries.len().min(session.entries.len())..]
             {
                 if let crate::session::Entry::Item(item) = entry
-                    && let ItemBody::UserMessage { text } = &item.body
+                    && let ItemBody::UserMessage { text, .. } = &item.body
                     && let Some(at) = state.pending.iter().position(|p| p == text)
                 {
                     state.pending.remove(at);
@@ -1100,6 +1100,7 @@ impl SessionView {
         self.send(CommandBody::SendPrompt {
             session_id: key.session_id,
             text: text.to_owned(),
+            images: Vec::new(),
         });
         buffer.set_text("");
         self.follow.set(true);

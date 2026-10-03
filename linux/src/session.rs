@@ -644,6 +644,7 @@ pub mod tests {
                     "i1",
                     ItemBody::UserMessage {
                         text: "Run the tests.".into(),
+                        attachments: Vec::new(),
                     },
                 ),
             ),

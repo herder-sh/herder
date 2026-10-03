@@ -66,7 +66,6 @@ async fn daemon(dir: &Path, script: PathBuf, shutdown: &CancellationToken) -> St
             provider: fake,
             label: "Account 1".into(),
             config_dir: Some(dir.join("account")),
-            failover: false,
         },
     );
     let turns = AtomicU64::new(0);
@@ -79,6 +78,7 @@ async fn daemon(dir: &Path, script: PathBuf, shutdown: &CancellationToken) -> St
             TurnId::new(format!("turn-{}", turns.fetch_add(1, Ordering::SeqCst) + 1))
         }),
         worktrees: Worktrees::new(dir.join("worktrees")),
+        attachments: dir.join("attachments"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone())
         .await
@@ -149,7 +149,8 @@ fn a_full_turn_from_the_app() {
                 branch: Some("herder/health".to_owned()),
                 account_id: Some(AccountId::new("account-1")),
                 model: None,
-                permission_mode: PermissionMode::Ask,
+                provider: None,
+                permission_mode: Some(PermissionMode::Ask),
                 max_children: None,
                 failover_pin: None,
             },

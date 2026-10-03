@@ -43,7 +43,6 @@ fn account(id: &str, provider: Provider, label: &str, usage: Vec<UsageWindow>) -
         provider,
         label: label.to_owned(),
         usage,
-        failover: true,
     }
 }
 
@@ -146,6 +145,7 @@ fn first_turn() -> Vec<(i64, Option<&'static str>, EventBody)> {
         (290, None, EventBody::TurnStarted { turn_id: TurnId::new("t1") }),
         (290, Some("dev"), item("u1", "t1", ItemBody::UserMessage {
             text: "Add a health endpoint and test it.".to_owned(),
+            attachments: Vec::new(),
         })),
         (288, None, item("r1", "t1", ItemBody::Reasoning {
             text: "Where the router lives: src/api.rs builds it with Router::new.\nA GET /health returning the build version is enough for the load balancer.".to_owned(),
@@ -256,6 +256,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Good. Now document the endpoint in the README.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
@@ -284,6 +285,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Good. Now remove the old target directory.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
@@ -321,6 +323,7 @@ pub fn moment(name: &str) -> (SessionStatus, SessionUpdate) {
                     "t2",
                     ItemBody::UserMessage {
                         text: "Document the endpoint too.".to_owned(),
+                        attachments: Vec::new(),
                     },
                 ),
             ));
