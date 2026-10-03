@@ -479,6 +479,13 @@
             "null"
           ]
         },
+        "title": {
+          "description": "The session's current title; absent until it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "updated_at": {
           "description": "`at` of the session's latest event.",
           "type": "string",

@@ -150,6 +150,7 @@ internal fun head(sessionId: String, projectId: String?) = SessionHead(
     status = SessionStatus.IDLE,
     parent = null,
     task = null,
+    title = null,
     projectId = projectId,
     accountId = "claude-main",
     childrenNeedYou = 0u,

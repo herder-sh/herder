@@ -74,6 +74,17 @@ impl JsonSchema for Provider {
     }
 }
 
+/// `raw` as a session title: trimmed of surrounding whitespace, then one non-empty line of at
+/// most [`crate::MAX_TITLE_CHARS`] characters with no control characters; `None` when it is not
+/// one.
+pub fn clean_title(raw: &str) -> Option<&str> {
+    let title = raw.trim();
+    let valid = !title.is_empty()
+        && title.chars().count() <= crate::MAX_TITLE_CHARS
+        && !title.chars().any(char::is_control);
+    valid.then_some(title)
+}
+
 /// How much the agent may do without asking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

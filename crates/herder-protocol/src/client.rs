@@ -119,6 +119,20 @@ pub enum CommandBody {
         /// Target session.
         session_id: SessionId,
     },
+    /// Set the session's title; archived and moved sessions refuse it.
+    RenameSession {
+        /// Target session.
+        session_id: SessionId,
+        /// New title, as [`crate::clean_title`] accepts it; stored trimmed.
+        title: String,
+    },
+    /// Generate the session's title again from its conversation so far, replacing any title,
+    /// a user's too. Accepted once the generation is started; the new title arrives as a
+    /// `title_changed` with source `ai_requested`. Archived and moved sessions refuse it.
+    RetitleSession {
+        /// Target session.
+        session_id: SessionId,
+    },
     /// Start a turn with a prompt.
     SendPrompt {
         /// Target session.

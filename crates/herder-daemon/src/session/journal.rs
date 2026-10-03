@@ -74,6 +74,7 @@ impl Journal {
                 | EventBody::SessionStatusChanged { .. }
                 | EventBody::AccountSwitched { .. }
                 | EventBody::ProviderSwitched { .. }
+                | EventBody::TitleChanged { .. }
         );
         let event = NewEvent {
             session_id,
@@ -169,6 +170,7 @@ impl Journal {
                 prs,
                 parent: session.parent,
                 task: session.task,
+                title: session.title,
                 head_seq: session.last_seq,
                 updated_at: session.updated_at,
             })
@@ -357,6 +359,7 @@ fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
             status: session.status,
             parent: session.parent,
             task: session.task,
+            title: session.title,
             account_id: session.account_id,
         })
         .collect()

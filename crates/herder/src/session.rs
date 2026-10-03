@@ -702,7 +702,7 @@ impl View {
             }
             EventBody::PrUnlinked { number } => self.prs.retain(|pr| pr.number != number),
             EventBody::ChildSpawned { .. } | EventBody::ChildReported { .. } => {}
-            EventBody::Unknown => {}
+            EventBody::TitleChanged { .. } | EventBody::Unknown => {}
         }
     }
 

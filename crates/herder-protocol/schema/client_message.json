@@ -350,6 +350,47 @@
           ]
         },
         {
+          "description": "Set the session's title; archived and moved sessions refuse it.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "title": {
+              "description": "New title, as [`crate::clean_title`] accepts it; stored trimmed.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "rename_session"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "title"
+          ]
+        },
+        {
+          "description": "Generate the session's title again from its conversation so far, replacing any title,\na user's too. Accepted once the generation is started; the new title arrives as a\n`title_changed` with source `ai_requested`. Archived and moved sessions refuse it.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "retitle_session"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        },
+        {
           "description": "Start a turn with a prompt.",
           "type": "object",
           "properties": {
