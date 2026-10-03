@@ -125,9 +125,9 @@ fun MachinesScreen(
     now: Instant = remember(profile) { Instant.now() },
     send: Sender? = null,
     onOpenUrl: ((String) -> Unit)? = null,
-    session: SessionContent = { _, _, _, _ -> },
     onPair: (suspend (String) -> String?)? = null,
     initialLink: String = "",
+    session: SessionContent = { _, _, _, _ -> },
 ) {
     // What the user picked; on a phone, `null` shows the machines page.
     var picked by remember { mutableStateOf<SidebarPick?>(null) }
