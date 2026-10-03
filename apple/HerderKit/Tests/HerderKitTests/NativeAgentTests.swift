@@ -114,6 +114,20 @@ struct NativeAgentTests {
         #expect(NativeAgent.find(reference, in: model)?.outcome == .ok)
     }
 
+    @Test func backgroundLaunchAcknowledgementIsNotCompletion() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Background review","run_in_background":true}"#)),
+            nestedItem("launch", .toolResult(callId: "a", output: "Agent launched", isError: false)),
+            .turnCompleted(turnId: "t1"),
+        ])
+        let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
+        #expect(agent?.outcome == .unknown)
+        #expect(agent?.status == "Started in background")
+        #expect(NativeAgent.summary(agent.map { [$0] } ?? []) == "1 background")
+    }
+
     @Test func interruptedAgentIsNotReportedAsCompleted() {
         var script = Script()
         let model = script.model([
