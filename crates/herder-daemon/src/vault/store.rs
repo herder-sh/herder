@@ -1150,7 +1150,11 @@ mod tests {
             DeviceId::new("di"),
         ];
         for (device, host) in paired.iter().zip([&a, &b, &idle]) {
-            assert!(store.bind(device, host, host.as_str(), &paired).unwrap());
+            assert!(
+                store
+                    .bind(device, host, host.as_str(), None, &paired)
+                    .unwrap()
+            );
         }
         let at = |at: &str| -> Timestamp { at.parse().unwrap() };
         let timed = |seq, when: &str| JournalRecord {
