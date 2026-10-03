@@ -261,8 +261,8 @@ fn the_new_session_dialog() {
     machines[0].accounts = vec![fake::account("claude-main", "Main")];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('n'));
-    press(&mut app, KeyCode::Tab);
-    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Tab);
     insta::assert_snapshot!(render(&mut app, 100, 20).backend());
 }
@@ -352,7 +352,7 @@ fn typed(app: &mut App, text: &str) {
     }
 }
 
-const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
+pub(super) const LINK: &str = "herder://pair?host=192.168.1.5%3A7447&host=10.0.0.2%3A7447\
                     &fp=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\
                     &code=ABCDE-FGHJK";
 
@@ -653,6 +653,14 @@ fn a_resize_back_to_the_same_size_repaints_what_the_terminal_reflowed() {
 /// to failover, and pins its sessions and fails over to codex, beside a disconnected machine
 /// with none; `s2` and `s3` run on `claude-main`.
 fn with_accounts() -> App {
+    let mut app = fake::tree();
+    add_accounts(&mut app);
+    app
+}
+
+/// Gives `app`'s first machine three accounts with usage, Claude's and Codex's, and adds a
+/// disconnected `laptop`.
+pub(super) fn add_accounts(app: &mut App) {
     use herder_protocol::{Provider, Timestamp, UsageWindow};
 
     // Half a minute past each reset time, so the countdown reads the same while the test runs.
@@ -661,7 +669,6 @@ fn with_accounts() -> App {
         used_percent,
         resets_at: Some(Timestamp::from_second(Timestamp::now().as_second() + secs + 30).unwrap()),
     };
-    let mut app = fake::tree();
     let mut machines = app.machines.clone();
     let mut main = fake::account("claude-main", "Main");
     main.usage = vec![
@@ -685,7 +692,6 @@ fn with_accounts() -> App {
     };
     machines.push(laptop);
     app.update(Msg::Machines(machines));
-    app
 }
 
 #[test]
@@ -708,8 +714,8 @@ fn the_switch_dialog_on_narrow_and_wide_screens() {
     let mut app = with_accounts();
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('s'));
-    press(&mut app, KeyCode::Char('j'));
-    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Down);
     narrow_and_wide("switch", &mut app);
 }
 
@@ -771,4 +777,86 @@ fn resource_figures_are_redrawn_as_they_arrive() {
     let shown = text(&mut app);
     assert!(shown.contains("cpu  97%"), "{shown}");
     assert!(!shown.contains("3 processes"), "{shown}");
+}
+
+#[test]
+fn the_command_palette_on_narrow_and_wide_screens() {
+    let mut app = open_s2(vec![fake::started("turn-1")]);
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('p'),
+        KeyModifiers::CONTROL,
+    )));
+    assert!(app.compose.palette.is_some());
+    narrow_and_wide("palette", &mut app);
+    // Typing filters; names the search starts come first.
+    fake::type_text(&mut app, "acc");
+    insta::assert_snapshot!("palette_filtered", render(&mut app, 100, 20).backend());
+}
+
+#[test]
+fn the_slash_popup_opens_above_the_prompt() {
+    let mut app = open_s2(vec![]);
+    press(&mut app, KeyCode::Char('i'));
+    fake::type_text(&mut app, "/a");
+    narrow_and_wide("slash", &mut app);
+}
+
+#[test]
+fn the_new_session_projects_on_narrow_and_wide_screens() {
+    let mut app = fake::projects();
+    press(&mut app, KeyCode::Char('v'));
+    press(&mut app, KeyCode::Char('n'));
+    narrow_and_wide("new_session_projects", &mut app);
+}
+
+#[test]
+fn an_approval_in_place_of_the_prompt_on_narrow_and_wide_screens() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Clean the build.".into(),
+            },
+        ),
+        fake::approval("a1", "Bash: rm -rf target/"),
+    ]);
+    narrow_and_wide("approval", &mut app);
+    // The arrows move to deny.
+    press(&mut app, KeyCode::Right);
+    let screen = render(&mut app, 100, 20).backend().to_string();
+    assert!(screen.contains("allow      deny"), "{screen}");
+}
+
+#[test]
+fn a_question_in_place_of_the_prompt_on_narrow_and_wide_screens() {
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        fake::question(
+            "q1",
+            "Which heading level for the API page?",
+            &["h2 under Reference", "h1, its own page"],
+        ),
+    ]);
+    narrow_and_wide("question", &mut app);
+    // Enter types the answer: the prompt shows under the question.
+    press(&mut app, KeyCode::Enter);
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains("Type an answer"), "{screen}");
+    assert!(screen.contains("Which heading level"), "{screen}");
+}
+
+#[test]
+fn f_shows_a_long_request_full_screen() {
+    let long = (1..=30)
+        .map(|n| format!("echo step {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        fake::approval("a1", &format!("Bash: {long}")),
+    ]);
+    insta::assert_snapshot!("request_folded", render(&mut app, 100, 40).backend());
+    press(&mut app, KeyCode::Char('f'));
+    insta::assert_snapshot!("request_full", render(&mut app, 100, 20).backend());
 }

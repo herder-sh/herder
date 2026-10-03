@@ -16,6 +16,7 @@
 //! [`crate::ui::glyphs::fold`].
 
 mod accounts;
+mod add_machine;
 mod composer;
 mod help;
 mod inbox;
@@ -26,6 +27,7 @@ mod palette;
 mod projects;
 mod prs;
 mod recover;
+mod request;
 mod resources;
 mod sessions;
 mod status;
@@ -101,7 +103,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         sessions::draw(frame, list, app, false, &mut hits);
         main(frame, rest, app, false, &mut hits);
     }
-    if !palette::draw(frame, status_line, app) {
+    if !palette::quit_hint(frame, status_line, app) {
         status::draw(frame, status_line, app, narrow);
     }
     // Under the dialogs, but their taps over everything.
@@ -124,7 +126,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.dialog_open() {
         hits.cover(area);
     }
-    new_session::draw(frame, area, app);
     if let Some(screen) = &app.account_screen {
         accounts::draw(frame, body, app, screen, &mut hits);
     }
@@ -134,6 +135,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         machines::draw(frame, body, app, panel, &mut hits);
     }
     terminals::draw(frame, body, app, &mut hits);
+    request::full(frame, area, app, &mut hits);
+    new_session::draw(frame, area, app, &mut hits);
+    palette::draw(frame, area, app, &mut hits);
     if app.help {
         help::draw(frame, area, app, &mut hits);
     }

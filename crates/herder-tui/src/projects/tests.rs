@@ -3,8 +3,9 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::*;
 use crate::app::{Effect, Msg};
-use crate::compose::{Field, Origin};
+use crate::compose::Origin;
 use crate::fake::{self, key};
+use crate::new_session::{Choice, Field, Step};
 
 fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
     app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
@@ -115,26 +116,29 @@ fn a_new_session_starts_from_the_project_on_the_clone_used_last() {
             },
         ]
     );
-    // On the project's heading; its newest session, s6, runs on laptop.
+    // On the project's heading; its newest session, s6, runs on laptop: the dialog starts at
+    // the project's machines, on that clone.
     press(&mut app, KeyCode::Char('g'));
     press(&mut app, KeyCode::Char('n'));
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!(dialog.project, Some(ProjectId::new("github.com/acme/app")));
-    assert_eq!(dialog.field, Field::Machine);
-    assert_eq!(dialog.host_id, HostId::new("h2"));
-    assert_eq!(dialog.repo.lines(), ["/work/app"]);
+    assert_eq!(dialog.step, Step::Machine);
+    assert_eq!(
+        app.new_session_choices(),
+        [
+            Choice::Machine(HostId::new("h1"), Some("/home/ann/src/app".into())),
+            Choice::Machine(HostId::new("h2"), Some("/work/app".into())),
+        ]
+    );
+    assert_eq!(dialog.selected, 1);
 
-    // The machine field picks among the machines with a clone, each with its own path.
-    press(&mut app, KeyCode::Right);
+    // Each machine with a clone, each with its own path.
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Enter);
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!(dialog.host_id, HostId::new("h1"));
     assert_eq!(dialog.repo.lines(), ["/home/ann/src/app"]);
-    press(&mut app, KeyCode::Right);
-    assert_eq!(
-        app.compose.dialog.as_ref().unwrap().host_id,
-        HostId::new("h2")
-    );
-    press(&mut app, KeyCode::Left);
+    assert_eq!(dialog.field, Field::Account);
     assert_eq!(
         press(&mut app, KeyCode::Enter),
         [Effect::Send {
@@ -165,18 +169,25 @@ fn a_new_session_from_a_projects_session_uses_that_project() {
     press(&mut app, KeyCode::Char('n'));
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!(dialog.project, Some(ProjectId::new("github.com/acme/docs")));
-    assert_eq!(dialog.repo.lines(), ["/home/ann/src/docs"]);
-    press(&mut app, KeyCode::Right);
+    assert_eq!(
+        app.new_session_choices(),
+        [Choice::Machine(
+            HostId::new("h1"),
+            Some("/home/ann/src/docs".into())
+        )]
+    );
+    press(&mut app, KeyCode::Enter);
     assert_eq!(
         app.compose.dialog.as_ref().unwrap().host_id,
         HostId::new("h1")
     );
 
-    // Grouped by machine, the dialog is the plain one.
+    // Grouped by machine, the dialog starts at the projects.
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('v'));
     press(&mut app, KeyCode::Char('n'));
-    assert_eq!(app.compose.dialog.as_ref().unwrap().project, None);
+    let dialog = app.compose.dialog.as_ref().unwrap();
+    assert_eq!((dialog.step, &dialog.project), (Step::Project, &None));
 }
 
 #[test]
@@ -242,13 +253,19 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
     // On laptop, the dialog starts on the project's default account; on box, the first.
     press(&mut app, KeyCode::Char('g'));
     press(&mut app, KeyCode::Char('n'));
+    press(&mut app, KeyCode::Enter);
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h2"), 1));
-    press(&mut app, KeyCode::Right);
+    assert_eq!(dialog.repo.lines(), ["/work/app"]);
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Enter);
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!(dialog.repo.lines(), ["/srv/app"]);
     assert_eq!(dialog.account, 1);
-    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Home);
+    press(&mut app, KeyCode::Enter);
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h1"), 0));
 }

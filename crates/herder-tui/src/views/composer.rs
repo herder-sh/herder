@@ -1,7 +1,8 @@
-//! Under the open transcript: the pending approval or question, then the composer. A tap on
-//! `y allow`, `n deny` or a choice answers; a tap on the composer writes in it.
+//! Under the open transcript: the pending approval or question ([`super::request`]), then the
+//! composer. An approval takes the composer's place; a question shows it while an answer is
+//! typed. A tap on the composer writes in it.
 
-use herder_protocol::{ApprovalDecision, EscalationReason, Route, SessionStatus};
+use herder_protocol::{Route, SessionStatus};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,7 +24,7 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
         return (area, None);
     };
     let width = usize::from(area.width.saturating_sub(2)).max(8);
-    let mut height = prompt(session, width, "").map_or(0, |(lines, _)| lines.len() + 2);
+    let mut height = usize::from(super::request::height(app, area.width, false));
     if app
         .open
         .as_ref()
@@ -31,7 +32,7 @@ pub(super) fn split(area: Rect, app: &App) -> (Rect, Option<Rect>) {
         .is_some()
     {
         height += 3;
-    } else if session.status != SessionStatus::Archived {
+    } else if session.status != SessionStatus::Archived && composer_shown(app) {
         height += composer_lines(app, width) + 2;
     }
     // The transcript keeps at least half the pane.
@@ -51,47 +52,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
     let Some(session) = app.open_session() else {
         return;
     };
-    let width = usize::from(area.width.saturating_sub(2)).max(8);
-    // Answer keys go to the composer while it has them: say how to leave it first.
-    let leave = match app.focus {
-        Focus::Composer if app.compose.editor.is_empty() => "⌫, then ",
-        Focus::Composer => "Esc, then ",
-        _ => "",
-    };
-    let prompt_lines = prompt(session, width, leave);
     let archived = session.status == SessionStatus::Archived;
-    let prompt_height = prompt_lines
-        .as_ref()
-        .map_or(0, |(lines, _)| lines.len() + 2);
-    let prompt_height = u16::try_from(prompt_height).unwrap_or(u16::MAX);
-    let [prompt_area, composer_area] =
-        Layout::vertical([Constraint::Length(prompt_height), Constraint::Fill(1)]).areas(area);
-    if let Some((lines, taps)) = prompt_lines {
-        let title = if session.approvals.is_empty() {
-            " question "
-        } else {
-            " approval needed "
-        };
-        let waiting = session.approvals.len() + session.questions.len();
-        let mut block = Block::bordered()
-            .border_style(Style::new().fg(Color::Magenta))
-            .title(Line::styled(title, attention()));
-        if waiting > 1 {
-            block = block.title(
-                Line::styled(format!(" +{} more ", waiting - 1), super::dim()).right_aligned(),
-            );
-        }
-        let inner = block.inner(prompt_area);
-        frame.render_widget(Paragraph::new(lines).block(block), prompt_area);
-        for tap in taps {
-            let y = inner.y + u16::try_from(tap.line).unwrap_or(u16::MAX);
-            let x = inner.x + tap.x;
-            if y < inner.bottom() && x < inner.right() {
-                let width = tap.width.min(inner.right() - x);
-                hits.click(Rect::new(x, y, width, 1), tap.click);
-            }
-        }
-    }
+    let request_height = super::request::height(app, area.width, compact);
+    let [request_area, composer_area] =
+        Layout::vertical([Constraint::Length(request_height), Constraint::Fill(1)]).areas(area);
+    super::request::draw(frame, request_area, app, compact, hits);
     if let Some((text, recover)) = app.open.as_ref().and_then(|key| app.read_only(key)) {
         let block = Block::bordered().border_style(super::dim());
         let style = if recover {
@@ -108,7 +73,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
         }
         return;
     }
-    if archived {
+    if archived || !composer_shown(app) {
         return;
     }
     let title = composer_title(session);
@@ -146,14 +111,17 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
     editor.set_block(block);
     frame.render_widget(&*editor, composer_area);
     hits.click(composer_area, Click::Act(Action::Compose(Act::Write)));
+    super::palette::slash(frame, composer_area, app, hits);
 }
 
-/// A tappable part of a prompt line: `width` columns from `x` of line `line`.
-struct Tap {
-    line: usize,
-    x: u16,
-    width: u16,
-    click: Click,
+/// Whether the composer shows: not while an approval takes its place, nor while a question
+/// waits until an answer is being typed.
+fn composer_shown(app: &App) -> bool {
+    match app.pending() {
+        None => true,
+        Some(crate::request::Pending::Approval(_)) => false,
+        Some(crate::request::Pending::Question(_)) => app.focus == Focus::Composer,
+    }
 }
 
 /// What the composer's text will do: answer the pending question, or prompt the agent, queued
@@ -185,108 +153,6 @@ fn composer_lines(app: &App, width: usize) -> usize {
         .map(|line| line.chars().count().div_ceil(width).max(1))
         .sum();
     lines.clamp(1, MAX_LINES)
-}
-
-/// The pending approval, else question, as lines `width` wide, with where taps answer it;
-/// `None` when nothing waits. `esc` says how to leave the composer first, while it has the
-/// keys.
-fn prompt(session: &Session, width: usize, esc: &str) -> Option<(Vec<Line<'static>>, Vec<Tap>)> {
-    let mut out = Vec::new();
-    let mut taps = Vec::new();
-    let answer = |act| Click::Act(Action::Compose(act));
-    if let Some(approval) = session.approvals.first() {
-        wrap(&mut out, &approval.summary, super::bold(), width);
-        escalation(&mut out, approval.reason, approval.note.as_deref(), width);
-        let before = if approval.routed_to == Route::Primary {
-            format!("asked the primary session first; {esc}")
-        } else {
-            esc.to_owned()
-        };
-        let after = if approval.routed_to == Route::Primary {
-            " to answer yourself"
-        } else {
-            ""
-        };
-        let x = u16::try_from(before.chars().count()).unwrap_or(u16::MAX);
-        for (x, label, decision) in [
-            (x, "y allow", ApprovalDecision::Allow),
-            (x.saturating_add(10), "n deny", ApprovalDecision::Deny),
-        ] {
-            taps.push(Tap {
-                line: out.len(),
-                x,
-                width: u16::try_from(label.len()).unwrap_or(u16::MAX),
-                click: answer(Act::Approve(decision)),
-            });
-        }
-        out.push(Line::styled(
-            format!("{before}y allow · n deny{after}"),
-            super::dim(),
-        ));
-        return Some((out, taps));
-    }
-    let question = session.questions.first()?;
-    wrap(&mut out, &question.text, super::bold(), width);
-    for (at, choice) in (0..).zip(&question.choices) {
-        let first = out.len();
-        wrap(
-            &mut out,
-            &format!("{}. {choice}", at + 1),
-            Style::new(),
-            width,
-        );
-        taps.extend((first..out.len()).map(|line| Tap {
-            line,
-            x: 0,
-            width: u16::try_from(width).unwrap_or(u16::MAX),
-            click: answer(Act::Choose(at)),
-        }));
-    }
-    escalation(&mut out, question.reason, question.note.as_deref(), width);
-    let routed = if question.routed_to == Route::Primary {
-        "asked the primary session first; "
-    } else {
-        ""
-    };
-    let hint = if question.choices.is_empty() {
-        format!("{routed}type the answer below")
-    } else {
-        format!(
-            "{routed}{esc}1-{} pick · or type an answer below",
-            question.choices.len()
-        )
-    };
-    out.push(Line::styled(hint, super::dim()));
-    Some((out, taps))
-}
-
-/// Why a child's request is the user's, and what its primary session said, when known.
-fn escalation(
-    out: &mut Vec<Line<'static>>,
-    reason: Option<EscalationReason>,
-    note: Option<&str>,
-    width: usize,
-) {
-    if let Some(reason) = reason {
-        wrap(
-            out,
-            crate::session::reason_text(reason),
-            super::dim(),
-            width,
-        );
-    }
-    if let Some(note) = note {
-        let style = Style::new().fg(Color::Cyan).add_modifier(Modifier::ITALIC);
-        wrap(out, &format!("the primary says: {note}"), style, width);
-    }
-}
-
-fn wrap(out: &mut Vec<Line<'static>>, text: &str, style: Style, width: usize) {
-    for line in text.lines() {
-        for part in textwrap::wrap(line, width) {
-            out.push(Line::styled(part.into_owned(), style));
-        }
-    }
 }
 
 fn attention() -> Style {

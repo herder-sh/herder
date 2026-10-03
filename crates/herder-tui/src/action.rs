@@ -77,6 +77,12 @@ pub enum Action {
     OpenRecover,
     /// Input to the recover dialog.
     Recover(crate::recover::Input),
+    /// Input to the command palette.
+    Palette(crate::palette::Input),
+    /// Input to the new-session dialog.
+    NewSession(crate::new_session::Input),
+    /// Input to the open session's pending request.
+    Request(crate::request::Input),
 }
 
 /// The action a key asks for in the app's current state, if any.
@@ -125,6 +131,13 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         };
         return Some(action);
     }
+    if app.request.full && app.pending().is_some() {
+        return crate::request::full_key(key);
+    }
+    let dialog = app.compose.palette.is_some() || app.compose.dialog.is_some();
+    if ctrl && key.code == KeyCode::Char('p') && !dialog {
+        return Some(Action::Compose(Act::Palette));
+    }
     if let Some(action) = compose::for_key(key, app) {
         return action;
     }
@@ -139,6 +152,11 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         return None;
     }
     let in_transcript = app.focus == Focus::Transcript;
+    if app.answering()
+        && let Some(action) = crate::request::key(key)
+    {
+        return Some(action);
+    }
     let action = match key.code {
         KeyCode::Char('i') | KeyCode::Enter if in_transcript => Action::Compose(Act::Write),
         KeyCode::Char('y') if in_transcript => {
@@ -206,8 +224,17 @@ pub const HELP: &[(&str, &str)] = &[
     ("Esc, ⌫ on empty", "leave the composer or close a dialog"),
     ("y / n", "allow / deny the pending approval"),
     ("1-9", "pick an answer to the pending question"),
+    (
+        "←/→, h/l, Enter",
+        "choose an answer to the pending request, give it",
+    ),
+    ("f", "the pending request full screen"),
     ("Ctrl-c, :interrupt", "interrupt the running turn"),
-    (":", "commands: model, mode, archive, new, down"),
+    (
+        ": / Ctrl-p",
+        "the command palette: type to filter, Enter runs",
+    ),
+    ("/ in the prompt", "commands; // sends a literal /"),
     ("n", "new session"),
     ("p", "focus the session's pull requests"),
     ("P", "every session's pull requests"),

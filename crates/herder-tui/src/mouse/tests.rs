@@ -186,16 +186,15 @@ fn the_wheel_scrolls_the_view_under_the_pointer() {
 fn a_tap_on_allow_or_deny_answers_the_approval() {
     for size in SIZES {
         for (label, decision) in [
-            ("y allow", ApprovalDecision::Allow),
-            ("n deny", ApprovalDecision::Deny),
+            ("allow", ApprovalDecision::Allow),
+            ("deny", ApprovalDecision::Deny),
         ] {
             let mut app = open_s2(vec![
                 fake::started("turn-1"),
                 fake::approval("a1", "Bash: rm -rf target"),
             ]);
-            // Also while the composer has the keys, where y would be typed.
-            press(&mut app, KeyCode::Char('i'));
-            let effects = tap_last(&mut app, size, label);
+            // The panel's button, the first on the screen.
+            let effects = tap(&mut app, size, label);
             let command = CommandBody::AnswerApproval {
                 session_id: herder_protocol::SessionId::new("s2"),
                 approval_id: herder_protocol::ApprovalId::new("a1"),
@@ -213,7 +212,7 @@ fn a_tap_on_a_choice_answers_the_question() {
             fake::started("turn-1"),
             fake::question("q1", "Which port?", &["8080", "3000"]),
         ]);
-        let effects = tap_last(&mut app, size, "2. 3000");
+        let effects = tap_last(&mut app, size, "2 3000");
         let command = CommandBody::AnswerQuestion {
             session_id: herder_protocol::SessionId::new("s2"),
             question_id: herder_protocol::QuestionId::new("q1"),
@@ -252,9 +251,12 @@ fn the_header_opens_the_inbox_and_new_session() {
         assert_ne!(app.focus, Focus::Inbox);
         tap(&mut app, size, " + ");
         assert!(app.compose.dialog.is_some(), "{size:?}");
-        // The dialog covers the screen: the list under it takes no taps.
+        // The dialog covers the screen: a tap on the list under it closes the dialog and
+        // opens nothing.
         tap(&mut app, size, "● box");
         assert_eq!(app.open, None);
+        assert!(app.compose.dialog.is_none(), "{size:?}");
+        tap(&mut app, size, " + ");
         tap(&mut app, size, "‹ back");
         assert!(app.compose.dialog.is_none());
     }

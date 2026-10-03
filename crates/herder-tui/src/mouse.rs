@@ -354,6 +354,7 @@ impl App {
             || self.compose.dialog.is_some()
             || self.compose.palette.is_some()
             || self.prs.prompt.is_some()
+            || (self.request.full && self.pending().is_some())
     }
 }
 

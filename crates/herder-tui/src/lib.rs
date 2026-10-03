@@ -21,12 +21,16 @@ mod bar;
 mod compose;
 #[cfg(test)]
 mod fake;
+mod fuzzy;
 mod inbox;
 mod machines;
 mod mouse;
+mod new_session;
+mod palette;
 mod projects;
 mod prs;
 mod recover;
+mod request;
 mod session;
 mod settings;
 mod switch;
