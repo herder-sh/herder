@@ -352,11 +352,16 @@ impl Session {
             Incoming::StreamEvent(stream) if stream.parent_tool_use_id.is_none() => {
                 self.stream_event(stream.event).await;
             }
-            Incoming::Assistant(assistant) if assistant.parent_tool_use_id.is_none() => {
-                self.assistant(assistant).await;
+            Incoming::Assistant(assistant) => {
+                if assistant.parent_tool_use_id.is_some() {
+                    self.nested_assistant(assistant).await;
+                } else {
+                    self.assistant(assistant).await;
+                }
             }
-            Incoming::User(user) if user.parent_tool_use_id.is_none() => {
-                self.tool_results(user.message.content).await;
+            Incoming::User(user) => {
+                self.tool_results(user.message.content, user.parent_tool_use_id)
+                    .await;
             }
             Incoming::Result(result) => self.result(result).await,
             Incoming::RateLimitEvent { rate_limit_info } => {
@@ -402,10 +407,7 @@ impl Session {
                 self.approvals.retain(|_, open| *open != request_id);
                 self.asks.retain(|ask| ask.request_id != request_id);
             }
-            Incoming::StreamEvent(_)
-            | Incoming::Assistant(_)
-            | Incoming::User(_)
-            | Incoming::Other => {}
+            Incoming::StreamEvent(_) | Incoming::Other => {}
         }
     }
 
@@ -456,7 +458,12 @@ impl Session {
                         text: String::new(),
                     });
                     let body = streamed_body(reasoning, String::new());
-                    let item = Item { id, turn_id, body };
+                    let item = Item {
+                        parent_call_id: None,
+                        id,
+                        turn_id,
+                        body,
+                    };
                     self.emit(AdapterEvent::ItemStarted { item }).await;
                 }
                 if let Some(streaming) = &mut self.streaming {
@@ -494,10 +501,54 @@ impl Session {
                 Block::ToolUse { id, name, input } => {
                     self.finish_streaming().await;
                     self.block = None;
-                    self.tool_call(id, turn_id.clone(), name, input).await;
+                    self.tool_call(id, turn_id.clone(), name, input, None).await;
                 }
                 Block::ToolResult { .. } | Block::Other => {}
             }
+        }
+    }
+
+    /// Child messages arrive interleaved with the parent stream. Emit their completed
+    /// blocks independently so they cannot finish or overwrite a parent streaming item.
+    async fn nested_assistant(&mut self, assistant: wire::Assistant) {
+        let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
+            return;
+        };
+        let Some(parent_call_id) = assistant
+            .parent_tool_use_id
+            .as_ref()
+            .and_then(|parent| self.tool_calls.get(parent))
+            .cloned()
+        else {
+            return; // A missing spawning call cannot be represented as a root message.
+        };
+        for block in assistant.message.content {
+            let body = match block {
+                Block::Text { text } => streamed_body(false, text),
+                Block::Thinking { thinking } => streamed_body(true, thinking),
+                Block::ToolUse { id, name, input } => {
+                    self.tool_call(
+                        id,
+                        turn_id.clone(),
+                        name,
+                        input,
+                        Some(parent_call_id.clone()),
+                    )
+                    .await;
+                    continue;
+                }
+                Block::ToolResult { .. } | Block::Other => continue,
+            };
+            let id = self.item_id();
+            self.emit(AdapterEvent::ItemCompleted {
+                item: Item {
+                    id,
+                    turn_id: turn_id.clone(),
+                    body,
+                    parent_call_id: Some(parent_call_id.clone()),
+                },
+            })
+            .await;
         }
     }
 
@@ -542,15 +593,31 @@ impl Session {
         turn_id: TurnId,
         name: String,
         input: Value,
+        parent_call_id: Option<ItemId>,
     ) -> ItemId {
         let id = self.item_id();
         self.tool_calls.insert(tool_use_id, id.clone());
         let body = ItemBody::ToolCall { name, input };
-        self.emit_item(id.clone(), turn_id, body).await;
+        self.emit(AdapterEvent::ItemCompleted {
+            item: Item {
+                id: id.clone(),
+                turn_id,
+                body,
+                parent_call_id,
+            },
+        })
+        .await;
         id
     }
 
-    async fn tool_results(&mut self, content: Value) {
+    async fn tool_results(&mut self, content: Value, parent: Option<String>) {
+        let parent_call_id = match parent {
+            Some(parent) => match self.tool_calls.get(&parent) {
+                Some(id) => Some(id.clone()),
+                None => return, // Never misattribute an unknown child to the main transcript.
+            },
+            None => None,
+        };
         let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
             return;
         };
@@ -576,7 +643,15 @@ impl Session {
                 output: result_text(content),
                 is_error,
             };
-            self.emit_item(id, turn_id.clone(), body).await;
+            self.emit(AdapterEvent::ItemCompleted {
+                item: Item {
+                    id,
+                    turn_id: turn_id.clone(),
+                    body,
+                    parent_call_id: parent_call_id.clone(),
+                },
+            })
+            .await;
         }
     }
 
@@ -608,7 +683,7 @@ impl Session {
         let summary = summary(&request);
         let tool_call_id = match self.tool_calls.get(&request.tool_use_id) {
             Some(id) => id.clone(),
-            // A subagent's tool call, which was skipped: emit it now so the approval names it.
+            // A call omitted by the CLI: emit it now so the approval names it.
             None => {
                 self.finish_streaming().await;
                 self.tool_call(
@@ -616,6 +691,7 @@ impl Session {
                     turn_id.clone(),
                     request.tool_name,
                     request.input,
+                    None,
                 )
                 .await
             }
@@ -783,7 +859,12 @@ impl Session {
     }
 
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
-        let item = Item { id, turn_id, body };
+        let item = Item {
+            parent_call_id: None,
+            id,
+            turn_id,
+            body,
+        };
         self.emit(AdapterEvent::ItemCompleted { item }).await;
     }
 
@@ -1039,6 +1120,7 @@ mod tests {
         use herder_protocol::{Attachment, AttachmentId};
 
         let item = |body| Item {
+            parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: TurnId::new("t"),
             body,

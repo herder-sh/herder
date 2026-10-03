@@ -797,6 +797,7 @@ impl Session {
             },
         );
         let item = Item {
+            parent_call_id: None,
             id,
             turn_id,
             body: streamed_body(reasoning, text),
@@ -839,7 +840,12 @@ impl Session {
     }
 
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
-        let item = Item { id, turn_id, body };
+        let item = Item {
+            parent_call_id: None,
+            id,
+            turn_id,
+            body,
+        };
         self.emit(AdapterEvent::ItemCompleted { item }).await;
     }
 
@@ -1143,6 +1149,7 @@ mod tests {
 
         let turn = TurnId::new("turn-1");
         let item = |body| Item {
+            parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: turn.clone(),
             body,

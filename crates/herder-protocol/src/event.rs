@@ -316,6 +316,10 @@ pub enum ErrorClass {
 /// One entry of the transcript.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
+    /// Spawning tool call for provider-native sub-agent content, in the same turn.
+    /// None identifies the main conversation. This ancestry survives journal replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_call_id: Option<ItemId>,
     /// The item.
     pub id: ItemId,
     /// Turn the item belongs to.

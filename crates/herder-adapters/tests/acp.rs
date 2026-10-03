@@ -116,6 +116,7 @@ fn prompt(session: &AdapterSession, text: &str) {
 
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),
         body,
@@ -319,7 +320,7 @@ async fn interrupt_cancels_the_turn() {
     // The thought streamed first and was closed when the message began.
     assert!(events.iter().any(|event| matches!(
         event,
-        AdapterEvent::ItemCompleted { item: Item { body: ItemBody::Reasoning { text }, .. } }
+        AdapterEvent::ItemCompleted { item: Item { parent_call_id: None,  body: ItemBody::Reasoning { text }, .. } }
             if text.starts_with("The user wants numbers")
     )));
     session.commands.send(AdapterCommand::Interrupt).unwrap();
@@ -327,7 +328,7 @@ async fn interrupt_cancels_the_turn() {
     assert!(matches!(
         &events[..],
         [
-            AdapterEvent::ItemCompleted { item: Item { body: ItemBody::AssistantMessage { .. }, .. } },
+            AdapterEvent::ItemCompleted { item: Item { parent_call_id: None,  body: ItemBody::AssistantMessage { .. }, .. } },
             AdapterEvent::TurnInterrupted { turn_id },
         ] if *turn_id == turn()
     ));
@@ -441,6 +442,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
     let mut start_request = request(PermissionMode::Ask);
     start_request.seed = vec![
         Item {
+            parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
             body: ItemBody::UserMessage {
@@ -449,6 +451,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
             },
         },
         Item {
+            parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),
             body: ItemBody::AssistantMessage { text: "4".into() },

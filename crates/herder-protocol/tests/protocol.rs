@@ -25,6 +25,7 @@ fn event(seq: Seq, by: Option<&str>, body: EventBody) -> ServerMessage {
 
 fn item(body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: ItemId::new("01J9ITEM"),
         turn_id: TurnId::new("01J9TURN"),
         body,
@@ -1183,6 +1184,7 @@ fn unknown_tags_decode_to_unknown() {
         body,
         EventBody::ItemAdded {
             item: Item {
+                parent_call_id: None,
                 id: ItemId::new("i"),
                 turn_id: TurnId::new("t"),
                 body: ItemBody::Unknown,
@@ -1901,4 +1903,21 @@ fn status_retry_deadline_is_optional_and_round_trips() {
         serde_json::from_value::<EventBody>(json).unwrap(),
         scheduled
     );
+}
+
+#[test]
+fn transcript_ancestry_is_optional_and_round_trips() {
+    let mut nested = item(ItemBody::AssistantMessage {
+        text: "Child output".into(),
+    });
+    let root = serde_json::to_value(&nested).unwrap();
+    assert!(root.get("parent_call_id").is_none());
+    assert_eq!(
+        serde_json::from_value::<Item>(root).unwrap().parent_call_id,
+        None
+    );
+    nested.parent_call_id = Some(ItemId::new("spawning-tool"));
+    let json = serde_json::to_value(&nested).unwrap();
+    assert_eq!(json["parent_call_id"], "spawning-tool");
+    assert_eq!(serde_json::from_value::<Item>(json).unwrap(), nested);
 }

@@ -143,6 +143,7 @@ fn id(n: u32) -> ItemId {
 
 fn item(n: u32, body: ItemBody) -> Item {
     Item {
+        parent_call_id: None,
         id: id(n),
         turn_id: turn(),
         body,
@@ -571,6 +572,7 @@ async fn an_interrupt_ends_the_turn_with_what_streamed() {
 async fn a_seed_becomes_context_before_the_first_prompt() {
     let seed = vec![
         Item {
+            parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
             body: ItemBody::UserMessage {
@@ -579,6 +581,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
             },
         },
         Item {
+            parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),
             body: message("Noted."),
@@ -983,4 +986,77 @@ async fn read_usage_of_an_account_without_plan_limits_is_empty() {
         .unwrap()
         .unwrap();
     assert_eq!(windows, []);
+}
+
+#[tokio::test]
+async fn nested_transcripts_keep_ancestry_without_interrupting_parent_streams() {
+    // Synthetic stream-json fixture: two siblings, a grandchild and interleaved parent text.
+    let lines = [
+        json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"agent-a","name":"Agent","input":{"prompt":"Investigate"}},
+            {"type":"tool_use","id":"agent-b","name":"Task","input":{"prompt":"Review"}}
+        ]}}),
+        json!({"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"text"}}}),
+        json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Parent "}}}),
+        json!({"type":"assistant","parent_tool_use_id":"agent-a","message":{"content":[
+            {"type":"text","text":"Child A"},
+            {"type":"tool_use","id":"read-a","name":"Read","input":{"file_path":"a.rs"}},
+            {"type":"tool_use","id":"agent-c","name":"Agent","input":{"prompt":"Explore"}}
+        ]}}),
+        json!({"type":"assistant","parent_tool_use_id":"agent-b","message":{"content":[{"type":"text","text":"Child B"}]}}),
+        json!({"type":"assistant","parent_tool_use_id":"agent-c","message":{"content":[{"type":"text","text":"Grandchild"}]}}),
+        json!({"type":"user","parent_tool_use_id":"agent-a","message":{"content":[{"type":"tool_result","tool_use_id":"read-a","content":"permission denied","is_error":true}]}}),
+        json!({"type":"user","parent_tool_use_id":"agent-a","message":{"content":[{"type":"tool_result","tool_use_id":"agent-c","content":"Exploration complete"}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent-a","content":"A complete"},{"type":"tool_result","tool_use_id":"agent-b","content":"B complete"}]}}),
+        json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"reply"}}}),
+        json!({"type":"assistant","message":{"content":[{"type":"text","text":"Parent reply"}]}}),
+        json!({"type":"result","subtype":"success","is_error":false,"result":"Parent reply"}),
+    ];
+    let mut replay = lines
+        .into_iter()
+        .map(|line| json!({"dir":"out", "line":line.to_string()}).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    replay.push_str("\n{\"dir\":\"in\",\"eof\":true}\n{\"exit\":0}\n");
+    let mut session = start_with(inline(&replay), request(Vec::new())).await;
+    session.commands.send(prompt("go")).unwrap();
+    let events = until(&mut session, is_turn_end).await;
+    let items: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AdapterEvent::ItemCompleted { item } => Some(item),
+            _ => None,
+        })
+        .collect();
+    let find_text = |text: &str| {
+        *items.iter().find(|item| matches!(&item.body, ItemBody::AssistantMessage { text: value } if value == text)).unwrap()
+    };
+    assert_eq!(find_text("Child A").parent_call_id, Some(id(1)));
+    assert_eq!(find_text("Child B").parent_call_id, Some(id(2)));
+    let grandchild_call = items.iter().find(|item| matches!(&item.body, ItemBody::ToolCall { input, .. } if input["prompt"] == "Explore")).unwrap();
+    assert_eq!(grandchild_call.parent_call_id, Some(id(1)));
+    assert_eq!(
+        find_text("Grandchild").parent_call_id.as_ref(),
+        Some(&grandchild_call.id)
+    );
+    assert_eq!(find_text("Parent reply").parent_call_id, None);
+    assert_eq!(find_text("Parent reply").id, id(3)); // original streaming item survives children
+    let denied = items.iter().find(|item| matches!(&item.body, ItemBody::ToolResult { output, is_error: true, .. } if output == "permission denied")).unwrap();
+    assert_eq!(denied.parent_call_id, Some(id(1)));
+    let root_results = items
+        .iter()
+        .filter(|item| {
+            item.parent_call_id.is_none() && matches!(item.body, ItemBody::ToolResult { .. })
+        })
+        .count();
+    assert_eq!(root_results, 2);
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item.parent_call_id.is_none()
+                && matches!(item.body, ItemBody::AssistantMessage { .. }))
+            .count(),
+        1
+    );
+    shutdown(session).await;
 }

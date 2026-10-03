@@ -66,7 +66,7 @@ struct FollowUpTests {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
-            .itemAdded(item: Item(id: "c", turnId: "t1", body: .toolCall(name: "Bash", input: "{}"))),
+            .itemAdded(item: Item(parentCallId: nil, id: "c", turnId: "t1", body: .toolCall(name: "Bash", input: "{}"))),
             .approvalRequested(approvalId: "a", turnId: "t1", toolCallId: "c", summary: "Bash: ls", routedTo: .user, reason: nil),
             .approvalResolved(approvalId: "a", decision: .allow, answeredBy: .user),
             .turnCompleted(turnId: "t1"),

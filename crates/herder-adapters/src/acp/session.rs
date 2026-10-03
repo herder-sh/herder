@@ -625,6 +625,7 @@ impl Session {
                 }
             };
             let item = Item {
+                parent_call_id: None,
                 id: id.clone(),
                 turn_id: turn.id.clone(),
                 body,
@@ -658,6 +659,7 @@ impl Session {
             ItemBody::AssistantMessage { text: text.text }
         };
         let item = Item {
+            parent_call_id: None,
             id: text.id,
             turn_id: turn.id.clone(),
             body,
@@ -734,6 +736,7 @@ impl Session {
         };
         tool.called = true;
         let item = Item {
+            parent_call_id: None,
             id: tool.id.clone(),
             turn_id: turn.id.clone(),
             body: ItemBody::ToolCall {
@@ -761,6 +764,7 @@ impl Session {
         };
         tool.finished = true;
         let item = Item {
+            parent_call_id: None,
             id,
             turn_id: turn.id.clone(),
             body: ItemBody::ToolResult {
@@ -874,6 +878,7 @@ mod tests {
 
         let turn = TurnId::new("t");
         let item = |id: &str, body| Item {
+            parent_call_id: None,
             id: ItemId::new(id),
             turn_id: turn.clone(),
             body,

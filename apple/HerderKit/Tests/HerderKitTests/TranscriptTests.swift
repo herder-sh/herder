@@ -4,7 +4,7 @@ import Herder
 import Testing
 
 private func item(_ id: String, _ body: ItemBody, turn: String = "t1") -> EventBody {
-    .itemAdded(item: Item(id: id, turnId: turn, body: body))
+    .itemAdded(item: Item(parentCallId: nil, id: id, turnId: turn, body: body))
 }
 
 struct TranscriptTests {
@@ -124,7 +124,7 @@ struct TranscriptTests {
     @Test func streamingItemsFollowTheLog() {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
-        model.apply(SessionUpdate(events: [], streaming: [Item(id: "s", turnId: "t1", body: .assistantMessage(text: "Hel"))]))
+        model.apply(SessionUpdate(events: [], streaming: [Item(parentCallId: nil, id: "s", turnId: "t1", body: .assistantMessage(text: "Hel"))]))
         #expect(Transcript.blocks(model).last == .assistant(id: "t1/s", text: "Hel", streaming: true))
     }
 }

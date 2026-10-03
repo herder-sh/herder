@@ -44,6 +44,7 @@ impl Adapter for Echo {
             tokio::spawn(async move {
                 let reply = |turn_id: TurnId, text: String| {
                     let item = Item {
+                        parent_call_id: None,
                         id: ItemId::new(format!("item-{turn_id}")),
                         turn_id: turn_id.clone(),
                         body: ItemBody::AssistantMessage { text },
@@ -80,6 +81,7 @@ impl Adapter for Echo {
                             if let Some((name, input)) = tool {
                                 let call = ItemId::new(format!("call-{requests}"));
                                 let item = Item {
+                                    parent_call_id: None,
                                     id: call.clone(),
                                     turn_id: turn_id.clone(),
                                     body: ItemBody::ToolCall {
