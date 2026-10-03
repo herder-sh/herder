@@ -80,6 +80,26 @@ public final class Fleet {
         await send(.answerQuestion(sessionId: key.sessionId, questionId: request.requestId, answer: answer), about: key)
     }
 
+    /// Creates a session, prompts it when a prompt is given, and returns it.
+    func createSession(
+        on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
+        mode: PermissionMode, prompt: String
+    ) async throws -> SessionKey {
+        let result = try await client.send(
+            hostId: hostId,
+            command: .createSession(
+                repo: repo, projectId: projectId, branch: nil, accountId: accountId,
+                model: model.isEmpty ? nil : model, permissionMode: mode, maxChildren: nil, failoverPin: nil))
+        guard case .sessionCreated(let sessionId) = result else {
+            throw HerderError.Local(detail: "the machine did not create a session")
+        }
+        let key = SessionKey(hostId: hostId, sessionId: sessionId)
+        if !prompt.isEmpty {
+            await send(.sendPrompt(sessionId: sessionId, text: prompt), about: key)
+        }
+        return key
+    }
+
     func archive(_ key: SessionKey) async {
         await send(.archiveSession(sessionId: key.sessionId, force: false), about: key)
     }

@@ -4,7 +4,7 @@ import SwiftUI
 /// The machines: connection, load, each account's usage, and a vault's hosts.
 struct MachinesView: View {
     let fleet: Fleet
-    @Binding var pairing: Bool
+    @Binding var sheet: AppSheet?
     @State private var renaming: MachineSummary?
     @State private var forgetting: MachineSummary?
     @State private var error: String?
@@ -13,8 +13,9 @@ struct MachinesView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
                 ForEach(fleet.lists.machines) { machine in
-                    MachineCard(machine: machine)
+                    MachineCard(machine: machine) { sheet = .machineSettings(hostId: machine.hostId) }
                         .contextMenu {
+                            Button("Settings…", systemImage: "gearshape") { sheet = .machineSettings(hostId: machine.hostId) }
                             Button("Rename…", systemImage: "pencil") { renaming = machine }
                             Button("Forget", systemImage: "trash", role: .destructive) { forgetting = machine }
                         }
@@ -32,7 +33,7 @@ struct MachinesView: View {
         .toolbar {
             #if os(iOS)
             Button("Reconnect", systemImage: "arrow.clockwise") { fleet.wake() }
-            Button("Add Machine", systemImage: "plus") { pairing = true }
+            Button("Add Machine", systemImage: "plus") { sheet = .pair }
             #endif
         }
         .alert("Rename \(renaming?.name ?? "")", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
@@ -85,6 +86,7 @@ private struct RenameField: View {
 
 struct MachineCard: View {
     let machine: MachineSummary
+    let settings: () -> Void
 
     var body: some View {
         Card {
@@ -114,6 +116,7 @@ struct MachineCard: View {
                             .foregroundStyle(Theme.tertiary)
                     }
                     .font(.caption.weight(.medium))
+                    IconButton(symbol: "gearshape", help: "Machine Settings", action: settings)
                 }
                 if let cpu = machine.cpu, let memory = machine.memory {
                     HStack(spacing: 16) {

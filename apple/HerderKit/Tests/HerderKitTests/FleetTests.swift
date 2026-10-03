@@ -58,7 +58,7 @@ struct FleetTests {
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func aSessionsTurnShowsLiveInTheLists() async throws {
+    func aSessionStartedFromTheAppShowsLiveAndArchives() async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("cannot open a fresh profile")
@@ -69,20 +69,18 @@ struct FleetTests {
         let machine = try await fleet.pair(link: daemon.link)
         try await fleet.client.synced(hostId: machine.hostId)
 
-        let created = try await fleet.client.send(
-            hostId: machine.hostId,
-            command: .createSession(
-                repo: daemon.repo, projectId: nil, branch: nil, accountId: daemon.account, model: nil,
-                permissionMode: .ask, maxChildren: nil, failoverPin: nil))
-        guard case .sessionCreated(let sessionId) = created else {
-            Issue.record("expected a session, got \(created)")
-            return
-        }
-        _ = try await fleet.client.send(hostId: machine.hostId, command: .sendPrompt(sessionId: sessionId, text: "Say hello."))
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .ask, prompt: "Say hello.")
+        let sessionId = key.sessionId
 
         #expect(await eventually {
             fleet.lists.recent.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
         })
         #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
+
+        await fleet.archive(key)
+        #expect(await eventually { fleet.sessions[key]?.state == .archived })
+        #expect(fleet.refusals[key] == nil)
     }
 }
