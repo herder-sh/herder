@@ -51,6 +51,7 @@ struct TestBackend {
 impl Backend for TestBackend {
     fn accounts(&self) -> Vec<Account> {
         vec![Account {
+            config_dir: None,
             account_id: AccountId::new("claude-main"),
             provider: Provider::Claude,
             label: "Main".into(),

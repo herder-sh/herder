@@ -206,3 +206,13 @@ Version 1 is the first frozen API. Compared with the code before it:
 | `TerminalEvent::Output(Vec<u8>)` | `Output { data }` | Same. |
 | `auth::PairingUri`, `FromStr::Err = anyhow::Error` | `PairingUri` at the crate root, `Err = Error` (`InvalidLink`) | Apps parse links to confirm them before pairing, as the TUI does; `auth` is Rust-only. |
 | — | `CLIENT_API_VERSION`, `public-api.txt`, `#![warn(missing_docs)]` | The freeze itself. |
+
+### Account settings (client API 4)
+
+`Account.config_dir` exposes the host-local configuration directory (absent means the
+provider default). `send(host, SetAccountSettings { account_id, label, config_dir })`
+updates the label and directory for an existing account; only owners may do this.
+The daemon persists configuration and broadcasts the refreshed account list. Labels
+must be non-empty. Directory changes require all sessions on the daemon archived;
+provider and account id cannot be changed. No provider credentials are exposed.
+The wire change is additive (protocol 4); the native record shape changes (client API 4).

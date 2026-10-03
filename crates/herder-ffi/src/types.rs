@@ -538,6 +538,11 @@ pub enum CommandBody {
     RevokeVaultHost {
         host_id: HostId,
     },
+    SetAccountSettings {
+        account_id: AccountId,
+        label: String,
+        config_dir: Option<String>,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -669,6 +674,7 @@ pub struct Account {
     pub account_id: AccountId,
     pub provider: Provider,
     pub label: String,
+    pub config_dir: Option<String>,
     pub usage: Vec<UsageWindow>,
 }
 

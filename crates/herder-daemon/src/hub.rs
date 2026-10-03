@@ -980,6 +980,7 @@ mod tests {
         let hub = Hub::default();
         let accounts = |used_percent| {
             vec![Account {
+                config_dir: None,
                 account_id: herder_protocol::AccountId::new("claude"),
                 provider: herder_protocol::Provider::Claude,
                 label: "Main".into(),

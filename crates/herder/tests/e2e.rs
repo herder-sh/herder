@@ -377,6 +377,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     assert_eq!(
         accounts,
         [Account {
+            config_dir: Some(account_dir.to_string_lossy().into_owned()),
             account_id: account.clone(),
             provider: Provider::Claude,
             label: "Work".into(),
