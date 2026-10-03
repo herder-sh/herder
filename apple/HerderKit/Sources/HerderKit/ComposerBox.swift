@@ -33,6 +33,9 @@ struct ComposerBox<Footer: View>: View {
     @State private var otherModel = false
     @State private var typedModel = ""
     @State private var imageError: String?
+    @State private var dictation = Dictation()
+    /// The text before dictation started; what is heard follows it.
+    @State private var dictatedAfter = ""
     #if os(macOS)
     @State private var pasteMonitor: Any?
     #endif
@@ -47,7 +50,12 @@ struct ComposerBox<Footer: View>: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(2...12)
                     .focused($focused)
-                    .onSubmit(send)
+                    .onSubmit(submit)
+                    .onKeyPress(.return, phases: .down) { press in
+                        guard press.modifiers.contains(.shift) else { return .ignored }
+                        text = ListContinuation.newline(after: text)
+                        return .handled
+                    }
                     .padding(.horizontal, 18)
                     .padding(.top, 16)
                     .padding(.bottom, 8)
@@ -85,9 +93,21 @@ struct ComposerBox<Footer: View>: View {
                     }
                     .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                     Spacer()
-                    if let imageError {
-                        Text(imageError).font(.caption).foregroundStyle(Theme.failure).lineLimit(1)
+                    if let problem = imageError ?? dictation.error {
+                        Text(problem).font(.caption).foregroundStyle(Theme.failure).lineLimit(2)
                     }
+                    Button(action: toggleDictation) {
+                        SwiftUI.Image(systemName: dictation.listening ? "mic.fill" : "mic")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(dictation.listening ? Theme.accent : Theme.secondary)
+                            .frame(width: 30, height: 30)
+                            .background(dictation.listening ? Theme.accent.opacity(0.18) : .clear, in: .circle)
+                            .contentShape(.rect)
+                            .symbolEffect(.pulse, isActive: dictation.listening)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .help(dictation.listening ? "Stop dictating (⇧⌘D)" : "Dictate, on this device (⇧⌘D)")
                     #if os(macOS)
                     Button(action: attach) {
                         SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
@@ -99,7 +119,7 @@ struct ComposerBox<Footer: View>: View {
                     if running && trimmed.isEmpty && images.isEmpty {
                         CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
                     } else {
-                        CircleButton(symbol: "arrow.up", help: "Send", action: send)
+                        CircleButton(symbol: "arrow.up", help: "Send", action: submit)
                             .disabled(trimmed.isEmpty && images.isEmpty)
                             .opacity(trimmed.isEmpty && images.isEmpty ? 0.35 : 1)
                             .keyboardShortcut(.return, modifiers: .command)
@@ -141,6 +161,21 @@ struct ComposerBox<Footer: View>: View {
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func submit() {
+        dictation.stop()
+        send()
+    }
+
+    private func toggleDictation() {
+        if dictation.listening {
+            dictation.stop()
+            return
+        }
+        dictatedAfter = text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") ? text : text + " "
+        focused = true
+        Task { await dictation.start { heard in text = dictatedAfter + heard } }
+    }
 
     /// Removes an image and its marker, renumbering the markers after it.
     private func remove(_ index: Int) {
