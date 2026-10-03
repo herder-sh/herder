@@ -290,7 +290,7 @@ struct ProjectsView: View {
                     }
                 } header: {
                     HStack(spacing: 6) {
-                        ProjectIcon(projectId: project.projectId, name: project.name, size: 18)
+                        ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 18)
                         Text(project.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         Text(project.machines.joined(separator: ", ")).font(.caption).foregroundStyle(Theme.tertiary)
                         Spacer()

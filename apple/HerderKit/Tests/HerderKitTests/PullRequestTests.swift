@@ -197,3 +197,17 @@ struct RemoveProjectTests {
         #expect(ProjectSettingsForm.liveSessions(of: "github.com/acme/app", on: host) == 0)
     }
 }
+
+struct ProjectIconLookupTests {
+    @Test func aProjectShowsTheIconAnyMachineListedAndThisAppFetched() {
+        let bare = Project(projectId: "github.com/acme/app", name: "app", paths: [], defaultPermissionMode: nil,
+                           defaultAccount: nil, setupCommand: nil, icon: nil)
+        var iconed = bare
+        iconed.icon = "abc"
+        let machines = [machine("a", name: "alpha", sessions: [], projects: [bare]),
+                        machine("b", name: "beta", sessions: [], projects: [iconed])]
+        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: [:]) == nil)
+        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": Data([1])]) == Data([1]))
+        #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": Data([1])]) == nil)
+    }
+}
