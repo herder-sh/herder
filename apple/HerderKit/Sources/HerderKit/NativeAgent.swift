@@ -15,6 +15,7 @@ struct NativeAgent: Hashable, Identifiable {
     let prompt: String
     let outcome: ToolCall.Outcome
     let result: String?
+    let background: Bool
 
     static func isAgent(_ name: String) -> Bool {
         ["agent", "task"].contains(name.lowercased())
@@ -29,13 +30,15 @@ struct NativeAgent: Hashable, Identifiable {
         title = (input["description"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? (input["subagent_type"] as? String) ?? "Sub-agent"
         prompt = input["prompt"] as? String ?? ""
+        background = input["run_in_background"] as? Bool ?? false
         if let last = items.last(where: {
             guard $0.turnId == item.turnId, $0.parentCallId == item.parentCallId,
                   case .toolResult(let callId, _, _) = $0.body else { return false }
             return callId == item.id
         }), case .toolResult(_, let output, let isError) = last.body {
             result = output
-            outcome = streaming.contains(last) ? .running : isError ? .failed : .ok
+            // A background tool result acknowledges launch, not completion of the agent.
+            outcome = streaming.contains(last) ? .running : isError ? .failed : background ? .unknown : .ok
         } else {
             result = nil
             outcome = runningTurn == item.turnId ? .running : .unknown
@@ -52,10 +55,13 @@ struct NativeAgent: Hashable, Identifiable {
 
     static func summary(_ agents: [NativeAgent]) -> String {
         let states: [(ToolCall.Outcome, String)] = [(.running, "working"), (.failed, "failed"), (.ok, "completed"), (.unknown, "stopped")]
-        return states.compactMap { outcome, label in
-            let count = agents.filter { $0.outcome == outcome }.count
+        var parts = states.compactMap { outcome, label in
+            let count = agents.filter { $0.outcome == outcome && !(outcome == .unknown && $0.background && $0.result != nil) }.count
             return count > 0 ? "\(count) \(label)" : nil
-        }.joined(separator: ", ")
+        }
+        let backgroundCount = agents.filter { $0.background && $0.outcome == .unknown && $0.result != nil }.count
+        if backgroundCount > 0 { parts.append("\(backgroundCount) background") }
+        return parts.joined(separator: ", ")
     }
 
     var status: String {
@@ -63,7 +69,7 @@ struct NativeAgent: Hashable, Identifiable {
         case .running: "Working"
         case .ok: "Completed"
         case .failed: "Failed"
-        case .unknown: "Stopped without a result"
+        case .unknown: background && result != nil ? "Started in background" : "Stopped without a result"
         }
     }
 }
@@ -176,7 +182,7 @@ private struct NativeAgentChat: View {
                         }
                         if let result = agent.result, !result.isEmpty {
                             Divider()
-                            Text("Result").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                            Text(agent.background ? "Launch result" : "Result").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
                             MarkdownText(text: result)
                         } else if blocks.isEmpty {
                             Text(agent.outcome == .running
