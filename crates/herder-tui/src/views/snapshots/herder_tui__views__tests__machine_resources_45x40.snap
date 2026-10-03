@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " fleet                               < back  "
 " ! 1 need you  x 1 error  * 1 running        "
-"-------------------------------------------- "
+"                                             "
 " attention                                   "
 "  ! api - app                           box  "
 "  x document it - app                   box  "

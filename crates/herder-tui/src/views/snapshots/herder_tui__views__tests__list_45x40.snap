@@ -4,7 +4,7 @@ expression: terminal.backend()
 ---
 " switch                                      "
 " ! 2 need you  x 1 error                     "
-"-------------------------------------------- "
+"                                             "
 " attention                                   "
 "  ! api - app                           box  "
 "  ! write the tests - app               box  "

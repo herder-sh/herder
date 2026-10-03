@@ -7,7 +7,7 @@ expression: dump(&buffer)
 || claude-main - opus - ask                                                                          |
 ||                                                                                                   |
 |                                                                                                    |
-|| Write a prompt…                                                                                   |
+|| Write a prompt...                                                                                 |
 ||                                                                                                   |
 || claude-main - opus - ask                                                                          |
 ||                                                                                                   |

@@ -4,7 +4,7 @@ expression: "render(&mut app, 45, 40).backend()"
 ---
 " accounts                            < back  "
 " ! 1 need you  x 1  * 1  x laptop offline    "
-"-------------------------------------------- "
+"                                             "
 "+ accounts --------------------------------+ "
 "| * box  connected - pinned                | "
 "|   Main  claude - claude-main - 4 session | "

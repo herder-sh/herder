@@ -168,7 +168,9 @@ fn session_buttons(app: &App) -> Vec<Button> {
     } else if session.status != SessionStatus::Archived && app.read_only(key).is_none() {
         buttons.push(button("i", "write", act(Act::Write)));
     }
-    if app.focus != Focus::Composer {
+    if app.focus == Focus::Composer {
+        buttons.push(button("esc", "done", mouse::key(KeyCode::Esc)));
+    } else {
         buttons.push(button("‹", "back", mouse::key(KeyCode::Esc)));
     }
     if session.turn.is_some() {

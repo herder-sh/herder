@@ -120,11 +120,19 @@ impl<'a, 'b> Prompt<'a, 'b> {
             ..panel
         };
         if self.editor.is_empty() {
-            // The placeholder starts where the text will, under the cursor.
+            // The placeholder starts where the text will; with focus, after the cursor.
             let placeholder = self
                 .placeholder
                 .unwrap_or_else(|| self.editor.placeholder_text());
-            Line::styled(placeholder.to_owned(), ui.muted()).render(text, buf);
+            let after = u16::from(self.focused);
+            let rest = Rect {
+                x: text.x + after,
+                width: text.width.saturating_sub(after),
+                ..text
+            };
+            // Its ellipsis as the glyph set draws one: `...` in ASCII.
+            let placeholder = placeholder.replace('…', ui.glyphs.ellipsis);
+            Line::styled(placeholder, ui.muted()).render(rest, buf);
             if self.focused {
                 buf[(text.x, text.y)].modifier.insert(Modifier::REVERSED);
             }

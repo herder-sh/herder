@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use crate::action::Action;
 use crate::app::{App, Focus};
@@ -270,13 +270,15 @@ pub(super) fn leader_popup(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or(u16::MAX)
         .min(area.width);
     let height = u16::try_from(rows + 2).unwrap_or(u16::MAX).min(area.height);
-    let popup = Rect::new(
-        area.x + 1,
-        area.bottom().saturating_sub(height),
-        width,
-        height,
-    );
-    let block = Block::bordered()
+    // Full width on a phone, so nothing under it peeks out at its side.
+    let (x, width) = if area.width < super::NARROW {
+        (area.x, area.width)
+    } else {
+        (area.x + 1, width)
+    };
+    let popup = Rect::new(x, area.bottom().saturating_sub(height), width, height);
+    // Lined in Unicode; in ASCII a menu panel, its title on its first row.
+    let block = super::pane(app)
         .border_style(ui.border(true))
         .style(Style::new().bg(ui.theme.background_menu))
         .title(Span::styled(" ctrl+x ", ui.strong()))

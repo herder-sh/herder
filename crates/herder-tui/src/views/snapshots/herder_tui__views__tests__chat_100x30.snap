@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, width, height).backend()"
 ---
-" herder        inbox 0 « │  chat   tasks 2   prs   term            claude-main · claude-opus · ask  "
+" herder        inbox 0 « │  chat   tasks 2   prs   term                                             "
 "                         │                                                                          "
 " machines     by machine │  ┃   }                                                                   "
 "  ◉ box                1 │  ┃                                                                       "
@@ -25,7 +25,7 @@ expression: "render(&mut app, width, height).backend()"
 "                         │                                                                          "
 "                         │     Removing the old target next: first I check that nothing▌            "
 "                         │                                                                          "
-"                         │  ┃ Write a prompt…                                                       "
+"                         │  ┃  Write a prompt…                                                      "
 "                         │  ┃                                                                       "
 "                         │  ┃ claude-main · claude-opus · ask                                       "
 " ─────────────────────── │  ╹                                                                       "

@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, width, height).backend()"
 ---
-" herder        inbox 1 « │  chat   tasks 2   prs 1   term          claude-main · claude-opus · ask  "
+" herder        inbox 1 « │  chat   tasks 2   prs 1   term                                           "
 "                         │                                                                          "
 " projects     by project │ ┌ resources ──────────────────────────────────────────────────────────┐  "
 "  ◉ app                1 │ │ cpu 12% · mem 768 MiB · 3 processes                                 │  "
@@ -25,7 +25,7 @@ expression: "render(&mut app, width, height).backend()"
 "                         │     I added GET /health; it returns 200 with the build version so        "
 "                         │     load balancers can probe it.                                         "
 "                         │                                                                          "
-"                         │  ┃ Write a prompt…                                                       "
+"                         │  ┃  Write a prompt…                                                      "
 "                         │  ┃                                                                       "
 "                         │  ┃ claude-main · claude-opus · ask                                       "
 " ─────────────────────── │  ┃                                                                       "

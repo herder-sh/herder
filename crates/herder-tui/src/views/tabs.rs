@@ -64,7 +64,11 @@ pub(super) fn row(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     }
     hits.wheel(Rect { height: 1, ..area }, Wheel::Tabs);
 
-    // The session's account, model and mode at the right end, where they fit.
+    // The session's account, model and mode at the right end, where they fit; in the chat
+    // the prompt's meta line says them.
+    if current == Tab::Chat {
+        return;
+    }
     let facts = Line::from(ui.joined(facts(app).into_iter().map(|f| Span::styled(f, ui.muted()))));
     let facts_width = u16::try_from(line_width(&facts)).unwrap_or(u16::MAX);
     let end = area.right();
