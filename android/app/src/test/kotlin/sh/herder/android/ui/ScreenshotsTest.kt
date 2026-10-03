@@ -1,6 +1,8 @@
 package sh.herder.android.ui
 
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -49,7 +51,8 @@ class ScreenshotsTest {
         capture("tablet-$theme-by-project")
         compose.onNodeWithText("By machine").performClick()
         capture("tablet-$theme-by-machine")
-        compose.onNodeWithText("box").performClick()
+        // The machines list's `box`; grouped by machine, it heads a group too.
+        compose.onAllNodesWithText("box").onFirst().performClick()
         capture("tablet-$theme-box")
     }
 

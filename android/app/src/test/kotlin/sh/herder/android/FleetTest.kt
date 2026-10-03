@@ -1,5 +1,6 @@
 package sh.herder.android
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.onCompletion
@@ -16,6 +17,7 @@ import sh.herder.ffi.SessionUpdate
 
 class FleetTest {
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class) // UnconfinedTestDispatcher
     fun followsEveryListedSessionLiveAndDropsTheOnesThatGo() = runTest {
         val s1 = SessionKey("h1", "s1")
         val s2 = SessionKey("h1", "s2")

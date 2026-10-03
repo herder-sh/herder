@@ -57,6 +57,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.time.Instant
 import sh.herder.android.Group
 import sh.herder.android.Grouping
@@ -414,14 +415,15 @@ private fun Pill(text: String, color: Color, fill: Color?, modifier: Modifier = 
 private fun StatusGlyph(status: SessionStatus?, modifier: Modifier = Modifier) {
     Text(
         status?.glyph().orEmpty(),
-        style = MaterialTheme.typography.titleMedium,
+        // The symbol font draws geometric shapes small at text sizes.
+        style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp),
         color = status?.color() ?: Color.Unspecified,
         textAlign = TextAlign.Center,
         modifier = modifier.width(GlyphWidth),
     )
 }
 
-private val GlyphWidth: Dp = 20.dp
+private val GlyphWidth: Dp = 24.dp
 
 /** A status's colour: the accent for what needs the user, quiet for what does not. */
 @Composable
