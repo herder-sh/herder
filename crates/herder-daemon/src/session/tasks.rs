@@ -32,8 +32,9 @@ use herder_protocol::{ErrorInfo, EventBody, PermissionMode, SessionId, SessionSt
 use herder_store::Session;
 use herder_tasktools::{
     AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
-    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SpawnInput, SpawnOutput,
-    StatusInput, StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
+    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
+    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, ToolCall, ToolError,
+    WaitForInput, WaitForOutput,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{self, oneshot, watch};
@@ -256,6 +257,7 @@ impl ToolHandler for TaskTools {
             let result = match call {
                 ToolCall::Spawn(input) => success(manager.spawn(caller, input, limits).await),
                 ToolCall::Send(input) => success(manager.send_child(caller, input).await),
+                ToolCall::SendSession(input) => success(manager.send_session(caller, input).await),
                 ToolCall::Status(input) => success(manager.child_status(caller, input).await),
                 ToolCall::WaitFor(input) => {
                     // The caller's turn uses no CPU while it waits for its children: its slot
@@ -286,14 +288,16 @@ fn tool_error(error: ErrorInfo) -> ToolError {
     use herder_protocol::ErrorCode as Command;
     let code = match error.code {
         Command::NotFound => ErrorCode::NotFound,
-        Command::BadRequest | Command::Conflict | Command::Unsupported => ErrorCode::NotAllowed,
+        Command::BadRequest | Command::Conflict | Command::Unsupported | Command::Forbidden => {
+            ErrorCode::NotAllowed
+        }
         _ => ErrorCode::Internal,
     };
     ToolError::new(code, error.message)
 }
 
 /// Permission modes from least to most allowed.
-fn rank(mode: PermissionMode) -> u8 {
+pub(super) fn rank(mode: PermissionMode) -> u8 {
     match mode {
         PermissionMode::ReadOnly => 0,
         PermissionMode::Ask => 1,
@@ -310,6 +314,10 @@ impl SessionManager {
         limits: TaskLimits,
     ) -> Result<SpawnOutput, ToolError> {
         let primary = self.caller(&caller).await?;
+        // Refuse before creating a child if automated relay depth is exhausted.
+        self.agent_message(&caller, String::new())
+            .await
+            .map_err(tool_error)?;
         if primary.parent.is_some() {
             return Err(ToolError::new(
                 ErrorCode::DepthExceeded,
@@ -412,6 +420,110 @@ impl SessionManager {
             .await
             .map_err(tool_error)?;
         Ok(SpawnOutput { child, branch })
+    }
+
+    /// Authenticate provenance from the session journal, not tool arguments. Provider echoes
+    /// have no user author or daemon provenance and cannot reset relay depth.
+    pub(super) async fn agent_message(
+        &self,
+        caller: &SessionId,
+        message_id: String,
+    ) -> Result<herder_protocol::AgentMessage, ErrorInfo> {
+        let events = self
+            .inner
+            .journal
+            .all(caller.clone())
+            .await
+            .map_err(super::internal)?;
+        let source = self
+            .inner
+            .journal
+            .session(caller.clone())
+            .await
+            .map_err(super::internal)?
+            .ok_or_else(|| {
+                super::error(
+                    herder_protocol::ErrorCode::NotFound,
+                    "sender does not exist",
+                )
+            })?;
+        let context = events
+            .iter()
+            .rev()
+            .find_map(|event| {
+                if let EventBody::ItemAdded { item } = &event.body
+                    && item.parent_call_id.is_none()
+                    && matches!(item.body, herder_protocol::ItemBody::UserMessage { .. })
+                    && (event.by.is_some() || item.agent_message.is_some())
+                {
+                    Some(
+                        item.agent_message
+                            .as_ref()
+                            .map(|message| (message.hop_count, message.permission_ceiling)),
+                    )
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        let (hops, inherited) = context.unwrap_or((0, source.permission_mode));
+        let permission_ceiling = if rank(inherited) < rank(source.permission_mode) {
+            inherited
+        } else {
+            source.permission_mode
+        };
+        if hops >= 8 {
+            return Err(super::error(
+                herder_protocol::ErrorCode::Forbidden,
+                "agent message relay limit reached; wait for a human prompt",
+            ));
+        }
+        Ok(herder_protocol::AgentMessage {
+            sender_session_id: caller.clone(),
+            message_id,
+            hop_count: hops + 1,
+            permission_ceiling,
+        })
+    }
+
+    async fn send_session(
+        &self,
+        caller: SessionId,
+        input: SendSessionInput,
+    ) -> Result<SendSessionOutput, ToolError> {
+        if caller == input.session_id {
+            return Err(ToolError::new(
+                ErrorCode::NotAllowed,
+                "cannot send a message to yourself",
+            ));
+        }
+        if input.text.trim().is_empty()
+            || input.text.len() > 64 * 1024
+            || input.message_id.is_empty()
+            || input.message_id.len() > 128
+        {
+            return Err(ToolError::new(
+                ErrorCode::InvalidArguments,
+                "text must be nonempty and at most 64 KiB; message_id must be 1–128 bytes",
+            ));
+        }
+        let source = self.caller(&caller).await?;
+        if matches!(
+            source.status,
+            SessionStatus::Archived | SessionStatus::Moved
+        ) {
+            return Err(ToolError::new(
+                ErrorCode::NotAllowed,
+                "the sending session is read-only",
+            ));
+        }
+        let message = self
+            .agent_message(&caller, input.message_id)
+            .await
+            .map_err(tool_error)?;
+        self.deliver_agent_message(&input.session_id, input.text, message)
+            .await
+            .map_err(tool_error)
     }
 
     async fn send_child(

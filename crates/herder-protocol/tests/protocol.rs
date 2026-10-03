@@ -25,6 +25,7 @@ fn event(seq: Seq, by: Option<&str>, body: EventBody) -> ServerMessage {
 
 fn item(body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new("01J9ITEM"),
         turn_id: TurnId::new("01J9TURN"),
@@ -1184,6 +1185,7 @@ fn unknown_tags_decode_to_unknown() {
         body,
         EventBody::ItemAdded {
             item: Item {
+                agent_message: None,
                 parent_call_id: None,
                 id: ItemId::new("i"),
                 turn_id: TurnId::new("t"),
@@ -1920,4 +1922,27 @@ fn transcript_ancestry_is_optional_and_round_trips() {
     let json = serde_json::to_value(&nested).unwrap();
     assert_eq!(json["parent_call_id"], "spawning-tool");
     assert_eq!(serde_json::from_value::<Item>(json).unwrap(), nested);
+}
+
+#[test]
+fn agent_provenance_is_optional_and_round_trips_with_the_item() {
+    let mut prompt = item(ItemBody::UserMessage {
+        text: "Review this".into(),
+        attachments: vec![],
+    });
+    assert!(
+        serde_json::to_value(&prompt)
+            .unwrap()
+            .get("agent_message")
+            .is_none()
+    );
+    prompt.agent_message = Some(herder_protocol::AgentMessage {
+        sender_session_id: SessionId::new("sender"),
+        message_id: "review-1".into(),
+        hop_count: 2,
+        permission_ceiling: PermissionMode::Ask,
+    });
+    let json = serde_json::to_value(&prompt).unwrap();
+    assert_eq!(json["agent_message"]["sender_session_id"], "sender");
+    assert_eq!(serde_json::from_value::<Item>(json).unwrap(), prompt);
 }

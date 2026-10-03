@@ -110,6 +110,7 @@ pub fn transcript(items: Vec<Item>, budget: usize) -> Vec<Item> {
     }
 
     let note = Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(NOTE_ID),
         turn_id: head

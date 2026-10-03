@@ -35,7 +35,15 @@ fn tools_list_is_the_mcp_shape() {
         .collect();
     assert_eq!(
         names,
-        ["spawn", "send", "status", "wait_for", "answer", "escalate"]
+        [
+            "spawn",
+            "send",
+            "send_session",
+            "status",
+            "wait_for",
+            "answer",
+            "escalate"
+        ]
     );
     for tool in tools {
         let keys: BTreeSet<_> = tool.as_object().unwrap().keys().cloned().collect();
@@ -218,6 +226,7 @@ fn calls_parse_validate_and_round_trip() {
         let back = match expected {
             ToolCall::Spawn(input) => serde_json::to_value(input),
             ToolCall::Send(input) => serde_json::to_value(input),
+            ToolCall::SendSession(input) => serde_json::to_value(input),
             ToolCall::Status(input) => serde_json::to_value(input),
             ToolCall::WaitFor(input) => serde_json::to_value(input),
             ToolCall::Answer(input) => serde_json::to_value(input),

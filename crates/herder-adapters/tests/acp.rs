@@ -107,6 +107,7 @@ fn prompt(session: &AdapterSession, text: &str) {
     session
         .commands
         .send(AdapterCommand::SendPrompt {
+            agent_sender: None,
             turn_id: turn(),
             text: text.into(),
             images: Vec::new(),
@@ -116,6 +117,7 @@ fn prompt(session: &AdapterSession, text: &str) {
 
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),
@@ -442,6 +444,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
     let mut start_request = request(PermissionMode::Ask);
     start_request.seed = vec![
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
@@ -451,6 +454,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
             },
         },
         Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),
@@ -611,6 +615,7 @@ async fn prompt_with_image(adapter: &AcpAdapter) -> Vec<AdapterEvent> {
     session
         .commands
         .send(AdapterCommand::SendPrompt {
+            agent_sender: None,
             turn_id: turn(),
             text: "reply with the word ok".into(),
             images: vec![png()],

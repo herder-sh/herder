@@ -17,8 +17,9 @@ use serde_json::{Map, Value};
 
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, EscalateArgs, EscalateInput,
-    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SpawnInput, SpawnOutput,
-    StatusInput, StatusOutput, WaitForInput, WaitForOutput,
+    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
+    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput,
+    WaitForOutput,
 };
 
 /// One of the task tools.
@@ -28,6 +29,8 @@ pub enum Tool {
     Spawn,
     /// Prompt an idle child.
     Send,
+    /// Send to an independent session on this host.
+    SendSession,
     /// Snapshot of the children.
     Status,
     /// Block until a child reports or needs an answer.
@@ -40,9 +43,10 @@ pub enum Tool {
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 6] = [
+    pub const ALL: [Tool; 7] = [
         Tool::Spawn,
         Tool::Send,
+        Tool::SendSession,
         Tool::Status,
         Tool::WaitFor,
         Tool::Answer,
@@ -54,6 +58,7 @@ impl Tool {
         match self {
             Tool::Spawn => "spawn",
             Tool::Send => "send",
+            Tool::SendSession => "send_session",
             Tool::Status => "status",
             Tool::WaitFor => "wait_for",
             Tool::Answer => "answer",
@@ -79,6 +84,14 @@ impl Tool {
                  and a task has a limit on children (5 unless the user changed it). When this \
                  machine is too loaded for another agent, fails with `host_busy` and \
                  `retry_after_secs`: keep working or call wait_for, then retry."
+            }
+            Tool::SendSession => {
+                "Send a message to another existing session on this host. Its agent receives an \
+                 attributed prompt through its normal queue; no new session or automatic reply is \
+                 created. Supply a stable message_id and reuse it when retrying. Cannot send to \
+                 yourself, an archived/moved session, or an agent with higher permissions. \
+                 Relay chains are bounded. Do not repeatedly acknowledge or bounce messages. \
+                 Existing child send/status/wait_for behavior is unchanged."
             }
             Tool::Send => {
                 "Send a follow-up prompt to a child: a correction, the next step, or a reply to \
@@ -125,6 +138,7 @@ impl Tool {
         match self {
             Tool::Spawn => tool_schema::<SpawnInput>(),
             Tool::Send => tool_schema::<SendInput>(),
+            Tool::SendSession => tool_schema::<SendSessionInput>(),
             Tool::Status => tool_schema::<StatusInput>(),
             Tool::WaitFor => tool_schema::<WaitForInput>(),
             Tool::Answer => tool_schema::<AnswerInput>(),
@@ -137,6 +151,7 @@ impl Tool {
         match self {
             Tool::Spawn => tool_schema::<SpawnOutput>(),
             Tool::Send => tool_schema::<SendOutput>(),
+            Tool::SendSession => tool_schema::<SendSessionOutput>(),
             Tool::Status => tool_schema::<StatusOutput>(),
             Tool::WaitFor => tool_schema::<WaitForOutput>(),
             Tool::Answer => tool_schema::<AnswerOutput>(),
@@ -208,6 +223,8 @@ pub enum ToolCall {
     Spawn(SpawnInput),
     /// `send`.
     Send(SendInput),
+    /// `send_session`.
+    SendSession(SendSessionInput),
     /// `status`.
     Status(StatusInput),
     /// `wait_for`.
@@ -226,6 +243,7 @@ impl ToolCall {
         let call = match tool {
             Tool::Spawn => serde_json::from_value(arguments).map(ToolCall::Spawn),
             Tool::Send => serde_json::from_value(arguments).map(ToolCall::Send),
+            Tool::SendSession => serde_json::from_value(arguments).map(ToolCall::SendSession),
             Tool::Status => serde_json::from_value(arguments).map(ToolCall::Status),
             Tool::WaitFor => serde_json::from_value(arguments).map(ToolCall::WaitFor),
             Tool::Answer => serde_json::from_value(arguments).map(ToolCall::Answer),
@@ -239,6 +257,7 @@ impl ToolCall {
         match self {
             ToolCall::Spawn(_) => Tool::Spawn,
             ToolCall::Send(_) => Tool::Send,
+            ToolCall::SendSession(_) => Tool::SendSession,
             ToolCall::Status(_) => Tool::Status,
             ToolCall::WaitFor(_) => Tool::WaitFor,
             ToolCall::Answer(_) => Tool::Answer,

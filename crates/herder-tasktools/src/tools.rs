@@ -383,3 +383,24 @@ impl From<EscalateInput> for EscalateArgs {
 /// Result of `escalate`: the request now waits for the user.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EscalateOutput {}
+
+/// Send a message to an existing independent session on the same daemon.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendSessionInput {
+    /// Destination session ID on this host; never your own session.
+    pub session_id: SessionId,
+    /// Message text. The recipient sees it as an agent message, not human instructions.
+    pub text: String,
+    /// Stable unique key for this delivery. Reuse on retries; never reuse for different text.
+    pub message_id: String,
+}
+
+/// Acceptance of a same-host agent message, not a promise of a reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SendSessionOutput {
+    /// Whether the message was accepted behind an active turn or an existing queued prompt.
+    pub queued: bool,
+    /// True when this sender/key was already accepted; no second prompt was created.
+    pub duplicate: bool,
+}

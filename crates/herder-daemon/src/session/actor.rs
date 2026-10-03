@@ -51,6 +51,11 @@ pub(super) struct SessionCommand {
 
 /// What a session command asks for.
 pub(super) enum Request {
+    SendAgentMessage {
+        text: String,
+        message: herder_protocol::AgentMessage,
+        done: oneshot::Sender<herder_tasktools::SendSessionOutput>,
+    },
     /// Queues a prompt, keeping its images; `queued` learns whether it waits behind a running
     /// turn.
     SendPrompt {
@@ -123,6 +128,7 @@ pub(super) enum PrimaryAct {
 /// A prompt waiting for its turn, or the running turn's.
 #[derive(Clone, PartialEq)]
 struct Prompt {
+    agent_message: Option<herder_protocol::AgentMessage>,
     by: Option<UserId>,
     text: String,
     /// The images it carries, kept apart ([`attachments`]).
@@ -237,6 +243,7 @@ impl Actor {
                 self.queue = saved
                     .iter()
                     .map(|prompt| Prompt {
+                        agent_message: prompt.agent_message.clone(),
                         by: prompt.by.clone(),
                         text: prompt.text.clone(),
                         attachments: prompt.attachments.clone(),
@@ -264,10 +271,17 @@ impl Actor {
 
     /// Saves the queue to the store when it changed, so it survives a restart.
     async fn save_queue(&mut self) {
+        if let Err(err) = self.persist_queue().await {
+            warn!(session_id = %self.session.session_id, "cannot save queued prompts: {err:#}");
+        }
+    }
+
+    async fn persist_queue(&mut self) -> Result<()> {
         let queue: Vec<QueuedPrompt> = self
             .queue
             .iter()
             .map(|prompt| QueuedPrompt {
+                agent_message: prompt.agent_message.clone(),
                 by: prompt.by.clone(),
                 text: prompt.text.clone(),
                 attachments: prompt.attachments.clone(),
@@ -275,19 +289,14 @@ impl Actor {
                 retry_at: prompt.retry_at,
             })
             .collect();
-        if queue == self.saved {
-            return;
+        if queue != self.saved {
+            self.inner
+                .journal
+                .set_queued_prompts(self.session.session_id.clone(), queue.clone())
+                .await?;
+            self.saved = queue;
         }
-        let session_id = self.session.session_id.clone();
-        match self
-            .inner
-            .journal
-            .set_queued_prompts(session_id.clone(), queue.clone())
-            .await
-        {
-            Ok(()) => self.saved = queue,
-            Err(err) => warn!(%session_id, "cannot save the queued prompts: {err:#}"),
-        }
+        Ok(())
     }
 
     pub(super) async fn run(
@@ -427,6 +436,83 @@ impl Actor {
             ));
         }
         match request {
+            Request::SendAgentMessage {
+                text,
+                message,
+                done,
+            } => {
+                if super::tasks::rank(self.session.permission_mode)
+                    > super::tasks::rank(message.permission_ceiling)
+                {
+                    return Err(error(
+                        ErrorCode::Forbidden,
+                        "recipient permissions exceed sender permissions",
+                    ));
+                }
+                let matches = |other: &herder_protocol::AgentMessage| {
+                    other.sender_session_id == message.sender_session_id
+                        && other.message_id == message.message_id
+                };
+                let existing = self
+                    .queue
+                    .iter()
+                    .find(|p| p.agent_message.as_ref().is_some_and(&matches))
+                    .map(|p| (p.text.clone(), true));
+                let existing = match existing {
+                    Some(value) => Some(value),
+                    None => self
+                        .inner
+                        .journal
+                        .all(self.session.session_id.clone())
+                        .await
+                        .map_err(super::internal)?
+                        .into_iter()
+                        .find_map(|event| {
+                            if let EventBody::ItemAdded { item } = event.body
+                                && item.agent_message.as_ref().is_some_and(&matches)
+                                && let ItemBody::UserMessage { text, .. } = item.body
+                            {
+                                Some((text, false))
+                            } else {
+                                None
+                            }
+                        }),
+                };
+                if let Some((old_text, queued)) = existing {
+                    if old_text != text {
+                        return Err(error(
+                            ErrorCode::Conflict,
+                            "message_id was used for different text",
+                        ));
+                    }
+                    let _ = done.send(herder_tasktools::SendSessionOutput {
+                        queued,
+                        duplicate: true,
+                    });
+                    return Ok(CommandResult::Applied);
+                }
+                if self.queue.len() >= 256 {
+                    return Err(error(ErrorCode::Conflict, "recipient prompt queue is full"));
+                }
+                let queued = self.turn.is_some() || !self.queue.is_empty();
+                self.queue.push_back(Prompt {
+                    agent_message: Some(message),
+                    by: None,
+                    text,
+                    attachments: Vec::new(),
+                    retry: false,
+                    retry_at: None,
+                });
+                // A successful tool result is a durable acceptance, not a best-effort write.
+                if let Err(err) = self.persist_queue().await {
+                    self.queue.pop_back();
+                    return Err(super::internal(err));
+                }
+                let _ = done.send(herder_tasktools::SendSessionOutput {
+                    queued,
+                    duplicate: false,
+                });
+            }
             Request::SendPrompt {
                 text,
                 images,
@@ -436,6 +522,7 @@ impl Actor {
                 self.cancel_retry(false).await;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
+                    agent_message: None,
                     by,
                     text,
                     attachments,
@@ -1251,9 +1338,13 @@ impl Actor {
             let Some(prompt) = self.queue.pop_front() else {
                 return;
             };
-            // Before the prompt is journaled, so a restart never runs it twice.
-            self.save_queue().await;
+            let original = prompt.clone();
+            // Agent queue removal happens atomically with its durable transcript item.
+            if prompt.agent_message.is_none() {
+                self.save_queue().await;
+            }
             let Prompt {
+                agent_message,
                 by,
                 text,
                 attachments,
@@ -1262,11 +1353,51 @@ impl Actor {
             } = prompt;
             self.set_status(SessionStatus::Running).await;
             let turn_id = (self.inner.turn_ids)();
+            if agent_message.as_ref().is_some_and(|message| {
+                super::tasks::rank(self.session.permission_mode)
+                    > super::tasks::rank(message.permission_ceiling)
+            }) {
+                if let Err(err) = self
+                    .user_message(by, &turn_id, text, attachments, agent_message)
+                    .await
+                {
+                    warn!("cannot journal rejected agent message: {err:#}");
+                    self.queue.push_front(original);
+                    self.set_status(SessionStatus::Error).await;
+                    return;
+                }
+                self.save_queue().await;
+                self.log(EventBody::TurnStarted {
+                    turn_id: turn_id.clone(),
+                })
+                .await;
+                let error =
+                    fatal("Recipient permissions now exceed the sending agent's authority.".into());
+                let summary = failed(&error);
+                self.log(EventBody::TurnFailed {
+                    turn_id: turn_id.clone(),
+                    error,
+                })
+                .await;
+                self.permit = None;
+                self.report(turn_id, summary).await;
+                self.set_status(SessionStatus::NeedsYou).await;
+                continue;
+            }
             if self.adapter.is_none() {
                 match self.start_adapter().await {
                     Ok(adapter) => self.adapter = Some(adapter),
                     Err(error) => {
-                        self.user_message(by, &turn_id, text, attachments).await;
+                        if let Err(err) = self
+                            .user_message(by, &turn_id, text, attachments, agent_message)
+                            .await
+                        {
+                            warn!("cannot journal prompt: {err:#}");
+                            self.queue.push_front(original);
+                            self.set_status(SessionStatus::Error).await;
+                            return;
+                        }
+                        self.save_queue().await;
                         self.log(EventBody::TurnStarted {
                             turn_id: turn_id.clone(),
                         })
@@ -1287,11 +1418,28 @@ impl Actor {
                 }
             }
             let images = self.images(&attachments).await;
-            self.user_message(by.clone(), &turn_id, text.clone(), attachments.clone())
-                .await;
+            if let Err(err) = self
+                .user_message(
+                    by.clone(),
+                    &turn_id,
+                    text.clone(),
+                    attachments.clone(),
+                    agent_message.clone(),
+                )
+                .await
+            {
+                warn!("cannot journal prompt: {err:#}");
+                self.queue.push_front(original);
+                self.set_status(SessionStatus::Error).await;
+                return;
+            }
+            self.save_queue().await;
             if let Some(adapter) = &self.adapter {
                 // A closed channel means the CLI is gone; its `exited` fails this turn.
                 let _ = adapter.commands.send(AdapterCommand::SendPrompt {
+                    agent_sender: agent_message
+                        .as_ref()
+                        .map(|message| message.sender_session_id.clone()),
                     turn_id: turn_id.clone(),
                     text: text.clone(),
                     images,
@@ -1299,6 +1447,7 @@ impl Actor {
             }
             self.turn = Some(turn_id);
             self.prompt = Some(Prompt {
+                agent_message,
                 by,
                 text,
                 attachments,
@@ -1334,6 +1483,7 @@ impl Actor {
         })
         .await;
         let call = Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
@@ -1386,6 +1536,7 @@ impl Actor {
         });
         let message = outcome.error_message(&setup.command);
         let result = Item {
+            agent_message: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: setup.turn_id.clone(),
@@ -1634,7 +1785,8 @@ impl Actor {
                 };
                 self.turn_ended(turn_id, body, settled, summary).await;
             }
-            AdapterEvent::ItemStarted { item } => {
+            AdapterEvent::ItemStarted { mut item } => {
+                item.agent_message = None;
                 self.inner
                     .journal
                     .sink()
@@ -1646,7 +1798,8 @@ impl Actor {
                     .sink()
                     .delta(&self.session.session_id, &item_id, &text);
             }
-            AdapterEvent::ItemCompleted { item } => {
+            AdapterEvent::ItemCompleted { mut item } => {
+                item.agent_message = None;
                 match &item.body {
                     ItemBody::AssistantMessage { text }
                         if self.turn.as_ref() == Some(&item.turn_id)
@@ -2017,19 +2170,18 @@ impl Actor {
         turn_id: &TurnId,
         text: String,
         attachments: Vec<Attachment>,
-    ) {
+        agent_message: Option<herder_protocol::AgentMessage>,
+    ) -> Result<()> {
         let item = Item {
+            agent_message,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::UserMessage { text, attachments },
         };
-        if let Err(err) = self.record(by, EventBody::ItemAdded { item }).await {
-            warn!(session_id = %self.session.session_id, "cannot journal a prompt: {err:#}");
-            return;
-        }
+        self.record(by, EventBody::ItemAdded { item }).await?;
         if !titles::enabled(&self.inner) {
-            return;
+            return Ok(());
         }
         self.prompts = match self.prompts {
             Some(prompts) => Some(prompts + 1),
@@ -2038,6 +2190,7 @@ impl Actor {
         if self.prompts == Some(1) {
             titles::auto(&self.inner, self.session.session_id.clone());
         }
+        Ok(())
     }
 
     /// The prompts the journal holds; `None` when it cannot be read.

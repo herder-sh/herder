@@ -9,14 +9,14 @@ use herder_client_core::{
     TerminalEvent,
 };
 use herder_protocol::{
-    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
-    ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
-    EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image, Item, ItemBody, ItemId,
-    LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, Provider,
-    PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
-    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
-    UsageWindow, UserId,
+    Account, AccountId, AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalId,
+    ApprovalOutcome, Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult,
+    Constraint, Container, ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
+    EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId, HostResources, Image,
+    Item, ItemBody, ItemId, LinkedVault, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId,
+    Provider, PullRequest, QuestionId, ReviewStatus, Role, Route, SessionHead, SessionId,
+    SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource,
+    TurnError, TurnId, UsageWindow, UserId,
 };
 use serde_json::Value as Json;
 
@@ -296,7 +296,17 @@ pub enum ErrorClass {
 }
 
 #[uniffi::remote(Record)]
+pub struct AgentMessage {
+    pub sender_session_id: SessionId,
+    pub message_id: String,
+    pub hop_count: u32,
+    /// Maximum permissions this message may exercise, retained while queued.
+    pub permission_ceiling: PermissionMode,
+}
+
+#[uniffi::remote(Record)]
 pub struct Item {
+    pub agent_message: Option<AgentMessage>,
     pub parent_call_id: Option<ItemId>,
     pub id: ItemId,
     pub turn_id: TurnId,

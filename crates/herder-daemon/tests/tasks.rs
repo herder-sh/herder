@@ -44,6 +44,7 @@ impl Adapter for Echo {
             tokio::spawn(async move {
                 let reply = |turn_id: TurnId, text: String| {
                     let item = Item {
+                        agent_message: None,
                         parent_call_id: None,
                         id: ItemId::new(format!("item-{turn_id}")),
                         turn_id: turn_id.clone(),
@@ -81,6 +82,7 @@ impl Adapter for Echo {
                             if let Some((name, input)) = tool {
                                 let call = ItemId::new(format!("call-{requests}"));
                                 let item = Item {
+                                    agent_message: None,
                                     parent_call_id: None,
                                     id: call.clone(),
                                     turn_id: turn_id.clone(),
@@ -1279,4 +1281,240 @@ async fn a_user_answers_a_request_routed_to_the_primary_first() {
     let late = json!({ "child": child.as_str(), "question_id": "question-1", "text": "B" });
     assert_eq!(tools.fails("answer", late).await, "already_resolved");
     assert!(daemon.notifier.taken().is_empty());
+}
+
+fn agent_messages(events: &[Event]) -> Vec<(&herder_protocol::AgentMessage, &str)> {
+    events
+        .iter()
+        .filter_map(|event| {
+            if let EventBody::ItemAdded { item } = &event.body
+                && let Some(message) = &item.agent_message
+                && let ItemBody::UserMessage { text, .. } = &item.body
+            {
+                assert!(
+                    event.by.is_none(),
+                    "agent prompts must never be attributed to a human"
+                );
+                Some((message, text.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn independent_agent_messages_queue_deduplicate_and_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let a = daemon.primary(PermissionMode::Ask).await;
+    let b = daemon.primary(PermissionMode::Ask).await;
+    daemon
+        .user_answers(CommandBody::SendPrompt {
+            session_id: b.clone(),
+            text: "Hang.".into(),
+            images: Vec::new(),
+        })
+        .await;
+    daemon
+        .until_n(&b, 2, |event| {
+            matches!(event, EventBody::TurnStarted { .. })
+        })
+        .await;
+    let message = json!({"session_id":b,"text":"Please review accounts.","message_id":"review-1"});
+    let mut first = daemon.connect(&a);
+    let mut second = daemon.connect(&a);
+    let (one, two) = tokio::join!(
+        first.ok("send_session", message.clone()),
+        second.ok("send_session", message.clone())
+    );
+    assert_eq!(one["queued"], true);
+    assert_eq!(two["queued"], true);
+    assert_ne!(one["duplicate"], two["duplicate"]);
+    let store = Store::open(dir.path().join("herder.db")).unwrap();
+    let queued = store.queued_prompts(&b).unwrap();
+    assert_eq!(queued.len(), 1);
+    let metadata = queued[0].agent_message.as_ref().unwrap();
+    assert_eq!(metadata.sender_session_id, a);
+    assert_eq!(metadata.hop_count, 1);
+    assert_eq!(metadata.permission_ceiling, PermissionMode::Ask);
+    drop(store);
+    drop(first);
+    drop(second);
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let daemon = Daemon::open(dir.path()).await;
+    daemon
+        .until_n(&b, 2, |event| {
+            matches!(event, EventBody::TurnCompleted { .. })
+        })
+        .await;
+    let events = daemon.journal(&b).await;
+    let messages = agent_messages(&events);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].0.sender_session_id, a);
+    assert_eq!(messages[0].1, "Please review accounts.");
+    assert!(
+        Store::open(dir.path().join("herder.db"))
+            .unwrap()
+            .session(&b)
+            .unwrap()
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    daemon.start(&a).await;
+    let mut tools = daemon.connect(&a);
+    let duplicate = tools.ok("send_session", message.clone()).await;
+    assert_eq!(duplicate["duplicate"], true);
+    assert_eq!(agent_messages(&daemon.journal(&b).await).len(), 1);
+    assert_eq!(
+        tools
+            .fails(
+                "send_session",
+                json!({"session_id":b,"text":"Different","message_id":"review-1"})
+            )
+            .await,
+        "not_allowed"
+    );
+}
+
+#[tokio::test]
+async fn independent_agent_messages_enforce_identity_authority_and_relay_depth() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let a = daemon.primary(PermissionMode::Ask).await;
+    let b = daemon.primary(PermissionMode::Ask).await;
+    let powerful = daemon.primary(PermissionMode::FullAccess).await;
+    let mut a_tools = daemon.connect(&a);
+    for (target, expected) in [
+        (&a, "not_allowed"),
+        (&powerful, "not_allowed"),
+        (&SessionId::new("missing"), "not_found"),
+    ] {
+        assert_eq!(
+            a_tools
+                .fails(
+                    "send_session",
+                    json!({"session_id":target,"text":"Hi","message_id":"m"})
+                )
+                .await,
+            expected
+        );
+    }
+    let mut b_tools = daemon.connect(&b);
+    for hop in 1..=8 {
+        let (tools, target) = if hop % 2 == 1 {
+            (&mut a_tools, &b)
+        } else {
+            (&mut b_tools, &a)
+        };
+        tools
+            .ok(
+                "send_session",
+                json!({"session_id":target,"text":"Review","message_id":format!("relay-{hop}")}),
+            )
+            .await;
+        daemon
+            .until_n(target, 1 + (hop as usize).div_ceil(2), |event| {
+                matches!(event, EventBody::TurnCompleted { .. })
+            })
+            .await;
+        let events = daemon.journal(target).await;
+        assert_eq!(agent_messages(&events).last().unwrap().0.hop_count, hop);
+    }
+    assert_eq!(
+        a_tools
+            .fails(
+                "send_session",
+                json!({"session_id":b,"text":"Loop","message_id":"too-far"})
+            )
+            .await,
+        "not_allowed"
+    );
+    // Existing child APIs cannot reset the relay counter or create an orphan at the limit.
+    assert_eq!(
+        a_tools
+            .fails("spawn", json!({"task":"Relay", "prompt":"Reset the loop"}))
+            .await,
+        "not_allowed"
+    );
+    let children = a_tools.ok("status", json!({})).await;
+    assert_eq!(children["children"], json!([]));
+    daemon.start(&a).await; // a real human prompt resets relay depth
+    a_tools
+        .ok(
+            "send_session",
+            json!({"session_id":b,"text":"New task","message_id":"after-human"}),
+        )
+        .await;
+    daemon
+        .until_n(&b, 6, |event| {
+            matches!(event, EventBody::TurnCompleted { .. })
+        })
+        .await;
+    assert_eq!(
+        agent_messages(&daemon.journal(&b).await)
+            .last()
+            .unwrap()
+            .0
+            .hop_count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn queued_agent_message_cannot_gain_permissions_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let a = daemon.primary(PermissionMode::Ask).await;
+    let b = daemon.primary(PermissionMode::Ask).await;
+    daemon
+        .user_answers(CommandBody::SendPrompt {
+            session_id: b.clone(),
+            text: "Hang.".into(),
+            images: Vec::new(),
+        })
+        .await;
+    daemon
+        .until_n(&b, 2, |event| {
+            matches!(event, EventBody::TurnStarted { .. })
+        })
+        .await;
+    daemon
+        .connect(&a)
+        .ok(
+            "send_session",
+            json!({"session_id":b,"text":"Review","message_id":"permission-race"}),
+        )
+        .await;
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Emulate a separately persisted permission change before the pending message dispatches.
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    store
+        .append(herder_store::NewEvent {
+            session_id: b.clone(),
+            at: herder_protocol::Timestamp::now(),
+            by: Some(alice()),
+            body: EventBody::PermissionModeChanged {
+                mode: PermissionMode::FullAccess,
+            },
+        })
+        .unwrap();
+    drop(store);
+    let daemon = Daemon::open(dir.path()).await;
+    daemon
+        .until_n(&b, 2, |event| matches!(event, EventBody::TurnFailed { .. }))
+        .await;
+    let events = daemon.journal(&b).await;
+    assert_eq!(agent_messages(&events).len(), 1);
+    assert!(events.iter().any(|event| matches!(&event.body, EventBody::TurnFailed { error, .. } if error.message.contains("authority"))));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event.body, EventBody::TurnCompleted { .. }))
+            .count(),
+        1
+    );
 }

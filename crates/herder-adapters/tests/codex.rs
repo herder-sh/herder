@@ -166,6 +166,7 @@ fn turn() -> TurnId {
 
 fn prompt(text: &str) -> AdapterCommand {
     AdapterCommand::SendPrompt {
+        agent_sender: None,
         turn_id: turn(),
         text: text.into(),
         images: Vec::new(),
@@ -174,6 +175,7 @@ fn prompt(text: &str) -> AdapterCommand {
 
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
+        agent_message: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),
@@ -259,6 +261,7 @@ async fn a_prompts_images_go_ahead_of_its_text_as_data_urls() {
             mode: PermissionMode::ReadOnly,
         },
         AdapterCommand::SendPrompt {
+            agent_sender: None,
             turn_id: turn(),
             text: "Reply with the word ok.".into(),
             images: vec![image],
