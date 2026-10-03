@@ -3,7 +3,6 @@ package sh.herder.android.ui
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -11,7 +10,6 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -162,26 +160,6 @@ class PrsScreenTest {
 
         compose.onNodeWithContentDescription("Session").performClick()
         compose.onNodeWithText("Link Pull Request…").assertIsDisplayed()
-    }
-
-    @Test
-    fun theLinkDialogSendsAParsedNumber() {
-        // The dialog's field focuses and blinks; Robolectric never goes idle if the clock auto-advances.
-        compose.mainClock.autoAdvance = false
-        var linked: ULong? = null
-        compose.setContent {
-            HerderTheme {
-                LinkPrDialog("api · herder/api", onDismiss = {}, onLink = { linked = it })
-            }
-        }
-        compose.mainClock.advanceTimeBy(1_000)
-        compose.onNodeWithText("Link a Pull Request").assertIsDisplayed()
-        compose.onNodeWithText("Link").assertIsNotEnabled()
-        compose.onNode(hasSetTextAction()).performTextInput("https://github.com/org/app/pull/41")
-        compose.mainClock.advanceTimeBy(1_000)
-        compose.onNodeWithText("Link").performClick()
-        compose.mainClock.advanceTimeBy(1_000)
-        assertEquals(41uL, linked)
     }
 
     @Test

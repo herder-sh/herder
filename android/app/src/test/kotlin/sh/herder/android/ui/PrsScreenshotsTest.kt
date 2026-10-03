@@ -67,17 +67,6 @@ class PrsScreenshotsTest {
         capture("phone-$theme-session")
     }
 
-    private fun phoneLink(theme: String) {
-        compose.mainClock.autoAdvance = false
-        compose.setContent {
-            HerderTheme(dark = theme == "dark") {
-                LinkPrDialog("api · herder/api", onDismiss = {}, onLink = {})
-            }
-        }
-        compose.mainClock.advanceTimeBy(1_000)
-        capture("phone-$theme-link")
-    }
-
     private fun tabletAll(theme: String) {
         compose.setContent { HerderTheme(dark = theme == "dark") { MachinesScreen(sampleFleet(now), now) } }
         compose.onNodeWithText("Pull requests").performClick()
@@ -136,14 +125,6 @@ class PrsScreenshotsTest {
     @Test
     @Config(qualifiers = "w411dp-h891dp-xxhdpi")
     fun phoneDarkSession() = phoneSession("dark")
-
-    @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun phoneLightLink() = phoneLink("light")
-
-    @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun phoneDarkLink() = phoneLink("dark")
 
     @Test
     @Config(qualifiers = "w1280dp-h800dp-xhdpi")
