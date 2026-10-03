@@ -9,8 +9,9 @@
 //! form (`▪`, `⚙`) they disagree: mosh and ratatui count one column where a phone SSH app may
 //! draw two, which shifts the rest of the row right and leaves stale cells behind. With
 //! [`Glyphs::Ascii`] the finished frame swaps each such symbol for an ASCII one before it is
-//! written, wherever it came from: the TUI's own marks or a transcript's text. Box-drawing
-//! borders stay; every terminal draws them one column wide.
+//! written, wherever it came from: the TUI's own marks or a transcript's text. Box drawing
+//! is folded too (`+ - |`), as it is East Asian Ambiguous as well; views draw panels without
+//! lines in the ASCII set where they can.
 //!
 //! Unless `:glyphs` chose, narrow screens, as on a phone, get ASCII.
 
@@ -165,20 +166,22 @@ pub const UNICODE: GlyphSet = GlyphSet {
     collapse: "«",
     expand: "»",
     separator: " · ",
-    tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "⚙"],
+    // Not ⚙ for other tools: it has an emoji form, drawn two columns wide.
+    tools: ["$", "→", "←", "✱", "◈", "☐", "◇", "◆"],
 };
 
-/// The ASCII set: what any terminal draws one column wide. Box drawing stays.
+/// The ASCII set: what any terminal draws one column wide. Box drawing goes too: it is East
+/// Asian Ambiguous, which some phone fonts draw two columns wide.
 pub const ASCII: GlyphSet = GlyphSet {
     states: ["!", "x", "v", "*", "~", "o", "_", ">", "."],
-    branch: "├",
-    last: "└",
-    pipe: "│",
+    branch: "|",
+    last: "`",
+    pipe: "|",
     folded: "+",
     unfolded: "-",
-    bar: "│",
-    cap_end: "└",
-    cap_fill: "─",
+    bar: "|",
+    cap_end: "'",
+    cap_fill: "-",
     cursor: "|",
     pointer: ">",
     collapsed: ">",
@@ -257,32 +260,37 @@ pub fn folded(text: &str) -> String {
 
 /// The ASCII stand-in for `c`, if it needs one.
 fn ascii(c: char) -> Option<char> {
-    let ascii = match c {
-        '·' | '–' | '—' | '‒' | '―' | '−' | '░' => '-',
-        '…' => '.',
-        '●' | '•' | '◉' | '★' => '*',
-        '○' | '◌' | '◯' | '◦' => 'o',
-        '◆' | '◇' => '+',
-        '▪' | '■' | '□' => '_',
-        '✗' | '✘' | '×' => 'x',
-        '✓' | '✔' => 'v',
-        '‹' | '«' | '←' | '⌫' | '◀' | '◂' => '<',
-        '›' | '»' | '→' | '⏎' | '▶' | '▸' | '⚙' => '>',
-        '↑' | '▲' | '▴' => '^',
-        '↓' | '▼' | '▾' => 'v',
-        '▌' | '▏' | '▎' | '▍' | '¦' => '|',
-        '█' | '▓' | '▒' => '#',
-        '⎿' => 'L',
-        '‘' | '’' | '‚' | '′' => '\'',
-        '“' | '”' | '„' | '″' => '"',
-        '\u{a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' => ' ',
-        // Box drawing: one column everywhere.
-        '\u{2500}'..='\u{257f}' => return None,
-        // Latin-1's symbols, punctuation to arrows, shapes, dingbats and technical symbols:
-        // wide on some terminals, one column on others.
-        '\u{a1}'..='\u{bf}' | '\u{2010}'..='\u{2bff}' => '?',
-        _ => return None,
-    };
+    let ascii =
+        match c {
+            '·' | '–' | '—' | '‒' | '―' | '−' | '░' => '-',
+            '…' => '.',
+            '●' | '•' | '◉' | '★' => '*',
+            '○' | '◌' | '◯' | '◦' => 'o',
+            '◆' | '◇' => '+',
+            '▪' | '■' | '□' => '_',
+            '✗' | '✘' | '×' => 'x',
+            '✓' | '✔' => 'v',
+            '‹' | '«' | '←' | '⌫' | '◀' | '◂' => '<',
+            '›' | '»' | '→' | '⏎' | '▶' | '▸' | '⚙' => '>',
+            '↑' | '▲' | '▴' => '^',
+            '↓' | '▼' | '▾' => 'v',
+            '▌' | '▏' | '▎' | '▍' | '¦' => '|',
+            '█' | '▓' | '▒' => '#',
+            '⎿' => 'L',
+            '‘' | '’' | '‚' | '′' => '\'',
+            '“' | '”' | '„' | '″' => '"',
+            '\u{a0}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' => ' ',
+            // Box drawing is East Asian Ambiguous too: lines become `-` and `|`, the rest `+`.
+            '─' | '━' | '┄' | '┅' | '┈' | '┉' | '╌' | '╍' | '═' | '╴' | '╶' | '╸' | '╺' | '╼'
+            | '╾' => '-',
+            '│' | '┃' | '┆' | '┇' | '┊' | '┋' | '╎' | '╏' | '║' | '╵' | '╷' | '╹' | '╻' | '╽'
+            | '╿' => '|',
+            '\u{2500}'..='\u{257f}' => '+',
+            // Latin-1's symbols, punctuation to arrows, shapes, dingbats and technical symbols:
+            // wide on some terminals, one column on others.
+            '\u{a1}'..='\u{bf}' | '\u{2010}'..='\u{2bff}' => '?',
+            _ => return None,
+        };
     Some(ascii)
 }
 
@@ -291,12 +299,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ascii_leaves_one_column_ascii_and_borders() {
-        let mut buffer = Buffer::with_lines(["┌ a · b … ● ◆ ▪ → ⚙ ✓ ✗ ¿ ą 日 ┐"]);
+    fn ascii_folds_symbols_and_box_drawing() {
+        let mut buffer = Buffer::with_lines(["┌ a · b … ● ◆ ▪ → ⚙ ✓ ✗ ¿ ą 日 ┐", "│ ├─┴ ═ ║ ┘"]);
         fold(&mut buffer);
         assert_eq!(
             buffer,
-            Buffer::with_lines(["┌ a - b . * + _ > > v x ? ą 日 ┐"])
+            Buffer::with_lines(["+ a - b . * + _ > > v x ? ą 日 +", "| +-+ - | +"])
         );
     }
 
@@ -328,7 +336,7 @@ mod tests {
         assert_eq!(ASCII.state(State::Unknown), ".");
         assert_eq!(UNICODE.tool("Bash"), "$");
         assert_eq!(ASCII.tool("mcp__herder__spawn"), "+");
-        assert_eq!(UNICODE.tool("mcp__github__search"), "⚙");
+        assert_eq!(UNICODE.tool("mcp__github__search"), "◆");
         assert_eq!(UNICODE.spinner_frame(0), "⠋");
         assert_eq!(UNICODE.spinner_frame(85), "⠙");
         assert_eq!(ASCII.spinner_frame(120 * 5), "/");

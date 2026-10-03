@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 110, 20).backend()"
 ---
-" herder        inbox 2 « │ ┌ write the tests needs you ─────────────────── claude-main · claude-opus · ask ┐  "
+" herder        inbox 2 « │ ┌ write the tests needs you ────────────────────────────────────────────────────┐  "
 "                         │ │  · question for the primary session: Which port should the server use?        │  "
 " machines     by machine │ │  · question escalated to you: the primary session left it to you; the primary…│  "
 "  ◉ box                3 │ │  · allowed by the primary session                                             │  "

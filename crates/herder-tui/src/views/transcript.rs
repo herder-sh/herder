@@ -9,19 +9,18 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 use textwrap::Options;
 
 use crate::app::{App, Focus};
 use crate::mouse::{Click, Hits, Wheel};
 use crate::session::{Entry, Session, Tone};
-
-/// Marks the end of an item still streaming.
-const CURSOR: &str = "▌";
+use crate::ui::glyphs::GlyphSet;
+use crate::ui::state::State;
 
 /// `compact`, on a narrow screen, leaves the title to the header.
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, hits: &mut Hits) {
-    let mut block = Block::bordered().border_style(super::border(app, Focus::Transcript));
+    let mut block = super::pane(app).border_style(super::border(app, Focus::Transcript));
     let Some(session) = app.open_session() else {
         let hint = Line::styled("Select a session and press Enter.", super::dim());
         let inner = block.inner(area);
@@ -49,26 +48,9 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
             .map_or_else(|| parent.to_string(), |(_, primary)| primary.title());
         block = block.title_bottom(Line::styled(format!(" child of {primary} "), super::dim()));
     }
-    if !session.model.is_empty() && !compact {
-        let mode = crate::session::mode_name(session.permission_mode);
-        // The account the session runs on, by its label where the machine lists it.
-        let account = app
-            .open
-            .as_ref()
-            .zip(session.account_id.as_ref())
-            .map(|(key, id)| {
-                crate::account_screen::find(&app.machines, &key.host_id, id)
-                    .map_or_else(|| id.to_string(), |account| account.label.clone())
-            });
-        let facts = match account {
-            Some(account) => format!(" {account} · {} · {mode} ", session.model),
-            None => format!(" {} · {mode} ", session.model),
-        };
-        block = block.title(Line::styled(facts, super::dim()).right_aligned());
-    }
     let inner = block.inner(area);
     let lines = if session.loaded {
-        lines(session, usize::from(inner.width))
+        lines(session, usize::from(inner.width), app.ui().glyphs)
     } else {
         vec![Line::styled("loading…", super::dim())]
     };
@@ -87,17 +69,17 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, compact: bool, 
 }
 
 /// The transcript as lines `width` wide.
-pub(crate) fn lines(session: &Session, width: usize) -> Vec<Line<'static>> {
+pub(crate) fn lines(session: &Session, width: usize, glyphs: &GlyphSet) -> Vec<Line<'static>> {
     let width = width.max(8);
     let mut out = Vec::new();
     for entry in &session.entries {
         match entry {
-            Entry::Item(item) => self::item(&mut out, item, width, false),
+            Entry::Item(item) => self::item(&mut out, item, width, false, glyphs),
             Entry::Notice { text, tone } => notice(&mut out, text, *tone, width),
         }
     }
     for item in &session.streaming {
-        self::item(&mut out, item, width, true);
+        self::item(&mut out, item, width, true, glyphs);
     }
     for prompt in &session.queued {
         if !out.is_empty() {
@@ -115,7 +97,13 @@ pub(crate) fn lines(session: &Session, width: usize) -> Vec<Line<'static>> {
     out
 }
 
-fn item(out: &mut Vec<Line<'static>>, item: &Item, width: usize, streaming: bool) {
+fn item(
+    out: &mut Vec<Line<'static>>,
+    item: &Item,
+    width: usize,
+    streaming: bool,
+    glyphs: &GlyphSet,
+) {
     match &item.body {
         ItemBody::UserMessage { text } => {
             heading(out, "you", Color::Cyan, streaming);
@@ -133,7 +121,10 @@ fn item(out: &mut Vec<Line<'static>>, item: &Item, width: usize, streaming: bool
         ItemBody::ToolCall { name, input } => {
             let summary = one_line(&tool_summary(input), width.saturating_sub(name.len() + 5));
             out.push(Line::from(vec![
-                Span::styled("  ⚙ ", Style::new().fg(Color::Yellow)),
+                Span::styled(
+                    format!("  {} ", glyphs.tool(name)),
+                    Style::new().fg(Color::Yellow),
+                ),
                 Span::styled(name.clone(), Style::new().fg(Color::Yellow)),
                 Span::raw(" "),
                 Span::styled(summary, super::dim()),
@@ -143,9 +134,9 @@ fn item(out: &mut Vec<Line<'static>>, item: &Item, width: usize, streaming: bool
             output, is_error, ..
         } => {
             let (mark, style) = if *is_error {
-                ("✗ ", Style::new().fg(Color::Red))
+                (glyphs.state(State::Error), Style::new().fg(Color::Red))
             } else {
-                ("⎿ ", super::dim())
+                (glyphs.last, super::dim())
             };
             let mut lines = output.lines().filter(|line| !line.trim().is_empty());
             let first = lines.next().unwrap_or("(no output)");
@@ -157,7 +148,7 @@ fn item(out: &mut Vec<Line<'static>>, item: &Item, width: usize, streaming: bool
             };
             let text = one_line(first, width.saturating_sub(6 + more.len()));
             out.push(Line::from(vec![
-                Span::styled(format!("    {mark}"), style),
+                Span::styled(format!("    {mark} "), style),
                 Span::styled(text, style),
                 Span::styled(more, super::dim()),
             ]));
@@ -165,7 +156,7 @@ fn item(out: &mut Vec<Line<'static>>, item: &Item, width: usize, streaming: bool
         ItemBody::Unknown => {}
     }
     if streaming && let Some(last) = out.last_mut() {
-        last.push_span(Span::styled(CURSOR, Style::new().fg(Color::Gray)));
+        last.push_span(Span::styled(glyphs.cursor, Style::new().fg(Color::Gray)));
     }
 }
 

@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 100, 20).backend()"
 ---
-" herder        inbox 0 « │ ┌ app · herder/api needs you ──────── claude-main · claude-opus · ask ┐  "
+" herder        inbox 0 « │ ┌ app · herder/api needs you ─────────────────────────────────────────┐  "
 "                         │ │assistant …                                                          │  "
 " machines     by machine │ │  Working on it▌                                                     │  "
 "  ◉ box                1 │ │                                                                     │  "
@@ -19,6 +19,6 @@ expression: "render(&mut app, 100, 20).backend()"
 "                         │ └─────────────────────────────────────────────────────────────────────┘  "
 "                         │ ┌ message · 1 queued ─────────────────────────────────────────────────┐  "
 " ─────────────────────── │ │and a changelog entry                                                │  "
-" + new            ≡ menu │ └──────────────────────── Enter send · Alt-Enter new line · Esc leave ┘  "
+" + new            ≡ menu │ └────────────────────── enter send · alt+enter newline · esc navigate ┘  "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  esc navigate  ctrl+c stop  ctrl+x leader           ● box  "

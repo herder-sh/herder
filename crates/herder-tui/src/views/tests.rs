@@ -224,6 +224,11 @@ pub(super) fn herd() -> App {
 fn the_shell_reproduces_the_mockups_at_phone_laptop_and_wide_widths() {
     for (width, height) in [(45, 30), (100, 30), (160, 34)] {
         let mut app = herd();
+        if width < super::NARROW {
+            // A phone gets ASCII only: no symbol a phone font may draw two columns wide.
+            let screen = render(&mut app, width, height).backend().to_string();
+            assert!(screen.is_ascii(), "{screen}");
+        }
         insta::assert_snapshot!(
             format!("shell_{width}x{height}"),
             render(&mut app, width, height).backend()
@@ -731,12 +736,9 @@ fn a_narrow_screen_shows_ascii_unless_glyphs_chose_unicode() {
     fake::feed(&mut app, "h1", "s2", update("s2", 3, events, Vec::new()));
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Esc);
+    // Box drawing too is folded: it is East Asian Ambiguous.
     let ascii = render(&mut app, 45, 20).backend().to_string();
-    let borders = '\u{2500}'..='\u{257f}';
-    assert!(
-        ascii.chars().all(|c| c.is_ascii() || borders.contains(&c)),
-        "{ascii}"
-    );
+    assert!(ascii.is_ascii(), "{ascii}");
     assert!(
         ascii.contains(r#"Done - the "fix" works. mostly > ship"#),
         "{ascii}"

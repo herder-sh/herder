@@ -2,7 +2,7 @@
 source: crates/herder-tui/src/views/tests.rs
 expression: "render(&mut app, 120, 12).backend()"
 ---
-" herder        inbox 0 « │ ┌ app · herder/ claude-main · claude-opus · ask ┐ │ → docs  moved                            "
+" herder        inbox 0 « │ ┌ app · herder/docs moved ──────────────────────┐ │ → docs  moved                            "
 "                         │ │                                               │ │ herder/docs · laptop · ~/src/app         "
 "  ○ vault                │ │                                               │ │ claude-main · claude-opus · ask          "
 "    ├ ○ devbox           │ │                                               │ │                                          "
