@@ -146,7 +146,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         "{entries:?}"
     );
 
-    // A daemon is no vault, and one that does not fork refuses to.
+    // A daemon is no vault, and refuses to fork a session it cannot find.
     let machine = client.machines().into_iter().next().unwrap();
     assert_eq!(machine.vault, None);
     let refused = block_on(client.send(
@@ -160,8 +160,8 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     let HerderError::Rejected { info } = refused else {
         panic!("expected a refusal, got {refused:?}");
     };
-    assert_eq!(info.code, herder_protocol::ErrorCode::Unsupported);
-    assert!(info.message.contains("does not fork"), "{}", info.message);
+    assert_eq!(info.code, herder_protocol::ErrorCode::NotFound);
+    assert!(info.message.contains("gone"), "{}", info.message);
 
     // Backgrounded and back, the client syncs again.
     client.suspend();

@@ -41,6 +41,17 @@ final class ForkSessionModel {
         }
     }
 
+    /// The sheet's submission path: real core request, provenance, then navigation.
+    func forkAndOpen(source: SessionKey, fleet: Fleet, open: (SessionKey) -> Void) async {
+        guard !working else { return }
+        await fork(source: source, provider: fleet.sessions[source]?.provider, machines: fleet.machines) { host, command in
+            try await fleet.client.send(hostId: host, command: command)
+        }
+        guard error == nil, let opened else { return }
+        fleet.forkOrigins[opened] = origin
+        open(opened)
+    }
+
     func fork(source: SessionKey, provider: Provider?, machines: [Machine],
               send: (HostId, CommandBody) async throws -> CommandResult) async {
         guard !working else { return }
@@ -115,11 +126,7 @@ struct ForkSessionSheet: View {
             Spacer()
             Button("Fork and Open") {
                 Task {
-                    await model.fork(source: key, provider: provider, machines: fleet.machines) { host, command in
-                        try await fleet.client.send(hostId: host, command: command)
-                    }
-                    if let opened = model.opened {
-                        fleet.forkOrigins[opened] = model.origin
+                    await model.forkAndOpen(source: key, fleet: fleet) { opened in
                         open(opened)
                         dismiss()
                     }
