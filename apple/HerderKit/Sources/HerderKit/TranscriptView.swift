@@ -164,7 +164,7 @@ struct HandoffSide: View {
     }
 }
 
-/// Assistant prose: inline Markdown, headings, bullets, quotes and fenced code.
+/// Assistant prose: inline Markdown, headings, bullets, quotes, tables and fenced code.
 struct MarkdownText: View {
     let text: String
     var streaming = false
@@ -174,12 +174,13 @@ struct MarkdownText: View {
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 switch part {
                 case .code(let code, let language):
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
-                            .padding(12)
-                    }
-                    .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+                    Self.codeText(code, language: language)
+                        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+                case .diagram(let source):
+                    MermaidBlock(source: source)
+                case .table(let table):
+                    MarkdownTableView(table: table)
                 case .line(let line):
                     lineView(line, last: index == parts.count - 1)
                 }
@@ -188,45 +189,70 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    static func codeText(_ code: String, language: String) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+                .padding(12)
+        }
+    }
+
     @ViewBuilder private func lineView(_ line: String, last: Bool) -> some View {
         let cursor = streaming && last ? " ▍" : ""
         if line.hasPrefix("#") {
-            Text(inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
+            Text(Self.inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
                 .font(.headline).foregroundStyle(Theme.text)
         } else if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("•").foregroundStyle(Theme.secondary)
-                Text(inline(String(line.dropFirst(item.count)) + cursor))
+                Text(Self.inline(String(line.dropFirst(item.count)) + cursor))
             }
             .font(.body).foregroundStyle(Theme.text)
         } else if line.hasPrefix(">") {
-            Text(inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
+            Text(Self.inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
                 .italic().foregroundStyle(Theme.secondary)
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) { Rectangle().fill(Theme.stroke).frame(width: 2) }
         } else {
-            Text(inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
+            Text(Self.inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
         }
     }
 
-    private func inline(_ text: String) -> AttributedString {
+    static func inline(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
     }
 
-    enum Part: Equatable { case line(String), code(String, language: String) }
+    enum Part: Equatable {
+        case line(String), code(String, language: String), diagram(String), table(MarkdownTable)
+    }
 
-    /// Fenced code blocks, and the non-blank lines between them.
+    /// Fenced code blocks, pipe tables, and the non-blank lines between them. A ```mermaid
+    /// fence becomes a diagram once it's closed, so a streaming one stays source until then.
     private var parts: [Part] { Self.parse(text, streaming: streaming) }
 
     static func parse(_ text: String, streaming: Bool = false) -> [Part] {
         var language = ""
         var parts: [Part] = []
         var code: [Substring]?
+        var table: MarkdownTable?
+        // The line before this one, since a table's separator must follow its header directly.
+        var previous: String?
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+            defer { previous = String(line) }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if code == nil, table != nil, trimmed.contains("|"), !trimmed.hasPrefix("```") {
+                table?.append(String(line))
+                continue
+            }
+            if let open = table {
+                parts.append(.table(open))
+                table = nil
+            }
+            if trimmed.hasPrefix("```") {
                 if let lines = code {
-                    parts.append(.code(lines.joined(separator: "\n"), language: language))
+                    let block = lines.joined(separator: "\n")
+                    let diagram = language.lowercased() == "mermaid" && !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    parts.append(diagram ? .diagram(block) : .code(block, language: language))
                     code = nil
                 } else {
                     language = String(line.trimmingCharacters(in: .whitespaces).dropFirst(3))
@@ -235,10 +261,15 @@ struct MarkdownText: View {
                 }
             } else if code != nil {
                 code?.append(line)
-            } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+            } else if case .line(let header)? = parts.last, header == previous,
+                      let start = MarkdownTable(header: header, separator: trimmed) {
+                parts.removeLast()
+                table = start
+            } else if !trimmed.isEmpty {
                 parts.append(.line(String(line)))
             }
         }
+        if let open = table { parts.append(.table(open)) }
         if let lines = code { parts.append(.code(lines.joined(separator: "\n"), language: language)) }
         if parts.isEmpty && streaming { parts.append(.line("")) }
         return parts

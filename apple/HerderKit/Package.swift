@@ -16,10 +16,14 @@ let package = Package(
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.20.0"),
     ],
     targets: [
-        .target(name: "HerderKit", dependencies: [
-            .product(name: "Herder", package: "Herder"),
-            .product(name: "SwiftTerm", package: "SwiftTerm"),
-        ]),
+        .target(
+            name: "HerderKit",
+            dependencies: [
+                .product(name: "Herder", package: "Herder"),
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
+            ],
+            // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline.
+            resources: [.copy("Resources/Mermaid")]),
         .testTarget(name: "HerderKitTests", dependencies: ["HerderKit"]),
     ]
 )
