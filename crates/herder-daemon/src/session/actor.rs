@@ -162,8 +162,12 @@ pub(super) struct Actor {
     /// The session's projection, kept current as this actor journals changes.
     session: Session,
     adapter: Option<AdapterSession>,
-    /// The turn the adapter is running.
+    /// The turn the adapter is running: one a prompt started, or one the CLI started on its
+    /// own while no prompt ran (without a `prompt`).
     turn: Option<TurnId>,
+    /// A turn the CLI started on its own just as `turn`'s prompt was sent: the adapter holds
+    /// the prompt until it ends.
+    cli_turn: Option<TurnId>,
     /// The host's admission of the running turn, or of the next one while it waits to start.
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
@@ -213,6 +217,7 @@ impl Actor {
             session,
             adapter: None,
             turn: None,
+            cli_turn: None,
             permit: None,
             waiting: None,
             prompt: None,
@@ -1752,8 +1757,27 @@ impl Actor {
         let Some(event) = event else {
             return self.exited(None).await;
         };
+        if let Some(cli_turn) = &self.cli_turn
+            && let Some(end) = turn_end(&event, cli_turn)
+        {
+            return self.cli_turn_ended(end).await;
+        }
         match event {
             AdapterEvent::TurnStarted { turn_id } => {
+                match &self.turn {
+                    // The CLI started a turn on its own, such as its reply to a background
+                    // agent's result: it runs like a prompted one, but no user asked for it, so
+                    // it has no prompt and nothing to retry on another account.
+                    None => {
+                        self.turn = Some(turn_id.clone());
+                        self.prompt = None;
+                        self.last_reply = None;
+                        self.set_status(SessionStatus::Running).await;
+                        self.sync_working();
+                    }
+                    Some(turn) if *turn != turn_id => self.cli_turn = Some(turn_id.clone()),
+                    Some(_) => {}
+                }
                 self.log(EventBody::TurnStarted { turn_id }).await;
             }
             AdapterEvent::TurnCompleted { turn_id } => {
@@ -1922,6 +1946,25 @@ impl Actor {
         }
     }
 
+    /// Journals the end of a turn the CLI ran on its own ahead of the sent prompt, whose turn
+    /// starts next. A spent limit is noted for the account; the prompt's own turn meets it too
+    /// and fails over from there.
+    async fn cli_turn_ended(&mut self, end: EventBody) {
+        let turn_id = self.cli_turn.take();
+        if let EventBody::TurnFailed { error, .. } = &end
+            && error.class == ErrorClass::LimitReached
+        {
+            self.inner.limit_hit(&self.session.account_id);
+        }
+        self.void_requests().await;
+        self.log(end).await;
+        if let Some(turn_id) = turn_id {
+            self.record_branches().await;
+            self.checkpoint(&turn_id).await;
+        }
+        self.settle().await;
+    }
+
     /// Journals the end of the running turn and reports it as `summary`, then starts the next
     /// queued prompt or settles on `settled`.
     async fn turn_ended(
@@ -2085,6 +2128,7 @@ impl Actor {
             None => None,
         };
         self.prompt = None;
+        self.cli_turn = None;
         let open = self.turn.take();
         self.permit = None;
         self.void_requests().await;
@@ -2252,6 +2296,30 @@ impl Actor {
         if let Err(err) = self.record(None, body).await {
             warn!(session_id = %self.session.session_id, "cannot journal an event: {err:#}");
         }
+    }
+}
+
+/// The journal event for `event` when it ends the turn `turn_id`.
+fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {
+    match event {
+        AdapterEvent::TurnCompleted { turn_id: ended } if ended == turn_id => {
+            Some(EventBody::TurnCompleted {
+                turn_id: ended.clone(),
+            })
+        }
+        AdapterEvent::TurnInterrupted { turn_id: ended } if ended == turn_id => {
+            Some(EventBody::TurnInterrupted {
+                turn_id: ended.clone(),
+            })
+        }
+        AdapterEvent::TurnFailed {
+            turn_id: ended,
+            error,
+        } if ended == turn_id => Some(EventBody::TurnFailed {
+            turn_id: ended.clone(),
+            error: error.clone(),
+        }),
+        _ => None,
     }
 }
 

@@ -4618,3 +4618,109 @@ async fn a_failed_title_run_changes_nothing() {
     assert_eq!(sessions[0].title, None);
     daemon.stop().await;
 }
+
+#[tokio::test]
+async fn a_turn_the_cli_starts_is_journaled_without_a_prompt_and_queues_the_next() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "background_turn.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Review it in the background.")
+        .await;
+    daemon
+        .events_until(|body| {
+            matches!(body, EventBody::ItemAdded { item }
+                if item.turn_id == TurnId::new("cli-1")
+                    && matches!(item.body, ItemBody::AssistantMessage { .. }))
+        })
+        .await;
+    // The CLI's own turn runs: the prompt waits behind it, and an interrupt reaches it.
+    daemon.prompt(alice(), &session, "Fix them.").await;
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    let result = daemon.manager.handle(bob(), interrupt).await.unwrap();
+    assert_eq!(result, CommandResult::Applied);
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        describe(&journal),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "alice: user turn-1 Review it in the background.",
+            "-: turn_started turn-1",
+            "-: tool_call Agent",
+            "-: tool_result Async agent launched successfully.",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+            "-: status Running",
+            "-: turn_started cli-1",
+            "-: tool_result Found 2 issues.",
+            "-: assistant cli-1 The review found 2 issues.",
+            "-: turn_interrupted cli-1",
+            "alice: user turn-2 Fix them.",
+            "-: turn_started turn-2",
+            "-: assistant turn-2 Fixed.",
+            "-: turn_completed turn-2",
+            "-: status Idle",
+        ]
+    );
+    // The agent's result answers the call that started it.
+    let result = journal.iter().find_map(|event| match &event.body {
+        EventBody::ItemAdded { item } if item.turn_id == TurnId::new("cli-1") => Some(&item.body),
+        _ => None,
+    });
+    assert!(matches!(
+        result,
+        Some(ItemBody::ToolResult { call_id, .. }) if *call_id == ItemId::new("item-1")
+    ));
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_turn_the_cli_starts_ahead_of_a_sent_prompt_runs_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "cli_turn_ahead.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "alice: user turn-1 First.",
+            "-: turn_started cli-1",
+            "-: assistant cli-1 The review finished.",
+            "-: turn_completed cli-1",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 One.",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+        ]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_turn_the_cli_starts_fails_on_a_spent_limit_without_a_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "cli_turn_limit.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        describe(&journal[5..]),
+        [
+            "-: status Idle",
+            "-: status Running",
+            "-: turn_started cli-1",
+            "-: turn_failed cli-1 LimitReached",
+            "-: status NeedsYou",
+        ]
+    );
+    daemon.stop().await;
+}

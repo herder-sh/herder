@@ -1,0 +1,6 @@
+# A turn the CLI starts on its own runs into the account's limit: there is no prompt to retry.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "First."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_started", "turn_id": "cli-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "cli-1", "error": {"class": "limit_reached", "message": "5-hour limit reached"}}}

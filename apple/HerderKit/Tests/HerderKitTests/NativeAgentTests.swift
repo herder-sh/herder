@@ -163,6 +163,27 @@ struct NativeAgentTests {
         #expect(after?.duration(at: .distantFuture) == nil)
     }
 
+    @Test func backgroundAgentResultFromALaterTurnCompletesIt() {
+        // Claude reports a background agent's result in a turn it starts itself, as a later
+        // result for the launching call.
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
+            nestedItem("launch", .toolResult(callId: "a", output: launchMetadata, isError: false)),
+            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "cli"),
+            nestedItem("done", .toolResult(callId: "a", output: "Found 2 issues", isError: false), turn: "cli"),
+            nestedItem("reply", .assistantMessage(text: "The review found 2 issues"), turn: "cli"),
+            .turnCompleted(turnId: "cli"),
+        ])
+        let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
+        #expect(agent?.launched == true)
+        #expect(agent?.result == "Found 2 issues")
+        #expect(agent?.outcome == .ok)
+        #expect(agent?.status == "Completed")
+        #expect(NativeAgent.summary(agent.map { [$0] } ?? []) == "1 completed")
+    }
+
     @Test func failedBackgroundLaunchShowsItsError() {
         var script = Script()
         let model = script.model([
