@@ -39,6 +39,12 @@ pub const COMMANDS: &[Command] = &[
     command("mode", "<mode>", "read_only, ask, auto_edit or full_access"),
     command("switch", "", "switch account, provider or model"),
     command("stop", "", "interrupt the running turn"),
+    command("rename", "<title>", "rename the session"),
+    command(
+        "retitle",
+        "",
+        "ask AI to title the session from its conversation",
+    ),
     command("archive", "", "archive the session (archive! forces)"),
     command("unarchive", "", "bring an archived session back"),
     command("pr", "<n|url>", "link a pull request"),
@@ -477,6 +483,29 @@ impl App {
                 };
                 Ok(vec![send(key, command)])
             }
+            ("rename", [_, ..]) => {
+                let key = session()?;
+                // The title as typed, its inner spaces kept.
+                let typed = line.trim_start_matches('/').trim_start()["rename".len()..].trim();
+                let title = herder_protocol::clean_title(typed).ok_or_else(|| {
+                    format!(
+                        "a title is one line of at most {} characters",
+                        herder_protocol::MAX_TITLE_CHARS
+                    )
+                })?;
+                let command = CommandBody::RenameSession {
+                    session_id: key.session_id.clone(),
+                    title: title.to_owned(),
+                };
+                Ok(vec![send(key, command)])
+            }
+            ("retitle", []) => {
+                let key = session()?;
+                let command = CommandBody::RetitleSession {
+                    session_id: key.session_id.clone(),
+                };
+                Ok(vec![send(key, command)])
+            }
             ("stop", []) => self.session_command(session()?, "interrupt", &[]),
             ("model" | "mode" | "archive" | "archive!" | "unarchive" | "down", args) => {
                 self.session_command(session()?, name, args)
@@ -721,5 +750,72 @@ mod tests {
         // Once something is typed, digits are text.
         type_text(&mut app, "x2");
         assert_eq!(text(&app), "x2");
+    }
+
+    #[test]
+    fn e_renames_the_selected_session_and_r_asks_ai_to_title_it() {
+        let mut app = fake::tree();
+        app.choose_row(Row::Session {
+            key: key("h1", "s2"),
+            depth: 0,
+        });
+        // The palette opens on its name, to edit.
+        press(&mut app, KeyCode::Char('E'));
+        let search = |app: &App| {
+            app.compose
+                .palette
+                .as_ref()
+                .map(|palette| palette.search.lines().join(" "))
+        };
+        assert_eq!(search(&app).as_deref(), Some("rename api"));
+        for _ in 0.."api".len() {
+            press(&mut app, KeyCode::Backspace);
+        }
+        type_text(&mut app, "Health  endpoint ");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [on_s2(CommandBody::RenameSession {
+                session_id: SessionId::new("s2"),
+                title: "Health  endpoint".into(),
+            })]
+        );
+        assert!(app.compose.palette.is_none());
+
+        // A title that is too long stays in the palette, saying why.
+        press(&mut app, KeyCode::Char('E'));
+        press(&mut app, KeyCode::Char('x'));
+        type_text(&mut app, &"x".repeat(herder_protocol::MAX_TITLE_CHARS));
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let error = app.compose.palette.as_ref().and_then(|p| p.error.clone());
+        assert_eq!(
+            error.as_deref(),
+            Some("a title is one line of at most 80 characters")
+        );
+        press(&mut app, KeyCode::Esc);
+
+        assert_eq!(
+            press(&mut app, KeyCode::Char('R')),
+            [on_s2(CommandBody::RetitleSession {
+                session_id: SessionId::new("s2"),
+            })]
+        );
+    }
+
+    #[test]
+    fn a_title_changed_renames_the_session_everywhere() {
+        let mut app = fake::tree();
+        let title = |app: &App| app.sessions.get(&key("h1", "s2")).map(|s| s.title());
+        assert_eq!(title(&app).as_deref(), Some("app · api"));
+        let renamed = herder_protocol::EventBody::TitleChanged {
+            title: "Health endpoint".into(),
+            source: herder_protocol::TitleSource::User,
+        };
+        fake::feed(
+            &mut app,
+            "h1",
+            "s2",
+            update("s2", 3, vec![renamed], Vec::new()),
+        );
+        assert_eq!(title(&app).as_deref(), Some("app · Health endpoint"));
     }
 }

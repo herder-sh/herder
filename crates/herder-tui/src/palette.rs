@@ -26,6 +26,8 @@ pub fn key_of(command: &Command) -> &'static str {
         "pr" => "L",
         "term" => "t",
         "fork" => "F",
+        "rename" => "E",
+        "retitle" => "R",
         "inbox" => "I",
         "prs" => "P",
         "accounts" => "A",
@@ -203,6 +205,29 @@ impl App {
             error: None,
             target: self.palette_target(),
         });
+    }
+
+    /// Opens the palette on a `rename` line holding the target session's name, to edit and
+    /// run; nothing without a session.
+    pub(crate) fn open_rename(&mut self) {
+        let Some(target) = self.palette_target() else {
+            return;
+        };
+        let name = self
+            .sessions
+            .get(&target)
+            .map(|session| session.name(false))
+            .unwrap_or_default();
+        self.open_palette();
+        if let Some(palette) = &mut self.compose.palette {
+            palette.search = search_line(&format!("rename {name}"), "");
+        }
+    }
+
+    /// Asks AI to title the selected or open session again.
+    pub(crate) fn retitle(&mut self) -> Vec<Effect> {
+        let target = self.palette_target();
+        self.slash(target.as_ref(), "retitle").unwrap_or_default()
     }
 
     /// What the palette suggests first: stopping a running turn, switching, a new session,

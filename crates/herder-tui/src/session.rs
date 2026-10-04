@@ -7,7 +7,7 @@ use herder_client_core::SessionUpdate;
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalId, ApprovalOutcome, AttachmentId, ErrorClass,
     EscalationReason, Event, EventBody, HostId, Item, ItemBody, ItemId, PermissionMode, Provider,
-    PullRequest, QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnId,
+    PullRequest, QuestionId, Route, SessionId, SessionStatus, Timestamp, TitleSource, TurnId,
 };
 
 /// A session of a machine; the key of everything per session.
@@ -38,6 +38,8 @@ pub struct Session {
     pub parent: Option<SessionId>,
     /// Task label, for a child session.
     pub task: Option<String>,
+    /// The session's title, and who chose it; `None` until it has one.
+    pub title: Option<(String, TitleSource)>,
     /// Latest status.
     pub status: SessionStatus,
     /// Reported usage reset for a scheduled retry.
@@ -199,6 +201,7 @@ impl Session {
             model: String::new(),
             parent: None,
             task: None,
+            title: None,
             status: SessionStatus::Idle,
             retry_at: None,
             entries: Vec::new(),
@@ -227,8 +230,8 @@ impl Session {
         self.streaming = update.streaming;
     }
 
-    /// The name the session list shows: the task label, else the repo's name and
-    /// [`Session::name`].
+    /// The name the session list shows: [`Session::name`], after the repo's name for a
+    /// top-level session.
     pub fn title(&self) -> String {
         self.titled(false)
     }
@@ -249,11 +252,14 @@ impl Session {
         }
     }
 
-    /// What the session is called under its repo: its task label; else its branch, without
-    /// herder's `herder/` prefix (with `short`, only the branch's last part); else, for the
-    /// branch herder made up from the session's id, a summary of its first prompt; the short
-    /// id only when there is nothing else.
+    /// What the session is called under its repo: its title, whoever chose it; else its task
+    /// label; else its branch, without herder's `herder/` prefix (with `short`, only the
+    /// branch's last part); else, for the branch herder made up from the session's id, a
+    /// summary of its first prompt; the short id only when there is nothing else.
     pub fn name(&self, short: bool) -> String {
+        if let Some((title, _)) = &self.title {
+            return title.clone();
+        }
         if let Some(task) = &self.task {
             return task.clone();
         }
@@ -559,8 +565,11 @@ impl Session {
                     Tone::Info,
                 ))
             }
-            // Shown from the session list's title (P2.19).
-            EventBody::TitleChanged { .. } | EventBody::Unknown => None,
+            EventBody::TitleChanged { title, source } => {
+                self.title = Some((title, source));
+                None
+            }
+            EventBody::Unknown => None,
         };
         self.entries.extend(entry);
     }
@@ -974,5 +983,18 @@ mod tests {
         // A task label wins.
         session.task = Some("write tests".into());
         assert_eq!(session.title(), "write tests");
+        // A title wins over everything, an automatic one too.
+        session.event(Event {
+            session_id: session.id.clone(),
+            seq: 9,
+            at: Timestamp::UNIX_EPOCH,
+            by: None,
+            body: EventBody::TitleChanged {
+                title: "Login redirect fix".into(),
+                source: TitleSource::Auto,
+            },
+        });
+        assert_eq!(session.title(), "Login redirect fix");
+        assert_eq!(session.name(true), "Login redirect fix");
     }
 }

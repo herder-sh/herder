@@ -240,6 +240,73 @@ fn the_shell_reproduces_the_mockups_at_phone_laptop_and_wide_widths() {
     }
 }
 
+/// [`herd`] with titles: `api` (open) titled automatically and the `docs` task renamed by
+/// a user; the other sessions untitled, named by their branch or task.
+fn titled_herd() -> App {
+    use herder_protocol::{EventBody, TitleSource};
+    let mut app = herd();
+    let titled = |title: &str, source| EventBody::TitleChanged {
+        title: title.to_owned(),
+        source,
+    };
+    let auto = titled("Health endpoint for load balancers", TitleSource::Auto);
+    fake::feed(
+        &mut app,
+        "h1",
+        "s2",
+        update("s2", 10, vec![auto], Vec::new()),
+    );
+    let user = titled("API reference page", TitleSource::User);
+    fake::feed(
+        &mut app,
+        "h1",
+        "s4",
+        update("s4", 6, vec![user], Vec::new()),
+    );
+    app
+}
+
+#[test]
+fn titled_and_untitled_sessions_in_the_sidebar_attention_header_and_details() {
+    for (width, height) in [(100, 30), (160, 34)] {
+        let mut app = titled_herd();
+        insta::assert_snapshot!(
+            format!("titles_{width}x{height}"),
+            render(&mut app, width, height).backend()
+        );
+    }
+    // A phone's switcher lists the attention rows and sessions by title too.
+    let mut app = titled_herd();
+    app.act(crate::action::Action::GoTo);
+    insta::assert_snapshot!("titles_switcher_45x34", render(&mut app, 45, 34).backend());
+}
+
+#[test]
+fn only_the_details_tell_a_users_title_from_an_automatic_one() {
+    let mut app = titled_herd();
+    // 100 columns have no details panel; 160 have one.
+    let auto = [100, 160].map(|width| render(&mut app, width, 34).backend().to_string());
+    // The open session renamed by a user, to the same title.
+    let renamed = herder_protocol::EventBody::TitleChanged {
+        title: "Health endpoint for load balancers".to_owned(),
+        source: herder_protocol::TitleSource::User,
+    };
+    fake::feed(
+        &mut app,
+        "h1",
+        "s2",
+        update("s2", 11, vec![renamed], Vec::new()),
+    );
+    let user = [100, 160].map(|width| render(&mut app, width, 34).backend().to_string());
+    assert_eq!(auto[0], user[0]);
+    assert!(auto[1].contains("auto title"), "{}", auto[1]);
+    assert!(
+        !user[1].contains("auto title") && user[1].contains("renamed"),
+        "{}",
+        user[1]
+    );
+}
+
 fn ctrl(c: char) -> Msg {
     Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
 }

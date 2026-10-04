@@ -508,6 +508,8 @@ impl App {
             Action::ToggleArchived => self.show_archived = !self.show_archived,
             Action::OpenFork => self.open_fork(),
             Action::Fork(input) => return self.fork_input(input),
+            Action::Rename => self.open_rename(),
+            Action::Retitle => return self.retitle(),
             Action::Leader => self.arm_leader(std::time::Instant::now()),
             Action::GoTo => self.focus = Focus::Sessions,
             Action::Resume => {

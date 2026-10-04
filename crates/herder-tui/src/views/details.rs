@@ -16,7 +16,7 @@
 //!
 //! then the session's pull requests, resources and terminals.
 
-use herder_protocol::TerminalPurpose;
+use herder_protocol::{TerminalPurpose, TitleSource};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -75,6 +75,11 @@ fn lines(app: &App, width: u16) -> Vec<Line<'static>> {
             Some(session.branch.clone()),
             machine.map(|m| m.name.clone()),
             Some(home(&session.repo)),
+            // Only here does it show who chose the title.
+            session
+                .title
+                .as_ref()
+                .map(|(_, source)| title_source(*source).to_owned()),
         ]
         .into_iter()
         .flatten()
@@ -197,6 +202,15 @@ fn flow(ui: Ui, parts: Vec<String>, width: u16) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+/// Who chose the session's title, as the panel says it.
+fn title_source(source: TitleSource) -> &'static str {
+    match source {
+        TitleSource::Auto => "auto title",
+        TitleSource::AiRequested => "AI title, as asked",
+        TitleSource::User => "renamed",
+    }
 }
 
 /// A blank line and a section's heading.
