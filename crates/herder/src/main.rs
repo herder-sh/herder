@@ -85,7 +85,7 @@ enum Command {
         #[arg(long, value_name = "ID")]
         session: String,
     },
-    /// Run by the git hooks herder installs in session worktrees.
+    /// Run by the git hooks herder installs in session worktrees, and by Claude Code's hook.
     #[command(hide = true)]
     Hook {
         #[command(subcommand)]
@@ -214,6 +214,20 @@ mod tests {
         let cli = Cli::try_parse_from(["herder", "vault", "forget-host", "old-box"]);
         assert!(matches!(cli.unwrap().command, Some(Command::Vault { .. })));
         assert!(Cli::try_parse_from(["herder", "vault", "forget-host"]).is_err());
+    }
+
+    #[test]
+    fn parses_the_claude_hook_the_adapter_passes() {
+        let args = ["herder"]
+            .into_iter()
+            .chain(herder_adapters::claude::PRE_TOOL_USE_ARGS);
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Hook {
+                hook: hook::Hook::ClaudePreToolUse
+            })
+        ));
     }
 
     #[test]

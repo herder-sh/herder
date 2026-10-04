@@ -1,12 +1,15 @@
-//! `herder hook`: the client side of the git hooks in session worktrees.
+//! `herder hook`: the client side of the git hooks in session worktrees, and of the Claude
+//! Code hook herder passes to the Claude sessions it runs.
 //!
-//! A hook must not break git when herder cannot help: every failure is a warning on stderr,
-//! and the command still succeeds.
+//! A hook must not break git or Claude Code when herder cannot help: every failure is a
+//! warning on stderr, and the command still succeeds.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use anyhow::Context;
 use clap::Subcommand;
+use herder_adapters::claude;
 use herder_daemon::prs::hooks;
 use herder_protocol::SessionId;
 
@@ -41,6 +44,8 @@ pub enum Hook {
         /// The commit message file.
         file: PathBuf,
     },
+    /// Answer Claude Code's PreToolUse hook; reads its input on stdin.
+    ClaudePreToolUse,
 }
 
 pub fn run(hook: Hook) -> anyhow::Result<ExitCode> {
@@ -60,9 +65,20 @@ pub fn run(hook: Hook) -> anyhow::Result<ExitCode> {
         Hook::PrepareCommitMsg { session, file } | Hook::CommitMsg { session, file } => {
             hooks::add_trailer(&SessionId::new(session), &file)
         }
+        Hook::ClaudePreToolUse => claude_pre_tool_use(),
     };
     if let Err(err) = result {
         eprintln!("herder: {err:#}");
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Prints the hook's decision for the call on stdin, or nothing when it has none.
+fn claude_pre_tool_use() -> anyhow::Result<()> {
+    let input: serde_json::Value =
+        serde_json::from_reader(std::io::stdin().lock()).context("reading the hook input")?;
+    if let Some(output) = claude::pre_tool_use(&input) {
+        println!("{output}");
+    }
+    Ok(())
 }
