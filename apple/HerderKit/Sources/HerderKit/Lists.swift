@@ -74,8 +74,13 @@ struct Lists {
         self.machines = machines.map { Self.summary($0, entries: entries, now: now) }
     }
 
+    /// Every project a machine lists or a listed session is in, and the sessions no project
+    /// holds yet. An archived session no project holds is left out: it is one of a project
+    /// the machine dropped, or of a repository gone from it, and would only keep that project
+    /// in the list.
     private static func projects(_ entries: [Entry], machines: [Machine], now: Date) -> [ProjectGroup] {
-        var grouped: [String?: [Entry]] = Dictionary(grouping: entries, by: \.projectId)
+        let shown = entries.filter { $0.projectId != nil || $0.model.state != .archived }
+        var grouped: [String?: [Entry]] = Dictionary(grouping: shown, by: \.projectId)
         // Projects the machines list but no session runs in yet still show.
         for project in machines.flatMap(\.projects) where grouped[project.projectId] == nil {
             grouped[project.projectId] = []
@@ -187,10 +192,9 @@ struct Lists {
 
         var key: SessionKey { model.key }
 
-        /// The head's project, else the local project of its repository once known.
-        var projectId: String? {
-            head.projectId ?? model.repo.map { "\(head.hostId ?? machine.hostId):\($0)" }
-        }
+        /// The project its machine lists it in; `nil` until the machine's project discovery
+        /// has seen its repository, and for good once the repository's project is removed.
+        var projectId: String? { head.projectId }
 
         /// For a vault, the host the session runs on.
         var host: FleetHost? {
