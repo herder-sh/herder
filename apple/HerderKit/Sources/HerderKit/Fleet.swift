@@ -419,6 +419,18 @@ public final class Fleet {
         update(client.machines())
     }
 
+    /// Puts `address` first and reconnects the machine now, so the connection moves to it.
+    /// Throws when it did not answer, though another address may have.
+    func connect(_ hostId: HostId, through address: String) async throws {
+        let addresses = machines.first { $0.hostId == hostId }?.addresses ?? []
+        try setAddresses(hostId, to: [address] + addresses.filter { $0 != address })
+        let used = try await client.reconnect(hostId: hostId)
+        update(client.machines())
+        if used != address {
+            throw HerderError.Local(detail: "\(address) did not answer; connected through \(used).")
+        }
+    }
+
     func forget(_ hostId: HostId) throws {
         try client.forget(hostId: hostId)
         update(client.machines())

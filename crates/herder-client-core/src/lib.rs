@@ -17,7 +17,7 @@
 //! of its certificate, and the device key this device presents to it (one key per machine).
 //! [`Client::pair`] adds every machine a `herder://pair` link names, [`Client::rename`]
 //! changes the name it is shown by on this device, [`Client::set_addresses`] the addresses it
-//! is reached at, and [`Client::forget`] removes it.
+//! is reached at, [`Client::reconnect`] connects again now, and [`Client::forget`] removes it.
 //!
 //! [`Client::share`] makes one link that pairs another device with every connected machine:
 //! each daemon mints a one-time code for this device's user and role there, so the new device
@@ -129,7 +129,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 8;
+pub const CLIENT_API_VERSION: u32 = 9;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +172,12 @@ pub enum Error {
     Rejected {
         /// The daemon's error; `info.code` says why.
         info: ErrorInfo,
+    },
+    /// No address of the machine answered; see [`Client::reconnect`].
+    #[error("no address answered: {message}")]
+    Unreachable {
+        /// Why each address did not answer.
+        message: String,
     },
     /// Something on this device failed: the profile file, a device key, or no async runtime.
     #[error("{message}")]
@@ -585,6 +591,15 @@ impl Client {
         profile::save(&self.inner.config_dir, &all)?;
         machine.set_addresses(normalized);
         Ok(())
+    }
+
+    /// Drops a machine's connection, if up, and connects again at once, racing its addresses
+    /// in their order as always: the address the new connection uses, or
+    /// [`Error::Unreachable`] when none answered (the supervisor then retries after its
+    /// backoff, as after any failure). To connect through an address, put it first with
+    /// [`Client::set_addresses`] and then reconnect.
+    pub async fn reconnect(&self, host_id: HostId) -> Result<String, Error> {
+        self.machine(&host_id)?.reconnect().await
     }
 
     /// Unpairs a machine on this device: removes it from the profile, with this device's key

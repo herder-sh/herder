@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 8`
+`CLIENT_API_VERSION = 9`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -75,7 +75,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -104,6 +104,7 @@ everything stops once the last clone is dropped.
 | `async share() -> Result<SharedLink, Error>` | Asks every connected machine for a one-time code (`pair_device`) and builds one link that pairs another device with all of them, as this device's user with its role on each. A machine not connected, or that refuses or does not answer within 10 s, is skipped. Fails with `Pairing` when no machine gave a code. |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
+| `async reconnect(host_id: HostId) -> Result<String, Error>` | Drops a machine's connection, if up, and connects again at once, racing its addresses in order: the address the new connection uses, or `Unreachable` when none answered. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
 | `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
@@ -159,7 +160,8 @@ everything stops once the last clone is dropped.
   String }` (nothing was saved for that machine).
 - `Error` — `InvalidLink { message }`, `Pairing { message }`, `UnknownMachine { host_id }`,
   `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
-  `read_only`), `Local { message }`, `Closed`.
+  `read_only`), `Unreachable { message }` (no address answered a `reconnect`), `Local {
+  message }`, `Closed`.
 
 ### `auth` (Rust-only)
 
@@ -203,6 +205,11 @@ A connection that is up moves to an address that comes before its own once one a
 `wake()`, which an app also calls when the network changes, and on `set_addresses`. One that
 uses an address `set_addresses` dropped is replaced at once.
 
+`reconnect` replaces the connection now, whatever answers first: an app connects through a
+chosen address by putting it first with `set_addresses` and then calling `reconnect`. A
+dead first address falls back to the next after its 300 ms head start, so the answer says
+which address the connection ended up on.
+
 ## Connection quality
 
 A connection is pinged as soon as it is up and every 15 s after. Each ping carries a fresh
@@ -232,6 +239,13 @@ sharer may do; members still get no terminals) and the addresses that daemon adv
 not the ones the sharer reached it on. The new device gets its own key on every machine,
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
+
+## Changes in version 9
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Client::reconnect` | Users switch a machine to a chosen address now, and see whether it answered. |
+| — | `Error::Unreachable { message }` | `reconnect` says why no address answered. A new variant breaks an exhaustive `match`. |
 
 ## Changes in version 8
 
