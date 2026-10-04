@@ -60,17 +60,31 @@ struct TranscriptBlockView: View {
         case .children(_, let children):
             ChildrenCard(children: children, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
-            HStack(spacing: 8) {
-                Rectangle().fill(Theme.stroke).frame(height: 1)
-                Text(notice.text)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(notice.tone == .error ? Theme.failure : notice.tone == .attention ? Theme.accent : Theme.tertiary)
-                    .multilineTextAlignment(.center)
-                    .layoutPriority(1)
-                Rectangle().fill(Theme.stroke).frame(height: 1)
-            }
+            NoticeLine(notice: notice)
         case .handoff(let handoff):
             HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [])
+        }
+    }
+}
+
+/// An event as a line across the transcript; one with more to it shows the rest on hover, and
+/// in full on a click.
+struct NoticeLine: View {
+    let notice: Notice
+    @State private var expanded = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Theme.stroke).frame(height: 1)
+            Text(expanded ? notice.detail ?? notice.text : notice.text)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(notice.tone == .error ? Theme.failure : notice.tone == .attention ? Theme.accent : Theme.tertiary)
+                .multilineTextAlignment(.center)
+                .textSelection(.enabled)
+                .layoutPriority(1)
+                .help(notice.detail ?? "")
+                .onTapGesture { if notice.detail != nil { expanded.toggle() } }
+            Rectangle().fill(Theme.stroke).frame(height: 1)
         }
     }
 }
