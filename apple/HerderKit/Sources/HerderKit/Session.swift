@@ -71,6 +71,8 @@ struct SessionModel {
     var stats = SessionStats()
     /// How each ended turn ended, for the reports a child sends its parent.
     var turnEnds: [TurnId: TurnEnd] = [:]
+    /// When each item was journaled, by "turn/item": how long a provider's own sub-agent ran.
+    var itemTimes: [String: Date] = [:]
 
     init(key: SessionKey) {
         self.key = key
@@ -89,6 +91,7 @@ struct SessionModel {
         count(event, at: at)
         timeline.append(TimelineEntry(seq: event.seq, at: at, text: Self.describe(event.body), by: event.by))
         updatedAt = at
+        if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
         switch event.body {
         case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, let task, _, _):
             self.repo = repo

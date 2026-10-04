@@ -12,35 +12,63 @@ struct NativeAgent: Hashable, Identifiable {
 
     let id: ID
     let title: String
+    /// The kind of agent the provider ran, such as "Explore".
+    let kind: String?
+    /// The model the agent ran on, when the call chose one.
+    let model: String?
     let prompt: String
     let outcome: ToolCall.Outcome
+    /// What the agent returned. Never a background launch's acknowledgement: that is metadata
+    /// for the parent model (an agent id, an output file), not the agent's work.
     let result: String?
     let background: Bool
+    /// The provider acknowledged a background launch; the agent works on after its call returned.
+    let launched: Bool
+    let startedAt: Date?
+    let endedAt: Date?
 
     static func isAgent(_ name: String) -> Bool {
         ["agent", "task"].contains(name.lowercased())
     }
 
-    init(item: Item, items: [Item], runningTurn: TurnId?, streaming: [Item] = []) {
+    /// Whether a tool result acknowledges a background launch, as Claude's does for an agent it
+    /// runs in the background whether or not the call asked for `run_in_background`.
+    static func isLaunch(_ output: String) -> Bool {
+        output.hasPrefix("Async agent launched") || output.contains("\nagentId: ") && output.contains("\noutput_file: ")
+    }
+
+    init(item: Item, items: [Item], runningTurn: TurnId?, streaming: [Item] = [], times: [String: Date] = [:]) {
         id = ID(turnId: item.turnId, callId: item.id)
         var input: [String: Any] = [:]
         if case .toolCall(_, let json) = item.body {
             input = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
         }
-        title = (input["description"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            ?? (input["subagent_type"] as? String) ?? "Sub-agent"
+        func text(_ key: String) -> String? { (input[key] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+        kind = text("subagent_type")
+        model = text("model")
+        title = text("description") ?? kind ?? "Sub-agent"
         prompt = input["prompt"] as? String ?? ""
-        background = input["run_in_background"] as? Bool ?? false
+        startedAt = times["\(item.turnId)/\(item.id)"]
+        let requested = input["run_in_background"] as? Bool ?? false
         if let last = items.last(where: {
             guard $0.turnId == item.turnId, $0.parentCallId == item.parentCallId,
                   case .toolResult(let callId, _, _) = $0.body else { return false }
             return callId == item.id
         }), case .toolResult(_, let output, let isError) = last.body {
-            result = output
-            // A background tool result acknowledges launch, not completion of the agent.
-            outcome = streaming.contains(last) ? .running : isError ? .failed : background ? .unknown : .ok
+            let streamingResult = streaming.contains(last)
+            launched = !isError && !streamingResult && (requested || Self.isLaunch(output))
+            background = requested || launched
+            result = launched ? nil : output
+            endedAt = launched ? nil : times["\(last.turnId)/\(last.id)"]
+            // A launch is known to run only while the turn that launched it does; after that
+            // nothing herder records says whether it still runs.
+            outcome = streamingResult ? .running : isError ? .failed
+                : launched ? (runningTurn == item.turnId ? .running : .unknown) : .ok
         } else {
+            launched = false
+            background = requested
             result = nil
+            endedAt = nil
             outcome = runningTurn == item.turnId ? .running : .unknown
         }
     }
@@ -50,27 +78,44 @@ struct NativeAgent: Hashable, Identifiable {
             if case .item(let item) = entry { item } else { nil }
         } + model.streaming
         guard let item = items.first(where: { $0.id == id.callId && $0.turnId == id.turnId }) else { return nil }
-        return NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming)
+        return NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming,
+                           times: model.itemTimes)
     }
 
     static func summary(_ agents: [NativeAgent]) -> String {
         let states: [(ToolCall.Outcome, String)] = [(.running, "working"), (.failed, "failed"), (.ok, "completed"), (.unknown, "stopped")]
         var parts = states.compactMap { outcome, label in
-            let count = agents.filter { $0.outcome == outcome && !(outcome == .unknown && $0.background && $0.result != nil) }.count
+            let count = agents.filter { $0.outcome == outcome && !(outcome == .unknown && $0.launched) }.count
             return count > 0 ? "\(count) \(label)" : nil
         }
-        let backgroundCount = agents.filter { $0.background && $0.outcome == .unknown && $0.result != nil }.count
+        let backgroundCount = agents.filter { $0.outcome == .unknown && $0.launched }.count
         if backgroundCount > 0 { parts.append("\(backgroundCount) background") }
         return parts.joined(separator: ", ")
     }
 
     var status: String {
         switch outcome {
-        case .running: "Working"
+        case .running: launched ? "Running in the background" : "Working"
         case .ok: "Completed"
         case .failed: "Failed"
-        case .unknown: background && result != nil ? "Started in background" : "Stopped without a result"
+        case .unknown: launched ? "In the background" : "Stopped without a result"
         }
+    }
+
+    /// The status as a badge: a word and its colour.
+    var badge: (text: String, color: Color) {
+        switch outcome {
+        case .running: (launched ? "Background" : "Running", Theme.running)
+        case .ok: ("Completed", Theme.success)
+        case .failed: ("Failed", Theme.failure)
+        case .unknown: (launched ? "Background" : "Stopped", Theme.secondary)
+        }
+    }
+
+    /// How long the agent ran: to its result, or until now while it runs.
+    func duration(at now: Date) -> TimeInterval? {
+        guard let startedAt, let end = endedAt ?? (outcome == .running ? now : nil) else { return nil }
+        return max(0, end.timeIntervalSince(startedAt))
     }
 }
 
@@ -155,6 +200,8 @@ struct NativeAgentCard: View {
     }
 }
 
+/// The sheet a sub-agent opens in: who it is and how it did, its task, its own transcript,
+/// and what it returned.
 private struct NativeAgentChat: View {
     let reference: NativeAgent.ID
     let fleet: Fleet
@@ -162,52 +209,245 @@ private struct NativeAgentChat: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let model = fleet.sessions[key], let agent = NativeAgent.find(reference, in: model) {
-                        Text(agent.title).font(.title2.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text(agent.status).font(.caption).foregroundStyle(agent.outcome == .failed ? Theme.failure : Theme.secondary)
-                        if !agent.prompt.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Task").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                                Text(agent.prompt).textSelection(.enabled).foregroundStyle(Theme.text)
-                            }
-                            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.raised, in: .rect(cornerRadius: Theme.corner))
-                        }
-                        let blocks = Transcript.blocks(model, parent: reference)
-                        ForEach(blocks) { block in
-                            TranscriptBlockView(block: block, fleet: fleet, key: key, open: nil)
-                        }
-                        if let result = agent.result, !result.isEmpty {
-                            Divider()
-                            Text(agent.background ? "Launch result" : "Result").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                            MarkdownText(text: result)
-                        } else if blocks.isEmpty {
-                            Text(agent.outcome == .running
-                                 ? "Waiting for the sub-agent’s first message…"
-                                 : "No nested messages were recorded for this agent.")
-                                .foregroundStyle(Theme.secondary)
-                        }
-                        Text("This agent is managed by the parent conversation. Return there to answer questions or give instructions.")
-                            .font(.footnote).foregroundStyle(Theme.tertiary)
-                    } else {
-                        Text("This sub-chat is no longer available.").foregroundStyle(Theme.secondary)
-                    }
+        Group {
+            if let model = fleet.sessions[key], let agent = NativeAgent.find(reference, in: model) {
+                NativeAgentDetail(agent: agent, model: model, fleet: fleet, key: key) { dismiss() }
+            } else {
+                VStack(spacing: 14) {
+                    Text("This sub-agent is no longer available.").foregroundStyle(Theme.secondary)
+                    Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
-                .padding(24).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(Theme.background)
-            .navigationTitle("Sub-chat")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Back to parent") { dismiss() }
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.background)
             }
         }
         #if os(macOS)
-        .frame(minWidth: 580, idealWidth: 720, minHeight: 440, idealHeight: 650)
+        .frame(minWidth: 600, idealWidth: 760, minHeight: 480, idealHeight: 700)
         #endif
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct NativeAgentDetail: View {
+    let agent: NativeAgent
+    let model: SessionModel
+    let fleet: Fleet
+    let key: SessionKey
+    let close: () -> Void
+
+    var body: some View {
+        let blocks = Transcript.blocks(model, parent: agent.id)
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Theme.stroke).frame(height: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if !agent.prompt.isEmpty {
+                        section("Task") { AgentTask(text: agent.prompt) }
+                    }
+                    section("Transcript", count: blocks.isEmpty ? nil : blocks.count) {
+                        if blocks.isEmpty {
+                            Text(agent.outcome == .running && !agent.launched
+                                 ? "Waiting for the agent’s first message…"
+                                 : "No messages from this agent were recorded.")
+                                .font(.callout).foregroundStyle(Theme.tertiary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 16) {
+                                ForEach(blocks) { block in
+                                    TranscriptBlockView(block: block, fleet: fleet, key: key, open: nil)
+                                }
+                            }
+                        }
+                    }
+                    section(agent.outcome == .failed ? "Error" : "Result") { result }
+                    Text("The parent conversation manages this agent. Answer it or steer it from there.")
+                        .font(.footnote).foregroundStyle(Theme.tertiary)
+                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity)
+                .padding(20)
+            }
+        }
+        .background(Theme.background)
+    }
+
+    private var parentTitle: String { model.title ?? "Conversation" }
+
+    /// The way back, then the agent: its provider and state, kind and model, title, badge and run time.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 6) {
+                Button(action: close) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text(parentTitle).lineLimit(1).truncationMode(.middle)
+                    }
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(Theme.raised, in: .rect(cornerRadius: 6))
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .help("Back to the conversation (Esc)")
+                .accessibilityLabel("Back to \(parentTitle)")
+                Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Theme.tertiary)
+                Text("Sub-agent").foregroundStyle(Theme.tertiary).lineLimit(1)
+                Spacer(minLength: 8)
+            }
+            .font(.caption.weight(.semibold))
+            HStack(alignment: .center, spacing: 14) {
+                ProviderMark(provider: model.provider ?? "claude", size: 22)
+                    .padding(10)
+                    .background(Theme.surface, in: Circle())
+                    .overlay(Circle().strokeBorder(Theme.stroke))
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle().fill(agent.badge.color).frame(width: 11, height: 11)
+                            .overlay(Circle().strokeBorder(Theme.background, lineWidth: 2.5))
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(agent.kind ?? "Sub-agent").foregroundStyle(Theme.secondary)
+                        if let name = agent.model {
+                            Text("·").foregroundStyle(Theme.tertiary)
+                            Text(name).foregroundStyle(Theme.tertiary)
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    Text(agent.title)
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 6) {
+                    AgentBadge(agent: agent)
+                    AgentRunTime(agent: agent)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 18)
+    }
+
+    /// What the agent returned, as Markdown; else where its result stands.
+    @ViewBuilder private var result: some View {
+        if let result = agent.result, !result.isEmpty {
+            MarkdownText(text: result)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+                .overlay(RoundedRectangle(cornerRadius: Theme.corner)
+                    .strokeBorder(agent.outcome == .failed ? Theme.failure.opacity(0.5) : Theme.stroke))
+        } else {
+            let (symbol, text): (String, String) = switch (agent.outcome, agent.launched) {
+            case (.running, false): ("", "Working. The result appears here when the agent finishes.")
+            case (.running, true): ("moon.stars", "Running in the background. The parent conversation gets the result when the agent finishes.")
+            case (.unknown, true): ("tray", "Launched in the background. herder has not recorded its result; the parent conversation gets it when the agent finishes.")
+            case (.ok, _): ("checkmark.circle", "Completed without a result.")
+            case (.failed, _): ("exclamationmark.circle", "Failed without saying why.")
+            case (.unknown, false): ("stop.circle", "Stopped without a result.")
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if symbol.isEmpty { ProgressView().controlSize(.small) } else { Image(systemName: symbol) }
+                Text(text).fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.callout)
+            .foregroundStyle(Theme.secondary)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        }
+    }
+
+    private func section(_ title: String, count: Int? = nil, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeading(title: title, count: count)
+            content()
+        }
+    }
+}
+
+/// The task the parent gave, folded when long.
+private struct AgentTask: View {
+    let text: String
+    @State private var expanded = false
+
+    private var long: Bool { text.count > 420 || text.split(separator: "\n", omittingEmptySubsequences: false).count > 6 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(Theme.text)
+                .textSelection(.enabled)
+                .lineLimit(long && !expanded ? 6 : nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if long {
+                Button { withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() } } label: {
+                    Label(expanded ? "Show less" : "Show more", systemImage: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.secondary)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+    }
+}
+
+/// The agent's state as a small coloured badge.
+private struct AgentBadge: View {
+    let agent: NativeAgent
+
+    var body: some View {
+        let (text, color) = agent.badge
+        HStack(spacing: 5) {
+            if agent.outcome == .running {
+                Circle().fill(color).frame(width: 6, height: 6)
+            }
+            Text(text)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(color.opacity(0.14), in: .capsule)
+        .fixedSize()
+        .help(agent.status)
+        .accessibilityLabel(agent.status)
+    }
+}
+
+/// How long the agent ran, ticking while it runs.
+private struct AgentRunTime: View {
+    let agent: NativeAgent
+
+    var body: some View {
+        Group {
+            if agent.outcome == .running, agent.startedAt != nil {
+                TimelineView(.periodic(from: .now, by: 1)) { context in text(at: context.date) }
+            } else if agent.duration(at: .now) != nil {
+                text(at: .now)
+            }
+        }
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(Theme.tertiary)
+    }
+
+    private func text(at now: Date) -> some View {
+        Label(Duration.seconds((agent.duration(at: now) ?? 0).rounded())
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)),
+              systemImage: "clock")
+            .labelStyle(.titleAndIcon)
+            .help("Time the agent ran")
     }
 }

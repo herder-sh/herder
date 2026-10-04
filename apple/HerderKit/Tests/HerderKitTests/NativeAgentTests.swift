@@ -7,6 +7,13 @@ private func nestedItem(_ id: String, _ body: ItemBody, turn: String = "t1", par
     .itemAdded(item: Item(agentMessage: nil, parentCallId: parent, id: id, turnId: turn, body: body))
 }
 
+private let launchMetadata = """
+    Async agent launched successfully. (This tool result is internal metadata, never quote it.)
+    agentId: a1b2c3 (internal ID)
+    The agent is working in the background. You will be notified automatically when it completes.
+    output_file: /tmp/claude/tasks/a1b2c3.output
+    """
+
 private let agentInput = #"{"description":"Review accounts","prompt":"Check owner permissions","subagent_type":"Explore"}"#
 
 struct NativeAgentTests {
@@ -124,8 +131,70 @@ struct NativeAgentTests {
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.outcome == .unknown)
-        #expect(agent?.status == "Started in background")
+        #expect(agent?.launched == true)
+        #expect(agent?.result == nil)
+        #expect(agent?.status == "In the background")
         #expect(NativeAgent.summary(agent.map { [$0] } ?? []) == "1 background")
+    }
+
+    @Test func backgroundLaunchMetadataIsNeverTheResult() {
+        // Claude runs some agents in the background without the call asking for it; only the
+        // acknowledgement's shape tells.
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
+            nestedItem("launch", .toolResult(callId: "a", output: launchMetadata, isError: false)),
+        ])
+        let reference = NativeAgent.ID(turnId: "t1", callId: "a")
+        let running = NativeAgent.find(reference, in: model)
+        #expect(running?.background == true)
+        #expect(running?.result == nil)
+        #expect(running?.outcome == .running)
+        #expect(running?.status == "Running in the background")
+        #expect(running?.duration(at: .distantFuture) != nil)
+
+        var ended = model
+        ended.apply(script.event(.turnCompleted(turnId: "t1")))
+        let after = NativeAgent.find(reference, in: ended)
+        #expect(after?.result == nil)
+        #expect(after?.outcome == .unknown)
+        #expect(after?.badge.text == "Background")
+        #expect(after?.duration(at: .distantFuture) == nil)
+    }
+
+    @Test func failedBackgroundLaunchShowsItsError() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Review","run_in_background":true}"#)),
+            nestedItem("launch", .toolResult(callId: "a", output: "Unknown agent type", isError: true)),
+            .turnCompleted(turnId: "t1"),
+        ])
+        let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
+        #expect(agent?.launched == false)
+        #expect(agent?.outcome == .failed)
+        #expect(agent?.result == "Unknown agent type")
+    }
+
+    @Test func syncAgentKeepsItsResultKindModelAndRunTime() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Count files","prompt":"Count","subagent_type":"Explore","model":"haiku"}"#)),
+            nestedItem("a-text", .assistantMessage(text: "Counting"), parent: "a"),
+            nestedItem("result", .toolResult(callId: "a", output: "**42** files", isError: false)),
+            .turnCompleted(turnId: "t1"),
+        ])
+        let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
+        #expect(agent?.background == false)
+        #expect(agent?.result == "**42** files")
+        #expect(agent?.outcome == .ok)
+        #expect(agent?.kind == "Explore")
+        #expect(agent?.model == "haiku")
+        #expect(agent?.title == "Count files")
+        // The script spaces events a second apart: the call is the 3rd, its result the 5th.
+        #expect(agent?.duration(at: .distantFuture) == 2)
     }
 
     @Test func interruptedAgentIsNotReportedAsCompleted() {
