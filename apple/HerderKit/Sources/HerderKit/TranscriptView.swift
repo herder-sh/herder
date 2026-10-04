@@ -59,6 +59,7 @@ struct TranscriptBlockView: View {
                 Image(systemName: "brain").foregroundStyle(Theme.tertiary)
                 Text(text + (streaming ? " ▍" : "")).italic().foregroundStyle(Theme.secondary)
                     .lineLimit(streaming ? nil : 3)
+                    .textSelection(.enabled)
             }
             .font(.footnote)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -195,6 +196,8 @@ struct MarkdownText: View {
                 }
             }
         }
+        // Every line, heading and bullet can be selected and copied, not only code.
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
