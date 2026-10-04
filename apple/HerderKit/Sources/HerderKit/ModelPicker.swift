@@ -47,20 +47,22 @@ struct SettingsOption: Hashable, Identifiable {
     let id: String
     let title: String
     var detail: String?
+    /// The provider an account signs in to, shown as its mark.
+    var provider: Provider?
     /// The busiest usage window's share, 0 to 100, for an account that reports usage.
     var usage: Double?
     var current = false
     /// Why it cannot be picked, if it cannot.
     var unavailable: String?
 
-    /// A provider's accounts on a machine, each with its busiest usage window.
-    static func accounts(_ accounts: [Account], provider: Provider?, current: AccountId?) -> [SettingsOption] {
-        accounts.filter { $0.provider == provider }.map { account in
+    /// Accounts on a machine, each with its provider and busiest usage window.
+    static func accounts(_ accounts: [Account], current: AccountId?) -> [SettingsOption] {
+        accounts.map { account in
             let busiest = account.usage.max { $0.usedPercent < $1.usedPercent }
             return SettingsOption(
                 id: account.accountId, title: account.label,
                 detail: busiest.map { "\(Lists.usageLabel($0.window)) \(Int($0.usedPercent.rounded()))%" },
-                usage: busiest?.usedPercent, current: account.accountId == current)
+                provider: account.provider, usage: busiest?.usedPercent, current: account.accountId == current)
         }
     }
 
@@ -326,9 +328,13 @@ struct SettingsSectionRows: View {
         MenuHeading(title: section.kind.rawValue, hint: section.hint)
         ForEach(section.options) { option in
             MenuRow(entry: .option(section.kind, option.id), highlighted: $highlighted, pick: pick) {
-                Image(systemName: section.kind.symbol)
-                    .foregroundStyle(option.current ? Theme.text : Theme.secondary)
-                    .frame(width: 16)
+                if let provider = option.provider {
+                    ProviderMark(provider: provider, size: 14).frame(width: 16)
+                } else {
+                    Image(systemName: section.kind.symbol)
+                        .foregroundStyle(option.current ? Theme.text : Theme.secondary)
+                        .frame(width: 16)
+                }
                 Text(option.title).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer(minLength: 8)
                 if let usage = option.usage {

@@ -370,7 +370,7 @@ private struct Composer: View {
     private func accountSection(_ accounts: [Account]) -> SettingsSection {
         SettingsSection(
             kind: .account,
-            options: SettingsOption.accounts(accounts, provider: model.provider, current: model.accountId)
+            options: SettingsOption.accounts(accounts.filter { $0.provider == model.provider }, current: model.accountId)
         ) { id in
             guard let other = accounts.first(where: { $0.accountId == id }) else { return }
             Task { await fleet.switchSession(key, to: other, model: "") }
@@ -469,6 +469,9 @@ struct DraftSessionView: View {
     @State private var hostId: HostId = ""
     /// The provider and model it starts on; picking another provider's model switches to it.
     @State private var choice = ModelCatalog.Choice(provider: "", model: "")
+    /// The account picked in the menu; while it is not the provider's on this machine, the
+    /// default account starts the session.
+    @State private var accountId: AccountId?
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
     @State private var images: [Herder.Image] = []
@@ -483,6 +486,11 @@ struct DraftSessionView: View {
             machine.connection == .connected && machine.hosts.isEmpty
                 && (draft.projectId == nil || machine.projects.contains { $0.projectId == draft.projectId })
         }
+    }
+    /// The account the session starts on.
+    private var account: Account? {
+        machine?.accounts.first { $0.accountId == accountId && $0.provider == choice.provider }
+            ?? fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: choice.provider)
     }
     private var place: String {
         machine?.projects.first { $0.projectId == draft.projectId }?.name
@@ -520,12 +528,14 @@ struct DraftSessionView: View {
                 mode: mode,
                 running: false,
                 choose: { choice = $0 },
-                settings: [machineSection],
+                settings: [accountSection, machineSection],
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}
             ) {
                 FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
+                FooterMenu(section: accountSection, text: account?.label ?? "No account",
+                           help: "The account it signs in with")
                 Label("New worktree", systemImage: "folder.badge.plus")
                 Spacer()
                 Label("From the default branch", systemImage: "arrow.triangle.branch")
@@ -548,6 +558,19 @@ struct DraftSessionView: View {
         }
     }
 
+    /// Every account on the machine, of each provider; picking another provider's account
+    /// switches to that provider's default model.
+    private var accountSection: SettingsSection {
+        let accounts = machine?.accounts ?? []
+        return SettingsSection(kind: .account, options: SettingsOption.accounts(accounts, current: account?.accountId)) { id in
+            guard let picked = accounts.first(where: { $0.accountId == id }) else { return }
+            accountId = id
+            if picked.provider != choice.provider {
+                choice = .init(provider: picked.provider, model: ModelCatalog.defaultModel(picked.provider))
+            }
+        }
+    }
+
     /// The machines it can start on; picking one moves the draft there.
     private var machineSection: SettingsSection {
         SettingsSection(kind: .machine, options: SettingsOption.machines(machines, current: hostId) { _ in nil }) { id in
@@ -559,7 +582,7 @@ struct DraftSessionView: View {
     private func start() async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty || !images.isEmpty else { return }
-        guard let account = fleet.defaultAccount(on: hostId, projectId: draft.projectId, provider: choice.provider) else {
+        guard let account else {
             error = "\(machine?.name ?? "This machine") has no \(ModelCatalog.providerName(choice.provider)) account."
             return
         }
