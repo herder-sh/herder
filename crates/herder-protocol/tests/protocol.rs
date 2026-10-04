@@ -239,6 +239,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             prompt_id: PromptId::new("01J9PROMPT"),
         }),
+        command(CommandBody::MergeQueued {
+            session_id: session_id(),
+            prompt_ids: vec![PromptId::new("01J9PROMPT"), PromptId::new("01J9OTHER")],
+        }),
         command(CommandBody::SetModel {
             session_id: session_id(),
             model: "sonnet".into(),
@@ -2305,10 +2309,17 @@ fn queue_edits_and_queues_have_their_wire_form() {
     );
     assert_eq!(
         wire(CommandBody::SendQueuedNow {
-            session_id,
-            prompt_id,
+            session_id: session_id.clone(),
+            prompt_id: prompt_id.clone(),
         }),
         json!({ "type": "send_queued_now", "session_id": "s1", "prompt_id": "p1" })
+    );
+    assert_eq!(
+        wire(CommandBody::MergeQueued {
+            session_id,
+            prompt_ids: vec![prompt_id, PromptId::new("p2")],
+        }),
+        json!({ "type": "merge_queued", "session_id": "s1", "prompt_ids": ["p1", "p2"] })
     );
 
     // A head without a queue omits it, and one from before queues decodes with none.

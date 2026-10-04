@@ -384,6 +384,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::RemoveQueued { session_id, .. }
         | CommandBody::MoveQueued { session_id, .. }
         | CommandBody::SendQueuedNow { session_id, .. }
+        | CommandBody::MergeQueued { session_id, .. }
         | CommandBody::SetModel { session_id, .. }
         | CommandBody::SetPermissionMode { session_id, .. }
         | CommandBody::AnswerApproval { session_id, .. }

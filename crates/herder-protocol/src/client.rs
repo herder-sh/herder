@@ -244,6 +244,20 @@ pub enum CommandBody {
         /// The prompt to run next.
         prompt_id: PromptId,
     },
+    /// Merge queued prompts into one, so they run as one turn. The merged prompt keeps the
+    /// first listed prompt's id and place in the queue; the rest leave it. Its text is theirs,
+    /// in the listed order, with a blank line between them, and its images are theirs, in the
+    /// same order, with each prompt's `[Image #N]` markers renumbered to count across the
+    /// merged prompt. Refused as `remove_queued` is, for any listed prompt; and with
+    /// `bad_request` for fewer than two prompts, a prompt listed twice, a prompt an agent sent,
+    /// prompts different users sent, or images over [`crate::MAX_PROMPT_IMAGE_BYTES`] together.
+    MergeQueued {
+        /// Target session.
+        session_id: SessionId,
+        /// The prompts to merge, as the session's `queue` lists them, in the order their texts
+        /// are to follow each other.
+        prompt_ids: Vec<PromptId>,
+    },
     /// Change the model within the current provider.
     SetModel {
         /// Target session.

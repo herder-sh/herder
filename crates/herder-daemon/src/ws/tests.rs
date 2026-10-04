@@ -106,7 +106,8 @@ impl Backend for TestBackend {
             CommandBody::SendPrompt { .. }
             | CommandBody::RemoveQueued { .. }
             | CommandBody::MoveQueued { .. }
-            | CommandBody::SendQueuedNow { .. } => Ok(CommandResult::Applied),
+            | CommandBody::SendQueuedNow { .. }
+            | CommandBody::MergeQueued { .. } => Ok(CommandResult::Applied),
             CommandBody::ListDirectory { path } => Ok(CommandResult::Directory {
                 path,
                 entries: Vec::new(),
@@ -995,7 +996,11 @@ async fn terminals_are_for_owners_only() {
         },
         CommandBody::SendQueuedNow {
             session_id: session.clone(),
-            prompt_id,
+            prompt_id: prompt_id.clone(),
+        },
+        CommandBody::MergeQueued {
+            session_id: session.clone(),
+            prompt_ids: vec![prompt_id, herder_protocol::PromptId::new("p2")],
         },
     ];
     for (n, edit) in edits.into_iter().enumerate() {
@@ -1028,7 +1033,7 @@ async fn terminals_are_for_owners_only() {
         member.command("c4", prompt).await,
         ServerMessage::CommandAccepted { .. }
     ));
-    assert_eq!(daemon.commands.load(Ordering::SeqCst), 5);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 6);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -1,5 +1,5 @@
 # A turn held until it is interrupted, so the apps can edit the prompts queued behind it; the
-# queue then runs "A." and "C.", as the HerderKit queue test leaves it.
+# queue then runs "A.", "C." and "D." merged with "E.", as the HerderKit queue test leaves it.
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Hold."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
 {"expect": {"type": "interrupt"}}
@@ -10,4 +10,7 @@
 {"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "C."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-3"}}
 {"emit": {"type": "turn_completed", "turn_id": "turn-3"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-4", "text": "D.\n\nE."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-4"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-4"}}
 {"expect": {"type": "shutdown"}}

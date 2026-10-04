@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Image, Item,
-    ItemBody, ItemId, PermissionMode, PromptId, QuestionId, Route, SessionId, SessionStatus,
-    Timestamp, TurnError, TurnId, UserId,
+    ItemBody, ItemId, MAX_PROMPT_IMAGE_BYTES, PermissionMode, PromptId, QuestionId, Route,
+    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -26,6 +26,7 @@ use tracing::warn;
 
 use super::attachments;
 use super::journal::Journal;
+use super::merge;
 use super::routing::{Escalation, PRIMARY_TIMEOUT, within_authority};
 use super::setup::{self, Outcome};
 use super::tasks::Tasks;
@@ -76,6 +77,10 @@ pub(super) enum Request {
     /// Runs a queued prompt next, interrupting the running turn.
     SendQueuedNow {
         prompt_id: PromptId,
+    },
+    /// Merges queued prompts into the first of them.
+    MergeQueued {
+        prompt_ids: Vec<PromptId>,
     },
     SetModel {
         model: String,
@@ -613,6 +618,7 @@ impl Actor {
                     let _ = adapter.commands.send(AdapterCommand::Interrupt);
                 }
             }
+            Request::MergeQueued { prompt_ids } => self.merge_queued(&prompt_ids)?,
             Request::SetModel { model } => {
                 if model != self.session.model {
                     let command = AdapterCommand::SetModel {
@@ -1149,6 +1155,70 @@ impl Actor {
                 format!("prompt {prompt_id} is not queued"),
             )),
         }
+    }
+
+    /// Merges the queued prompts `prompt_ids` into the first of them, as `merge_queued` asks.
+    fn merge_queued(&mut self, prompt_ids: &[PromptId]) -> Result<(), ErrorInfo> {
+        if prompt_ids.len() < 2 {
+            return Err(error(
+                ErrorCode::BadRequest,
+                "merging takes at least two prompts",
+            ));
+        }
+        let mut indices = Vec::with_capacity(prompt_ids.len());
+        for prompt_id in prompt_ids {
+            let index = self.queued(prompt_id)?;
+            if indices.contains(&index) {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!("prompt {prompt_id} is listed twice"),
+                ));
+            }
+            indices.push(index);
+        }
+        let prompts: Vec<&Prompt> = indices.iter().map(|&index| &self.queue[index]).collect();
+        if prompts.iter().any(|prompt| prompt.agent_message.is_some()) {
+            return Err(error(
+                ErrorCode::BadRequest,
+                "a prompt an agent sent cannot be merged: it would lose who sent it",
+            ));
+        }
+        let by = &prompts[0].by;
+        if prompts.iter().any(|prompt| prompt.by != *by) {
+            return Err(error(
+                ErrorCode::BadRequest,
+                "prompts different users sent cannot be merged: it would lose who sent them",
+            ));
+        }
+        let attachments: Vec<Attachment> = prompts
+            .iter()
+            .flat_map(|prompt| prompt.attachments.iter().cloned())
+            .collect();
+        let bytes: u64 = attachments.iter().map(|attachment| attachment.size).sum();
+        if bytes > MAX_PROMPT_IMAGE_BYTES as u64 {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!(
+                    "the merged prompt's images would have more than \
+                     {MAX_PROMPT_IMAGE_BYTES} bytes together"
+                ),
+            ));
+        }
+        let text = merge::merge_texts(
+            prompts
+                .iter()
+                .map(|prompt| (prompt.text.as_str(), prompt.attachments.len())),
+        );
+        let first = indices[0];
+        self.queue[first].text = text;
+        self.queue[first].attachments = attachments;
+        // From the back, so each index still names its prompt.
+        let mut rest = indices[1..].to_vec();
+        rest.sort_unstable();
+        for index in rest.into_iter().rev() {
+            self.queue.remove(index);
+        }
+        Ok(())
     }
 
     /// Checks a prompt's `images` and keeps them; refused when the session's adapter cannot

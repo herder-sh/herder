@@ -18,9 +18,9 @@ use herder_daemon::session::{
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    CommandBody, CommandResult, ErrorClass, EscalationReason, Event, EventBody, Item, ItemBody,
-    ItemId, PermissionMode, Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus,
-    TurnError, TurnId, UserId,
+    CommandBody, CommandResult, ErrorClass, ErrorCode, EscalationReason, Event, EventBody, Item,
+    ItemBody, ItemId, PermissionMode, PromptId, Provider, QuestionId, Route, SessionHead,
+    SessionId, SessionStatus, TurnError, TurnId, UserId,
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
@@ -1571,6 +1571,42 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
     let resent = json!({ "session_id": b, "text": "Review billing.", "message_id": "review-2" });
     assert_eq!(tools.ok("send_session", resent).await["duplicate"], true);
     assert_eq!(queue().await.len(), 2);
+
+    // A message is not merged with prompts, which would lose who sent it: it stays queued in
+    // place between the user's prompts, which merge around it.
+    daemon
+        .user_answers(CommandBody::SendPrompt {
+            session_id: b.clone(),
+            text: "Also.".into(),
+            images: Vec::new(),
+        })
+        .await;
+    let ids: Vec<_> = queue()
+        .await
+        .into_iter()
+        .map(|prompt| prompt.prompt_id)
+        .collect();
+    let merge = |prompt_ids: Vec<PromptId>| CommandBody::MergeQueued {
+        session_id: b.clone(),
+        prompt_ids,
+    };
+    let refused = daemon.manager.handle(alice(), merge(ids.clone())).await;
+    assert_eq!(refused.unwrap_err().code, ErrorCode::BadRequest);
+    daemon
+        .user_answers(merge(vec![ids[0].clone(), ids[2].clone()]))
+        .await;
+    let queued: Vec<_> = queue()
+        .await
+        .into_iter()
+        .map(|prompt| (prompt.text, prompt.agent_message.is_some()))
+        .collect();
+    assert_eq!(
+        queued,
+        [
+            ("Later.\n\nAlso.".to_owned(), false),
+            ("Review accounts.".to_owned(), true),
+        ]
+    );
 }
 
 #[tokio::test]
