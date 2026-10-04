@@ -173,10 +173,11 @@ struct SessionView: View {
             HStack(spacing: 6) {
             let rollup = PRRollup(of: key, sessions: fleet.sessions)
             if !rollup.groups.isEmpty {
-                HeaderButton(symbol: "arrow.triangle.pull", title: rollup.chip,
+                HeaderButton(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
                              tint: rollup.urgent?.color ?? Theme.secondary) {
                     showsPRs.toggle()
                 }
+                .accessibilityLabel(rollup.chip)
                 // On compact width the popover adapts to a sheet, which PRStrip then frames.
                 .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
                     PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in

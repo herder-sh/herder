@@ -184,7 +184,7 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
   descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
   chip, never one per PR: a single PR shows its number ("#181"), more show the count and how
   many are open ("16 PRs · 3 open"), tinted by the most urgent state (open, draft, merged,
-  closed). Its list must hold a hundred PRs: an Open / All filter (Open while any is open),
+  closed). Where the header drops its labels it shortens to open of all ("3/16"). Its list must hold a hundred PRs: an Open / All filter (Open while any is open),
   grouped by session (this one first, then each descendant by title, nested), each group open,
   draft, merged, closed, with merged and closed folded behind "n merged"; a search (number,
   title, branch) once there are more than 10; one-line rows (`PRLine`: number, title truncated,
@@ -373,6 +373,7 @@ iPhone layout fixes land in P7.21.
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
+| Session PRs with descendants' (1, 5, 60) | [`p7-28/mac-1.png`](screenshots/p7-28/mac-1.png), [`p7-28/mac-5.png`](screenshots/p7-28/mac-5.png), [`p7-28/mac-60.png`](screenshots/p7-28/mac-60.png), [`p7-28/mac-60-all.png`](screenshots/p7-28/mac-60-all.png), [`p7-28/mac-60-search.png`](screenshots/p7-28/mac-60-search.png) | [`p7-28/ios-1.png`](screenshots/p7-28/ios-1.png), [`p7-28/ios-5.png`](screenshots/p7-28/ios-5.png), [`p7-28/ios-60.png`](screenshots/p7-28/ios-60.png), [`p7-28/ios-60-all.png`](screenshots/p7-28/ios-60-all.png) |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |
 | Terminal | `mac-session-terminal.png` | — |
 | New session | `mac-new-session.png` | `ios-new-session.png`, `ios-new-session-path.png` |

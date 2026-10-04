@@ -88,6 +88,13 @@ struct PRRollup: Equatable {
         return open == 0 ? "\(all.count) PRs" : "\(all.count) PRs · \(open) open"
     }
 
+    /// The chip where the header drops its buttons' labels: open of all, as "3/16".
+    var shortChip: String {
+        let all = all
+        if all.count == 1 { return "#\(all[0].number)" }
+        return open == 0 ? "\(all.count)" : "\(open)/\(all.count)"
+    }
+
     /// The most urgent state among them, which tints the header button.
     var urgent: PrState? { all.map(\.state).min { $0.order < $1.order } }
 
@@ -283,8 +290,10 @@ struct PRStrip: View {
             switch presentation {
             case .popover:
                 VStack(alignment: .leading, spacing: 0) {
-                    controls.padding(.horizontal, 12).padding(.vertical, 10)
-                    Rectangle().fill(Theme.stroke).frame(height: 1)
+                    if hasControls {
+                        controls.padding(.horizontal, 12).padding(.vertical, 10)
+                        Rectangle().fill(Theme.stroke).frame(height: 1)
+                    }
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) { groups }
                             .padding(8)
@@ -302,7 +311,7 @@ struct PRStrip: View {
             case .sheet:
                 SheetScaffold(title: "Pull Requests", subtitle: rollup.groups.count > 1
                               ? "This session's and its agents'." : "Linked to this session.") {
-                    controls
+                    if hasControls { controls }
                     LazyVStack(alignment: .leading, spacing: 10) { groups }
                         .padding(.horizontal, -10)
                 } footer: {
@@ -337,16 +346,23 @@ struct PRStrip: View {
         Binding { openOnly ?? (rollup.open > 0) } set: { openOnly = $0 }
     }
 
+    /// Open / All only when they differ; the search once there are many.
+    private var filters: Bool { rollup.open > 0 && rollup.open < rollup.all.count }
+    private var searches: Bool { rollup.all.count > PRRollup.searchFrom }
+    private var hasControls: Bool { filters || searches }
+
     private var controls: some View {
         HStack(spacing: 10) {
-            Picker("Show", selection: filter) {
-                Text("Open \(rollup.open)").tag(true)
-                Text("All \(rollup.all.count)").tag(false)
+            if filters {
+                Picker("Show", selection: filter) {
+                    Text("Open \(rollup.open)").tag(true)
+                    Text("All \(rollup.all.count)").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            if rollup.all.count > PRRollup.searchFrom {
+            if searches {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
                     TextField("Number, title or branch", text: $query)
@@ -379,7 +395,8 @@ struct PRStrip: View {
         }
         ForEach(shown) { group in
             VStack(alignment: .leading, spacing: 0) {
-                heading(group)
+                // A session alone needs no heading: the list is its own.
+                if rollup.groups.count > 1 { heading(group) }
                 ForEach(group.live, id: \.url) { PRLine(pr: $0, fleet: fleet, key: group.key) }
                 let finished = group.finished
                 if !finished.isEmpty {

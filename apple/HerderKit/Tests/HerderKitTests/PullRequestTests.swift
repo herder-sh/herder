@@ -75,13 +75,16 @@ struct PRRollupTests {
     @Test func theChipSaysTheCountAndHowManyAreOpen() {
         let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
         #expect(rollup.chip == "6 PRs · 3 open")
+        #expect(rollup.shortChip == "3/6")
         #expect(rollup.urgent == .open)
         let (key, model) = session("01P", task: "Primary", prs: [pr(181, .merged)])
         let single = PRRollup(of: key, sessions: [key: model])
         #expect(single.chip == "#181")
+        #expect(single.shortChip == "#181")
         #expect(single.urgent == .merged)
         let (done, finished) = session("01P", task: "Primary", prs: [pr(1, .merged), pr(2, .closed)])
         #expect(PRRollup(of: done, sessions: [done: finished]).chip == "2 PRs")
+        #expect(PRRollup(of: done, sessions: [done: finished]).shortChip == "2")
     }
 
     @Test func theListFiltersToOpenAndSearchesNumberTitleAndBranch() {
