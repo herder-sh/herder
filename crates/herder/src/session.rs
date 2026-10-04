@@ -804,7 +804,9 @@ impl View {
             }
             EventBody::PrUnlinked { number } => self.prs.retain(|pr| pr.number != number),
             EventBody::ChildSpawned { .. } | EventBody::ChildReported { .. } => {}
-            EventBody::TitleChanged { .. } | EventBody::Unknown => {}
+            EventBody::TitleChanged { .. }
+            | EventBody::SessionForked { .. }
+            | EventBody::Unknown => {}
         }
     }
 

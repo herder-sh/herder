@@ -11,7 +11,7 @@
 //! `moved`, read-only; a client paired with both sees that copy go to the new host.
 
 use herder_client_core::{ConnectionState, Machine};
-use herder_protocol::{CommandBody, FleetHost, Role, SessionId, SessionStatus};
+use herder_protocol::{CommandBody, FleetHost, HostId, Role, SessionId, SessionStatus};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 use crate::action::Action;
@@ -90,6 +90,23 @@ impl App {
             .iter()
             .find(|m| m.host_id == key.host_id)
             .map(|machine| machine.name.clone())
+    }
+
+    /// What to call the host `host_id`: its machine's name, else the name a vault lists it
+    /// under, else its id.
+    pub fn machine_name(&self, host_id: &HostId) -> String {
+        let machine = self.machines.iter().find(|m| m.host_id == *host_id);
+        let listed = || {
+            self.machines
+                .iter()
+                .flat_map(|machine| &machine.hosts)
+                .find(|host| host.host_id == *host_id)
+                .map(|host| host.host_name.clone())
+        };
+        machine
+            .map(|machine| machine.name.clone())
+            .or_else(listed)
+            .unwrap_or_else(|| host_id.to_string())
     }
 
     /// Whether `key`'s session can be forked: it is loaded, and not a task's child.
@@ -260,6 +277,17 @@ mod tests {
         machines.push(fake::machine("devbox", "devbox", &[]));
         app.update(Msg::Machines(machines.clone()));
         (app, machines)
+    }
+
+    #[test]
+    fn a_host_is_named_by_its_machine_else_its_vault_listing_else_its_id() {
+        let mut app = fake::vault();
+        let mut machines = app.machines.clone();
+        machines.push(fake::machine("devbox", "Devbox", &[]));
+        app.update(Msg::Machines(machines));
+        assert_eq!(app.machine_name(&HostId::new("devbox")), "Devbox");
+        assert_eq!(app.machine_name(&HostId::new("laptop")), "laptop");
+        assert_eq!(app.machine_name(&HostId::new("gone")), "gone");
     }
 
     #[test]

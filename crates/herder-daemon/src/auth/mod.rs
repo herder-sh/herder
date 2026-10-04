@@ -348,6 +348,18 @@ impl Auth {
         })
     }
 
+    /// The daemon's first owner, which the local control socket acts as: only the system user
+    /// running the daemon reaches it. `None` until an owner pairs.
+    pub fn owner(&self) -> Option<UserId> {
+        self.lock()
+            .users
+            .users
+            .iter()
+            .filter(|user| user.role == Role::Owner)
+            .min_by_key(|user| user.created_at)
+            .map(|user| user.user_id.clone())
+    }
+
     /// Every paired device with its user, oldest first.
     pub fn devices(&self) -> Vec<(Device, User)> {
         let state = self.lock();
@@ -594,16 +606,18 @@ mod tests {
             .mint("bob", Some(Role::Member), PAIRING_TTL)
             .unwrap_err();
         assert!(err.to_string().contains("first user"), "{err}");
+        assert_eq!(auth.owner(), None);
         let pairing = auth.mint("alice", None, PAIRING_TTL).unwrap();
         assert_eq!(pairing.role, Role::Owner);
         let alice = pair(&auth, "fp-a", &pairing.code).unwrap();
         assert_eq!(alice.role, Role::Owner);
+        assert_eq!(auth.owner().as_ref(), Some(&alice.user_id));
 
         // Later users default to member; an existing user keeps their role.
-        assert_eq!(
-            auth.mint("bob", None, PAIRING_TTL).unwrap().role,
-            Role::Member
-        );
+        let bob = auth.mint("bob", None, PAIRING_TTL).unwrap();
+        assert_eq!(bob.role, Role::Member);
+        pair(&auth, "fp-b", &bob.code).unwrap();
+        assert_eq!(auth.owner().as_ref(), Some(&alice.user_id));
         assert_eq!(
             auth.mint("alice", None, PAIRING_TTL).unwrap().role,
             Role::Owner

@@ -591,6 +591,14 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 source: TitleSource::AiRequested,
             },
         ),
+        event(
+            21,
+            owner,
+            EventBody::SessionForked {
+                from_session: SessionId::new("01J9ORIGINAL"),
+                from_host: HostId::new("01J9HOST2"),
+            },
+        ),
         ServerMessage::Terminals {
             terminals: vec![
                 Terminal {

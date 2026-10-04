@@ -64,8 +64,22 @@ struct TranscriptBlockView: View {
         case .notice(let notice):
             NoticeLine(notice: notice)
         case .handoff(let handoff):
-            HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [])
+            HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [],
+                           machineName: machineName)
         }
+    }
+
+    /// What to call a machine: its name, else the name a vault lists it under, else its short id.
+    /// Through a vault, this session runs on the host the vault lists it under.
+    private func machineName(_ id: HostId?) -> String {
+        guard var id else { return "?" }
+        if id == hostId, let runsOn = fleet.machines.first(where: { $0.hostId == id })?
+            .sessions.first(where: { $0.sessionId == key.sessionId })?.hostId {
+            id = runsOn
+        }
+        if let machine = fleet.machines.first(where: { $0.hostId == id }) { return machine.name }
+        if let host = fleet.machines.lazy.flatMap(\.hosts).first(where: { $0.hostId == id }) { return host.hostName }
+        return String(id.suffix(6))
     }
 }
 
@@ -96,6 +110,8 @@ struct NoticeLine: View {
 struct HandoffDivider: View {
     let handoff: Handoff
     let accounts: [Account]
+    /// Names a machine of a move between machines.
+    let machineName: (HostId?) -> String
 
     var body: some View {
         HStack(spacing: 12) {
@@ -114,10 +130,14 @@ struct HandoffDivider: View {
         .padding(.vertical, 6)
     }
 
-    /// An account switch names the accounts; the others, the models.
+    /// A move between machines names the machines; an account switch, the accounts; the
+    /// others, the models.
     @ViewBuilder private func side(_ side: Handoff.Side) -> some View {
         HStack(spacing: 5) {
-            if handoff.kind == .account {
+            if handoff.kind == .machine {
+                Image(systemName: "desktopcomputer")
+                Text(machineName(side.hostId))
+            } else if handoff.kind == .account {
                 Image(systemName: "person.crop.circle")
                 Text(account(side.accountId))
             } else {

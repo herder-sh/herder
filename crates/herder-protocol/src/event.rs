@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, ApprovalId, Attachment, ItemId, PermissionMode, Provider, QuestionId, Seq,
+    AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId, Seq,
     SessionId, Timestamp, TurnId, UserId,
 };
 
@@ -244,6 +244,14 @@ pub enum EventBody {
         title: String,
         /// Who chose it.
         source: TitleSource,
+    },
+    /// The session was forked here, `by` the user who forked it: the history before this event
+    /// is that of the session it was forked from.
+    SessionForked {
+        /// The session it was forked from.
+        from_session: SessionId,
+        /// The host that session ran on.
+        from_host: HostId,
     },
     /// An event type newer than this build; skip it.
     #[serde(other, skip_serializing)]
