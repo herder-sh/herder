@@ -19,6 +19,7 @@ mod project;
 pub mod replication;
 mod resources;
 mod server;
+mod settings;
 mod types;
 
 pub use attachment::{
@@ -47,6 +48,10 @@ pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
     HostReplication, HostUsage, LinkedVault, QueuedPrompt, Role, ServerHello, ServerMessage,
     SessionHead, Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
+};
+pub use settings::{
+    BackupSettings, DaemonSettings, LogFormat, LogSettings, ProjectDiscovery, ProviderBinary,
+    ResourceSettings, TaskSettings, TitleSettings,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 
