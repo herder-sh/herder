@@ -65,6 +65,8 @@ struct SessionModel {
     /// Every event, worded, oldest first.
     var timeline: [TimelineEntry] = []
     var stats = SessionStats()
+    /// How each ended turn ended, for the reports a child sends its parent.
+    var turnEnds: [TurnId: TurnEnd] = [:]
 
     init(key: SessionKey) {
         self.key = key
@@ -102,10 +104,15 @@ struct SessionModel {
             turnStartedAt = at
             lastTool = nil
             failure = nil
-        case .turnCompleted(let turnId), .turnInterrupted(let turnId):
+        case .turnCompleted(let turnId):
             endTurn(turnId)
+            turnEnds[turnId] = .completed
+        case .turnInterrupted(let turnId):
+            endTurn(turnId)
+            turnEnds[turnId] = .interrupted
         case .turnFailed(let turnId, let error):
             endTurn(turnId)
+            turnEnds[turnId] = .failed
             failure = error.message
         case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
@@ -212,7 +219,8 @@ struct SessionModel {
             }
             notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
         case .childSpawned(let child, let task): log.append(.child(sessionId: child, task: task))
-        case .childReported(_, _, let summary): notice("Child reported: \(summary)")
+        case .childReported(let child, let turnId, let summary):
+            log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
         case .modelSwitched(let model): handoff(.model, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .accountSwitched(let accountId):
             handoff(.account, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
@@ -363,6 +371,59 @@ struct SessionModel {
         case .idle: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
         }
     }
+
+    /// Where the session stands as a child of another: an idle child is done once a turn
+    /// completed, and failed while its last turn's failure stands.
+    var progress: ChildProgress {
+        switch state {
+        case .running: .running
+        case .waiting: .waiting
+        case .needsYou: .needsYou
+        case .error: .failed
+        case .archived: .archived
+        case .moved: .moved
+        case .idle: failure != nil ? .failed : stats.completed > 0 ? .done : .idle
+        }
+    }
+
+    /// Time spent in turns, the running one included.
+    func runTime(at now: Date) -> TimeInterval {
+        stats.busy + (turn != nil ? turnStartedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0 : 0)
+    }
+}
+
+/// How a turn ended.
+enum TurnEnd: Hashable { case completed, interrupted, failed }
+
+/// A child session's progress, as its parent shows it.
+enum ChildProgress: Hashable {
+    case running, waiting, needsYou, idle, done, failed, archived, moved
+
+    var label: String {
+        switch self {
+        case .running: "Running"
+        case .waiting: "Waiting for a free slot"
+        case .needsYou: "Needs you"
+        case .idle: "Idle"
+        case .done: "Done"
+        case .failed: "Failed"
+        case .archived: "Archived"
+        case .moved: "Moved"
+        }
+    }
+
+    /// The status mark that stands for it.
+    var state: SessionState {
+        switch self {
+        case .running: .running
+        case .waiting: .waiting
+        case .needsYou: .needsYou
+        case .idle, .done: .idle
+        case .failed: .error
+        case .archived: .archived
+        case .moved: .moved
+        }
+    }
 }
 
 extension ItemBody {
@@ -434,6 +495,17 @@ enum LogEntry: Hashable {
     case notice(Notice)
     case handoff(Handoff)
     case child(sessionId: SessionId, task: String)
+    case report(ChildReport)
+}
+
+/// A child session ended a turn and reported back to this one.
+struct ChildReport: Hashable {
+    let id: UInt64
+    let sessionId: SessionId
+    /// The child's turn that ended.
+    let turnId: TurnId
+    /// The child's last message of the turn, or why it failed.
+    let summary: String
 }
 
 /// An event shown as a line of the transcript.

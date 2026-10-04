@@ -59,6 +59,8 @@ struct TranscriptBlockView: View {
             NativeAgentGroup(agents: agents, fleet: fleet, key: key)
         case .children(_, let children):
             ChildrenCard(children: children, fleet: fleet, hostId: hostId, open: open)
+        case .report(let report):
+            ChildReportCard(report: report, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
             NoticeLine(notice: notice)
         case .handoff(let handoff):
@@ -280,54 +282,6 @@ private struct ToolRow: View {
         case .web: "globe"
         case .other: "gearshape"
         }
-    }
-}
-
-/// The child sessions the agent spawned, with their state live; each opens its session.
-private struct ChildrenCard: View {
-    let children: [ChildRef]
-    let fleet: Fleet
-    let hostId: HostId
-    let open: ((SessionKey) -> Void)?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                Text(children.count == 1 ? "Spawned a child session" : "Spawned \(children.count) child sessions")
-            }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(Theme.text)
-            ForEach(children, id: \.sessionId) { child in
-                let key = SessionKey(hostId: hostId, sessionId: child.sessionId)
-                let session = fleet.sessions[key]
-                if let open {
-                    Button { open(key) } label: { row(child, session) }.buttonStyle(.plain)
-                } else {
-                    NavigationLink(value: key) { row(child, session) }.buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(12)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-    }
-
-    private func row(_ child: ChildRef, _ session: SessionModel?) -> some View {
-        HStack(spacing: 8) {
-            StatusGlyph(state: session?.state ?? .idle, size: 8)
-            Text(child.task).foregroundStyle(Theme.text).lineLimit(1)
-            Spacer()
-            Text(session?.activity ?? "")
-                .foregroundStyle(session?.state == .needsYou ? Theme.accent : Theme.tertiary)
-                .lineLimit(1)
-            Image(systemName: "chevron.right").foregroundStyle(Theme.tertiary)
-        }
-        .font(.footnote)
-        .padding(.horizontal, 10)
-        .frame(minHeight: 44)
-        .background(Theme.raised, in: .rect(cornerRadius: Theme.corner - 2))
-        .contentShape(.rect)
     }
 }
 

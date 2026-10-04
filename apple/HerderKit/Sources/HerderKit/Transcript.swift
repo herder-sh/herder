@@ -29,6 +29,7 @@ enum TranscriptBlock: Hashable, Identifiable {
     case reasoning(id: String, text: String, streaming: Bool)
     case tools(id: String, calls: [ToolCall])
     case children(id: String, [ChildRef])
+    case report(ChildReport)
     case agents(id: String, [NativeAgent])
     case notice(Notice)
     case handoff(Handoff)
@@ -41,6 +42,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
         case .handoff(let handoff): "handoff-\(handoff.id)"
+        case .report(let report): "report-\(report.id)"
         }
     }
 
@@ -151,6 +153,10 @@ enum Transcript {
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.handoff(handoff))
+            case .report(let report):
+                guard parent == nil else { continue }
+                flushCalls(); flushChildren(); flushAgents()
+                blocks.append(.report(report))
             case .child(let sessionId, let task):
                 guard parent == nil else { continue }
                 flushCalls(); flushAgents()

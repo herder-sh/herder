@@ -18,6 +18,10 @@ struct SessionView: View {
     @AppStorage("inspectorShown") private var inspectorShown = false
     @State private var linking = false
     @State private var typedPR = ""
+    /// The transcript block at the top of the view, and where each session shown here was
+    /// left, so going back to a parent lands where it was.
+    @State private var position: String?
+    @State private var positions: [SessionKey: String] = [:]
 
     var body: some View {
         let model = fleet.sessions[key]
@@ -41,12 +45,15 @@ struct SessionView: View {
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                     }
                 }
+                .scrollTargetLayout()
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
                 .padding(16)
             }
+            .scrollPosition(id: $position)
             .defaultScrollAnchor(.bottom)
             .modifier(FollowsGrowth())
+            .id(key)
             if let model {
                 controls(model, summary)
             }
@@ -62,7 +69,11 @@ struct SessionView: View {
                 }
             }
         }
-        .onChange(of: key) { showsTerminal = false }
+        .onChange(of: key) { old, new in
+            showsTerminal = false
+            positions[old] = position
+            position = positions[new]
+        }
         .sheet(isPresented: $forking, onDismiss: {
             guard let key = completedFork else { return }
             completedFork = nil
@@ -95,6 +106,10 @@ struct SessionView: View {
     private func header(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
+                if let parent = model?.parent {
+                    ParentLink(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
+                        .padding(.bottom, 2)
+                }
                 Text(summary?.title ?? model?.title ?? "Session")
                     .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
                 HStack(spacing: 6) {

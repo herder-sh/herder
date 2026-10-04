@@ -23,11 +23,6 @@ struct Lists {
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
 
-    /// Newest created first: session ids are ULIDs, which sort by creation time.
-    static func newestCreated(_ a: SessionSummary, _ b: SessionSummary) -> Bool {
-        a.key.sessionId != b.key.sessionId ? a.key.sessionId > b.key.sessionId : a.key.hostId < b.key.hostId
-    }
-
     init(machines: [Machine], sessions: [SessionKey: SessionModel], now: Date = .now) {
         var entries: [Entry] = []
         for machine in machines {
@@ -39,14 +34,7 @@ struct Lists {
 
         projects = Self.projects(entries, machines: machines, now: now)
         let flat = entries.map { $0.summary(now: now, children: entries) }
-        let byActivity = zip(entries, flat)
-            .sorted { ($0.0.model.updatedAt ?? .distantPast) > ($1.0.model.updatedAt ?? .distantPast) }
-            .map(\.1)
-        // A session whose request is on a card above is not listed again.
-        let asking = Set(entries.filter { !$0.model.forUser.isEmpty }.map(\.key))
-        active = byActivity.filter { [.running, .waiting, .needsYou].contains($0.state) && !asking.contains($0.key) }
-            .sorted(by: Self.newestCreated)
-        recent = byActivity.filter { [.idle, .error].contains($0.state) }
+        (active, recent) = Self.home(entries, now: now)
 
         requests = zip(entries, flat).flatMap { entry, summary in
             entry.model.forUser.map { pending in
@@ -72,6 +60,46 @@ struct Lists {
         }
 
         self.machines = machines.map { Self.summary($0, entries: entries, now: now) }
+    }
+
+    /// Home's task trees. A tree is active while its top session or a child is: the top session
+    /// leads, its active children under it. Active trees stay in the order they were created,
+    /// newest first, so the list holds still while they work; recent ones are newest activity
+    /// first. Idle children are left to their parent, so they never crowd Home.
+    private static func home(_ entries: [Entry], now: Date) -> (active: [SessionSummary], recent: [SessionSummary]) {
+        // A session whose request is on a card above is not listed again.
+        let asking = Set(entries.filter { !$0.model.forUser.isEmpty }.map(\.key))
+        func isActive(_ entry: Entry) -> Bool {
+            [.running, .waiting, .needsYou].contains(entry.model.state) && !asking.contains(entry.key)
+        }
+        func descendants(_ entry: Entry, depth: Int = 0) -> [Entry] {
+            guard depth < 8 else { return [] }
+            return entries.filter { $0.isChild(of: entry) }.sorted { $0.key.sessionId < $1.key.sessionId }
+                .flatMap { [$0] + descendants($0, depth: depth + 1) }
+        }
+        let trees = forest(entries).filter { $0.1 == 0 }
+            .map { top, _ in
+                let children = descendants(top)
+                return (top, children, latest: ([top] + children).compactMap(\.model.updatedAt).max() ?? .distantPast)
+            }
+            .sorted { $0.latest > $1.latest }
+        var groups: [(top: SessionKey, sessions: [SessionSummary])] = []
+        var recent: [SessionSummary] = []
+        for (top, children, _) in trees {
+            let busy = children.filter(isActive)
+            if isActive(top) || !busy.isEmpty {
+                groups.append((top.key, [top.summary(now: now, children: entries)] + busy.map { child in
+                    var summary = child.summary(now: now, children: entries)
+                    summary.depth = 1
+                    return summary
+                }))
+            } else if [.idle, .error].contains(top.model.state) {
+                recent.append(top.summary(now: now, children: entries))
+            }
+        }
+        // Session ids are ULIDs, which sort by creation time.
+        let active = groups.sorted { $0.top.sessionId > $1.top.sessionId }.flatMap(\.sessions)
+        return (active, recent)
     }
 
     /// Every project a machine lists or a listed session is in, and the sessions no project
