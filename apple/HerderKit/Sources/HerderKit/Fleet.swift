@@ -9,8 +9,8 @@ import Observation
 @Observable
 public final class Fleet {
     public let client: Client
-    public private(set) var machines: [Machine]
-    private(set) var sessions: [SessionKey: SessionModel] = [:]
+    public private(set) var machines: [Machine] { didSet { refreshLists() } }
+    private(set) var sessions: [SessionKey: SessionModel] = [:] { didSet { refreshLists() } }
     /// Provenance returned by forks made on this device during this app run.
     var forkOrigins: [SessionKey: ForkOrigin] = [:]
     /// The last command a session refused, until its next command succeeds.
@@ -36,7 +36,10 @@ public final class Fleet {
     /// Each machine's ping round trips since the app opened, oldest first.
     private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
     /// The sessions that finished a turn since this device last opened them.
-    private(set) var done: DoneSessions
+    private(set) var done: DoneSessions { didSet { refreshLists() } }
+    /// What the lists show now. Replaced only when it differs, so the views that show it
+    /// redraw when a list changes, not on every token a session streams.
+    private(set) var lists = Lists()
     /// The sessions shown on screen now, whose turns ending are seen.
     @ObservationIgnored private var watching: Set<SessionKey> = []
 
@@ -45,6 +48,7 @@ public final class Fleet {
         self.client = client
         machines = client.machines()
         done = DoneSessions(file: doneFile)
+        refreshLists()
     }
 
     /// Replaces the machines without a client change, for tests.
@@ -52,8 +56,10 @@ public final class Fleet {
         self.machines = machines
     }
 
-    /// What the lists show now.
-    var lists: Lists { Lists(machines: machines, sessions: sessions, done: done.keys) }
+    private func refreshLists() {
+        let lists = Lists(machines: machines, sessions: sessions, done: done.keys)
+        if lists != self.lists { self.lists = lists }
+    }
 
     /// A session view shows `key`: it is seen, and stays seen while shown.
     func watch(_ key: SessionKey) {

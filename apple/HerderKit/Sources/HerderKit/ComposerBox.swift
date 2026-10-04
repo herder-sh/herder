@@ -294,7 +294,9 @@ struct FooterItem<Items: View>: View {
             }
             .hitTarget()
         }
-        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        // Truncates rather than widening the footer past a phone's width.
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

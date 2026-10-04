@@ -21,13 +21,15 @@ struct ProjectGroup: Hashable, Identifiable {
 
 /// What the lists show, built from the machines and their sessions' folded state the way the
 /// TUI builds its own (crates/herder-tui/src/app.rs, projects.rs, inbox.rs).
-struct Lists {
+struct Lists: Equatable {
     var requests: [PendingRequest] = []
     /// Home's sessions: every task tree that is not archived, newest first by when it was
     /// created, so a session keeps its place as it starts and stops working.
     var home: [SessionSummary] = []
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
+
+    init() {}
 
     /// `done` holds the sessions that finished a turn since this device last opened them.
     init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [], now: Date = .now) {

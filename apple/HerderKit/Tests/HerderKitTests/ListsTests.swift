@@ -168,3 +168,27 @@ struct ListsTests {
         #expect(Lists.usageLabel("monthly_spend") == "Monthly spend")
     }
 }
+
+@MainActor
+struct FleetListsTests {
+    /// Whether `change` makes the fleet publish new lists.
+    private func publishes(_ fleet: Fleet, _ change: () -> Void) -> Bool {
+        let published = Published()
+        withObservationTracking { _ = fleet.lists } onChange: { published.value = true }
+        change()
+        return published.value
+    }
+
+    private final class Published: @unchecked Sendable { var value = false }
+
+    @Test func listsArePublishedOnlyWhenTheyChange() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("the profile did not open")
+            return
+        }
+        let machines = [machine("host-a", name: "a", sessions: ["01A"])]
+        #expect(publishes(fleet) { fleet.setMachinesForTesting(machines) })
+        #expect(!publishes(fleet) { fleet.setMachinesForTesting(machines) })
+        #expect(fleet.lists.recent.map(\.key.sessionId) == ["01A"])
+    }
+}

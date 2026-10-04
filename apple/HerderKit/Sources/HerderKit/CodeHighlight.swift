@@ -10,11 +10,17 @@ enum CodeHighlight {
         let kind: Kind
     }
 
-    static func tokens(_ code: String, language: String) -> [Token] {
-        let language = language.lowercased()
-        let hashComments = ["toml", "yaml", "yml", "python", "py", "bash", "sh", "shell", "ruby", "rb"]
-        let slashComments = ["swift", "rust", "rs", "javascript", "js", "typescript", "ts", "tsx", "jsx", "c", "cpp", "c++", "java", "go", "jsonc"]
-        guard hashComments.contains(language) || slashComments.contains(language) || language == "json" else { return [] }
+    private static let hashComments = ["toml", "yaml", "yml", "python", "py", "bash", "sh", "shell", "ruby", "rb"]
+    private static let slashComments = ["swift", "rust", "rs", "javascript", "js", "typescript", "ts", "tsx", "jsx", "c", "cpp", "c++", "java", "go", "jsonc"]
+    private static let kinds: [Kind] = [.string, .comment, .number, .keyword, .key]
+
+    /// Each language's pattern, compiled once rather than on every redraw of a code block.
+    private static let regexes: [String: NSRegularExpression] = Dictionary(
+        uniqueKeysWithValues: (hashComments + slashComments + ["json"]).compactMap { language in
+            (try? NSRegularExpression(pattern: pattern(language))).map { (language, $0) }
+        })
+
+    private static func pattern(_ language: String) -> String {
         let strings = #"(?:\"\"\"[\s\S]*?(?:\"\"\"|$)|'''[\s\S]*?(?:'''|$)|\"(?:\\.|[^\"\\])*(?:\"|$)|'(?:\\.|[^'\\])*(?:'|$)|`(?:\\.|[^`\\])*(?:`|$))"#
         let comments = hashComments.contains(language) ? #"#[^\n]*"#
             : slashComments.contains(language) ? #"//[^\n]*|/\*[\s\S]*?(?:\*/|$)"# : #"(?!)"#
@@ -22,9 +28,11 @@ enum CodeHighlight {
         let keyword = #"\b(?:true|false|null|nil|None|True|False|let|var|const|func|fn|def|class|struct|enum|impl|trait|interface|type|import|from|use|pub|public|private|return|if|else|elif|for|while|in|match|switch|case|break|continue|async|await|try|catch|throw|throws|new|export|default|mut|self|this|guard|do|end|then|fi)\b"#
         let key = language == "toml" ? #"(?m)^\s*\[\[?[^\]\n]+\]\]?|\b[A-Za-z_][\w.-]*(?=\s*=)"#
             : ["yaml", "yml"].contains(language) ? #"(?m)^\s*[\w.-]+(?=\s*:)"# : #"(?!)"#
-        let pattern = [strings, comments, number, keyword, key].map { "(" + $0 + ")" }.joined(separator: "|")
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        let kinds: [Kind] = [.string, .comment, .number, .keyword, .key]
+        return [strings, comments, number, keyword, key].map { "(" + $0 + ")" }.joined(separator: "|")
+    }
+
+    static func tokens(_ code: String, language: String) -> [Token] {
+        guard let regex = regexes[language.lowercased()] else { return [] }
         return regex.matches(in: code, range: NSRange(code.startIndex..., in: code)).compactMap { match in
             for (index, kind) in kinds.enumerated() where match.range(at: index + 1).location != NSNotFound {
                 return Token(range: match.range, kind: kind)
