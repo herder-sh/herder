@@ -58,7 +58,8 @@ struct SessionModel {
     var updatedAt: Date?
     /// The transcript: completed items, events worth a line, and spawned children, in order.
     var log: [LogEntry] = []
-    /// What the user sent from this device, until the session takes it as a user message.
+    /// What the user sent from this device, until the session takes it as a user message or
+    /// the machine's queue lists it.
     var outbox: [Outgoing] = []
     /// When the running turn started.
     var turnStartedAt: Date?
@@ -76,6 +77,16 @@ struct SessionModel {
 
     init(key: SessionKey) {
         self.key = key
+    }
+
+    /// Hands what this device sent over to the machine's queue once it lists it: the queue
+    /// tray shows it from then on.
+    mutating func settle(_ queue: [QueuedPrompt]) {
+        for prompt in queue where prompt.agentMessage == nil {
+            if let index = outbox.firstIndex(where: { $0.state == .delivered && $0.text == prompt.text }) {
+                outbox.remove(at: index)
+            }
+        }
     }
 
     mutating func apply(_ update: SessionUpdate) {

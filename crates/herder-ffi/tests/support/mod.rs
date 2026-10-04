@@ -1,6 +1,6 @@
 //! A daemon for the bindings' tests and samples: in-process, on localhost, with one account
-//! on the fake adapter replaying `fixtures/hello.jsonl`, and a git repository to create a
-//! session on.
+//! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
+//! and a git repository to create a session on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,6 +27,9 @@ use tokio_util::sync::CancellationToken;
 /// The account sessions run on.
 pub const ACCOUNT: &str = "fake";
 
+/// An account whose turn runs until it is interrupted, for prompts to queue behind it.
+pub const HOLD_ACCOUNT: &str = "hold";
+
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
     /// A pairing link with a fresh code, for user `sample`, who becomes the owner.
@@ -49,19 +52,28 @@ impl FakeDaemon {
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
         let hub = Arc::new(Hub::default());
-        let fake = Provider::Other("fake".into());
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/hello.jsonl");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
         let mut adapters = Adapters::new();
-        adapters.register(fake.clone(), Arc::new(FakeAdapter::new(script)));
         let mut accounts = Accounts::new();
-        accounts.insert(
-            AccountId::new(ACCOUNT),
-            AccountConfig {
-                provider: fake,
-                label: "Fake".into(),
-                config_dir: Some(dir.join("account")),
-            },
-        );
+        for (account, label, script) in [
+            (ACCOUNT, "Fake", "hello.jsonl"),
+            (HOLD_ACCOUNT, "Hold", "hold.jsonl"),
+        ] {
+            // Each account has a provider of its own, as a provider has one script.
+            let provider = Provider::Other(account.into());
+            adapters.register(
+                provider.clone(),
+                Arc::new(FakeAdapter::new(fixtures.join(script))),
+            );
+            accounts.insert(
+                AccountId::new(account),
+                AccountConfig {
+                    provider,
+                    label: label.into(),
+                    config_dir: Some(dir.join(account)),
+                },
+            );
+        }
         let turns = AtomicU64::new(0);
         let setup = Setup {
             store: Store::open(dir.join("herder.db"))?,

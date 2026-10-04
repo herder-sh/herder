@@ -10,6 +10,8 @@ final class FakeDaemon {
     let link: String
     let repo: String
     let account: String
+    /// The account whose turn runs until it is interrupted (`fixtures/hold.jsonl`).
+    let holdAccount: String
     private let process = Process()
     private let stdin = Pipe()
 
@@ -22,8 +24,8 @@ final class FakeDaemon {
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
-        let lines = try Self.readLines(3, from: stdout.fileHandleForReading)
-        (link, repo, account) = (lines[0], lines[1], lines[2])
+        let lines = try Self.readLines(4, from: stdout.fileHandleForReading)
+        (link, repo, account, holdAccount) = (lines[0], lines[1], lines[2], lines[3])
     }
 
     deinit {
