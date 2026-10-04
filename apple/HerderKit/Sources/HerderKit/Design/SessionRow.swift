@@ -20,9 +20,11 @@ struct SessionRow: View {
                         .foregroundStyle(Theme.text)
                         .lineLimit(1)
                     if session.children > 0 {
-                        Text("\(session.children)")
+                        Label("\(session.children)", systemImage: "point.3.connected.trianglepath.dotted")
+                            .labelStyle(.titleAndIcon)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.secondary)
+                            .help(session.children == 1 ? "1 child session" : "\(session.children) child sessions")
                     }
                     if session.childrenNeedYou > 0 {
                         Text("\(session.childrenNeedYou) need you")

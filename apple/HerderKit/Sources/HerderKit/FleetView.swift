@@ -16,6 +16,7 @@ struct FleetView: View {
     @State private var draft: Draft?
     @State private var tab = 0
     @State private var homePath: [SessionKey] = []
+    @State private var projectsPath: [SessionKey] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -97,13 +98,15 @@ struct FleetView: View {
                 HomeView(fleet: fleet, sheet: $sheet)
                     .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
             }
+            .environment(\.sessionPath, $homePath)
             .tabItem { Label("Home", systemImage: "tray.full") }
             .badge(fleet.lists.requests.count)
             .tag(0)
-            NavigationStack {
+            NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, sheet: $sheet, draft: $draft, projects: fleet.lists.projects)
                     .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
             }
+            .environment(\.sessionPath, $projectsPath)
             .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
             .tag(1)
             NavigationStack { MachinesView(fleet: fleet, sheet: $sheet) }
