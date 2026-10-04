@@ -106,6 +106,24 @@ struct NativeAgent: Hashable, Identifiable {
                            streaming: model.streaming, times: model.itemTimes)
     }
 
+    /// The agents a list shows under their session, so it is plain what runs: while the session
+    /// works, its own agents (not theirs) that run and those that finished since its last turn
+    /// started; none once it is idle, when every one has finished or stopped.
+    static func listed(in model: SessionModel) -> [NativeAgent] {
+        guard model.status == .running || model.turn != nil else { return [] }
+        let items = model.log.compactMap { entry -> Item? in
+            if case .item(let item) = entry { item } else { nil }
+        } + model.streaming
+        let since = model.turnStartedAt ?? .distantFuture
+        return items.compactMap { item -> NativeAgent? in
+            guard item.parentCallId == nil, case .toolCall(let name, _) = item.body, isAgent(name) else { return nil }
+            let agent = NativeAgent(item: item, items: items, runningTurn: model.turn,
+                                    working: model.status == .running, streaming: model.streaming, times: model.itemTimes)
+            let finished = agent.outcome != .unknown && (agent.endedAt ?? .distantPast) >= since
+            return agent.outcome == .running || finished ? agent : nil
+        }
+    }
+
     static func summary(_ agents: [NativeAgent]) -> String {
         let states: [(ToolCall.Outcome, String)] = [(.running, "working"), (.failed, "failed"), (.ok, "completed"), (.unknown, "stopped")]
         var parts = states.compactMap { outcome, label in
@@ -224,9 +242,48 @@ struct NativeAgentCard: View {
     }
 }
 
+/// A provider agent under its session in a list: its task and how it is doing; a tap opens
+/// its sheet.
+struct NativeAgentRow: View {
+    let agent: NativeAgent
+    let fleet: Fleet
+    let key: SessionKey
+    /// Its session's depth in the task tree.
+    var depth = 0
+    @State private var showingChat = false
+    @State private var hovering = false
+
+    var body: some View {
+        Button { showingChat = true } label: {
+            HStack(spacing: 8) {
+                TreeLine().frame(width: CGFloat(depth + 1) * 14)
+                ProviderMark(provider: fleet.sessions[key]?.provider ?? "claude", size: 11)
+                    .frame(width: 20, height: 20)
+                    .background(Theme.raised, in: Circle())
+                    .overlay(Circle().strokeBorder(Theme.stroke))
+                Text(agent.title).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
+                Spacer(minLength: 6)
+                if agent.outcome == .running { ProgressView().controlSize(.mini) }
+                Text(agent.badge.text).font(.caption.weight(.semibold)).foregroundStyle(agent.badge.color).fixedSize()
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(agent.prompt)
+        .accessibilityLabel("Open sub-agent: \(agent.title), \(agent.status)")
+        .sheet(isPresented: $showingChat) {
+            NativeAgentChat(reference: agent.id, fleet: fleet, key: key)
+        }
+    }
+}
+
 /// The sheet a sub-agent opens in: who it is and how it did, its task, its own transcript,
 /// and what it returned.
-private struct NativeAgentChat: View {
+struct NativeAgentChat: View {
     let reference: NativeAgent.ID
     let fleet: Fleet
     let key: SessionKey

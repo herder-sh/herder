@@ -269,6 +269,9 @@ struct SessionGroup: View {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                         if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
                         SessionLink(session: session, fleet: fleet, selection: selection, showsProject: showsProject)
+                        ForEach(session.agents) { agent in
+                            NativeAgentRow(agent: agent, fleet: fleet, key: session.key, depth: session.depth)
+                        }
                     }
                 }
                 .padding(4)
@@ -338,7 +341,13 @@ struct ProjectsView: View {
         List {
             ForEach(projects) { project in
                 Section {
-                    ForEach(project.live) { row($0) }
+                    ForEach(project.live) { session in
+                        row(session)
+                        ForEach(session.agents) { agent in
+                            NativeAgentRow(agent: agent, fleet: fleet, key: session.key, depth: session.depth)
+                                .listRowBackground(Theme.surface)
+                        }
+                    }
                     if !project.archived.isEmpty {
                         DisclosureGroup(isExpanded: Binding(
                             get: { unfolded.contains(project.id) },

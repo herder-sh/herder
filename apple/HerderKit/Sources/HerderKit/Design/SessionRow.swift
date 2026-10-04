@@ -75,8 +75,8 @@ struct SessionRow: View {
     }
 }
 
-/// The elbow that ties a child session to its parent.
-private struct TreeLine: View {
+/// The elbow that ties a child session, or a provider agent, to its parent.
+struct TreeLine: View {
     var body: some View {
         GeometryReader { geometry in
             Path { path in

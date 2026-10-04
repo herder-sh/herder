@@ -39,6 +39,8 @@ struct SessionSummary: Hashable, Identifiable {
     var depth = 0
     var children = 0
     var childrenNeedYou = 0
+    /// The provider's own agents to list under it (`NativeAgent.listed`).
+    var agents: [NativeAgent] = []
 }
 
 /// An approval or a question waiting on the user.
