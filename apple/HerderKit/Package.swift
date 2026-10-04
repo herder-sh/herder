@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:6.2
 // The app itself, shared by the iOS and macOS targets in project.yml: models over the client
 // core's Swift bindings (`Herder`, crates/herder-ffi/swift) and the SwiftUI views. Build the
 // bindings first with scripts/build-ffi.sh.
@@ -7,7 +7,7 @@ import PackageDescription
 
 let package = Package(
     name: "HerderKit",
-    platforms: [.iOS(.v17), .macOS(.v14)],
+    platforms: [.iOS(.v26), .macOS(.v26)],
     products: [
         .library(name: "HerderKit", targets: ["HerderKit"]),
     ],
