@@ -36,7 +36,8 @@ TIMEOUT = 180
 # recording-only flags described above.
 CLAUDE = [
     "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-    "--verbose", "--include-partial-messages", "--permission-prompt-tool", "stdio",
+    "--verbose", "--include-partial-messages", "--replay-user-messages",
+    "--permission-prompt-tool", "stdio",
     "--allow-dangerously-skip-permissions", "--permission-mode", "default",
     "--safe-mode", "--model", "haiku",
 ]

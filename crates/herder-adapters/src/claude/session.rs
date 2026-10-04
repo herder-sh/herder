@@ -67,9 +67,11 @@ pub(super) async fn start(
         next_request: 0,
         pending: HashMap::new(),
         turn: None,
+        deferred: None,
         block: None,
         streaming: None,
         tool_calls: HashMap::new(),
+        tasks: HashMap::new(),
         approvals: HashMap::new(),
         asks: Vec::new(),
         next_item: 0,
@@ -151,7 +153,7 @@ enum Pending {
     Ignored,
 }
 
-/// The turn the daemon started and the CLI has not finished.
+/// The turn the CLI is running, started by a prompt from the daemon or by the CLI itself.
 struct OpenTurn {
     id: TurnId,
     /// Whether herder asked to interrupt it.
@@ -176,6 +178,14 @@ struct AskedQuestion {
     answer: Option<String>,
 }
 
+/// A prompt that came while a turn the CLI started itself ran: it is sent once that turn ends.
+struct Deferred {
+    turn_id: TurnId,
+    text: String,
+    images: Vec<Image>,
+    agent_sender: Option<herder_protocol::SessionId>,
+}
+
 /// A text or thinking item being streamed.
 struct Streaming {
     id: ItemId,
@@ -196,11 +206,16 @@ struct Session {
     next_request: u64,
     pending: HashMap<String, Pending>,
     turn: Option<OpenTurn>,
+    /// The daemon's prompt waiting for a turn the CLI started itself to end.
+    deferred: Option<Deferred>,
     /// The kind of the content block streaming, `true` for thinking, before it has an item.
     block: Option<bool>,
     streaming: Option<Streaming>,
     /// Tool call items of the open turn, by Claude's `tool_use` id.
     tool_calls: HashMap<String, ItemId>,
+    /// Tool call items that started a background task, by Claude's `tool_use` id: kept across
+    /// turns, as the task ends in a later one.
+    tasks: HashMap<String, ItemId>,
     /// Open approval requests and the CLI's `request_id` to answer each on.
     approvals: HashMap<ApprovalId, String>,
     /// Open `AskUserQuestion` calls, in the order asked.
@@ -252,10 +267,12 @@ impl Session {
                 _ => None,
             };
             self.fail_open_turn(fatal("claude stopped")).await;
+            self.fail_deferred(fatal("claude stopped")).await;
             self.emit(AdapterEvent::Exited { error }).await;
         } else {
             let error = fatal(gone(&mut exit).await);
             self.fail_open_turn(error.clone()).await;
+            self.fail_deferred(error.clone()).await;
             self.emit(AdapterEvent::Exited { error: Some(error) }).await;
         }
     }
@@ -270,27 +287,19 @@ impl Session {
                 images,
                 agent_sender,
             } => {
-                let text = crate::agent_prompt(&text, agent_sender.as_ref());
-                self.turn = Some(OpenTurn {
-                    id: turn_id.clone(),
-                    interrupted: false,
-                    failure: Failure::default(),
-                });
-                self.send(&wire::UserLine {
-                    kind: "user",
-                    message: wire::UserMessage {
-                        role: "user",
-                        content: content(&text, &images),
-                    },
-                    parent_tool_use_id: None,
-                    session_id: "",
-                    should_query: None,
-                    origin: agent_sender
-                        .is_none()
-                        .then_some(wire::Origin { kind: "human" }),
-                })
-                .await;
-                self.emit(AdapterEvent::TurnStarted { turn_id }).await;
+                let prompt = Deferred {
+                    turn_id,
+                    text,
+                    images,
+                    agent_sender,
+                };
+                // The daemon sends a prompt only while no turn of its own runs, so an open
+                // turn is one the CLI started itself, which the prompt must not join.
+                if self.turn.is_some() {
+                    self.deferred = Some(prompt);
+                } else {
+                    self.prompt(prompt).await;
+                }
             }
             AdapterCommand::Interrupt => {
                 if let Some(turn) = &mut self.turn
@@ -334,6 +343,36 @@ impl Session {
         }
     }
 
+    async fn prompt(&mut self, prompt: Deferred) {
+        let Deferred {
+            turn_id,
+            text,
+            images,
+            agent_sender,
+        } = prompt;
+        let text = crate::agent_prompt(&text, agent_sender.as_ref());
+        self.turn = Some(OpenTurn {
+            id: turn_id.clone(),
+            interrupted: false,
+            failure: Failure::default(),
+        });
+        self.send(&wire::UserLine {
+            kind: "user",
+            message: wire::UserMessage {
+                role: "user",
+                content: content(&text, &images),
+            },
+            parent_tool_use_id: None,
+            session_id: "",
+            should_query: None,
+            origin: agent_sender
+                .is_none()
+                .then_some(wire::Origin { kind: "human" }),
+        })
+        .await;
+        self.emit(AdapterEvent::TurnStarted { turn_id }).await;
+    }
+
     // ---- Lines from the CLI ----
 
     async fn handle(&mut self, incoming: Incoming) {
@@ -352,21 +391,36 @@ impl Session {
                 if let Some(mode) = system.permission_mode.as_deref().and_then(mode_from_flag) {
                     self.mode_known(mode).await;
                 }
+                if system.subtype.as_deref() == Some("task_started")
+                    && let Some(tool_use_id) = system.tool_use_id
+                    && let Some(call_id) = self.tool_calls.get(&tool_use_id)
+                {
+                    self.tasks.insert(tool_use_id, call_id.clone());
+                }
             }
             Incoming::StreamEvent(stream) if stream.parent_tool_use_id.is_none() => {
+                self.open_unprompted().await;
                 self.stream_event(stream.event).await;
             }
             Incoming::Assistant(assistant) => {
                 if assistant.parent_tool_use_id.is_some() {
                     self.nested_assistant(assistant).await;
                 } else {
+                    self.open_unprompted().await;
                     self.assistant(assistant).await;
                 }
             }
-            Incoming::User(user) => {
-                self.tool_results(user.message.content, user.parent_tool_use_id)
-                    .await;
-            }
+            Incoming::User(user) => match (user.origin, user.message.content) {
+                // A prompt the CLI wrote itself to the main agent; herder's own, echoed back,
+                // are not items.
+                (Some(origin), Value::String(text))
+                    if origin.kind != "human" && user.parent_tool_use_id.is_none() =>
+                {
+                    self.open_unprompted().await;
+                    self.notifications(&text).await;
+                }
+                (_, content) => self.tool_results(content, user.parent_tool_use_id).await,
+            },
             Incoming::Result(result) => self.result(result).await,
             Incoming::RateLimitEvent { rate_limit_info } => {
                 if let Some(turn) = &mut self.turn
@@ -617,6 +671,51 @@ impl Session {
         id
     }
 
+    /// Opens a turn the CLI started on its own, such as its reply to a background agent's
+    /// result, when no turn is open; the adapter mints its id.
+    async fn open_unprompted(&mut self) {
+        if self.turn.is_some() {
+            return;
+        }
+        let turn_id = TurnId::new(ulid::Ulid::new().to_string());
+        self.turn = Some(OpenTurn {
+            id: turn_id.clone(),
+            interrupted: false,
+            failure: Failure::default(),
+        });
+        self.emit(AdapterEvent::TurnStarted { turn_id }).await;
+    }
+
+    /// Each `<task-notification>` in a prompt the CLI wrote, whose task a tool call of this
+    /// session started, as that call's final result.
+    async fn notifications(&mut self, text: &str) {
+        let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
+            return;
+        };
+        for notification in text.split(NOTIFICATION).skip(1) {
+            let Some(call_id) = tag(notification, "tool-use-id").and_then(|tool_use_id| {
+                self.tasks
+                    .get(&tool_use_id)
+                    .or_else(|| self.tool_calls.get(&tool_use_id))
+                    .cloned()
+            }) else {
+                continue;
+            };
+            let Some(output) = tag(notification, "result").or_else(|| tag(notification, "summary"))
+            else {
+                continue;
+            };
+            let is_error = tag(notification, "status").as_deref() == Some("failed");
+            let id = self.item_id();
+            let body = ItemBody::ToolResult {
+                call_id,
+                output,
+                is_error,
+            };
+            self.emit_item(id, turn_id.clone(), body).await;
+        }
+    }
+
     async fn tool_results(&mut self, content: Value, parent: Option<String>) {
         let parent_call_id = match parent {
             Some(parent) => match self.tool_calls.get(&parent) {
@@ -833,11 +932,25 @@ impl Session {
             TurnEnd::Failed(classify(failure))
         };
         self.end_turn(end).await;
+        if let Some(prompt) = self.deferred.take() {
+            self.prompt(prompt).await;
+        }
     }
 
     async fn fail_open_turn(&mut self, error: TurnError) {
         if self.turn.is_some() {
             self.end_turn(TurnEnd::Failed(error)).await;
+        }
+    }
+
+    /// Fails the deferred prompt's turn, which the CLI will not run any more.
+    async fn fail_deferred(&mut self, error: TurnError) {
+        if let Some(Deferred { turn_id, .. }) = self.deferred.take() {
+            self.emit(AdapterEvent::TurnStarted {
+                turn_id: turn_id.clone(),
+            })
+            .await;
+            self.emit(AdapterEvent::TurnFailed { turn_id, error }).await;
         }
     }
 
@@ -946,6 +1059,23 @@ fn streamed_body(reasoning: bool, text: String) -> ItemBody {
     } else {
         ItemBody::AssistantMessage { text }
     }
+}
+
+/// Opens each of the CLI's reports that a background task ended.
+const NOTIFICATION: &str = "<task-notification>";
+
+/// The text of the first `<name>` element in `text`, unescaped, as the CLI writes a
+/// notification's fields: `tool-use-id`, `status`, `summary`, `result` and others.
+fn tag(text: &str, name: &str) -> Option<String> {
+    let (_, rest) = text.split_once(&format!("<{name}>"))?;
+    let (value, _) = rest.split_once(&format!("</{name}>"))?;
+    let value = value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
+    Some(value.trim().to_owned())
 }
 
 /// A tool result's text: a string, or the text blocks of an array.

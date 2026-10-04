@@ -1,0 +1,16 @@
+# A background agent's result comes after the prompted turn ended, and the CLI starts a turn of
+# its own to reply. A prompt sent meanwhile waits behind it; an interrupt stops it.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Review it in the background."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Agent", "input": {"description": "Review", "run_in_background": true}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "turn-1", "body": {"type": "tool_result", "call_id": "item-1", "output": "Async agent launched successfully.", "is_error": false}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_started", "turn_id": "cli-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-3", "turn_id": "cli-1", "body": {"type": "tool_result", "call_id": "item-1", "output": "Found 2 issues.", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "item-4", "turn_id": "cli-1", "body": {"type": "assistant_message", "text": "The review found 2 issues."}}}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "cli-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Fix them."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-5", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Fixed."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}

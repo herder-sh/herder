@@ -87,6 +87,31 @@
 //! A permission request whose tool call was omitted first emits its call so the approval has an item to name. The user's own prompt is not echoed. Items still streaming when a turn
 //! ends, as on interrupt, are completed with the text received so far.
 //!
+//! # Background tasks
+//!
+//! A tool call can start a background task: an agent (the `Agent` tool, which Claude Code may
+//! background whether or not the call asked for `run_in_background`), or a `Bash` command run
+//! in the background. Its `tool_result` only acknowledges the launch, and the CLI announces the
+//! task with a `system` `task_started` line naming the call's `tool_use_id`. When the task
+//! ends, the CLI writes a prompt of its own: a `<task-notification>` block with the task's
+//! `task-id`, `tool-use-id`, `output-file`, `status` (`completed`, `failed` or `stopped`),
+//! `summary` and, for an agent, its `result`, each XML-escaped. `--replay-user-messages` puts
+//! that prompt on stdout as a `user` line whose `origin.kind` is `task-notification` (it also
+//! echoes herder's own prompts, `origin.kind` `human` or none, which the adapter skips).
+//!
+//! The notification becomes a `tool_result` item for the call that started the task, its
+//! output the `result` (else the `summary`) and `is_error` set for `failed`, so a client links
+//! the task's real outcome to its call by `call_id`, as for any tool. The calls that started a
+//! task are remembered for the rest of the session; a notification for a call this process did
+//! not see, as after a restart, adds no item.
+//!
+//! When the task ends while a turn runs, the CLI folds the notification into that turn. When
+//! none runs, the CLI starts a turn itself: the adapter then sends `TurnStarted` with an id it
+//! mints (a ULID, like the daemon's), the notification's item, the reply, and the turn's end,
+//! as for any turn; `Interrupt` stops it. Any other top-level output while no turn runs opens
+//! such a turn the same way. A prompt the daemon sends while the CLI's own turn runs is held
+//! until that turn's `result`, then sent and started, so turns never overlap.
+//!
 //! # Questions
 //!
 //! `AskUserQuestion` arrives as a `can_use_tool` request too, after its `tool_call` item. One
@@ -226,6 +251,7 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
             "stream-json",
             "--verbose",
             "--include-partial-messages",
+            "--replay-user-messages",
             "--permission-prompt-tool",
             "stdio",
             "--allow-dangerously-skip-permissions",
@@ -478,6 +504,7 @@ mod tests {
                 "stream-json",
                 "--verbose",
                 "--include-partial-messages",
+                "--replay-user-messages",
                 "--permission-prompt-tool",
                 "stdio",
                 "--allow-dangerously-skip-permissions",

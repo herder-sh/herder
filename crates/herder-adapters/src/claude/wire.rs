@@ -37,10 +37,16 @@ pub(super) enum Incoming {
     Other,
 }
 
-/// `system` lines: `init` at the start of a query, `status` on changes, and many others.
+/// `system` lines: `init` at the start of a query, `status` on changes, `task_started` when a
+/// background task such as an agent starts, and many others.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct System {
+    #[serde(default)]
+    pub subtype: Option<String>,
+    /// The tool call that started the task, on `task_started`.
+    #[serde(default, rename = "tool_use_id")]
+    pub tool_use_id: Option<String>,
     /// The effective model, on `init`.
     #[serde(default)]
     pub model: Option<String>,
@@ -97,12 +103,23 @@ pub(super) enum Block {
     Other,
 }
 
-/// A user-role line: tool results, and the CLI's own notes such as an interrupt marker.
+/// A user-role line: tool results, the CLI's own notes such as an interrupt marker, and with
+/// `--replay-user-messages` every prompt the conversation gets, herder's own included.
 #[derive(Debug, Deserialize)]
 pub(super) struct User {
     pub message: UserBody,
     #[serde(default)]
     pub parent_tool_use_id: Option<String>,
+    /// Who wrote a replayed prompt: `human` for herder's users, `task-notification` for the
+    /// CLI's report that a background task ended. Absent on tool results.
+    #[serde(default)]
+    pub origin: Option<Written>,
+}
+
+/// A replayed prompt's `origin`.
+#[derive(Debug, Deserialize)]
+pub(super) struct Written {
+    pub kind: String,
 }
 
 #[derive(Debug, Deserialize)]

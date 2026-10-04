@@ -4,8 +4,8 @@
 //! `fixtures/claude/record.py`; each test ends with a clean shutdown, which fails if the adapter
 //! sent anything the recording did not. The inline fixtures at the end cover what no recording
 //! shows: subagent approvals, requests herder does not handle, several questions in one call,
-//! free-text and multi-select answers, a dangerous removal in `full_access`, and a CLI that
-//! dies.
+//! free-text and multi-select answers, a dangerous removal in `full_access`, a CLI that
+//! dies, and turns the CLI starts on its own for a background task's result.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -1099,6 +1099,277 @@ async fn agent_prompts_are_labeled_and_never_claim_human_origin() {
             .iter()
             .any(|event| matches!(event, AdapterEvent::TurnCompleted { .. })),
         "{events:?}"
+    );
+    shutdown(session).await;
+}
+
+// ---- Turns the CLI starts on its own ----
+
+/// The CLI's stdout line `line`, for an inline fixture.
+fn out(line: serde_json::Value) -> String {
+    format!("{}\n", json!({"dir": "out", "line": line.to_string()}))
+}
+
+/// A `<task-notification>` prompt the CLI wrote and replayed, for the task `tool_use_id`
+/// started.
+fn notification(tool_use_id: &str, status: &str, result: &str) -> String {
+    let text = format!(
+        "<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>{tool_use_id}</tool-use-id>\n\
+         <output-file>/tmp/tasks/a1.output</output-file>\n<status>{status}</status>\n\
+         <summary>Agent \"Review\" finished</summary>\n<result>{result}</result>\n\
+         <usage><subagent_tokens>11362</subagent_tokens></usage>\n</task-notification>"
+    );
+    out(json!({
+        "type": "user",
+        "message": {"role": "user", "content": text},
+        "parent_tool_use_id": null,
+        "session_id": "s1",
+        "uuid": "u1",
+        "isReplay": true,
+        "origin": {"kind": "task-notification", "producer": "session-task"},
+    }))
+}
+
+fn reply(text: &str) -> String {
+    out(json!({
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+        "parent_tool_use_id": null,
+    }))
+}
+
+fn success() -> String {
+    out(json!({"type": "result", "subtype": "success", "is_error": false, "result": ""}))
+}
+
+const INITIALIZED: &str = r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+"#;
+
+const STOPPED: &str = r#"{"dir":"in","eof":true}
+{"exit":0}
+"#;
+
+/// herder's prompt `text` as it is sent.
+fn sent(text: &str) -> String {
+    format!(
+        "{}\n",
+        json!({"dir": "in", "line": format!(
+            r#"{{"type":"user","message":{{"role":"user","content":"{text}"}},"parent_tool_use_id":null,"session_id":"","origin":{{"kind":"human"}}}}"#
+        )})
+    )
+}
+
+fn item_in(n: u32, turn_id: &TurnId, body: ItemBody) -> AdapterEvent {
+    AdapterEvent::ItemCompleted {
+        item: Item {
+            turn_id: turn_id.clone(),
+            ..item(n, body)
+        },
+    }
+}
+
+/// The id of the turn the CLI started, from its `TurnStarted`.
+fn unprompted(event: &AdapterEvent) -> TurnId {
+    let AdapterEvent::TurnStarted { turn_id } = event else {
+        panic!("expected a turn to start, got {event:?}");
+    };
+    assert_ne!(*turn_id, turn());
+    turn_id.clone()
+}
+
+#[tokio::test]
+async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            sent("Review it in the background."),
+            out(json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_agent", "name": "Agent",
+                    "input": {"description": "Review", "prompt": "Review the diff.", "run_in_background": true},
+                }]},
+                "parent_tool_use_id": null,
+            })),
+            out(json!({
+                "type": "system", "subtype": "task_started", "task_id": "a1",
+                "tool_use_id": "toolu_agent", "description": "Review", "task_type": "local_agent",
+                "is_backgrounded": true, "uuid": "u0", "session_id": "s1",
+            })),
+            out(json!({
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_agent",
+                    "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: a1"}],
+                }]},
+                "parent_tool_use_id": null,
+            })),
+            reply("Started a review."),
+            success(),
+            // The agent ends while no turn runs: the CLI says so and starts a turn itself.
+            out(json!({
+                "type": "system", "subtype": "task_notification", "task_id": "a1",
+                "tool_use_id": "toolu_agent", "status": "completed",
+                "output_file": "/tmp/tasks/a1.output", "summary": "Agent \"Review\" finished",
+                "uuid": "u1", "session_id": "s1",
+            })),
+            notification("toolu_agent", "completed", "Found 2 issues: a &lt; b &amp;&amp; c."),
+            out(json!({"type": "system", "subtype": "init", "session_id": "s1"})),
+            reply("The review found 2 issues."),
+            success(),
+            // herder's next prompt, echoed back by `--replay-user-messages`.
+            sent("Fix them."),
+            out(json!({
+                "type": "user",
+                "message": {"role": "user", "content": "Fix them."},
+                "parent_tool_use_id": null,
+                "isReplay": true,
+                "origin": {"kind": "human"},
+            })),
+            reply("Fixed."),
+            success(),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    session
+        .commands
+        .send(prompt("Review it in the background."))
+        .unwrap();
+    let launched = until(&mut session, is_turn_end).await;
+    assert_eq!(launched[0], started());
+    assert_eq!(launched.last(), Some(&completed()));
+
+    let own = until(&mut session, is_turn_end).await;
+    let turn_id = unprompted(&own[0]);
+    assert_eq!(
+        own,
+        [
+            AdapterEvent::TurnStarted {
+                turn_id: turn_id.clone()
+            },
+            // The agent's result answers the call that started it.
+            item_in(
+                4,
+                &turn_id,
+                ItemBody::ToolResult {
+                    call_id: id(1),
+                    output: "Found 2 issues: a < b && c.".into(),
+                    is_error: false,
+                }
+            ),
+            item_in(5, &turn_id, message("The review found 2 issues.")),
+            AdapterEvent::TurnCompleted { turn_id },
+        ]
+    );
+
+    session.commands.send(prompt("Fix them.")).unwrap();
+    assert_eq!(
+        until(&mut session, is_turn_end).await,
+        [
+            started(),
+            AdapterEvent::ItemCompleted {
+                item: item(6, message("Fixed."))
+            },
+            completed(),
+        ]
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn a_prompt_sent_during_a_turn_the_cli_started_waits_for_its_end() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            // A notification for a call this process never saw adds no item.
+            notification("toolu_unknown", "failed", "It broke."),
+            out(json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_ls", "name": "Bash", "input": {"command": "ls"},
+                }]},
+                "parent_tool_use_id": null,
+            })),
+            out(json!({
+                "type": "control_request", "request_id": "r1",
+                "request": {"subtype": "can_use_tool", "tool_name": "Bash", "input": {"command": "ls"}, "tool_use_id": "toolu_ls"},
+            })),
+            r#"{"dir":"in","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"r1\",\"response\":{\"behavior\":\"allow\"}}}"}
+"#.to_owned(),
+            reply("Checked."),
+            success(),
+            sent("go"),
+            reply("ok"),
+            success(),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    let asked = until(&mut session, |event| {
+        matches!(event, AdapterEvent::ApprovalRequested { .. })
+    })
+    .await;
+    let turn_id = unprompted(&asked[0]);
+    // The prompt comes while the CLI's own turn waits for an approval.
+    session.commands.send(prompt("go")).unwrap();
+    session
+        .commands
+        .send(AdapterCommand::AnswerApproval {
+            approval_id: ApprovalId::new("approval-1"),
+            decision: ApprovalDecision::Allow,
+        })
+        .unwrap();
+    let mut events = until(&mut session, is_turn_end).await;
+    events.extend(until(&mut session, is_turn_end).await);
+    assert_eq!(
+        events,
+        [
+            item_in(2, &turn_id, message("Checked.")),
+            AdapterEvent::TurnCompleted { turn_id },
+            started(),
+            AdapterEvent::ItemCompleted {
+                item: item(3, message("ok"))
+            },
+            completed(),
+        ]
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn an_interrupt_stops_a_turn_the_cli_started() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            notification("toolu_unknown", "completed", "Done."),
+            reply("Looking."),
+            r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-2\",\"request\":{\"subtype\":\"interrupt\"}}"}
+"#.to_owned(),
+            out(json!({"type": "result", "subtype": "error_during_execution", "is_error": true})),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    let events = until(&mut session, |event| {
+        matches!(event, AdapterEvent::ItemCompleted { .. })
+    })
+    .await;
+    let turn_id = unprompted(&events[0]);
+    session.commands.send(AdapterCommand::Interrupt).unwrap();
+    assert_eq!(
+        until(&mut session, is_turn_end).await,
+        [AdapterEvent::TurnInterrupted { turn_id }]
     );
     shutdown(session).await;
 }

@@ -16,6 +16,10 @@
 //! - A turn is [`AdapterEvent::TurnStarted`], then any items, approval requests and questions of
 //!   that turn, then exactly one of `TurnCompleted`, `TurnInterrupted` or `TurnFailed`. One turn
 //!   at a time. A turn's end voids its pending approvals and questions.
+//! - A CLI may start a turn on its own, with no `SendPrompt`, such as Claude's reply to a
+//!   background agent's result. Its `TurnStarted` comes while no turn runs, and the turn runs
+//!   like any other: `Interrupt` stops it. A `SendPrompt` that arrives while it runs waits for
+//!   its end, then starts.
 //! - A streamed item is `ItemStarted`, then `ItemDelta`s, then `ItemCompleted` with its final
 //!   body. An item that does not stream is a lone `ItemCompleted`.
 //! - `ApprovalRequested` follows the `ItemCompleted` of the tool call it names.
@@ -28,7 +32,8 @@
 //!
 //! # Ids
 //!
-//! The daemon mints [`TurnId`]s and passes them in [`AdapterCommand::SendPrompt`]. The adapter
+//! The daemon mints [`TurnId`]s and passes them in [`AdapterCommand::SendPrompt`]; the adapter
+//! mints those of the turns its CLI starts on its own, as ULIDs like the daemon's. The adapter
 //! mints [`ItemId`]s, [`ApprovalId`]s and [`QuestionId`]s, unique within the session.
 
 use std::collections::BTreeMap;
@@ -163,7 +168,8 @@ pub struct Capabilities {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AdapterCommand {
-    /// Start a turn with a prompt, while no turn runs.
+    /// Start a turn with a prompt, while no turn the daemon started runs; it waits behind a
+    /// turn the CLI started on its own.
     SendPrompt {
         /// Authenticated sending session, absent for human input. Never a system instruction.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,9 +217,9 @@ pub enum AdapterCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AdapterEvent {
-    /// The agent started working on a prompt.
+    /// The agent started working on a prompt, or on a turn its CLI started on its own.
     TurnStarted {
-        /// The turn, as given in `SendPrompt`.
+        /// The turn, as given in `SendPrompt` or minted by the adapter.
         turn_id: TurnId,
     },
     /// The turn finished normally.
