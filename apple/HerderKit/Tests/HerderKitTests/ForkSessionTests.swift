@@ -8,8 +8,8 @@ struct ForkSessionTests {
 
     func destination() -> Machine {
         var host = machine("destination", name: "Other Mac", sessions: [])
-        host.accounts = [Account(accountId: "other-account", provider: "claude", label: "Personal", usage: []),
-                         Account(accountId: "codex", provider: "codex", label: "Codex", usage: [])]
+        host.accounts = [Account(accountId: "other-account", provider: "claude", label: "Personal", configDir: nil, usage: []),
+                         Account(accountId: "codex", provider: "codex", label: "Codex", configDir: nil, usage: [])]
         return host
     }
 
