@@ -3,6 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
+#else
+import GameController
 #endif
 
 /// The prompt box: the text on top, and inside its bottom edge the settings and permission menus
@@ -139,7 +141,7 @@ struct ComposerBox<Footer: View>: View {
                             in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
                 .padding(.horizontal, 18)
         }
-        .onAppear { focus() }
+        .onAppear { if focusesOnAppear { focus() } }
         .onChange(of: text) {
             // A chip deleted from the text takes its image or paste with it.
             PromptText.prune(.image, items: &images, text: &text)
@@ -152,6 +154,16 @@ struct ComposerBox<Footer: View>: View {
         editing
         #else
         focused
+        #endif
+    }
+
+    /// The prompt takes focus as it appears on the Mac and on an iPad with a hardware keyboard.
+    /// On iPhone the session opens on its transcript: the keyboard waits for a tap on the prompt.
+    private var focusesOnAppear: Bool {
+        #if os(macOS)
+        true
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad && GCKeyboard.coalesced != nil
         #endif
     }
 
