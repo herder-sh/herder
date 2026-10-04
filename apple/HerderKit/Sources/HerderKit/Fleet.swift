@@ -34,10 +34,16 @@ public final class Fleet {
     private(set) var connectionLog: [HostId: [ConnectionChange]] = [:]
     /// Each machine's ping round trips since the app opened, oldest first.
     private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
+    /// The sessions that finished a turn since this device last opened them.
+    private(set) var done: DoneSessions
+    /// The sessions shown on screen now, whose turns ending are seen.
+    @ObservationIgnored private var watching: Set<SessionKey> = []
 
-    public init(client: Client) {
+    /// `doneFile` keeps the done sessions across launches; `nil` keeps them in memory.
+    public init(client: Client, doneFile: URL? = nil) {
         self.client = client
         machines = client.machines()
+        done = DoneSessions(file: doneFile)
     }
 
     /// Replaces the machines without a client change, for tests.
@@ -46,7 +52,18 @@ public final class Fleet {
     }
 
     /// What the lists show now.
-    var lists: Lists { Lists(machines: machines, sessions: sessions) }
+    var lists: Lists { Lists(machines: machines, sessions: sessions, done: done.keys) }
+
+    /// A session view shows `key`: it is seen, and stays seen while shown.
+    func watch(_ key: SessionKey) {
+        watching.insert(key)
+        done.remove(key)
+    }
+
+    /// A session view stopped showing `key`.
+    func unwatch(_ key: SessionKey) {
+        watching.remove(key)
+    }
 
     /// Follows the client's changes until it stops; runs for as long as the fleet is shown.
     public func follow() async {
@@ -83,6 +100,7 @@ public final class Fleet {
             task.cancel()
             subscriptions[key] = nil
             sessions[key] = nil
+            done.remove(key)
         }
     }
 
@@ -93,8 +111,17 @@ public final class Fleet {
         sessions[key] = sessions[key] ?? SessionModel(key: key)
         // Releasing the subscription when this returns unsubscribes.
         while let update = await subscription.next(), !Task.isCancelled {
+            guard let before = sessions[key] else { break }
             sessions[key]?.apply(update)
+            observe(key, before: before)
         }
+    }
+
+    /// Notes what an update did to `key`'s status, from the session as it was before it.
+    func observe(_ key: SessionKey, before: SessionModel) {
+        guard let after = sessions[key]?.status else { return }
+        done.observe(key, before: before.status, after: after, wasLoaded: before.loaded,
+                     open: watching.contains(key))
     }
 
     /// Sends a command about a session; a refusal is kept to show with it.
@@ -403,7 +430,9 @@ public enum Profile {
     public static func open(at directory: URL, client name: String) -> Profile {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            return .opened(Fleet(client: try Client.open(configDir: directory.path, client: name)))
+            return .opened(Fleet(
+                client: try Client.open(configDir: directory.path, client: name),
+                doneFile: directory.appendingPathComponent("cache/done.json")))
         } catch {
             return .failed(describe(error))
         }

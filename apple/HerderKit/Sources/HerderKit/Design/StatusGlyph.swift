@@ -5,17 +5,21 @@ import SwiftUI
 struct StatusGlyph: View {
     let state: SessionState
     var size: CGFloat = 10
+    /// Whether running pulses; the sidebar holds still, as the TUI's does.
+    var pulses = true
     @State private var pulsing = false
 
     var body: some View {
         ZStack {
             switch state {
             case .running:
-                Circle().fill(Theme.running.opacity(0.35))
-                    .frame(width: size * 2, height: size * 2)
-                    .scaleEffect(pulsing ? 1 : 0.5)
-                    .opacity(pulsing ? 0 : 1)
-                    .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
+                if pulses {
+                    Circle().fill(Theme.running.opacity(0.35))
+                        .frame(width: size * 2, height: size * 2)
+                        .scaleEffect(pulsing ? 1 : 0.5)
+                        .opacity(pulsing ? 0 : 1)
+                        .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
+                }
                 Circle().fill(Theme.running).frame(width: size, height: size)
             case .needsYou:
                 Circle().fill(Theme.accent).frame(width: size + 4, height: size + 4)
@@ -25,6 +29,9 @@ struct StatusGlyph: View {
                     .frame(width: size + 2, height: size + 2)
             case .idle:
                 Circle().strokeBorder(Theme.idle, lineWidth: 1.5).frame(width: size, height: size)
+            case .done:
+                Image(systemName: "checkmark").font(.system(size: size, weight: .heavy))
+                    .foregroundStyle(Theme.success)
             case .error:
                 Circle().fill(Theme.failure).frame(width: size + 2, height: size + 2)
                     .overlay(Image(systemName: "xmark").font(.system(size: size * 0.6, weight: .heavy))

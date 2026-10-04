@@ -13,6 +13,10 @@ struct ProjectGroup: Hashable, Identifiable {
     let archived: [SessionSummary]
 
     var sessions: [SessionSummary] { live + archived }
+
+    /// What its sidebar row and header show: its live sessions' states rolled up, as the TUI
+    /// rolls up a project; `nil` without any.
+    var state: SessionState? { SessionState.rollup(live.map(\.state)) }
 }
 
 /// What the lists show, built from the machines and their sessions' folded state the way the
@@ -27,12 +31,14 @@ struct Lists {
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
 
-    init(machines: [Machine], sessions: [SessionKey: SessionModel], now: Date = .now) {
+    /// `done` holds the sessions that finished a turn since this device last opened them.
+    init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [], now: Date = .now) {
         var entries: [Entry] = []
         for machine in machines {
             for head in machine.sessions {
                 let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
-                entries.append(Entry(machine: machine, head: head, model: sessions[key] ?? SessionModel(key: key)))
+                entries.append(Entry(machine: machine, head: head, model: sessions[key] ?? SessionModel(key: key),
+                                     done: done.contains(key)))
             }
         }
 
@@ -225,8 +231,13 @@ struct Lists {
         let machine: Machine
         let head: SessionHead
         let model: SessionModel
+        /// Whether it finished a turn since this device last opened it.
+        var done = false
 
         var key: SessionKey { model.key }
+
+        /// Its state, done while idle and unseen.
+        var state: SessionState { model.state == .idle && done ? .done : model.state }
 
         /// The project its machine lists it in; `nil` until the machine's project discovery
         /// has seen its repository, and for good once the repository's project is removed.
@@ -251,7 +262,7 @@ struct Lists {
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
                 branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
                 machineOffline: host.map { !$0.online } ?? false,
-                state: model.state, activity: model.activity,
+                state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), prs: model.prs,
                 children: kids.count, childrenNeedYou: kids.filter(\.model.needsUser).count)
         }

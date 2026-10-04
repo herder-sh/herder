@@ -90,10 +90,14 @@ struct SessionView: View {
                 }
             }
         }
-        .onChange(of: key) {
+        .onChange(of: key) { old, _ in
             showsTerminal = false
             scroll.show(key)
+            fleet.unwatch(old)
+            fleet.watch(key)
         }
+        .onAppear { fleet.watch(key) }
+        .onDisappear { fleet.unwatch(key) }
         .sheet(isPresented: $forking, onDismiss: {
             guard let key = completedFork else { return }
             completedFork = nil

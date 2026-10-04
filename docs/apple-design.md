@@ -380,6 +380,3 @@ iPhone layout fixes land in P7.21.
 - On iPhone the keyboard opens with every session and dragging the transcript does not dismiss
   it; with a request pinned, no transcript is visible —
   [P7.24](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353283).
-- No **done** state and no roll-up: project rows show a session count, not their sessions'
-  state, unlike the TUI —
-  [P7.26](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353293).

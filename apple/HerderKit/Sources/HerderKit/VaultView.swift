@@ -333,6 +333,7 @@ extension SessionState {
         case .needsYou: Theme.accent
         case .waiting: Theme.waiting
         case .idle: Theme.idle
+        case .done: Theme.success
         case .error: Theme.failure
         case .archived, .moved: Theme.stroke
         }
