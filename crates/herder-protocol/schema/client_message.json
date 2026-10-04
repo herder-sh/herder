@@ -1457,6 +1457,129 @@
           ]
         },
         {
+          "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. Answered with `applied`; `skills_status` follows.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "set_skills_repo"
+            },
+            "url": {
+              "description": "The repository's git URL, as `git clone` takes it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "description": "Add a skill to the library, or replace one, with exactly `files`, committed and pushed;\nowners only. Answered with `applied` once pushed; `skills_status` follows, and the\nclient sends `pull_skills` to its other machines. Refused with `bad_request` for a name\n[`crate::is_valid_skill_name`] refuses, files without a top-level `SKILL.md`, an\ninvalid path, or files over [`crate::MAX_SKILL_BYTES`] together; with `not_found` when\nno library is set.",
+          "type": "object",
+          "properties": {
+            "files": {
+              "description": "Every file of the skill's folder.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SkillFile"
+              }
+            },
+            "name": {
+              "description": "The skill's name, its folder in the library.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "put_skill"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "files"
+          ]
+        },
+        {
+          "description": "Remove a skill from the library, committed and pushed; owners only. Answered as\n`put_skill` is; refused with `not_found` for a skill the library does not have.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The skill.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "delete_skill"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "description": "Copy a skill folder out of another git repository into the library, named after the\nfolder, committed and pushed; owners only. Answered as `put_skill` is; refused with\n`bad_request` when the folder has no `SKILL.md` or its name is not a valid skill name.",
+          "type": "object",
+          "properties": {
+            "git_url": {
+              "description": "The repository to copy it from, as `git clone` takes it.",
+              "type": "string"
+            },
+            "path": {
+              "description": "The skill's folder within that repository; its top when absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "import_skill"
+            }
+          },
+          "required": [
+            "type",
+            "git_url"
+          ]
+        },
+        {
+          "description": "Pull the library into the daemon's checkout now; owners only. Answered with `applied`\nonce pulled; `skills_status` follows with the new head, or the pull's error.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pull_skills"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Enable or disable a library skill on this machine only; owners only. A disabled skill\nreaches no provider here. Answered with `applied`; `skills_status` follows. Refused with\n`not_found` for a skill the library does not have.",
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "description": "Whether it is to be enabled.",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "The skill.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_skill_enabled"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "enabled"
+          ]
+        },
+        {
           "description": "Start streaming a terminal's output; owners only.",
           "type": "object",
           "properties": {
@@ -3058,6 +3181,29 @@
           "type": "string",
           "const": "moved"
         }
+      ]
+    },
+    "SkillFile": {
+      "description": "One file of a skill's folder, for `put_skill`.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "The file's bytes.",
+          "$ref": "#/$defs/Bytes"
+        },
+        "executable": {
+          "description": "Whether the file is executable, as a script the skill runs is; `false` when absent.",
+          "type": "boolean",
+          "default": false
+        },
+        "path": {
+          "description": "Path within the skill's folder, `/`-separated, without `.` or `..` components, e.g.\n`SKILL.md` or `scripts/run.sh`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "data"
       ]
     },
     "TaskSettings": {

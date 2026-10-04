@@ -453,8 +453,8 @@ impl Auth {
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
 /// bringing down containers, browsing folders, changing projects, reading or changing the
-/// daemon's settings, restarting it, backing up to a vault, and forking sessions onto the
-/// host are for owners only.
+/// daemon's settings, restarting it, backing up to a vault, forking sessions onto the host,
+/// and changing the skill library or which of its skills are enabled are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -521,6 +521,20 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     {
         return Err(forbidden(
             "forking sessions onto this host is for the daemon's owners only",
+        ));
+    }
+    let skills = matches!(
+        command,
+        CommandBody::SetSkillsRepo { .. }
+            | CommandBody::PutSkill { .. }
+            | CommandBody::DeleteSkill { .. }
+            | CommandBody::ImportSkill { .. }
+            | CommandBody::PullSkills
+            | CommandBody::SetSkillEnabled { .. }
+    );
+    if skills && identity.role != Role::Owner {
+        return Err(forbidden(
+            "changing the skill library is for the daemon's owners only",
         ));
     }
     Ok(())

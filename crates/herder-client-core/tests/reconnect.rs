@@ -1179,6 +1179,59 @@ async fn host_and_session_resources_stay_current_while_connected() {
     .await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skills_stay_current_while_connected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let status = |head: &str| herder_protocol::SkillsStatus {
+        repo: Some("https://github.com/you/herder-skills".into()),
+        head: Some(head.into()),
+        last_pull: None,
+        pull_error: None,
+        skills: Vec::new(),
+        reload: Vec::new(),
+    };
+    // A status from before the client connects reaches it after hello.
+    daemon.hub.skills_status(status("a1"));
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    pair_one(&client, daemon.pairing_link()).await.unwrap();
+    wait_machine(&client, |m| m.skills == Some(status("a1"))).await;
+    daemon.hub.skills_status(status("b2"));
+    wait_machine(&client, |m| m.skills == Some(status("b2"))).await;
+
+    let session = SessionId::new("s1");
+    let skills = vec![herder_protocol::SessionSkill {
+        name: "deploy".into(),
+        description: "Deploys the app.".into(),
+        source: herder_protocol::SkillSource::Library,
+        path: None,
+    }];
+    daemon.hub.session_skills(&session, skills.clone());
+    wait_machine(&client, |m| m.session_skills.get(&session) == Some(&skills)).await;
+    // A session with no skills leaves the map.
+    daemon.hub.session_skills(&session, Vec::new());
+    wait_machine(&client, |m| m.session_skills.is_empty()).await;
+
+    // Skills go with the connection.
+    daemon.hub.session_skills(&session, skills);
+    wait_machine(&client, |m| !m.session_skills.is_empty()).await;
+    daemon.kill().await;
+    wait_machine(&client, |m| {
+        !connected(&m.connection) && m.skills.is_none() && m.session_skills.is_empty()
+    })
+    .await;
+}
+
 /// A connection is pinged as soon as it is up: its round trip, when it was established and how
 /// often it was re-established are reported, and the round trips go with the connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -62,6 +62,19 @@ pub enum ServerMessage {
         /// Its usage now.
         usage: SessionUsage,
     },
+    /// The skill library as this daemon has it; ephemeral, never journaled. Sent after hello,
+    /// then whenever it changes.
+    SkillsStatus(crate::SkillsStatus),
+    /// The skills one session's agent may use: the library's enabled skills and the project's
+    /// skills in its worktree; ephemeral, never journaled. Sent after hello for every live
+    /// session, then whenever they change. An empty list is sent once, as when the session is
+    /// archived, and then no longer to clients that connect later.
+    SessionSkills {
+        /// The session.
+        session_id: SessionId,
+        /// Its skills, ordered by name, then library before project, then by path.
+        skills: Vec<crate::SessionSkill>,
+    },
     /// A durable journal event of a subscribed session.
     Event(Event),
     /// The full current state of an in-progress item; later deltas apply on top of it.

@@ -56,7 +56,9 @@
 //!
 //! [`Machine::resources`] and [`Machine::session_usage`] hold the latest figures the daemon
 //! pushed, at most every two seconds each, and a vault's [`Machine::vault`] its latest status;
-//! they are live only while connected, so they are cleared when the connection is not up.
+//! they are live only while connected, so they are cleared when the connection is not up. So
+//! are [`Machine::skills`] and [`Machine::session_skills`], the skill library and each
+//! session's skills as the daemon last sent them.
 //!
 //! # Sessions
 //!
@@ -115,8 +117,8 @@ use futures_util::future::join_all;
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
     Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
-    Provider, Role, SessionHead, SessionId, SessionUsage, Terminal, TerminalId, Timestamp,
-    VaultStatus,
+    Provider, Role, SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal,
+    TerminalId, Timestamp, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -130,7 +132,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 9;
+pub const CLIENT_API_VERSION: u32 = 10;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +236,11 @@ pub struct Machine {
     /// What a vault holds and how far each host's replication got, as last sent; `None` for a
     /// daemon, and while not connected.
     pub vault: Option<VaultStatus>,
+    /// The skill library as the daemon has it, as last sent; `None` until it sends it, and
+    /// while not connected.
+    pub skills: Option<SkillsStatus>,
+    /// The skills each live session's agent may use, as last sent; empty while not connected.
+    pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
 }
 
 /// What pairing with one machine of a link came to; see [`Client::pair`].

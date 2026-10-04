@@ -154,6 +154,8 @@ struct State {
     resources: Option<herder_protocol::HostResources>,
     session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
     vault: Option<herder_protocol::VaultStatus>,
+    skills: Option<herder_protocol::SkillsStatus>,
+    session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -431,6 +433,8 @@ impl Supervisor {
             resources: state.resources.clone(),
             session_usage: state.session_usage.clone(),
             vault: state.vault.clone(),
+            skills: state.skills.clone(),
+            session_skills: state.session_skills.clone(),
         }
     }
 
@@ -725,13 +729,16 @@ impl Supervisor {
 
     fn set_connection(&self, connection: ConnectionState) {
         let mut state = self.lock();
-        // Resource figures and a vault's status are live; a new connection sends them afresh.
+        // Resource figures, a vault's status and skills are live; a new connection sends them
+        // afresh.
         if connection == ConnectionState::Connected {
             state.quality.connected();
         } else {
             state.resources = None;
             state.session_usage.clear();
             state.vault = None;
+            state.skills = None;
+            state.session_skills.clear();
             state.address = None;
             state.quality.disconnected();
         }
@@ -838,6 +845,19 @@ impl Supervisor {
             }
             ServerMessage::VaultStatus(status) => {
                 state.vault = Some(status);
+                return self.notify_after(state);
+            }
+            ServerMessage::SkillsStatus(status) => {
+                state.skills = Some(status);
+                return self.notify_after(state);
+            }
+            ServerMessage::SessionSkills { session_id, skills } => {
+                // The daemon sends a session's empty list once, then nothing until it changes.
+                if skills.is_empty() {
+                    state.session_skills.remove(&session_id);
+                } else {
+                    state.session_skills.insert(session_id, skills);
+                }
                 return self.notify_after(state);
             }
             ServerMessage::SessionResources { session_id, usage } => {

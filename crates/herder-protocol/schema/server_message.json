@@ -179,6 +179,46 @@
       ]
     },
     {
+      "description": "The skill library as this daemon has it; ephemeral, never journaled. Sent after hello,\nthen whenever it changes.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "skills_status"
+        }
+      },
+      "$ref": "#/$defs/SkillsStatus",
+      "required": [
+        "type"
+      ]
+    },
+    {
+      "description": "The skills one session's agent may use: the library's enabled skills and the project's\nskills in its worktree; ephemeral, never journaled. Sent after hello for every live\nsession, then whenever they change. An empty list is sent once, as when the session is\narchived, and then no longer to clients that connect later.",
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "The session.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "skills": {
+          "description": "Its skills, ordered by name, then library before project, then by path.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionSkill"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "session_skills"
+        }
+      },
+      "required": [
+        "type",
+        "session_id",
+        "skills"
+      ]
+    },
+    {
       "description": "A durable journal event of a subscribed session.",
       "type": "object",
       "properties": {
@@ -2349,6 +2389,37 @@
       "description": "Identifies an item within a session; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "LibrarySkill": {
+      "description": "A skill of the library.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What the skill is for, from its `SKILL.md`.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether the skill is enabled on this machine, as `set_skill_enabled` set it; a new skill\nis.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The skill's name, its folder in the library.",
+          "type": "string"
+        },
+        "providers": {
+          "description": "The providers whose CLIs on this machine load the skill; empty while it is disabled.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Provider"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "enabled",
+        "providers"
+      ]
+    },
     "LinkedVault": {
       "description": "The vault a host backs up to, as its `[vault]` table names it.",
       "type": "object",
@@ -2636,6 +2707,24 @@
       "required": [
         "provider",
         "binary"
+      ]
+    },
+    "ProviderReload": {
+      "description": "When one provider's CLI picks up a change to the skills.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "The provider.",
+          "$ref": "#/$defs/Provider"
+        },
+        "reload": {
+          "description": "When its running sessions see a change.",
+          "$ref": "#/$defs/SkillReload"
+        }
+      },
+      "required": [
+        "provider",
+        "reload"
       ]
     },
     "PullRequest": {
@@ -3011,6 +3100,36 @@
       "description": "Identifies a session; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "SessionSkill": {
+      "description": "A skill a session's agent may use.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What the skill is for, from its `SKILL.md`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The skill's name.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A project skill's folder, relative to the worktree, e.g. `.claude/skills/deploy` or\n`web/.agents/skills/deploy`; absent for a library skill.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "description": "Where the skill comes from.",
+          "$ref": "#/$defs/SkillSource"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "source"
+      ]
+    },
     "SessionStatus": {
       "description": "Where a session stands, as shown in lists.",
       "oneOf": [
@@ -3085,6 +3204,94 @@
         "memory_bytes",
         "processes",
         "containers"
+      ]
+    },
+    "SkillReload": {
+      "description": "When a provider CLI picks up a change to the skills.",
+      "oneOf": [
+        {
+          "description": "At once, within a running turn.",
+          "type": "string",
+          "const": "live"
+        },
+        {
+          "description": "At the session's next turn.",
+          "type": "string",
+          "const": "next_turn"
+        },
+        {
+          "description": "Only in sessions started after the change.",
+          "type": "string",
+          "const": "next_session"
+        }
+      ]
+    },
+    "SkillSource": {
+      "description": "Where a session's skill comes from.",
+      "oneOf": [
+        {
+          "description": "The skill library, enabled on the session's machine.",
+          "type": "string",
+          "const": "library"
+        },
+        {
+          "description": "The project: checked in to the session's worktree, where its provider looks for skills.",
+          "type": "string",
+          "const": "project"
+        }
+      ]
+    },
+    "SkillsStatus": {
+      "description": "The skill library as one daemon has it, and how its skills reach the provider CLIs there.",
+      "type": "object",
+      "properties": {
+        "head": {
+          "description": "The commit the daemon's checkout is at; absent until it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_pull": {
+          "description": "When the daemon last pulled the library, successfully or not; absent until it tried.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "pull_error": {
+          "description": "Why the last pull failed; absent when it succeeded.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reload": {
+          "description": "When each provider CLI on this machine picks up a change to the skills.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderReload"
+          }
+        },
+        "repo": {
+          "description": "The library's git URL, as `set_skills_repo` set it, without any credentials it held;\nabsent until one is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "description": "The library's skills at `head`, ordered by name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibrarySkill"
+          }
+        }
+      },
+      "required": [
+        "skills",
+        "reload"
       ]
     },
     "TaskSettings": {

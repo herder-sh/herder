@@ -22,6 +22,8 @@
 //! - on a vault, the host list whenever a host's liveness changes, and the vault's status
 //!   whenever what it holds changes, sent to every client, and the latest of each on connect
 //!   ([`crate::vault`]).
+//! - the skill library's status and each session's skills whenever they change, sent to every
+//!   client, and on connect the latest status and every session's non-empty skills.
 //!
 //! Terminal output does not pass through the hub: each terminal queues its bytes straight onto
 //! its attached clients' outboxes with [`Outbox::terminal_output`].
@@ -32,8 +34,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
-    Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionUsage, Terminal, TerminalId,
-    VaultStatus,
+    Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill, SessionUsage,
+    SkillsStatus, Terminal, TerminalId, VaultStatus,
 };
 
 use crate::session::EventSink;
@@ -75,6 +77,10 @@ struct State {
     fleet: Option<Vec<FleetHost>>,
     /// A vault's latest status; `None` on a daemon.
     vault: Option<VaultStatus>,
+    /// The skill library's latest status; `None` until the daemon publishes one.
+    skills: Option<SkillsStatus>,
+    /// The skills of each session that has any.
+    session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     /// The latest project list; `None` until discovery publishes its first.
     projects: Option<Vec<Project>>,
     /// How sessions fail over, sent with every account list.
@@ -219,6 +225,15 @@ impl Hub {
                 usage: usage.clone(),
             });
         }
+        if let Some(status) = &state.skills {
+            inner.push(ServerMessage::SkillsStatus(status.clone()));
+        }
+        for (session_id, skills) in &state.session_skills {
+            inner.push(ServerMessage::SessionSkills {
+                session_id: session_id.clone(),
+                skills: skills.clone(),
+            });
+        }
         drop(inner);
         outbox.wake();
         state.outboxes.push(Arc::clone(outbox));
@@ -276,6 +291,38 @@ impl Hub {
         }
         let message = ServerMessage::VaultStatus(status.clone());
         state.vault = Some(status);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends the skill library's status to every client, and to clients that connect later.
+    pub fn skills_status(&self, status: SkillsStatus) {
+        let mut state = self.lock();
+        let message = ServerMessage::SkillsStatus(status.clone());
+        state.skills = Some(status);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends a session's skills to every client. An empty list is sent once and then no
+    /// longer to clients that connect later.
+    pub fn session_skills(&self, session_id: &SessionId, skills: Vec<SessionSkill>) {
+        let mut state = self.lock();
+        if skills.is_empty() {
+            state.session_skills.remove(session_id);
+        } else {
+            state
+                .session_skills
+                .insert(session_id.clone(), skills.clone());
+        }
+        let message = ServerMessage::SessionSkills {
+            session_id: session_id.clone(),
+            skills,
+        };
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();
@@ -998,6 +1045,48 @@ mod tests {
         let last = Arc::new(Outbox::default());
         hub.connect(&last, Role::Member);
         assert!(drain(&last).is_empty());
+    }
+
+    #[test]
+    fn skills_reach_every_client_and_later_ones_until_a_session_has_none() {
+        let hub = Hub::default();
+        let status = SkillsStatus {
+            repo: Some("https://github.com/you/herder-skills".into()),
+            head: None,
+            last_pull: None,
+            pull_error: None,
+            skills: Vec::new(),
+            reload: Vec::new(),
+        };
+        let skills = vec![SessionSkill {
+            name: "deploy".into(),
+            description: "Deploys.".into(),
+            source: herder_protocol::SkillSource::Project,
+            path: Some(".claude/skills/deploy".into()),
+        }];
+        let listed = |skills| ServerMessage::SessionSkills {
+            session_id: session(),
+            skills,
+        };
+        let member = Arc::new(Outbox::default());
+        hub.connect(&member, Role::Member);
+        hub.skills_status(status.clone());
+        hub.session_skills(&session(), skills.clone());
+        let both = [
+            ServerMessage::SkillsStatus(status.clone()),
+            listed(skills.clone()),
+        ];
+        assert_eq!(drain(&member), both);
+
+        let later = Arc::new(Outbox::default());
+        hub.connect(&later, Role::Member);
+        assert_eq!(drain(&later), both);
+
+        hub.session_skills(&session(), Vec::new());
+        assert_eq!(drain(&member), [listed(Vec::new())]);
+        let last = Arc::new(Outbox::default());
+        hub.connect(&last, Role::Member);
+        assert_eq!(drain(&last), [ServerMessage::SkillsStatus(status)]);
     }
 
     #[test]
