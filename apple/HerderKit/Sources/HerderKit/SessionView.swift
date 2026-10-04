@@ -409,7 +409,8 @@ private struct Composer: View {
                 FooterMenu(section: accountSection(accounts), text: account?.label ?? model.accountId ?? "")
                 Spacer()
                 if let branch = model.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1)
+                    // The header shows it too, so it gives way first.
+                    Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1).layoutPriority(-1)
                 }
             }
             if let refusal = fleet.refusals[key] {

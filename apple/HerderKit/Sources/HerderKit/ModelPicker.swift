@@ -454,7 +454,8 @@ struct FooterMenu: View {
             .hitTarget()
         }
         .buttonStyle(.plain)
-        .fixedSize()
+        // Truncates rather than widening the footer past a phone's width.
+        .fixedSize(horizontal: false, vertical: true)
         .help(help ?? section.kind.rawValue)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 1) {
