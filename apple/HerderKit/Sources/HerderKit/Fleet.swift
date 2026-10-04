@@ -68,6 +68,11 @@ public final class Fleet {
             log.append(ConnectionChange(at: .now, state: machine.connection))
             connectionLog[machine.hostId] = Array(log.suffix(100))
         }
+        for machine in machines {
+            for head in machine.sessions where !head.queue.isEmpty {
+                sessions[SessionKey(hostId: machine.hostId, sessionId: head.sessionId)]?.settle(head.queue)
+            }
+        }
         let listed = Set(machines.flatMap { machine in
             machine.sessions.map { SessionKey(hostId: machine.hostId, sessionId: $0.sessionId) }
         })
@@ -177,6 +182,40 @@ public final class Fleet {
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
             sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }
+        // The queue may have listed it before the machine answered.
+        sessions[key]?.settle(queue(of: key))
+    }
+
+    /// The prompts waiting in a session's queue on its machine, in the order they will run.
+    func queue(of key: SessionKey) -> [QueuedPrompt] {
+        machines.first { $0.hostId == key.hostId }?.sessions.first { $0.sessionId == key.sessionId }?.queue ?? []
+    }
+
+    /// Drops a queued prompt without running it.
+    func removeQueued(_ promptId: PromptId, from key: SessionKey) async {
+        await editQueue(.removeQueued(sessionId: key.sessionId, promptId: promptId), of: key)
+    }
+
+    /// Moves a queued prompt just before another, or to the end.
+    func moveQueued(_ promptId: PromptId, before: PromptId?, in key: SessionKey) async {
+        await editQueue(.moveQueued(sessionId: key.sessionId, promptId: promptId, before: before), of: key)
+    }
+
+    /// Runs a queued prompt next, stopping the running turn; the rest keep their order.
+    func sendQueuedNow(_ promptId: PromptId, in key: SessionKey) async {
+        await editQueue(.sendQueuedNow(sessionId: key.sessionId, promptId: promptId), of: key)
+    }
+
+    /// Sends a queue edit; a prompt that started meanwhile is refused as such.
+    private func editQueue(_ command: CommandBody, of key: SessionKey) async {
+        do {
+            _ = try await client.send(hostId: key.hostId, command: command)
+            refusals[key] = nil
+        } catch HerderError.Rejected(let info) where info.code == .conflict {
+            refusals[key] = "That message has already started."
+        } catch {
+            refusals[key] = describe(error)
+        }
     }
 
     /// Brings an archived session back, then sends the prompt; a refusal is shown with it.
@@ -252,11 +291,6 @@ public final class Fleet {
     /// the project has sessions that are not archived.
     func removeProject(_ projectId: ProjectId, on hostId: HostId) async throws {
         _ = try await client.send(hostId: hostId, command: .removeProject(projectId: projectId))
-    }
-
-    /// Runs a queued prompt now: interrupts the turn, so the daemon starts the queue.
-    func sendNow(_ key: SessionKey) async {
-        await interrupt(key)
     }
 
     /// Drops a prompt that failed to send.
