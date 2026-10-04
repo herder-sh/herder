@@ -36,3 +36,23 @@ struct MarkdownTableTests {
         #expect(parts.last == .code("ls", language: "sh"))
     }
 }
+
+#if os(macOS)
+import AppKit
+import SwiftUI
+
+@MainActor struct MarkdownTableLayoutTests {
+    private func size(_ cell: String) -> CGSize {
+        var table = MarkdownTable(header: "| A | B |", separator: "|---|---|")!
+        table.append("| x | \(cell) |")
+        return NSHostingView(rootView: MarkdownTableView(table: table)).fittingSize
+    }
+
+    @Test func aLongCellWrapsAndGrowsItsRow() {
+        let short = size("short")
+        let long = size(String(repeating: "wrapping words ", count: 30))
+        #expect(long.width < short.width + 400, "the column is capped, \(long)")
+        #expect(long.height > short.height + 60, "the row grows to fit its wrapped lines, \(long) vs \(short)")
+    }
+}
+#endif

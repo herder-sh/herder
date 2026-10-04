@@ -90,12 +90,13 @@ struct MarkdownTableView: View {
     }
 
     private func cell(_ text: String, _ column: Int) -> some View {
-        Text(MarkdownText.inline(text))
-            .multilineTextAlignment(textAlignment(table.alignments[column]))
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 320, alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+        WrappingWidth(limit: 320) {
+            Text(MarkdownText.inline(text))
+                .multilineTextAlignment(textAlignment(table.alignments[column]))
+        }
+        .frame(maxWidth: .infinity, alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     private func horizontal(_ alignment: MarkdownTable.Alignment) -> HorizontalAlignment {
@@ -112,5 +113,25 @@ struct MarkdownTableView: View {
         case .center: .center
         case .trailing: .trailing
         }
+    }
+}
+
+/// Lays its content out at its natural width up to `limit`, wrapping past it. The sideways
+/// scroll view proposes no width, so text would otherwise measure itself on one line and spill
+/// out of a row sized for that one line.
+private struct WrappingWidth: Layout {
+    let limit: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        return content.sizeThatFits(ProposedViewSize(width: width(of: content), height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
+
+    private func width(of content: LayoutSubview) -> CGFloat {
+        min(content.sizeThatFits(.unspecified).width, limit)
     }
 }
