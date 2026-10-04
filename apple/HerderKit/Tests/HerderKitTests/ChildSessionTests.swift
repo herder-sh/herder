@@ -50,6 +50,13 @@ struct ChildSessionTests {
         #expect(model.turnEnds["c2"] == .failed)
     }
 
+    @Test func theSpawnSummaryCountsStatesMostUrgentFirst() {
+        #expect(ChildProgress.summary([.done, .running, .needsYou, .running, .failed])
+            == "1 needs you · 2 running · 1 failed · 1 done")
+        #expect(ChildProgress.summary([.waiting]) == "1 waiting")
+        #expect(ChildProgress.summary([]) == "")
+    }
+
     @Test func runTimeCountsTurnsAndTheRunningOne() {
         var script = Script("01C")
         // Events are a second apart: the first turn runs 1s, the second started at 6s.

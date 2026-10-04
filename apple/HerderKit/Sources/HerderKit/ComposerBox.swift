@@ -12,6 +12,8 @@ struct ComposerBox<Footer: View>: View {
     /// Images going with the prompt: pasted, dropped or attached.
     @Binding var images: [Herder.Image]
     let placeholder: String
+    /// Edges the box in a colour of its own, as in a child session.
+    var tint: Color?
     /// The model menu's groups, from `ModelCatalog.groups`.
     let models: [ModelCatalog.Group]
     /// The provider and model in use; `""` is the provider's default.
@@ -119,7 +121,8 @@ struct ComposerBox<Footer: View>: View {
                 .padding(.bottom, 10)
             }
             .background(Theme.surface, in: .rect(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(isFocused ? Theme.secondary.opacity(0.5) : Theme.stroke))
+            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(
+                tint.map { $0.opacity(isFocused ? 0.7 : 0.4) } ?? (isFocused ? Theme.secondary.opacity(0.5) : Theme.stroke)))
             .contentShape(.rect)
             .onTapGesture { focus() }
             .onDrop(of: [.image], isTargeted: nil) { providers in

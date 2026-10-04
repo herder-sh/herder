@@ -20,21 +20,28 @@ struct SessionView: View {
     @AppStorage("inspectorShown") private var inspectorShown = false
     @State private var linking = false
     @State private var typedPR = ""
-    /// The transcript block at the top of the view, and where each session shown here was
-    /// left, so going back to a parent lands where it was.
-    @State private var position: String?
-    @State private var positions: [SessionKey: String] = [:]
+    /// Where the transcript is scrolled, and where each session shown here was left.
+    @State private var scroll = TranscriptScroll()
+    /// Bumped on every send, so the transcript jumps to its end.
+    @State private var sent = 0
 
     var body: some View {
         let model = fleet.sessions[key]
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
         let blocks = model.map(Transcript.blocks) ?? []
         VStack(spacing: 0) {
+            if let parent = model?.parent {
+                ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
+            }
             header(model, summary)
+                .overlay(alignment: .leading) {
+                    if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
+                }
             Rectangle().fill(Theme.stroke).frame(height: 1)
             if showsTerminal {
                 TerminalPane(fleet: fleet, key: key)
             } else {
+            ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true {
@@ -51,11 +58,14 @@ struct SessionView: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
                 .padding(16)
+                .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(TranscriptScroll.end) }
+                .onAppear { if let top = scroll.land() { proxy.scrollTo(top, anchor: .top) } }
             }
-            .scrollPosition(id: $position)
             .defaultScrollAnchor(.bottom)
-            .modifier(FollowsGrowth())
+            .modifier(FollowsGrowth(key: key, scroll: $scroll))
             .id(key)
+            .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
+            }
             if let model {
                 controls(model, summary)
             }
@@ -71,10 +81,9 @@ struct SessionView: View {
                 }
             }
         }
-        .onChange(of: key) { old, new in
+        .onChange(of: key) {
             showsTerminal = false
-            positions[old] = position
-            position = positions[new]
+            scroll.show(key)
         }
         .sheet(isPresented: $forking, onDismiss: {
             guard let key = completedFork else { return }
@@ -108,12 +117,11 @@ struct SessionView: View {
     private func header(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
-                if let parent = model?.parent {
-                    ParentLink(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
-                        .padding(.bottom, 2)
+                HStack(spacing: 10) {
+                    if model?.parent != nil { ChildAvatar(session: model, size: 26, showsState: false) }
+                    Text(summary?.title ?? model?.title ?? "Session")
+                        .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
                 }
-                Text(summary?.title ?? model?.title ?? "Session")
-                    .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
                 HStack(spacing: 6) {
                     StatusGlyph(state: model?.state ?? .idle, size: 7)
                     Text(model?.state.label ?? "")
@@ -205,7 +213,7 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model) { host in
+                Composer(fleet: fleet, key: key, model: model, sent: { sent += 1 }) { host in
                     forkTarget = host
                     forking = true
                 }
@@ -243,14 +251,57 @@ struct SessionView: View {
     }
 }
 
-/// Keeps the transcript at its end as it grows, where the OS supports it.
+/// Keeps the transcript at its end as it grows, and tracks where it is scrolled, where the OS
+/// supports it.
 private struct FollowsGrowth: ViewModifier {
+    let key: SessionKey
+    @Binding var scroll: TranscriptScroll
+
     func body(content: Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
-            content.defaultScrollAnchor(.bottom, for: .sizeChanges)
+            content
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { scroll.saw($0.first, in: key) }
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.visibleRect.maxY >= geometry.contentSize.height - 40
+                } action: { _, atEnd in
+                    scroll.scrolled(key, atEnd: atEnd)
+                }
         } else {
             content
         }
+    }
+}
+
+/// Where each session's transcript was scrolled, so coming back to one lands where it was left.
+/// It is scrolled there once, not bound as the scroll position, so the view still follows
+/// new output and sends: a bound position pins its block in place as the transcript grows.
+struct TranscriptScroll {
+    /// The id of the transcript's end, where a send scrolls.
+    static let end = "transcript-end"
+
+    /// The block at the top of each session's view, and the sessions scrolled up from the end.
+    private var tops: [SessionKey: String] = [:]
+    private var scrolledUp: Set<SessionKey> = []
+    /// Where the session being shown again lands, until its transcript appears.
+    private var landing: String?
+
+    mutating func saw(_ top: String?, in key: SessionKey) { tops[key] = top }
+
+    mutating func scrolled(_ key: SessionKey, atEnd: Bool) {
+        if atEnd { scrolledUp.remove(key) } else { scrolledUp.insert(key) }
+    }
+
+    /// Shows a session again: back where it was left scrolled up, else at its end, following
+    /// what comes. Decided now, as its new transcript reports itself at the end first.
+    mutating func show(_ key: SessionKey) {
+        landing = scrolledUp.contains(key) ? tops[key] : nil
+    }
+
+    /// The block to scroll to the top as the transcript appears, once.
+    mutating func land() -> String? {
+        defer { landing = nil }
+        return landing
     }
 }
 
@@ -260,6 +311,8 @@ private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
     let model: SessionModel
+    /// Called on every send.
+    let sent: () -> Void
     /// Opens the fork sheet, on a machine when one was picked.
     let fork: (HostId?) -> Void
     @State private var text = ""
@@ -284,6 +337,7 @@ private struct Composer: View {
                 text: $text,
                 images: $images,
                 placeholder: placeholder,
+                tint: model.parent != nil ? Theme.child : nil,
                 models: fleet.modelGroups(on: key.hostId, providers: model.provider.map { [$0] } ?? [],
                                           current: current, offersDefault: false),
                 current: current,
@@ -340,6 +394,9 @@ private struct Composer: View {
 
     private var placeholder: String {
         if !model.questions.isEmpty { return "Type an answer…" }
+        if model.parent != nil {
+            return model.turn != nil ? "Queue a message for this child session…" : "Message this child session…"
+        }
         return model.turn != nil ? "Queue a follow-up…" : "Ask for changes or send a follow-up"
     }
 
@@ -349,6 +406,7 @@ private struct Composer: View {
         guard !text.isEmpty || !images.isEmpty else { return }
         self.text = ""
         self.images = []
+        sent()
         if model.state == .archived {
             Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }
         } else {
