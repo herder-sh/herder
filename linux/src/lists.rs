@@ -482,6 +482,7 @@ pub mod tests {
             host_id: HostId::new(host),
             name: name.to_owned(),
             addresses: vec!["127.0.0.1:7447".to_owned()],
+            address: None,
             fingerprint: "ab".repeat(32),
             connection: ConnectionState::Connected,
             quality: Default::default(),

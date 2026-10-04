@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 4`
+`CLIENT_API_VERSION = 8`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -103,6 +103,7 @@ everything stops once the last clone is dropped.
 | `async pair(link: String) -> Result<Vec<PairResult>, Error>` | Pairs with every machine a `herder://pair` link names, at once, and saves each that paired; one `PairResult` per machine, in the link's order. Fails only with `InvalidLink`. |
 | `async share() -> Result<SharedLink, Error>` | Asks every connected machine for a one-time code (`pair_device`) and builds one link that pairs another device with all of them, as this device's user with its role on each. A machine not connected, or that refuses or does not answer within 10 s, is skipped. Fails with `Pairing` when no machine gave a code. |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
+| `set_addresses(host_id: HostId, addresses: Vec<String>) -> Result<(), Error>` | Connects to a machine at `addresses`, in this order of preference, from now on; each a host or IP with an optional port (7447 by default). Fails with `Error::Local` on an invalid address or an empty list. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
 | `suspend()` | The app went to the background: saves the offline cache (blocking) and stops retrying lost connections. |
@@ -125,7 +126,9 @@ everything stops once the last clone is dropped.
 
 ### Records
 
-- `Machine` — `host_id`, `name`, `addresses`, `fingerprint`, `connection`, `quality`, `role`,
+- `Machine` — `host_id`, `name`, `addresses` (in order of preference), `address:
+  Option<String>` (the one the current connection uses; `None` while not connected),
+  `fingerprint`, `connection`, `quality`, `role`,
   `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
   `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
   `None` for a daemon and while not connected).
@@ -184,6 +187,22 @@ a machine's supervisor starts, the daemon's lists replace the cached ones and it
 the cached ones by seq. It is saved every 30 s while something changed, when a connection
 ends, and on `suspend()`; `forget` deletes it.
 
+## Addresses
+
+A machine's addresses are in order of preference. Connecting races them: each starts 300 ms
+after the one before, or as soon as every attempt so far failed, and the first to finish its
+hello wins. So the first address wins whenever it answers, and a dead one delays the next by
+300 ms, not by the 10 s connect timeout.
+
+`pair` completes each address of the link (the default port, brackets around IPv6) and saves
+them direct routes first: private network addresses (home, or a VPN into it such as UniFi
+Teleport), then other addresses, then Tailscale ones (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`,
+`*.ts.net`). After that `set_addresses` sets the order, and nothing re-sorts it.
+
+A connection that is up moves to an address that comes before its own once one answers: on
+`wake()`, which an app also calls when the network changes, and on `set_addresses`. One that
+uses an address `set_addresses` dropped is replaced at once.
+
 ## Connection quality
 
 A connection is pinged as soon as it is up and every 15 s after. Each ping carries a fresh
@@ -213,6 +232,13 @@ sharer may do; members still get no terminals) and the addresses that daemon adv
 not the ones the sharer reached it on. The new device gets its own key on every machine,
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
+
+## Changes in version 8
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Client::set_addresses` | Users add addresses (a Tailscale name, a port-forward) and choose which route comes first. |
+| — | `Machine::address: Option<String>` | Apps show which route the connection uses. A new field breaks code that builds a `Machine`. |
 
 ## Changes in version 7
 

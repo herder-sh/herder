@@ -1,5 +1,6 @@
 import Foundation
 import Herder
+import Network
 import Observation
 
 /// The paired machines and the state of every session they list, kept current from the
@@ -69,6 +70,8 @@ public final class Fleet {
     public func follow() async {
         // Subscribe before reading, so a change between `init` and now is not missed.
         let changes = client.changes()
+        let network = Task { await self.wakeOnNetworkChanges() }
+        defer { network.cancel() }
         update(client.machines())
         while await changes.next() {
             update(client.machines())
@@ -404,6 +407,12 @@ public final class Fleet {
         update(client.machines())
     }
 
+    /// Connects to a machine at `addresses`, first to last in order of preference.
+    func setAddresses(_ hostId: HostId, to addresses: [String]) throws {
+        try client.setAddresses(hostId: hostId, addresses: addresses)
+        update(client.machines())
+    }
+
     func forget(_ hostId: HostId) throws {
         try client.forget(hostId: hostId)
         update(client.machines())
@@ -412,6 +421,20 @@ public final class Fleet {
     /// The app is in the foreground: reconnects now and replaces dead connections.
     public func wake() {
         client.wake()
+    }
+
+    /// Wakes the client whenever the network changes, as when the Wi-Fi changes or a VPN such
+    /// as UniFi Teleport or Tailscale comes up or goes down: a lost connection is retried at
+    /// once instead of after its backoff, and one that is up moves to an address that comes
+    /// before its own once that answers.
+    private func wakeOnNetworkChanges() async {
+        var previous: NWPath?
+        for await path in NWPathMonitor() {
+            defer { previous = path }
+            // The first path is the network as it is now, not a change.
+            guard let previous, path != previous, path.status == .satisfied else { continue }
+            client.wake()
+        }
     }
 
     /// The app went to the background: saves the offline cache and stops retrying.

@@ -245,6 +245,15 @@ impl Client {
         Ok(self.inner.rename(host_id, name)?)
     }
 
+    /// Connects to a machine at `addresses`, in this order of preference, from now on.
+    pub fn set_addresses(
+        &self,
+        host_id: HostId,
+        addresses: Vec<String>,
+    ) -> Result<(), HerderError> {
+        Ok(self.inner.set_addresses(host_id, addresses)?)
+    }
+
     /// Unpairs a machine on this device.
     pub fn forget(&self, host_id: HostId) -> Result<(), HerderError> {
         Ok(self.inner.forget(host_id)?)

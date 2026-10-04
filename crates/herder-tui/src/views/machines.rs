@@ -177,7 +177,9 @@ fn row<'a>(ui: Ui, app: &App, panel: &MachinePanel, machine: &Machine, compact: 
         left.push(Span::raw("  "));
         left.push(Span::styled(role_name(role), ui.muted()));
     }
-    if let Some(address) = machine.addresses.first().filter(|_| !compact) {
+    // The route in use while connected, else the one tried first.
+    let address = machine.address.as_ref().or(machine.addresses.first());
+    if let Some(address) = address.filter(|_| !compact) {
         left.push(Span::raw("  "));
         left.push(Span::styled(address.clone(), ui.muted()));
     }

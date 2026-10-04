@@ -80,6 +80,8 @@ pub struct Machine {
     pub host_id: HostId,
     pub name: String,
     pub addresses: Vec<String>,
+    #[uniffi(default = None)]
+    pub address: Option<String>,
     pub fingerprint: String,
     pub connection: ConnectionState,
     pub quality: ConnectionQuality,
