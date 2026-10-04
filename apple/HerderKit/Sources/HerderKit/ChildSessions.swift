@@ -21,8 +21,8 @@ struct SessionButton<Label: View>: View {
     }
 }
 
-/// The child sessions the agent spawned, live: each one's state, what it does now and how
-/// long it has run. A row opens the child.
+/// The child sessions the agent spawned, live, as T3 Code lists sub-agents: each one's provider,
+/// model and state, what it does now and how long it has run. A row opens the child.
 struct ChildrenCard: View {
     let children: [ChildRef]
     let fleet: Fleet
@@ -31,44 +31,51 @@ struct ChildrenCard: View {
 
     private func key(_ child: ChildRef) -> SessionKey { SessionKey(hostId: hostId, sessionId: child.sessionId) }
 
-    /// "2 running, 1 done".
-    private var summary: String {
-        let progress = children.map { fleet.sessions[key($0)]?.progress ?? .idle }
-        var counts: [(ChildProgress, Int)] = []
-        for state in progress {
-            if let index = counts.firstIndex(where: { $0.0 == state }) { counts[index].1 += 1 } else { counts.append((state, 1)) }
-        }
-        return counts.map { "\($0.1) \($0.0.label.lowercased())" }.joined(separator: ", ")
-    }
+    private var progress: [ChildProgress] { children.map { fleet.sessions[key($0)]?.progress ?? .idle } }
 
     var body: some View {
+        let progress = progress
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "point.3.connected.trianglepath.dotted").foregroundStyle(Theme.secondary)
-                Text(children.count == 1 ? "Spawned a child session" : "Spawned \(children.count) child sessions")
-                    .foregroundStyle(Theme.text)
-                Spacer(minLength: 8)
-                if children.count > 1 {
-                    Text(summary).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+            HStack(spacing: 10) {
+                HStack(spacing: -6) {
+                    ForEach(children.prefix(3), id: \.sessionId) { child in
+                        ChildAvatar(session: fleet.sessions[key(child)], size: 22, showsState: false)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(children.count == 1 ? "Spawned 1 agent" : "Spawned \(children.count) agents")
+                        .font(.footnote.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text(ChildProgress.summary(progress))
+                        .font(.caption)
+                        .foregroundStyle(progress.contains(.running) ? Theme.running
+                                         : progress.contains(.needsYou) ? Theme.accent
+                                         : progress.contains(.failed) ? Theme.failure : Theme.tertiary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            VStack(spacing: 0) {
+                ForEach(children, id: \.sessionId) { child in
+                    SessionButton(key: key(child), open: open) {
+                        ChildRow(child: child, session: fleet.sessions[key(child)])
+                    }
+                    .accessibilityLabel("Open child session: \(fleet.sessions[key(child)]?.title ?? child.task)")
                 }
             }
-            .font(.footnote.weight(.semibold))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            ForEach(children, id: \.sessionId) { child in
-                Divider().overlay(Theme.stroke)
-                SessionButton(key: key(child), open: open) {
-                    ChildRow(child: child, session: fleet.sessions[key(child)])
-                }
-                .accessibilityLabel("Open child session: \(fleet.sessions[key(child)]?.title ?? child.task)")
-            }
+            .padding(4)
+            .background(Theme.background.opacity(0.5), in: .rect(cornerRadius: Theme.corner - 2))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner - 2).strokeBorder(Theme.stroke.opacity(0.7)))
+            .padding([.horizontal, .bottom], 6)
         }
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
     }
 }
 
-/// One spawned child: its state, title and task, the last thing it did, and its run time.
+/// One spawned child: its provider, title and model, its state and the last thing it did on
+/// one line, and its run time.
 private struct ChildRow: View {
     let child: ChildRef
     let session: SessionModel?
@@ -79,35 +86,82 @@ private struct ChildRow: View {
         let title = session?.title ?? child.task
         // A failed child says why; an idle one, the last thing it said.
         let activity = progress == .failed ? session?.failure.map(firstLine) ?? "" : session?.activity ?? ""
-        HStack(alignment: .top, spacing: 10) {
-            StatusGlyph(state: progress.state, size: 8)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(title).font(.callout.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                    Spacer(minLength: 8)
-                    if let session { RunTime(session: session) }
-                }
-                if child.task != title {
-                    Text(child.task).font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+        let detail = activity == progress.label || activity == "Idle" ? "" : activity
+        HStack(spacing: 10) {
+            ChildAvatar(session: session, size: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(title).font(.footnote.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    if let session {
+                        Text(ModelCatalog.name(session.model ?? "", provider: session.provider))
+                            .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                            .layoutPriority(-1)
+                    }
                 }
                 HStack(spacing: 5) {
-                    Text(progress.label).foregroundStyle(progress.color)
-                    if !activity.isEmpty && activity != progress.label && activity != "Idle" {
+                    Text(progress.label).foregroundStyle(progress.color).fixedSize()
+                    if !detail.isEmpty {
                         Text("·").foregroundStyle(Theme.tertiary)
-                        Text(activity).foregroundStyle(progress == .needsYou ? Theme.accent : Theme.tertiary)
+                        Text(detail).foregroundStyle(progress == .failed ? Theme.failure : Theme.secondary)
                             .lineLimit(1).truncationMode(.tail)
                     }
                 }
-                .font(.caption.weight(.medium))
+                .font(.caption)
             }
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
-                .padding(.top, 3)
+            Spacer(minLength: 8)
+            if let session { RunTime(session: session) }
+            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Theme.tertiary)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(hovering ? Theme.raised : .clear)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
         .contentShape(.rect)
         .onHover { hovering = $0 }
+        .help(child.task)
+    }
+}
+
+/// A child's identity: its provider's mark in a round tile, with its state as a dot.
+struct ChildAvatar: View {
+    let session: SessionModel?
+    var size: CGFloat = 26
+    var showsState = true
+
+    var body: some View {
+        let progress = session?.progress ?? .idle
+        ProviderMark(provider: session?.provider ?? "", size: size * 0.54)
+            .frame(width: size, height: size)
+            .background(Theme.raised, in: Circle())
+            .overlay(Circle().strokeBorder(Theme.stroke))
+            .overlay(alignment: .bottomTrailing) {
+                if showsState {
+                    StateDot(progress: progress, size: max(7, size * 0.32)).offset(x: 1, y: 1)
+                }
+            }
+            .background(Theme.surface, in: Circle().inset(by: -2))
+            .accessibilityHidden(true)
+    }
+}
+
+/// A child's state as a dot ringed in the background; a running child's pulses.
+private struct StateDot: View {
+    let progress: ChildProgress
+    let size: CGFloat
+    @State private var pulsing = false
+
+    var body: some View {
+        ZStack {
+            if progress == .running {
+                Circle().fill(Theme.running.opacity(0.4))
+                    .scaleEffect(pulsing ? 2 : 1)
+                    .opacity(pulsing ? 0 : 1)
+                    .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
+            }
+            Circle().fill(progress == .idle ? Theme.idle : progress.color)
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2).padding(-2))
+        .onAppear { pulsing = true }
     }
 }
 
@@ -123,15 +177,13 @@ private struct RunTime: View {
                 text(at: .now)
             }
         }
-        .font(.caption.monospacedDigit())
+        .font(.caption.monospaced())
         .foregroundStyle(Theme.tertiary)
     }
 
     private func text(at now: Date) -> some View {
-        Label(Duration.seconds(session.runTime(at: now).rounded())
-            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)),
-              systemImage: "clock")
-            .labelStyle(.titleAndIcon)
+        Text(Duration.seconds(session.runTime(at: now).rounded())
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2)))
             .help("Time spent working")
     }
 }
@@ -154,11 +206,16 @@ struct ChildReportCard: View {
         let overflows = height > folded + 24
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                StatusGlyph(state: child?.progress.state ?? .idle, size: 7)
-                Text("Report from").foregroundStyle(Theme.secondary)
-                Text(child?.title ?? "Session …\(report.sessionId.suffix(6))")
-                    .fontWeight(.semibold).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                ReportBadge(end: child?.turnEnds[report.turnId])
+                ChildAvatar(session: child, size: 24, showsState: false)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(child?.title ?? "Session …\(report.sessionId.suffix(6))")
+                            .fontWeight(.semibold).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                        ReportBadge(end: child?.turnEnds[report.turnId])
+                    }
+                    Text(child.map { "Report · \(ModelCatalog.name($0.model ?? "", provider: $0.provider))" } ?? "Report")
+                        .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                }
                 Spacer(minLength: 8)
                 SessionButton(key: key, open: open) {
                     HStack(spacing: 4) {
@@ -223,8 +280,9 @@ private struct ReportBadge: View {
     }
 }
 
-/// A child session's way back to its parent: "← Parent › Child session".
-struct ParentLink: View {
+/// What marks a child session, above its header and so in view however far it scrolls: whose
+/// agent it is, in the child tint, and the way back to the parent.
+struct ChildBanner: View {
     let fleet: Fleet
     let parent: SessionKey
     let open: ((SessionKey) -> Void)?
@@ -236,45 +294,66 @@ struct ParentLink: View {
 
     var body: some View {
         let name = fleet.sessions[parent]?.title ?? "Session …\(parent.sessionId.suffix(6))"
-        HStack(spacing: 6) {
-            Group {
+        HStack(spacing: 10) {
+            if listed {
+                Group {
+                    if let open {
+                        Button { open(parent) } label: { back }
+                            .keyboardShortcut("[", modifiers: .command)
+                    } else if let path, path.wrappedValue.dropLast().last == parent {
+                        // Pushed from the parent: back pops to it, where it was left.
+                        Button { path.wrappedValue.removeLast() } label: { back }
+                    } else {
+                        NavigationLink(value: parent) { back }
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Back to \(name) (⌘[)")
+                .accessibilityLabel("Back to parent session \(name)")
+            }
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.turn.down.right").foregroundStyle(Theme.child)
+                Text("Agent of").foregroundStyle(Theme.child)
+                Text(name).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
                 if !listed {
-                    crumb(name, symbol: "arrow.turn.left.up")
-                } else if let open {
-                    Button { open(parent) } label: { crumb(name, symbol: "chevron.left") }
-                        .buttonStyle(.plain)
-                        .keyboardShortcut("[", modifiers: .command)
-                } else if let path, path.wrappedValue.dropLast().last == parent {
-                    // Pushed from the parent: back pops to it, where it was left.
-                    Button { path.wrappedValue.removeLast() } label: { crumb(name, symbol: "chevron.left") }
-                        .buttonStyle(.plain)
-                } else {
-                    NavigationLink(value: parent) { crumb(name, symbol: "chevron.left") }.buttonStyle(.plain)
+                    Text("· not listed").foregroundStyle(Theme.tertiary).fixedSize()
                 }
             }
-            .help(listed ? "Back to the parent session (⌘[)" : "The parent session is not listed")
-            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Theme.tertiary)
-            Text("Child session").foregroundStyle(Theme.tertiary).lineLimit(1)
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
         }
         .font(.caption.weight(.semibold))
-        .accessibilityElement(children: .contain)
+        .padding(.horizontal, 20)
+        .frame(minHeight: 38)
+        .background(Theme.child.opacity(0.09))
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.child.opacity(0.22)).frame(height: 1) }
     }
 
-    private func crumb(_ name: String, symbol: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: symbol)
-            Text(name).lineLimit(1).truncationMode(.middle)
+    private var back: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "chevron.left").font(.caption2.weight(.bold))
+            Text("Back")
         }
-        .foregroundStyle(listed ? Theme.text : Theme.secondary)
+        .foregroundStyle(Theme.text)
         .padding(.horizontal, 8)
         .frame(height: 24)
-        .background(Theme.raised, in: .rect(cornerRadius: 6))
+        .background(Theme.child.opacity(0.16), in: .rect(cornerRadius: 6))
         .contentShape(.rect)
-        .accessibilityLabel(listed ? "Back to parent session \(name)" : "Parent session \(name)")
     }
 }
 
 extension ChildProgress {
+    /// The states of a set of children, most urgent first: "1 needs you · 2 running · 1 done".
+    static func summary(_ states: [ChildProgress]) -> String {
+        let order: [ChildProgress] = [.needsYou, .running, .waiting, .failed, .done, .idle, .archived, .moved]
+        return order.compactMap { state in
+            let count = states.filter { $0 == state }.count
+            guard count > 0 else { return nil }
+            return "\(count) \(state == .waiting ? "waiting" : state.label.lowercased())"
+        }
+        .joined(separator: " · ")
+    }
+
     var color: Color {
         switch self {
         case .running: Theme.running
