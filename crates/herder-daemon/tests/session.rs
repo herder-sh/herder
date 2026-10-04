@@ -27,7 +27,7 @@ use herder_protocol::{
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, MAX_TITLE_CHARS,
     PermissionMode, Project, ProjectId, PromptId, Provider, QuestionId, SessionHead, SessionId,
-    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
+    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use tokio::sync::mpsc;
@@ -461,6 +461,28 @@ async fn two_clients_prompting_one_session_share_one_ordered_history() {
     assert_eq!(describe(&for_alice), history);
     assert_eq!(for_alice, for_bob);
     assert_eq!(seqs(&for_alice), (1..=12).collect::<Vec<_>>());
+    // The usage the adapter reported with a turn's end is journaled with it.
+    let usage: Vec<_> = for_alice
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::TurnCompleted { usage, .. } => Some(usage.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        usage,
+        [
+            Some(TurnUsage {
+                input: 1_200,
+                output: 340,
+                cache_read: 18_000,
+                cache_write: 2_048,
+                cost_usd: Some(0.0425),
+                cost_estimated: false,
+            }),
+            None,
+        ]
+    );
     // Live subscribers get exactly the stored events, in the same order.
     published.retain(|event| event.session_id == session);
     assert_eq!(published, for_alice);
