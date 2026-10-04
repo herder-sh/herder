@@ -250,7 +250,10 @@ details p { margin: -4px 0 22px; color: var(--muted); max-width: 760px; }
   .tagline { margin-top: 32px; }
   .lede { font-size: 16.5px; }
   .cmd { padding-left: 14px; }
-  .cmd code { font-size: 13px; }
+  .cmd code { font-size: 13px; white-space: normal; overflow-wrap: anywhere; }
+  .prompt { display: none; }
+  .copy { min-width: 0; padding: 8px 10px; }
+  .steps pre { font-size: 12px; padding: 14px; }
   .btn { flex: 1 1 100%; justify-content: center; }
   .hero-shot { margin-top: 48px; }
   section { padding: 88px 18px 0; }
