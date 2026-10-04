@@ -16,6 +16,11 @@ private func pr(_ state: PrState, ci: CiStatus = .passing) -> PullRequest {
 }
 
 struct InspectorTests {
+    @Test func theInspectorIsASheetOnCompactWidthAndAPaneOtherwise() {
+        #expect(InspectorPresentation(compact: true) == .sheet)
+        #expect(InspectorPresentation(compact: false) == .pane)
+    }
+
     @Test func theTimelineKeepsTheMainEventsAndFoldsATurnsTools() {
         var script = Script()
         let model = script.model([

@@ -18,6 +18,15 @@ struct SessionView: View {
     @State private var showsPRs = false
     @AppStorage("listHidden") private var listHidden = false
     @AppStorage("inspectorShown") private var inspectorShown = false
+    /// The inspector as a sheet, on compact width; not kept, unlike the pane.
+    @State private var inspectorSheet = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var compact: Bool { sizeClass == .compact }
+    #else
+    private let compact = false
+    #endif
+    private var inspector: InspectorPresentation { InspectorPresentation(compact: compact) }
     @State private var linking = false
     @State private var typedPR = ""
     /// Where the transcript is scrolled, and where each session shown here was left.
@@ -74,7 +83,7 @@ struct SessionView: View {
         .background(Theme.background)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
-            if inspectorShown {
+            if inspector == .pane && inspectorShown {
                 HStack(spacing: 0) {
                     Rectangle().fill(Theme.stroke).frame(width: 1)
                     SessionInspector(fleet: fleet, key: key).frame(width: 300)
@@ -98,6 +107,11 @@ struct SessionView: View {
             if let key = pushedFork { SessionView(fleet: fleet, key: key) }
         }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
+        .sheet(isPresented: $inspectorSheet) {
+            SessionInspector(fleet: fleet, key: key)
+                .presentationDetents([.medium, .large])
+                .presentationBackground(Theme.surface)
+        }
         .alert("Link a pull request", isPresented: $linking) {
             TextField("123, #123 or a link", text: $typedPR)
             Button("Link") {
@@ -121,15 +135,17 @@ struct SessionView: View {
                     if model?.parent != nil { ChildAvatar(session: model, size: 26, showsState: false) }
                     Text(summary?.title ?? model?.title ?? "Session")
                         .font(.title3.weight(.bold)).foregroundStyle(Theme.text).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+                // One line, so a narrow header truncates where it runs on rather than wrapping
+                // its parts beside each other.
                 HStack(spacing: 6) {
                     StatusGlyph(state: model?.state ?? .idle, size: 7)
-                    Text(model?.state.label ?? "")
+                    (Text(model?.state.label ?? "")
                         .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
-                    if let summary {
-                        Text("· \(summary.project.isEmpty ? "" : summary.project + " · ")\(summary.machine)")
-                            .foregroundStyle(Theme.tertiary)
-                    }
+                     + Text(summary.map { " · \($0.project.isEmpty ? "" : $0.project + " · ")\($0.machine)" } ?? "")
+                        .foregroundStyle(Theme.tertiary))
+                        .lineLimit(1)
                 }
                 .font(.footnote.weight(.medium))
                 if let origin = fleet.forkOrigins[key] {
@@ -138,6 +154,7 @@ struct SessionView: View {
                 }
                 if let branch = model?.branch {
                     Text(branch).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).textSelection(.enabled)
+                        .lineLimit(1).truncationMode(.middle)
                 }
             }
             Spacer()
@@ -155,12 +172,18 @@ struct SessionView: View {
                 }
             }
             if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
-                HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal", title: showsTerminal ? "Chat" : "Terminal",
+                HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
+                             title: compact ? nil : showsTerminal ? "Chat" : "Terminal",
                              selected: showsTerminal) { showsTerminal.toggle() }
                     .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
-            HeaderButton(symbol: "info.circle", title: nil, selected: inspectorShown) { inspectorShown.toggle() }
+            HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
+                switch inspector {
+                case .pane: inspectorShown.toggle()
+                case .sheet: inspectorSheet = true
+                }
+            }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Events and statistics (⌥⌘I)")
             #if os(macOS)
@@ -193,6 +216,8 @@ struct SessionView: View {
                 .fixedSize()
             }
             }
+            // The buttons keep their size; the title, status and branch take what is left.
+            .fixedSize()
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -636,5 +661,15 @@ struct HeaderLabel: View {
         .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
         .background(selected ? Theme.primary : Theme.bubble, in: .rect(cornerRadius: 9))
         .contentShape(.rect)
+    }
+}
+
+/// How a session's inspector shows: a pane beside the chat where there is room for both, else
+/// a sheet over it, as a 300 point pane leaves a compact-width chat no room.
+enum InspectorPresentation: Equatable {
+    case pane, sheet
+
+    init(compact: Bool) {
+        self = compact ? .sheet : .pane
     }
 }
