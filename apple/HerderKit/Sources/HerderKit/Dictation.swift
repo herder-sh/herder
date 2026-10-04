@@ -29,9 +29,10 @@ final class Dictation {
         request.addsPunctuation = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         let input = engine.inputNode
-        // The tap runs on the audio thread; the request only takes buffers from it.
+        // The tap runs on the audio thread, so it is `@Sendable`, not the main actor's; the
+        // request only takes buffers from it.
         nonisolated(unsafe) let buffers = request
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { @Sendable buffer, _ in
             buffers.append(buffer)
         }
         engine.prepare()
@@ -45,7 +46,8 @@ final class Dictation {
         self.request = request
         error = nil
         listening = true
-        task = recognizer.recognitionTask(with: request) { [weak self] result, failure in
+        // Results arrive on the recognizer's queue.
+        task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, failure in
             let text = result?.bestTranscription.formattedString
             let done = (result?.isFinal ?? false) || failure != nil
             Task { @MainActor in
@@ -66,7 +68,8 @@ final class Dictation {
         listening = false
     }
 
-    private static func authorize() async -> Bool {
+    /// Off the main actor: the system answers on a queue of its own.
+    private nonisolated static func authorize() async -> Bool {
         let speech = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
         }
