@@ -15,12 +15,18 @@ struct ProjectGroup: Hashable, Identifiable {
 /// TUI builds its own (crates/herder-tui/src/app.rs, projects.rs, inbox.rs).
 struct Lists {
     var requests: [PendingRequest] = []
-    /// Running, waiting and needing-you sessions without a request card, newest activity first.
+    /// Running, waiting and needing-you sessions without a request card, newest first by when they
+    /// were created, so the list holds still while they work.
     var active: [SessionSummary] = []
     /// Idle and failed sessions, newest activity first.
     var recent: [SessionSummary] = []
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
+
+    /// Newest created first: session ids are ULIDs, which sort by creation time.
+    static func newestCreated(_ a: SessionSummary, _ b: SessionSummary) -> Bool {
+        a.key.sessionId != b.key.sessionId ? a.key.sessionId > b.key.sessionId : a.key.hostId < b.key.hostId
+    }
 
     init(machines: [Machine], sessions: [SessionKey: SessionModel], now: Date = .now) {
         var entries: [Entry] = []
@@ -39,6 +45,7 @@ struct Lists {
         // A session whose request is on a card above is not listed again.
         let asking = Set(entries.filter { !$0.model.forUser.isEmpty }.map(\.key))
         active = byActivity.filter { [.running, .waiting, .needsYou].contains($0.state) && !asking.contains($0.key) }
+            .sorted(by: Self.newestCreated)
         recent = byActivity.filter { [.idle, .error].contains($0.state) }
 
         requests = zip(entries, flat).flatMap { entry, summary in

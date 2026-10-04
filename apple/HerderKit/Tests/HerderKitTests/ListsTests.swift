@@ -39,6 +39,19 @@ struct ListsTests {
         #expect(lists.active.isEmpty)
     }
 
+    @Test func activeSessionsStayInTheOrderTheyWereCreated() {
+        var older = Script("01A")
+        var newer = Script("01B")
+        // The older session works on after the newer one: its activity is the latest.
+        let running = EventBody.sessionStatusChanged(status: .running, retryAt: nil)
+        let newerModel = newer.model([created(), running])
+        let olderModel = older.model([created(), running, .turnStarted(turnId: "t"), .turnStarted(turnId: "u")])
+        #expect(olderModel.updatedAt! > newerModel.updatedAt!)
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])],
+                          sessions: [older.key: olderModel, newer.key: newerModel])
+        #expect(lists.active.map(\.key.sessionId) == ["01B", "01A"])
+    }
+
     @Test func childrenFollowTheirParentOldestFirst() {
         var parent = Script("01A")
         var older = Script("01B")

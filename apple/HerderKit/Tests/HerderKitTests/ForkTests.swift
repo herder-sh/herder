@@ -40,7 +40,10 @@ struct ForkTests {
         #expect(fork == flow.opened)
         #expect(fork.hostId == host.hostId)
         #expect(fork.sessionId != original.sessionId)
-        #expect(await eventually { fleet.sessions[fork]?.loaded == true })
+        // The fork's history can arrive over more than one update: wait for all of it.
+        #expect(await eventually {
+            fleet.sessions[fork].map { $0.loaded && $0.lastMessage != nil && $0.status == .idle } == true
+        })
         let copy = try #require(fleet.sessions[fork])
         #expect(copy.lastMessage == "Hello, world.")
         #expect(copy.branch != originalBranch)
