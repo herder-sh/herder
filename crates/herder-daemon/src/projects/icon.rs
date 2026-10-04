@@ -1,7 +1,8 @@
 //! Project icons: an image file found in a project's clone, as T3 Code finds them.
 //!
 //! [`find`] takes the file a `[[project]]` entry's `icon` names, else the first of
-//! [`CANDIDATES`] that is an icon, else the largest PNG of an Xcode `AppIcon.appiconset` at most
+//! [`CANDIDATES`] that is an icon, else the first of them in a folder directly in the clone, as
+//! a monorepo's apps keep theirs, else the largest PNG of an Xcode `AppIcon.appiconset` at most
 //! two folders down. A file is an icon when its extension gives one of
 //! [`PROJECT_ICON_MEDIA_TYPES`] and it has at most [`MAX_PROJECT_ICON_BYTES`]; nothing outside
 //! the clone is ever read, so a symlink leading out of it is no icon.
@@ -55,15 +56,30 @@ pub struct Icon {
 }
 
 /// The icon of the clone at `clone`: the file `explicit` names relative to it, else the first
-/// candidate that is an icon. Blocks on the file system.
+/// candidate that is an icon, in the clone, then in its folders, candidate by candidate. Blocks
+/// on the file system.
 pub fn find(clone: &Path, explicit: Option<&Path>) -> Option<Icon> {
     let root = clone.canonicalize().ok()?;
     explicit
         .map(Path::to_path_buf)
         .into_iter()
         .chain(CANDIDATES.iter().map(PathBuf::from))
+        .chain(std::iter::once_with(|| nested(&root)).flatten())
         .chain(std::iter::once_with(|| app_icon(&root)).flatten())
         .find_map(|relative| read(&root, &relative))
+}
+
+/// The candidates in each folder directly in `root`, relative to it: each candidate in every
+/// folder before the next, so a favicon anywhere wins over a logo.
+fn nested(root: &Path) -> Vec<PathBuf> {
+    let folders: Vec<PathBuf> = subfolders(root)
+        .into_iter()
+        .filter_map(|folder| folder.strip_prefix(root).ok().map(Path::to_path_buf))
+        .collect();
+    CANDIDATES
+        .iter()
+        .flat_map(|candidate| folders.iter().map(move |folder| folder.join(candidate)))
+        .collect()
 }
 
 /// The file at `relative` in the canonical clone `root`, if it is an icon inside it.
@@ -261,6 +277,18 @@ mod tests {
         fs::create_dir_all(repo.path().join("favicon.svg")).unwrap();
         write(repo.path(), "logo.png", b"png");
         assert_eq!(found(repo.path()), Some(b"png".to_vec()));
+    }
+
+    #[test]
+    fn a_monorepos_app_icons_are_found_favicons_first() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        write(root, "mcp/logo.png", b"logo");
+        write(root, "web/public/favicon.svg", b"favicon");
+        write(root, "node_modules/pkg/favicon.svg", b"dep");
+        assert_eq!(found(root), Some(b"favicon".to_vec()));
+        write(root, "docs/logo.png", b"root");
+        assert_eq!(found(root), Some(b"root".to_vec()));
     }
 
     #[test]
