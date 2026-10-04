@@ -1402,6 +1402,89 @@ async fn independent_agent_messages_queue_deduplicate_and_survive_restart() {
 }
 
 #[tokio::test]
+async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let a = daemon.primary(PermissionMode::Ask).await;
+    let b = daemon.primary(PermissionMode::Ask).await;
+    daemon
+        .user_answers(CommandBody::SendPrompt {
+            session_id: b.clone(),
+            text: "Hang.".into(),
+            images: Vec::new(),
+        })
+        .await;
+    daemon
+        .until_n(&b, 1, |event| {
+            matches!(event, EventBody::TurnStarted { .. })
+        })
+        .await;
+    let mut tools = daemon.connect(&a);
+    for (text, id) in [
+        ("Review accounts.", "review-1"),
+        ("Review billing.", "review-2"),
+    ] {
+        let message = json!({ "session_id": b, "text": text, "message_id": id });
+        assert_eq!(tools.ok("send_session", message).await["queued"], true);
+    }
+    daemon
+        .user_answers(CommandBody::SendPrompt {
+            session_id: b.clone(),
+            text: "Later.".into(),
+            images: Vec::new(),
+        })
+        .await;
+    let queue = async || {
+        let heads = daemon.manager.sessions().await.unwrap();
+        let head = heads.into_iter().find(|head| head.session_id == b).unwrap();
+        head.queue
+    };
+    let queued = queue().await;
+    let senders: Vec<_> = queued
+        .iter()
+        .map(|prompt| {
+            let sender = prompt.agent_message.as_ref();
+            (
+                prompt.text.as_str(),
+                sender.map(|m| &m.sender_session_id),
+                prompt.by.as_ref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        senders,
+        [
+            ("Review accounts.", Some(&a), None),
+            ("Review billing.", Some(&a), None),
+            ("Later.", None, Some(&alice())),
+        ]
+    );
+    daemon
+        .user_answers(CommandBody::MoveQueued {
+            session_id: b.clone(),
+            prompt_id: queued[2].prompt_id.clone(),
+            before: Some(queued[0].prompt_id.clone()),
+        })
+        .await;
+    daemon
+        .user_answers(CommandBody::RemoveQueued {
+            session_id: b.clone(),
+            prompt_id: queued[1].prompt_id.clone(),
+        })
+        .await;
+    let texts: Vec<_> = queue()
+        .await
+        .into_iter()
+        .map(|prompt| prompt.text)
+        .collect();
+    assert_eq!(texts, ["Later.", "Review accounts."]);
+    // The removed message keeps its receipt: resending it is a duplicate, not a new prompt.
+    let resent = json!({ "session_id": b, "text": "Review billing.", "message_id": "review-2" });
+    assert_eq!(tools.ok("send_session", resent).await["duplicate"], true);
+    assert_eq!(queue().await.len(), 2);
+}
+
+#[tokio::test]
 async fn independent_agent_messages_enforce_identity_authority_and_relay_depth() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;

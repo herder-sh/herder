@@ -89,7 +89,7 @@ impl Journal {
             sink.event(&stored);
             if lists {
                 let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
-                sink.sessions_changed(&heads(store.sessions()?, &projects));
+                sink.sessions_changed(&heads(store, &projects)?);
             }
             Ok(stored)
         })
@@ -114,7 +114,7 @@ impl Journal {
                 sink.event(&stored);
             }
             let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
-            sink.sessions_changed(&heads(store.sessions()?, &projects));
+            sink.sessions_changed(&heads(store, &projects)?);
             Ok(())
         })
         .await
@@ -246,14 +246,21 @@ impl Journal {
             .await
     }
 
-    /// Replaces the prompts queued in a session.
+    /// Replaces the prompts queued in a session, and publishes the session list with them.
     pub(super) async fn set_queued_prompts(
         &self,
         session_id: SessionId,
         prompts: Vec<QueuedPrompt>,
     ) -> Result<()> {
-        self.with_store(move |store| store.set_queued_prompts(&session_id, &prompts))
-            .await
+        let sink = self.sink.clone();
+        let projects = self.projects.clone();
+        self.with_store(move |store| {
+            store.set_queued_prompts(&session_id, &prompts)?;
+            let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
+            sink.sessions_changed(&heads(store, &projects)?);
+            Ok(())
+        })
+        .await
     }
 
     /// The CLI session last reported behind a session.
@@ -282,9 +289,12 @@ impl Journal {
     }
 
     pub(super) async fn heads(&self) -> Result<Vec<SessionHead>> {
-        let sessions = self.sessions().await?;
-        let projects = self.projects();
-        Ok(heads(sessions, &projects))
+        let projects = self.projects.clone();
+        self.with_store(move |store| {
+            let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
+            heads(store, &projects)
+        })
+        .await
     }
 
     /// The projects discovery last published.
@@ -348,9 +358,11 @@ impl Journal {
     }
 }
 
-/// `sessions` as lists show them, each with its project as `projects` resolve it and, for a
-/// primary, how many of its children need the user.
-fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
+/// Every session in `store` as lists show it, with its queue and its project as `projects`
+/// resolve it and, for a primary, how many of its children need the user.
+fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<SessionHead>> {
+    let sessions = store.sessions()?;
+    let mut queues = store.queues()?;
     let mut need_you: HashMap<SessionId, u32> = HashMap::new();
     for session in &sessions {
         if let Some(parent) = &session.parent
@@ -359,12 +371,18 @@ fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
             *need_you.entry(parent.clone()).or_default() += 1;
         }
     }
-    sessions
+    Ok(sessions
         .into_iter()
         .map(|session| SessionHead {
             host_id: None,
             project_id: projects.by_path.get(&session.repo).cloned(),
             children_need_you: need_you.get(&session.session_id).copied().unwrap_or(0),
+            queue: queues
+                .remove(&session.session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(listed)
+                .collect(),
             session_id: session.session_id,
             head_seq: session.last_seq,
             status: session.status,
@@ -373,5 +391,17 @@ fn heads(sessions: Vec<Session>, projects: &Projects) -> Vec<SessionHead> {
             title: session.title,
             account_id: session.account_id,
         })
-        .collect()
+        .collect())
+}
+
+/// A queued prompt as the session's queue lists it; `None` for a turn's prompt queued again
+/// to retry it, which has started already.
+fn listed(prompt: QueuedPrompt) -> Option<herder_protocol::QueuedPrompt> {
+    (!prompt.retry).then(|| herder_protocol::QueuedPrompt {
+        prompt_id: prompt.prompt_id,
+        text: prompt.text,
+        images: u32::try_from(prompt.attachments.len()).unwrap_or(u32::MAX),
+        by: prompt.by,
+        agent_message: prompt.agent_message,
+    })
 }

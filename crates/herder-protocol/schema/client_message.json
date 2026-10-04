@@ -491,6 +491,86 @@
           ]
         },
         {
+          "description": "Drop a prompt from the session's queue without running it. Refused with `conflict`\nonce it has started, and `not_found` for an unknown prompt.",
+          "type": "object",
+          "properties": {
+            "prompt_id": {
+              "description": "The prompt, as the session's `queue` lists it.",
+              "$ref": "#/$defs/PromptId"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "remove_queued"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "prompt_id"
+          ]
+        },
+        {
+          "description": "Move a prompt within the session's queue. Refused as `remove_queued` is, for either\nprompt.",
+          "type": "object",
+          "properties": {
+            "before": {
+              "description": "The queued prompt it is to run just before; absent moves it to the end.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PromptId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "prompt_id": {
+              "description": "The prompt to move.",
+              "$ref": "#/$defs/PromptId"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "move_queued"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "prompt_id"
+          ]
+        },
+        {
+          "description": "Run a queued prompt next, ahead of the rest, which stay queued in order: interrupts the\nrunning turn, or cancels a retry waiting for a usage limit to reset, as `interrupt`\ndoes. Refused as `remove_queued` is.",
+          "type": "object",
+          "properties": {
+            "prompt_id": {
+              "description": "The prompt to run next.",
+              "$ref": "#/$defs/PromptId"
+            },
+            "session_id": {
+              "description": "Target session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "send_queued_now"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "prompt_id"
+          ]
+        },
+        {
           "description": "Change the model within the current provider.",
           "type": "object",
           "properties": {
@@ -1228,6 +1308,10 @@
     },
     "ProjectId": {
       "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
+      "type": "string"
+    },
+    "PromptId": {
+      "description": "Identifies a prompt waiting in its session's queue; a ULID string, opaque.",
       "type": "string"
     },
     "Provider": {

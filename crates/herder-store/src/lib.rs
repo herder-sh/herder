@@ -21,12 +21,13 @@
 mod project;
 mod schema;
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use herder_protocol::{
     AccountId, Attachment, CommandId, CommandResult, Event, EventBody, JournalRecord,
-    PermissionMode, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus, Timestamp,
-    TitleSource, UserId,
+    PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus,
+    Timestamp, TitleSource, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -118,6 +119,8 @@ pub struct Session {
 /// A prompt waiting for its session's next turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueuedPrompt {
+    /// The prompt's id, as clients see it in the session's queue.
+    pub prompt_id: PromptId,
     /// Agent sender and delivery key; absent for human prompts.
     pub agent_message: Option<herder_protocol::AgentMessage>,
     /// User who sent it; `None` when the primary session's agent did.
@@ -443,30 +446,30 @@ impl Store {
 
     /// The prompts queued in `session`, oldest first.
     pub fn queued_prompts(&self, session: &SessionId) -> Result<Vec<QueuedPrompt>> {
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT by, text, attachments, retry, retry_at, agent_message FROM queued_prompts WHERE session_id = ?1
-             ORDER BY position",
-        )?;
-        let rows = stmt.query_map([session.as_str()], |row| {
-            let attachments: String = row.get(2)?;
-            let agent_json: Option<String> = row.get(5)?;
-            Ok(QueuedPrompt {
-                agent_message: agent_json
-                    .map(|json| serde_json::from_str(&json))
-                    .transpose()
-                    .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
-                    })?,
-                by: row.get::<_, Option<String>>(0)?.map(UserId::new),
-                text: row.get(1)?,
-                attachments: serde_json::from_str(&attachments).map_err(|err| {
-                    rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(err))
-                })?,
-                retry: row.get(3)?,
-                retry_at: row.get(4)?,
-            })
-        })?;
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "{QUEUED_SELECT} WHERE session_id = ?1 ORDER BY position"
+        ))?;
+        let rows = stmt.query_map([session.as_str()], queued_prompt)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The prompts queued in every session that has any, each oldest first.
+    pub fn queues(&self) -> Result<HashMap<SessionId, Vec<QueuedPrompt>>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(&format!("{QUEUED_SELECT} ORDER BY session_id, position"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                SessionId::new(row.get::<_, String>(7)?),
+                queued_prompt(row)?,
+            ))
+        })?;
+        let mut queues: HashMap<SessionId, Vec<QueuedPrompt>> = HashMap::new();
+        for row in rows {
+            let (session, prompt) = row?;
+            queues.entry(session).or_default().push(prompt);
+        }
+        Ok(queues)
     }
 
     /// Replaces the prompts queued in `session` with `prompts`, oldest first.
@@ -481,8 +484,8 @@ impl Store {
         tx.prepare_cached("DELETE FROM queued_prompts WHERE session_id = ?1")?
             .execute([session.as_str()])?;
         let mut insert = tx.prepare_cached(
-            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry, retry_at, agent_message)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry, retry_at, agent_message, prompt_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?;
         for (position, prompt) in prompts.iter().enumerate() {
             if let Some(message) = &prompt.agent_message {
@@ -502,6 +505,7 @@ impl Store {
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()?,
+                prompt.prompt_id.as_str(),
             ])?;
         }
         drop(insert);
@@ -556,6 +560,31 @@ impl Store {
         let rows = stmt.query_map([], |row| Ok(SessionId::new(row.get::<_, String>(0)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
+}
+
+const QUEUED_SELECT: &str = "SELECT by, text, attachments, retry, retry_at, agent_message,
+    prompt_id, session_id FROM queued_prompts";
+
+/// A queued prompt from a row of [`QUEUED_SELECT`].
+fn queued_prompt(row: &Row<'_>) -> rusqlite::Result<QueuedPrompt> {
+    let attachments: String = row.get(2)?;
+    let agent_json: Option<String> = row.get(5)?;
+    Ok(QueuedPrompt {
+        prompt_id: PromptId::new(row.get::<_, String>(6)?),
+        agent_message: agent_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()
+            .map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(5, Type::Text, Box::new(err))
+            })?,
+        by: row.get::<_, Option<String>>(0)?.map(UserId::new),
+        text: row.get(1)?,
+        attachments: serde_json::from_str(&attachments).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(2, Type::Text, Box::new(err))
+        })?,
+        retry: row.get(3)?,
+        retry_at: row.get(4)?,
+    })
 }
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,

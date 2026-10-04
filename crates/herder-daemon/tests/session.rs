@@ -22,7 +22,7 @@ use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, MAX_TITLE_CHARS,
-    PermissionMode, Project, ProjectId, Provider, QuestionId, SessionHead, SessionId,
+    PermissionMode, Project, ProjectId, PromptId, Provider, QuestionId, SessionHead, SessionId,
     SessionStatus, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
@@ -537,6 +537,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             project_id: None,
             account_id: account(),
             children_need_you: 0,
+            queue: Vec::new(),
         }]
     );
     // Nothing starts until the next prompt.
@@ -649,6 +650,149 @@ async fn interrupt_stops_the_running_turn() {
         describe(&events),
         ["-: turn_interrupted turn-1", "-: status Idle"]
     );
+}
+
+/// The texts of `session_id`'s queue in the latest session list published, and their ids.
+fn published_queue(daemon: &mut Daemon, session_id: &SessionId) -> Vec<(String, PromptId)> {
+    let mut latest = None;
+    while let Ok(seen) = daemon.seen.try_recv() {
+        if let Seen::Sessions(heads) = &seen {
+            latest = Some(heads.clone());
+        }
+        daemon.log.push(seen);
+    }
+    let heads = latest.expect("no session list was published");
+    let head = heads
+        .iter()
+        .find(|head| head.session_id == *session_id)
+        .unwrap();
+    head.queue
+        .iter()
+        .map(|prompt| (prompt.text.clone(), prompt.prompt_id.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn queued_prompts_are_removed_moved_and_sent_now_until_they_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "queue.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Hold.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    for text in ["A.", "B.", "C.", "D."] {
+        daemon.prompt(bob(), &session, text).await;
+    }
+    let queue = published_queue(&mut daemon, &session);
+    let texts = |queue: &[(String, PromptId)]| -> Vec<String> {
+        queue.iter().map(|(text, _)| text.clone()).collect()
+    };
+    assert_eq!(texts(&queue), ["A.", "B.", "C.", "D."]);
+    let id = |text: &str| {
+        queue
+            .iter()
+            .find(|(queued, _)| queued == text)
+            .map(|(_, id)| id.clone())
+            .unwrap()
+    };
+    let heads = daemon.manager.sessions().await.unwrap();
+    let listed = &heads[0].queue[0];
+    assert_eq!(
+        (listed.by.as_ref(), listed.images, &listed.agent_message),
+        (Some(&bob()), 0, &None)
+    );
+
+    let edit = async |daemon: &mut Daemon, command: CommandBody| {
+        daemon.manager.handle(bob(), command).await?;
+        Ok::<_, ErrorInfo>(texts(&published_queue(daemon, &session)))
+    };
+    let remove = |prompt_id: PromptId| CommandBody::RemoveQueued {
+        session_id: session.clone(),
+        prompt_id,
+    };
+    let move_before = |prompt_id: PromptId, before: Option<PromptId>| CommandBody::MoveQueued {
+        session_id: session.clone(),
+        prompt_id,
+        before,
+    };
+    let send_now = |prompt_id: PromptId| CommandBody::SendQueuedNow {
+        session_id: session.clone(),
+        prompt_id,
+    };
+    assert_eq!(
+        edit(&mut daemon, remove(id("B."))).await.unwrap(),
+        ["A.", "C.", "D."]
+    );
+    // To the front, into the middle, and to the end.
+    assert_eq!(
+        edit(&mut daemon, move_before(id("D."), Some(id("A."))))
+            .await
+            .unwrap(),
+        ["D.", "A.", "C."]
+    );
+    assert_eq!(
+        edit(&mut daemon, move_before(id("D."), Some(id("C."))))
+            .await
+            .unwrap(),
+        ["A.", "D.", "C."]
+    );
+    assert_eq!(
+        edit(&mut daemon, move_before(id("A."), None))
+            .await
+            .unwrap(),
+        ["D.", "C.", "A."]
+    );
+
+    // Unknown prompts, and a removed one, are not found; nothing changes.
+    let unknown = PromptId::new("unknown");
+    for command in [
+        remove(unknown.clone()),
+        remove(id("B.")),
+        move_before(unknown.clone(), None),
+        move_before(id("A."), Some(unknown.clone())),
+        send_now(unknown.clone()),
+    ] {
+        let refused = daemon.manager.handle(bob(), command).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::NotFound, "{refused:?}");
+    }
+
+    // Sending the middle prompt now interrupts the turn and runs it first; the rest keep
+    // their order.
+    assert_eq!(
+        edit(&mut daemon, send_now(id("C."))).await.unwrap(),
+        ["C.", "D.", "A."]
+    );
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-4"))
+        .await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let journal = daemon.journal(&session).await;
+    let prompts: Vec<String> = describe(&journal)
+        .into_iter()
+        .filter(|line| line.contains(": user ") || line.contains("turn_interrupted"))
+        .collect();
+    assert_eq!(
+        prompts,
+        [
+            "alice: user turn-1 Hold.",
+            "-: turn_interrupted turn-1",
+            "bob: user turn-2 C.",
+            "bob: user turn-3 D.",
+            "bob: user turn-4 A.",
+        ]
+    );
+    assert!(daemon.manager.sessions().await.unwrap()[0].queue.is_empty());
+
+    // Once a prompt has started, it can no longer be edited.
+    for command in [
+        remove(id("C.")),
+        move_before(id("D."), None),
+        send_now(id("A.")),
+    ] {
+        let refused = daemon.manager.handle(bob(), command).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::Conflict, "{refused:?}");
+    }
 }
 
 #[tokio::test]

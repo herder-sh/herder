@@ -381,6 +381,9 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SendPrompt { session_id, .. }
         | CommandBody::GetAttachment { session_id, .. }
         | CommandBody::Interrupt { session_id }
+        | CommandBody::RemoveQueued { session_id, .. }
+        | CommandBody::MoveQueued { session_id, .. }
+        | CommandBody::SendQueuedNow { session_id, .. }
         | CommandBody::SetModel { session_id, .. }
         | CommandBody::SetPermissionMode { session_id, .. }
         | CommandBody::AnswerApproval { session_id, .. }

@@ -1,0 +1,15 @@
+# A turn held until it is interrupted to send a queued prompt now: that prompt runs next,
+# then the rest of the queue in order.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Hold."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "C."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "D."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-4", "text": "A."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-4"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-4"}}

@@ -23,6 +23,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         project_id: project.map(herder_protocol::ProjectId::new),
         account_id: AccountId::new("claude-main"),
         children_need_you: 0,
+        queue: Vec::new(),
     }
 }
 

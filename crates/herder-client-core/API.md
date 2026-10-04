@@ -27,7 +27,9 @@ says what exists, why, and how it maps to foreign languages.
   `RemoveProject` command, a compatible addition that keeps both versions. P0.14 added
   `Project.icon` and the `GetProjectIcon` command, compatible too. P0.13 added, also
   compatibly, the `ForkSession` command with its `SessionForked` result, and a
-  vault's `VaultStatus` message (`VaultStatus`, `HostReplication`).
+  vault's `VaultStatus` message (`VaultStatus`, `HostReplication`). P0.20 added, compatibly,
+  `SessionHead.queue` (`QueuedPrompt`, `PromptId`) and the `RemoveQueued`, `MoveQueued` and
+  `SendQueuedNow` commands.
 
 ## Shape, and how it maps to UniFFI
 
@@ -73,7 +75,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
-| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
@@ -282,6 +284,28 @@ after a queued message was discarded by archiving. Durable receipts retain the a
 text under a used key fails. Self-send, read-only targets, permission escalation and relay
 chains beyond eight hops are refused. Existing child send/spawn retain their restrictions
 and carry the same provenance so they cannot reset relay depth. A human prompt resets it.
+
+### Prompt queue
+
+A prompt sent while a turn runs waits in the daemon's queue for its session.
+`SessionHead.queue` lists the waiting prompts in the order they will run, each a
+`QueuedPrompt` with its `prompt_id`, `text`, image count, and sender: the user `by`, or the
+`agent_message` of another agent's message. A prompt leaves the queue as its turn starts. The
+queue arrives with the session list (`Machine::sessions`), which every client gets again
+whenever any session's queue changes; a vault lists none.
+
+Whoever may `SendPrompt` to a session may edit its queue, messages from other agents
+included:
+
+- `RemoveQueued { session_id, prompt_id }` drops a prompt without running it.
+- `MoveQueued { session_id, prompt_id, before }` moves it just before the queued prompt
+  `before`, or to the end when `before` is absent.
+- `SendQueuedNow { session_id, prompt_id }` runs it next, ahead of the rest, which keep
+  their order: it interrupts the running turn (or cancels a retry waiting for a usage limit
+  to reset).
+
+Each answers `Applied`. A prompt that has started is refused with `conflict`, and an unknown
+one with `not_found`.
 
 ### Account settings (client API 6)
 
