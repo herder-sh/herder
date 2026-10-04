@@ -626,6 +626,19 @@ struct DraftSessionView: View {
             choice = fleet.draftChoice(on: hostId, projectId: draft.projectId)
             mode = fleet.machines.first { $0.hostId == draft.hostId }?.projects
                 .first { $0.projectId == draft.projectId }?.defaultPermissionMode ?? ModePreference.mode(for: draft)
+            if let kept = PromptDrafts.shared.load(draft.key) {
+                text = kept.text
+                images = kept.herderImages
+            }
+        }
+        // Kept a moment after the last keystroke, and at once on leaving; not while the
+        // session is starting, so a sent prompt is not kept again.
+        .task(id: PromptDrafts.Content(text: text, images: images)) {
+            guard starting == nil, (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
+            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key)
+        }
+        .onDisappear {
+            if starting == nil { PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key) }
         }
     }
 
@@ -665,6 +678,7 @@ struct DraftSessionView: View {
             text = ""
             images = []
         }
+        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
@@ -676,6 +690,7 @@ struct DraftSessionView: View {
                 images = sent
                 self.error = describe(error)
             }
+            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent), for: draft.key)
         }
     }
 }
@@ -683,7 +698,7 @@ struct DraftSessionView: View {
 /// The permission mode new sessions of a project start in, remembered on this device; full
 /// access until changed.
 enum ModePreference {
-    private static func key(_ draft: Draft) -> String { "mode." + (draft.projectId ?? draft.repo ?? "") }
+    private static func key(_ draft: Draft) -> String { "mode." + draft.key }
 
     static func mode(for draft: Draft) -> PermissionMode {
         switch UserDefaults.standard.string(forKey: key(draft)) {
