@@ -189,6 +189,6 @@ struct FleetListsTests {
         let machines = [machine("host-a", name: "a", sessions: ["01A"])]
         #expect(publishes(fleet) { fleet.setMachinesForTesting(machines) })
         #expect(!publishes(fleet) { fleet.setMachinesForTesting(machines) })
-        #expect(fleet.lists.recent.map(\.key.sessionId) == ["01A"])
+        #expect(fleet.lists.home.map(\.key.sessionId) == ["01A"])
     }
 }

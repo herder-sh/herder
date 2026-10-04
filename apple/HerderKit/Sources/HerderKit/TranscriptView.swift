@@ -14,18 +14,27 @@ struct TranscriptBlockView: View {
         switch block {
         case .user(_, let text, let attachments, let outgoing, let agentMessage):
             VStack(alignment: .trailing, spacing: 6) {
+                let pictures = MessagePicture.of(attachments: attachments, outgoing: outgoing, in: fleet)
+                // Images the text names by marker show as chips in it; others, above it.
+                let inline = MessageText.refers(text, to: pictures)
                 if let agentMessage {
                     AgentMessageSource(message: agentMessage, fleet: fleet, hostId: hostId, open: open)
                 }
-                if !attachments.isEmpty {
+                if !inline && !attachments.isEmpty {
                     MessageImages(fleet: fleet, key: key, attachments: attachments)
                 }
-                if let outgoing, !outgoing.images.isEmpty {
+                if !inline, let outgoing, !outgoing.images.isEmpty {
                     HStack(spacing: 8) {
-                        ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, data in Picture(data: data, height: 140) }
+                        ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, image in Picture(data: image.data, height: 140) }
                     }
                 }
-                Text(text)
+                Group {
+                    if inline {
+                        MessageText(text: text, pictures: pictures) { await fleet.fetchAttachment($0, of: key) }
+                    } else {
+                        Text(text)
+                    }
+                }
                     .font(.body)
                     .foregroundStyle(Theme.onBubble)
                     .textSelection(.enabled)

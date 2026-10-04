@@ -132,43 +132,48 @@ struct DetailRow: View {
     }
 }
 
-/// Lays children out left to right, wrapping onto new lines.
+/// Lays children out left to right, wrapping onto new lines, each line's children centred on
+/// it; a child wider than a line gets one to itself and wraps within it.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
+    /// Between lines; `spacing` when not set.
+    var lineSpacing: CGFloat?
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
-        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
-        return CGSize(width: proposal.width ?? rows.map(\.width).max() ?? 0, height: height)
+        let height = rows.map(\.height).reduce(0, +) + (lineSpacing ?? spacing) * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: rows.map(\.width).max() ?? 0, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in rows(width: bounds.width, subviews: subviews) {
             var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            for (index, size) in row.items {
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
-            y += row.height + spacing
+            y += row.height + (lineSpacing ?? spacing)
         }
     }
 
-    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
-        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
-        var current: (indices: [Int], width: CGFloat, height: CGFloat) = ([], 0, 0)
+    private typealias Row = (items: [(index: Int, size: CGSize)], width: CGFloat, height: CGFloat)
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
+        var rows: [Row] = []
+        var current: Row = ([], 0, 0)
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let next = current.indices.isEmpty ? size.width : current.width + spacing + size.width
-            if next > width && !current.indices.isEmpty {
+            var size = subviews[index].sizeThatFits(.unspecified)
+            if size.width > width { size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil)) }
+            let next = current.items.isEmpty ? size.width : current.width + spacing + size.width
+            if next > width && !current.items.isEmpty {
                 rows.append(current)
-                current = ([index], size.width, size.height)
+                current = ([(index, size)], size.width, size.height)
             } else {
-                current = (current.indices + [index], next, max(current.height, size.height))
+                current = (current.items + [(index, size)], next, max(current.height, size.height))
             }
         }
-        if !current.indices.isEmpty { rows.append(current) }
+        if !current.items.isEmpty { rows.append(current) }
         return rows
     }
 }
