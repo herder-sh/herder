@@ -376,9 +376,6 @@ iPhone layout fixes land in P7.21.
   (iPhone Projects) — [P7.21](https://app.basecamp.com/6276894/buckets/49114742/todos/10369340239).
 - Compact width has no Pull Requests and no Vault: the tab bar is Home · Projects · Machines —
   [P7.22](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353269).
-- New Session (`ProjectPicker`, fixed 520 pt) clips off both edges on iPhone, and the session's
-  PR popover (`PRStrip`, 520 pt) is wider than the screen —
-  [P7.23](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353278).
 - On iPhone the keyboard opens with every session and dragging the transcript does not dismiss
   it; with a request pinned, no transcript is visible —
   [P7.24](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353283).

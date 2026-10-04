@@ -152,34 +152,51 @@ extension PrState {
     }
 }
 
-/// A session's PRs above its transcript, at most four, with linking another.
+/// How a session's PRs show from its header: a 520 point popover where there is room for one,
+/// else a sheet, as a phone is narrower than the popover.
+enum PRListPresentation: Equatable {
+    case popover, sheet
+
+    init(compact: Bool) {
+        self = compact ? .sheet : .popover
+    }
+}
+
+/// A session's PRs, at most four, with linking another.
 struct PRStrip: View {
     let fleet: Fleet
     let key: SessionKey
     let prs: [PullRequest]
+    let presentation: PRListPresentation
     @State private var expanded = false
     @State private var linking = false
     @State private var typed = ""
 
     var body: some View {
-        let sorted = prs.sorted { $0.state.rank < $1.state.rank }
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(expanded ? sorted : Array(sorted.prefix(4)), id: \.number) { PRRow(pr: $0, fleet: fleet, key: key) }
-            HStack {
-                if sorted.count > 4 {
-                    Button(expanded ? "Show fewer" : "Show all \(sorted.count)") { expanded.toggle() }
+        Group {
+            switch presentation {
+            case .popover:
+                VStack(alignment: .leading, spacing: 2) {
+                    rows
+                    HStack { actions }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
                 }
-                Spacer()
-                Button("Link PR…", systemImage: "link") { linking = true }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(width: 520)
+                .background(Theme.surface)
+                .preferredColorScheme(.dark)
+            case .sheet:
+                SheetScaffold(title: "Pull Requests", subtitle: "Linked to this session.") {
+                    VStack(alignment: .leading, spacing: 2) { rows }
+                        .padding(.horizontal, -12)
+                } footer: {
+                    actions
+                }
+                .presentationDetents([.medium, .large])
             }
-            .buttonStyle(.plain)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(Theme.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
         .alert("Link a pull request", isPresented: $linking) {
             TextField("123, #123 or a link", text: $typed)
             Button("Link") {
@@ -190,6 +207,25 @@ struct PRStrip: View {
         } message: {
             Text("Its number, or its link.")
         }
+    }
+
+    private var sorted: [PullRequest] { prs.sorted { $0.state.rank < $1.state.rank } }
+
+    private var rows: some View {
+        ForEach(expanded ? sorted : Array(sorted.prefix(4)), id: \.number) { PRRow(pr: $0, fleet: fleet, key: key) }
+    }
+
+    private var actions: some View {
+        Group {
+            if sorted.count > 4 {
+                Button(expanded ? "Show fewer" : "Show all \(sorted.count)") { expanded.toggle() }
+            }
+            Spacer()
+            Button("Link PR…", systemImage: "link") { linking = true }
+        }
+        .buttonStyle(.plain)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(Theme.secondary)
     }
 }
 
