@@ -114,3 +114,16 @@ struct DictationTests {
         #expect(entitlements?["com.apple.security.device.audio-input"] as? Bool == true)
     }
 }
+
+#if os(macOS)
+@MainActor
+struct PromptEditorMeasureTests {
+    @Test func measuringLeavesTheTextViewAlone() {
+        let text = NSAttributedString(string: String(repeating: "word ", count: 200), attributes: PromptEditor.attributes)
+        let narrow = PromptEditor.height(of: text, width: 200)
+        let wide = PromptEditor.height(of: text, width: 800)
+        #expect(narrow > wide)
+        #expect(wide > 0)
+    }
+}
+#endif
