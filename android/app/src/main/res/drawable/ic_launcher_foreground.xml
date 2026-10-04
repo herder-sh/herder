@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- assets/icon/herder.svg's frame and h, scaled so the frame's corners stay inside the
+     adaptive icon's 66 dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.0585"
+        android:scaleY="0.0585"
+        android:translateX="24.05"
+        android:translateY="24.05">
+        <path
+            android:fillColor="#FF9ECE6A"
+            android:pathData="M312 252H472V292H512V532H552V492H712V532H752V772H672V572H512V772H432V332H352V452H272V292H312Z M112 112H472V160H160V652H112Z M552 112H912V912H652V864H864V160H552Z M112 712H160V864H572V912H112Z" />
+    </group>
+</vector>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=herder
+Comment=Watch and steer coding agents across your machines
+Exec=herder-gtk
+Icon=sh.herder.Herder
+Terminal=false
+Categories=Development;
+StartupNotify=true
