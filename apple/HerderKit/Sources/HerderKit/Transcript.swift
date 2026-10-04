@@ -102,7 +102,8 @@ enum Transcript {
                     $0.turnId == item.turnId && $0.parentCallId == item.id
                 }) {
                     flushCalls()
-                    agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming))
+                    agents.append(NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming,
+                                              times: model.itemTimes))
                 } else {
                     flushAgents()
                     if callsTurn != item.turnId { flushCalls() }
