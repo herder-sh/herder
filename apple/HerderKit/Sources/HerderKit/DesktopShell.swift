@@ -55,7 +55,8 @@ struct DesktopShell: View {
                      switcher: switcher, query: $query) {
                     ScrollView {
                         if let project {
-                            ProjectSessions(fleet: fleet, sessions: project.sessions.filter { $0.matches(query) },
+                            ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
+                                            archived: project.archived.filter { $0.matches(query) },
                                             selection: $session)
                                 .padding(16)
                         }
@@ -330,7 +331,7 @@ struct Sidebar: View {
                         SidebarRow(
                             title: project.name, symbol: "shippingbox",
                             icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
-                            badge: project.sessions.count,
+                            badge: project.live.count,
                             selected: item == .project(project.id),
                             settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
                         ) { select(.project(project.id)) }
@@ -491,33 +492,37 @@ struct IconButton: View {
     }
 }
 
-/// A project's sessions: the live ones, then a few archived ones with the rest a click away.
+/// A project's sessions: the live ones, then the archived ones, folded away until asked for.
 private struct ProjectSessions: View {
     let fleet: Fleet
-    let sessions: [SessionSummary]
+    let live: [SessionSummary]
+    let archived: [SessionSummary]
     @Binding var selection: SessionKey?
-    @State private var allArchived = false
+    @State private var showsArchived = false
 
     var body: some View {
-        let live = sessions.filter { $0.state != .archived }
-        let archived = sessions.filter { $0.state == .archived }
         VStack(alignment: .leading, spacing: 26) {
             SessionGroup(title: "Sessions", sessions: live, fleet: fleet, selection: $selection, showsProject: false)
             if !archived.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    SessionGroup(title: "Archived", sessions: allArchived ? archived : Array(archived.prefix(5)),
-                                 fleet: fleet, selection: $selection, showsProject: false)
-                        .opacity(0.75)
-                    if archived.count > 5 {
-                        Button(allArchived ? "Show fewer" : "Show \(archived.count - 5) more archived") { allArchived.toggle() }
-                            .buttonStyle(.plain)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Theme.secondary)
-                            .padding(.leading, 6)
+                    Button { showsArchived.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .rotationEffect(.degrees(showsArchived ? 90 : 0))
+                            SectionHeading(title: "Archived", count: archived.count)
+                        }
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.secondary)
+                    if showsArchived {
+                        SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: $selection, showsProject: false)
+                            .opacity(0.75)
                     }
                 }
             }
-            if sessions.isEmpty {
+            if live.isEmpty && archived.isEmpty {
                 Text("No sessions match.").foregroundStyle(Theme.tertiary)
             }
         }
