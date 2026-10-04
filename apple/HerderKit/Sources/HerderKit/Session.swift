@@ -156,7 +156,7 @@ struct SessionModel {
             prs.removeAll { $0.number == number }
         case .titleChanged(let title, _):
             titled = title
-        case .itemAdded, .childSpawned, .childReported, .unknown:
+        case .itemAdded, .childSpawned, .childReported, .sessionForked, .unknown:
             break
         }
     }
@@ -168,10 +168,10 @@ struct SessionModel {
         func notice(_ text: String, _ tone: Notice.Tone = .info, detail: String? = nil) {
             log.append(.notice(Notice(id: event.seq, text: text, tone: tone, detail: detail)))
         }
-        func handoff(_ kind: Handoff.Kind, to: Handoff.Side) {
+        func handoff(_ kind: Handoff.Kind, from: HostId? = nil, to: Handoff.Side) {
             log.append(.handoff(Handoff(
                 id: event.seq, kind: kind,
-                from: Handoff.Side(provider: provider, model: model, accountId: accountId), to: to)))
+                from: Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: from), to: to)))
         }
         func asked(_ what: String, _ text: String, _ routedTo: Route, _ reason: EscalationReason?) {
             switch (routedTo, reason) {
@@ -226,6 +226,9 @@ struct SessionModel {
             handoff(.account, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .providerSwitched(let provider, let accountId, let model):
             handoff(.provider, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
+        case .sessionForked(_, let fromHost):
+            handoff(.machine, from: fromHost,
+                    to: Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: key.hostId))
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
@@ -302,6 +305,7 @@ struct SessionModel {
         case .prUpdated(let pr): return "PR #\(pr.number) \(pr.state.word.lowercased()), CI \(pr.ci)"
         case .prUnlinked(let number): return "PR #\(number) unlinked"
         case .titleChanged(let title, _): return "Title: \(title)"
+        case .sessionForked(let fromSession, let fromHost): return "Machine: from \(fromHost) (\(fromSession))"
         case .unknown: return "Event"
         }
     }
@@ -540,15 +544,18 @@ enum TurnFailure {
     }
 }
 
-/// The session moved to another model, account or provider: what it ran on, and what it runs on
-/// from here.
+/// The session moved to another model, account, provider or machine: what it ran on, and what
+/// it runs on from here. A fork is a move to the machine it was forked onto.
 struct Handoff: Hashable {
-    enum Kind: Hashable { case model, account, provider }
+    enum Kind: Hashable { case model, account, provider, machine }
     /// A side of the switch; `nil` where the session had not said yet.
     struct Side: Hashable {
         let provider: Provider?
         let model: String?
         let accountId: AccountId?
+        /// The machine, for a move between machines: the host forked from, or the machine the
+        /// app reaches the fork through.
+        var hostId: HostId? = nil
     }
     let id: UInt64
     let kind: Kind

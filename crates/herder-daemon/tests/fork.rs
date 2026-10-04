@@ -605,8 +605,9 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     );
     assert!(!b_worktree.join(".env").exists());
     assert_eq!(git(&b_worktree, &["status", "--porcelain"]), "?? notes.txt");
-    // Its journal is A's, under the fork's id, with B's paths and branch, then the switch to
-    // B's account and the turn A had open, failed.
+    // Its journal is A's, under the fork's id, with B's paths and branch, then the fork from
+    // A and the switch to B's account, both by the user who forked it, and the turn A had
+    // open, failed.
     let b_journal = b.journal(&fork).await;
     assert!(b_journal.iter().all(|event| event.session_id == fork));
     let copied = &b_journal[..a_journal.len()];
@@ -632,15 +633,19 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     );
     assert_eq!(repo, b.repo.to_str().unwrap());
     assert_eq!(worktree, b_worktree.to_str().unwrap());
-    let tail: Vec<_> = b_journal[a_journal.len()..]
-        .iter()
-        .map(|e| &e.body)
-        .collect();
+    let tail = &b_journal[a_journal.len()..];
     assert!(
-        matches!(tail[0], EventBody::AccountSwitched { account_id } if account_id.as_str() == "b-account")
+        matches!(&tail[0].body, EventBody::SessionForked { from_session, from_host }
+            if *from_session == session_id && from_host.as_str() == "host-a"),
+        "{:?}",
+        tail[0].body
     );
     assert!(
-        matches!(tail[1], EventBody::TurnFailed { turn_id, .. } if turn_id.as_str() == "turn-2")
+        matches!(&tail[1].body, EventBody::AccountSwitched { account_id } if account_id.as_str() == "b-account")
+    );
+    assert_eq!((&tail[0].by, &tail[1].by), (&Some(alice()), &Some(alice())));
+    assert!(
+        matches!(&tail[2].body, EventBody::TurnFailed { turn_id, .. } if turn_id.as_str() == "turn-2")
     );
     assert_eq!(status(&b_journal), Some(SessionStatus::NeedsYou));
     // B answers for the image A's prompt carried.
@@ -693,6 +698,17 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         "half done\n"
     );
     let local_journal = a.journal(&local).await;
+    let marks: Vec<_> = local_journal
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::SessionForked {
+                from_session,
+                from_host,
+            } => Some((from_session, from_host.as_str(), &event.by)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, [(&session_id, "host-a", &Some(alice()))]);
     assert_eq!(status(&local_journal), Some(SessionStatus::NeedsYou));
     assert_eq!(a.images(&local, &local_journal).await, [image]);
     assert_eq!(

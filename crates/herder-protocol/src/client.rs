@@ -137,7 +137,8 @@ pub enum CommandBody {
     /// on here, in a new worktree on a new branch restored from the session's latest
     /// checkpoint; owners only. The session is looked up on this daemon, else in the vault it
     /// replicates to, whether its own host is up or gone; the original is left as it is.
-    /// Answered with `session_forked`. A task's child cannot be forked.
+    /// Answered with `session_forked`; the fork's journal marks it with the event
+    /// `session_forked`, `by` the forking user. A task's child cannot be forked.
     ForkSession {
         /// The session to fork, as this daemon or its vault lists it.
         session_id: SessionId,

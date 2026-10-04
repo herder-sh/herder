@@ -155,6 +155,12 @@ pub enum Entry {
     },
     /// The session moved to another model, account, provider or permission mode.
     Switch(String),
+    /// The session moved to this machine: it was forked from a session of `from_host`, whose
+    /// name the transcript looks up.
+    Forked {
+        /// The host the original ran on.
+        from_host: HostId,
+    },
     /// An approval or question was answered, or expired.
     Resolved {
         /// An approval, rather than a question.
@@ -569,6 +575,7 @@ impl Session {
                 self.title = Some((title, source));
                 None
             }
+            EventBody::SessionForked { from_host, .. } => Some(Entry::Forked { from_host }),
             EventBody::Unknown => None,
         };
         self.entries.extend(entry);
@@ -955,6 +962,29 @@ mod tests {
         );
         assert_eq!(session.account_id, Some(AccountId::new("claude-spare")));
         assert_eq!(session.provider, Some(herder_protocol::Provider::Claude));
+    }
+
+    #[test]
+    fn a_fork_is_handed_off_from_its_host() {
+        let mut session = Session::new(SessionId::new("s2"));
+        session.apply(update(
+            "s2",
+            1,
+            vec![
+                created("herder/t", None, None),
+                EventBody::SessionForked {
+                    from_session: SessionId::new("s1"),
+                    from_host: HostId::new("h1"),
+                },
+            ],
+            vec![],
+        ));
+        assert_eq!(
+            session.entries,
+            [Entry::Forked {
+                from_host: HostId::new("h1"),
+            }]
+        );
     }
 
     #[test]

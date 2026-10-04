@@ -264,6 +264,10 @@ pub enum EventBody {
         title: String,
         source: TitleSource,
     },
+    SessionForked {
+        from_session: SessionId,
+        from_host: HostId,
+    },
     Unknown,
 }
 

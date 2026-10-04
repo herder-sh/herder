@@ -827,7 +827,7 @@ Each `ItemBody` and event renders as follows.
 | `ChildSpawned` | `◇ Task <title> → <branch>`, then a live `↳ <child's current tool>` or `↳ N tool calls · 1m 02s`; `o` opens it |
 | `ChildReported` | `↳ report:` plus the first line of the report, under the task line |
 | approval / question resolved | one muted line: `△ allowed Bash · by you` / `? answered by primary` |
-| `ModelSwitched`, `AccountSwitched`, `ProviderSwitched`, `PermissionModeChanged` | centred rule: `── switched to codex-work (transcript replayed) ──` |
+| `ModelSwitched`, `AccountSwitched`, `ProviderSwitched`, `PermissionModeChanged`, `SessionForked` | centred rule: `── switched to codex-work (transcript replayed) ──`; a fork: `── switched to devbox (from laptop) ──` |
 | `TurnFailed` | `┃` bar in `error` with the class (limit / auth / transient / fatal) and the failover outcome |
 | `PrLinked` / `PrUpdated` | `⎇ #12 opened · ci …` one line; updates edit that line rather than adding new ones |
 | live text deltas | the in-progress item with a `▌` cursor (today's) |

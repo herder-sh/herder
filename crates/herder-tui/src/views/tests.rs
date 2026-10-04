@@ -1630,3 +1630,19 @@ fn usage_reset_wait_shows_its_deadline() {
     );
     assert!(!shown.contains("waiting for capacity"), "{shown}");
 }
+
+#[test]
+fn a_fork_reads_as_a_switch_to_its_machine() {
+    let app = open_s2(vec![herder_protocol::EventBody::SessionForked {
+        from_session: herder_protocol::SessionId::new("s0"),
+        from_host: herder_protocol::HostId::new("laptop-id"),
+    }]);
+    let session = &app.sessions[&fake::key("h1", "s2")];
+    let (rows, _) = super::transcript::rows(&app, session, 80);
+    let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
+    assert!(
+        text.iter()
+            .any(|line| line.contains(" switched to box (from laptop-id) ")),
+        "{text:?}"
+    );
+}

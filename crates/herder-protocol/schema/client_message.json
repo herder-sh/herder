@@ -391,7 +391,7 @@
           ]
         },
         {
-          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. The session is looked up on this daemon, else in the vault it\nreplicates to, whether its own host is up or gone; the original is left as it is.\nAnswered with `session_forked`. A task's child cannot be forked.",
+          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. The session is looked up on this daemon, else in the vault it\nreplicates to, whether its own host is up or gone; the original is left as it is.\nAnswered with `session_forked`; the fork's journal marks it with the event\n`session_forked`, `by` the forking user. A task's child cannot be forked.",
           "type": "object",
           "properties": {
             "account_id": {

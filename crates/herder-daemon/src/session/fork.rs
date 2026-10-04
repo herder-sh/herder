@@ -9,7 +9,8 @@
 //! when the original ran here, else one on `origin` ([`checkpoint::fetch_latest`]). A turn the
 //! original had open is closed as after a restart, a read-only original's fork is idle, and
 //! the fork moves to an account of this host by `account_switched` when the original's is not
-//! here; its next prompt starts the CLI seeded with the transcript, as after any switch. The
+//! here. Its journal marks the fork with `session_forked`, naming the original and its host,
+//! and both that and the account switch are `by` the user who forked it; its next prompt starts the CLI seeded with the transcript, as after any switch. The
 //! images its prompts carried are kept for it under their ids, so `get_attachment` answers as
 //! for the original.
 
@@ -18,7 +19,7 @@ use std::sync::Arc;
 
 use herder_protocol::{
     AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, ItemBody,
-    ProjectId, Provider, SessionId, SessionStatus,
+    ProjectId, Provider, SessionId, SessionStatus, UserId,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -91,8 +92,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Forks `request.session_id` onto this host.
-    pub async fn fork(&self, request: Request) -> Result<Forked, ErrorInfo> {
+    /// Forks `request.session_id` onto this host, `by` the user who asked; `None` when nobody
+    /// has paired with this host yet, as when `herder fork` recovers a session onto a new one.
+    pub async fn fork(&self, request: Request, by: Option<UserId>) -> Result<Forked, ErrorInfo> {
         let forks = self
             .inner
             .forks
@@ -125,7 +127,7 @@ impl SessionManager {
                 ),
             ));
         };
-        self.fork_source(source, request.account_id).await
+        self.fork_source(source, request.account_id, by).await
     }
 
     /// A session of this host, to fork.
@@ -162,11 +164,12 @@ impl SessionManager {
 
     /// Makes a new session here out of `source`, running on `account_id` or else on the
     /// source's account, its project's default account or this host's first account of its
-    /// provider.
+    /// provider. The fork, and its move to that account, are `by` that user.
     async fn fork_source(
         &self,
         source: Source,
         account_id: Option<AccountId>,
+        by: Option<UserId>,
     ) -> Result<Forked, ErrorInfo> {
         let inner = &self.inner;
         let Some(first) = source.events.first() else {
@@ -287,12 +290,20 @@ impl SessionManager {
         }
         let journal = &inner.journal;
         journal.import(events).await.map_err(internal)?;
+        let body = EventBody::SessionForked {
+            from_session: original.clone(),
+            from_host: source.host_id.clone(),
+        };
+        journal
+            .record(session_id.clone(), by.clone(), body)
+            .await
+            .map_err(internal)?;
         if account_id != current {
             let body = EventBody::AccountSwitched {
                 account_id: account_id.clone(),
             };
             journal
-                .record(session_id.clone(), None, body)
+                .record(session_id.clone(), by, body)
                 .await
                 .map_err(internal)?;
         }

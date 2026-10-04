@@ -478,6 +478,9 @@ impl Session {
                 self.prs.retain(|pr| pr.number != *number);
                 Some(notice(format!("pull request #{number} unlinked")))
             }
+            EventBody::SessionForked { from_host, .. } => Some(Entry::Switch(format!(
+                "switched to this machine (from {from_host})"
+            ))),
             // Shown from the session list's title.
             EventBody::TitleChanged { .. } | EventBody::Unknown => None,
         };
@@ -579,7 +582,7 @@ pub fn duration(seconds: i64) -> String {
 
 #[cfg(test)]
 pub mod tests {
-    use herder_protocol::{ApprovalDecision, Seq, TurnError};
+    use herder_protocol::{ApprovalDecision, HostId, Seq, TurnError};
 
     use super::*;
 
@@ -806,6 +809,13 @@ pub mod tests {
                     mode: PermissionMode::AutoEdit,
                 },
             ),
+            (
+                Some("alice"),
+                EventBody::SessionForked {
+                    from_session: SessionId::new("s0"),
+                    from_host: HostId::new("laptop"),
+                },
+            ),
         ]));
         // The failed turn took its question with it.
         assert!(session.questions.is_empty());
@@ -826,6 +836,7 @@ pub mod tests {
                 "failed over to claude-alt: the last account hit its limit",
                 "switched to codex-work · gpt-5 (transcript replayed)",
                 "mode set to auto_edit",
+                "switched to this machine (from laptop)",
             ]
         );
     }

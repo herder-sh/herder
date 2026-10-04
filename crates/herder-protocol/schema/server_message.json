@@ -1786,6 +1786,29 @@
             "title",
             "source"
           ]
+        },
+        {
+          "description": "The session was forked here, `by` the user who forked it: the history before this event\nis that of the session it was forked from.",
+          "type": "object",
+          "properties": {
+            "from_host": {
+              "description": "The host that session ran on.",
+              "$ref": "#/$defs/HostId"
+            },
+            "from_session": {
+              "description": "The session it was forked from.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_forked"
+            }
+          },
+          "required": [
+            "type",
+            "from_session",
+            "from_host"
+          ]
         }
       ]
     },

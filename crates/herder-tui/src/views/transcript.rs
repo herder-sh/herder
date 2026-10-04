@@ -14,7 +14,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use herder_protocol::{Attachment, AttachmentId, ErrorClass, Item, ItemBody, ItemId, SessionId};
+use herder_protocol::{
+    Attachment, AttachmentId, ErrorClass, HostId, Item, ItemBody, ItemId, SessionId,
+};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -78,6 +80,9 @@ pub(super) struct Builder<'a> {
     /// Diffs are split into two columns.
     pub split: bool,
     pub chat: &'a Chat,
+    /// The machine the session runs on, and those it was forked from, by name.
+    pub machine: String,
+    pub machines: HashMap<&'a HostId, String>,
     pub session: &'a Session,
     /// The open session's worktree, which paths are shown relative to.
     pub worktree: &'a str,
@@ -212,18 +217,10 @@ impl<'a> Builder<'a> {
                     .collect();
                 self.block(theme.error, title, body);
             }
-            Entry::Switch(text) => {
-                self.start(true);
-                let label = format!(" {text} ");
-                let room = self.width.saturating_sub(crate::ui::width(&label));
-                let left = room / 2;
-                let rule = Style::new().fg(theme.border_subtle);
-                let line = Line::from(vec![
-                    Span::styled("─".repeat(left), rule),
-                    Span::styled(label, ui.muted()),
-                    Span::styled("─".repeat(room - left), rule),
-                ]);
-                self.line(fit(line, self.width, ui.glyphs));
+            Entry::Switch(text) => self.rule(text),
+            Entry::Forked { from_host } => {
+                let from = self.machines.get(from_host).map_or("", String::as_str);
+                self.rule(&format!("switched to {} (from {from})", self.machine));
             }
             Entry::Child { session_id, task } => {
                 self.start(false);
@@ -298,6 +295,22 @@ impl<'a> Builder<'a> {
         spans.push(Span::styled(first_line(text).to_owned(), style));
         let line = fit(Line::from(spans), self.width, self.ui.glyphs);
         self.line(line);
+    }
+
+    /// A centred line across the pane, as for a switch.
+    fn rule(&mut self, text: &str) {
+        let (ui, theme) = (self.ui, self.ui.theme);
+        self.start(true);
+        let label = format!(" {text} ");
+        let room = self.width.saturating_sub(crate::ui::width(&label));
+        let left = room / 2;
+        let rule = Style::new().fg(theme.border_subtle);
+        let line = Line::from(vec![
+            Span::styled("─".repeat(left), rule),
+            Span::styled(label, ui.muted()),
+            Span::styled("─".repeat(room - left), rule),
+        ]);
+        self.line(fit(line, self.width, ui.glyphs));
     }
 
     /// A block: a bar of `bar`'s colour down the left on the panel, `title`, then `body`.
@@ -497,12 +510,24 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
                 .map_or_else(|| id.to_string(), |account| account.label.clone())
         })
         .unwrap_or_default();
+    let machines = session
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Forked { from_host } => Some((from_host, app.machine_name(from_host))),
+            _ => None,
+        })
+        .collect();
     let mut builder = Builder {
         ui,
         width: usize::from(width).max(8),
         padded: width >= super::NARROW,
         split: app.width >= SPLIT,
         chat: &app.chat,
+        machine: key
+            .and_then(|key| app.host_name(key))
+            .unwrap_or_else(|| "this machine".to_owned()),
+        machines,
         session,
         worktree: &session.worktree,
         results,

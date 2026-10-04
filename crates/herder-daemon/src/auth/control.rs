@@ -210,13 +210,15 @@ async fn answer(stream: UnixStream, auth: &Auth, daemon: &Daemon) -> Result<()> 
     Ok(())
 }
 
-async fn fork(request: fork::Request, daemon: &Daemon) -> Response {
+/// Forks as the daemon's first owner: only the system user running the daemon reaches the
+/// socket, and that is who paired as its owner.
+async fn fork(request: fork::Request, auth: &Auth, daemon: &Daemon) -> Response {
     let Some(sessions) = &daemon.sessions else {
         return Response::Error {
             message: "the vault runs no sessions; fork on a host".to_owned(),
         };
     };
-    match sessions.fork(request).await {
+    match sessions.fork(request, auth.owner()).await {
         Ok(forked) => Response::Forked(forked),
         Err(error) => Response::Error {
             message: error.message,
@@ -262,7 +264,7 @@ async fn handle(request: Request, auth: &Auth, daemon: &Daemon) -> Response {
             },
             Err(err) => failed(err),
         },
-        Request::Fork(request) => fork(request, daemon).await,
+        Request::Fork(request) => fork(request, auth, daemon).await,
         Request::ForgetHost { host } => match &daemon.vault {
             Some(admin) => match admin.forget_host(&host).await {
                 Ok(forgot) => Response::ForgotHost(forgot),

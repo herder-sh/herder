@@ -318,6 +318,7 @@ private class Fold(var session: Session) {
                 session = s.copy(prs = s.prs.filter { it.number != body.number })
                 Entry.Notice("pull request #${body.number} unlinked")
             }
+            is EventBody.SessionForked -> Entry.Switch("switched to this machine (from ${body.fromHost})")
             // Shown from the session list's title.
             is EventBody.TitleChanged, EventBody.Unknown -> null
         }

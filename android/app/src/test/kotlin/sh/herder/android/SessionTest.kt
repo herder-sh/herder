@@ -77,6 +77,7 @@ class SessionTest {
                 EventBody.AccountSwitched("claude-alt"),
                 EventBody.ProviderSwitched("codex", "codex-work", "gpt-5"),
                 EventBody.PermissionModeChanged(PermissionMode.AUTO_EDIT),
+                EventBody.SessionForked("s0", "laptop"),
             ).let { update ->
                 update.copy(events = update.events.mapIndexed { n, event -> if (n == 1) event.copy(by = null) else event })
             },
@@ -92,6 +93,7 @@ class SessionTest {
                 "failed over to claude-alt: the last account hit its limit",
                 "switched to codex-work · gpt-5 (transcript replayed)",
                 "mode set to auto_edit",
+                "switched to this machine (from laptop)",
             ),
             session.entries.filterIsInstance<Entry.Switch>().map { it.text },
         )

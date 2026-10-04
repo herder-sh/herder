@@ -118,6 +118,21 @@ struct TranscriptTests {
         #expect(handoffs.map(\.to) == [claude("haiku", "main"), claude("haiku", "work"), Handoff.Side(provider: "codex", model: "gpt-6.1-sol", accountId: "gpt")])
     }
 
+    @Test func aForkIsAHandoffBetweenMachines() {
+        var script = Script("01B", host: "host-b")
+        var model = script.model([created()])
+        model.apply(SessionUpdate(events: [
+            script.event(.sessionForked(fromSession: "01A", fromHost: "host-a"), by: "tomas"),
+            script.event(.accountSwitched(accountId: "work"), by: "tomas"),
+        ], streaming: []))
+        let handoffs = Transcript.blocks(model).compactMap { block -> Handoff? in
+            if case .handoff(let handoff) = block { handoff } else { nil }
+        }
+        #expect(handoffs.map(\.kind) == [.machine, .account])
+        #expect(handoffs[0].from == Handoff.Side(provider: "claude", model: "opus", accountId: "main", hostId: "host-a"))
+        #expect(handoffs[0].to == Handoff.Side(provider: "claude", model: "opus", accountId: "main", hostId: "host-b"))
+    }
+
     @Test func aSentPromptShowsWhereItIsUntilTheSessionTakesIt() {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
