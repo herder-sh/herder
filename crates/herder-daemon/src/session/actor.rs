@@ -1468,7 +1468,7 @@ impl Actor {
                 })
                 .await;
                 self.permit = None;
-                self.report(turn_id, summary).await;
+                self.report(turn_id, summary, false).await;
                 self.set_status(SessionStatus::NeedsYou).await;
                 continue;
             }
@@ -1500,7 +1500,7 @@ impl Actor {
                         if self.queue.is_empty() {
                             self.set_status(SessionStatus::NeedsYou).await;
                         }
-                        self.report(turn_id, summary).await;
+                        self.report(turn_id, summary, false).await;
                         continue;
                     }
                 }
@@ -1658,7 +1658,7 @@ impl Actor {
         self.queue.clear();
         self.retry_deadline = None;
         self.set_status(SessionStatus::Error).await;
-        self.report(turn_id, summary).await;
+        self.report(turn_id, summary, false).await;
     }
 
     /// Whether the next turn may start: it holds a permit or the host grants one now. Otherwise
@@ -2036,14 +2036,17 @@ impl Actor {
     }
 
     /// Journals the end of the running turn and reports it as `summary`, then starts the next
-    /// queued prompt or settles on `settled`.
+    /// queued prompt or settles on `settled`. A child that completed its turn with nothing
+    /// queued is archived once it reported, unless its worktree has changes, which its report
+    /// then says.
     async fn turn_ended(
         &mut self,
         turn_id: TurnId,
         body: EventBody,
         settled: SessionStatus,
-        summary: String,
+        mut summary: String,
     ) {
+        let completed = matches!(body, EventBody::TurnCompleted { .. });
         self.void_requests().await;
         self.log(body).await;
         self.record_branches().await;
@@ -2055,7 +2058,23 @@ impl Actor {
         if self.queue.is_empty() {
             self.set_status(settled).await;
         }
-        self.report(turn_id, summary).await;
+        let finished = completed
+            && self.session.parent.is_some()
+            && self.session.status == SessionStatus::Idle
+            && self.queue.is_empty()
+            && self.setup.is_none();
+        let mut archive = false;
+        if finished {
+            match worktree::dirty(Path::new(&self.session.worktree)).await {
+                Ok(false) => archive = true,
+                Ok(true) => summary.push_str(KEPT_DIRTY),
+                Err(err) => warn!(
+                    session_id = %self.session.session_id,
+                    "cannot tell whether the finished child's worktree has changes: {err}"
+                ),
+            }
+        }
+        self.report(turn_id, summary, archive).await;
         if self.prompts == Some(titles::REFRESH_AFTER) {
             titles::auto(&self.inner, self.session.session_id.clone());
         }
@@ -2178,7 +2197,7 @@ impl Actor {
             if self.queue.is_empty() {
                 self.set_status(SessionStatus::NeedsYou).await;
             }
-            self.report(turn_id, failed(&error)).await;
+            self.report(turn_id, failed(&error), false).await;
             return self.start_next().await;
         }
         // The retry keeps the failed turn's permit: it is the same work, moved.
@@ -2225,7 +2244,7 @@ impl Actor {
             }
         }
         if let (Some(turn_id), Some(summary)) = (open, summary) {
-            self.report(turn_id, summary).await;
+            self.report(turn_id, summary, false).await;
         }
         self.start_next().await;
     }
@@ -2257,9 +2276,11 @@ impl Actor {
         })
     }
 
-    /// A child's turn ended: journals `child_reported` in its primary session and hands the
-    /// report to the primary's `wait_for`. Nothing for a top-level session.
-    async fn report(&mut self, turn_id: TurnId, summary: String) {
+    /// A child's turn ended: journals `child_reported` in its primary session, archives the
+    /// child when `archive`, and hands the report to the primary's `wait_for`. Archived before
+    /// `wait_for` hears of it, so the primary finds the child's slot free once it does. Nothing
+    /// for a top-level session.
+    async fn report(&mut self, turn_id: TurnId, summary: String, archive: bool) {
         let Some(parent) = self.session.parent.clone() else {
             return;
         };
@@ -2271,6 +2292,9 @@ impl Actor {
         };
         if let Err(err) = self.inner.journal.record(parent.clone(), None, body).await {
             warn!(session_id = %child, "cannot journal a report to {parent}: {err:#}");
+        }
+        if archive && let Err(err) = self.archive(None, false).await {
+            warn!(session_id = %child, "cannot archive the finished child: {}", err.message);
         }
         let output = WaitForOutput::Report {
             child: child.clone(),
@@ -2368,6 +2392,12 @@ impl Actor {
         }
     }
 }
+
+/// Appended to the report of a child that finished with changes in its worktree, which keep it
+/// from being archived.
+const KEPT_DIRTY: &str = "\n\n(herder kept this child live instead of archiving it: its \
+                          worktree has uncommitted or untracked changes. Send it a follow-up to \
+                          commit or discard them.)";
 
 /// The journal event for `event` when it ends the turn `turn_id`.
 fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {

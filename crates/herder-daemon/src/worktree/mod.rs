@@ -241,14 +241,11 @@ impl Worktrees {
             git(repo, ["worktree", "prune"]).await?;
             return Ok(());
         }
-        if !force {
-            let changes = git(path, ["status", "--porcelain"]).await?;
-            if !changes.is_empty() {
-                return Err(Error::Conflict(format!(
-                    "{} has uncommitted or untracked changes; commit or discard them, or force",
-                    path.display()
-                )));
-            }
+        if !force && dirty(path).await? {
+            return Err(Error::Conflict(format!(
+                "{} has uncommitted or untracked changes; commit or discard them, or force",
+                path.display()
+            )));
         }
         // `--force` once the check passed or the user asked: it also removes ignored files.
         git(
@@ -263,6 +260,11 @@ impl Worktrees {
         .await?;
         Ok(())
     }
+}
+
+/// Whether the worktree at `path` has uncommitted or untracked changes.
+pub async fn dirty(path: &Path) -> Result<bool, Error> {
+    Ok(!git(path, ["status", "--porcelain"]).await?.is_empty())
 }
 
 /// Every branch the worktree at `path` has had checked out, in the order first checked out,
