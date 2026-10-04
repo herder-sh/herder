@@ -505,11 +505,19 @@ struct DraftSessionView: View {
                     .font(.footnote)
                 }
                 .frame(maxWidth: 760, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .transition(.asymmetric(
+                    insertion: .offset(y: 40).combined(with: .opacity).animation(.smooth(duration: 0.35).delay(0.25)),
+                    removal: .opacity
+                ))
             } else {
-            Text("What should we build in \(machine?.name ?? "")/\(place)?")
-                .font(.system(size: 30, weight: .medium))
-                .foregroundStyle(Theme.text)
-                .multilineTextAlignment(.center)
+                Text("What should we build in \(machine?.name ?? "")/\(place)?")
+                    .font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .multilineTextAlignment(.center)
+                    .transition(.opacity)
+            }
+            // Always present, so on send it slides down to where the session's composer sits.
             ComposerBox(
                 text: $text,
                 images: $images,
@@ -531,13 +539,16 @@ struct DraftSessionView: View {
                 Label("From the default branch", systemImage: "arrow.triangle.branch")
             }
             .frame(maxWidth: 760)
-            }
+            .disabled(starting != nil)
             if let error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
             }
-            Spacer()
+            if starting == nil {
+                Spacer()
+            }
         }
         .padding(.horizontal, 24)
+        .padding(.bottom, starting == nil ? 0 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
         .onAppear {
@@ -564,14 +575,24 @@ struct DraftSessionView: View {
             return
         }
         ModePreference.remember(mode, for: draft)
-        starting = prompt
-        defer { starting = nil }
+        let sent = images
+        withAnimation(.smooth(duration: 0.4)) {
+            starting = prompt
+            error = nil
+            text = ""
+            images = []
+        }
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
-                model: choice.model, mode: mode, prompt: prompt, images: images))
+                model: choice.model, mode: mode, prompt: prompt, images: sent))
         } catch {
-            self.error = describe(error)
+            withAnimation(.smooth(duration: 0.4)) {
+                starting = nil
+                text = prompt
+                images = sent
+                self.error = describe(error)
+            }
         }
     }
 }
