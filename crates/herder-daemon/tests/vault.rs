@@ -632,6 +632,10 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
             session_id: session.clone(),
             prompt_id: prompt_id.clone(),
         },
+        CommandBody::MergeQueued {
+            session_id: session.clone(),
+            prompt_ids: vec![prompt_id.clone(), herder_protocol::PromptId::new("p2")],
+        },
     ] {
         match client.send(vault_id.clone(), edit).await {
             Err(Error::Rejected { info }) => assert_eq!(info.code, ErrorCode::ReadOnly),

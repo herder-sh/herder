@@ -540,6 +540,10 @@ pub enum CommandBody {
         session_id: SessionId,
         prompt_id: PromptId,
     },
+    MergeQueued {
+        session_id: SessionId,
+        prompt_ids: Vec<PromptId>,
+    },
     SetModel {
         session_id: SessionId,
         model: String,

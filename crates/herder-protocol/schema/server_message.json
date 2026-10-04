@@ -2727,7 +2727,7 @@
           "minimum": 0
         },
         "prompt_id": {
-          "description": "The prompt, for `remove_queued`, `move_queued` and `send_queued_now`.",
+          "description": "The prompt, for `remove_queued`, `move_queued`, `send_queued_now` and `merge_queued`.",
           "$ref": "#/$defs/PromptId"
         },
         "text": {

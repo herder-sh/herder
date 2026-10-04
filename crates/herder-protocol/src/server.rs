@@ -285,7 +285,7 @@ pub struct SessionHead {
 /// A prompt waiting in a session's queue.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct QueuedPrompt {
-    /// The prompt, for `remove_queued`, `move_queued` and `send_queued_now`.
+    /// The prompt, for `remove_queued`, `move_queued`, `send_queued_now` and `merge_queued`.
     pub prompt_id: PromptId,
     /// Prompt text.
     pub text: String,

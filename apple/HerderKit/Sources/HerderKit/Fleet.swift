@@ -244,6 +244,12 @@ public final class Fleet {
         await editQueue(.sendQueuedNow(sessionId: key.sessionId, promptId: promptId), of: key)
     }
 
+    /// Merges queued prompts into the first of them, so they run as one turn; the machine joins
+    /// their texts and images, which only it holds.
+    func mergeQueued(_ promptIds: [PromptId], in key: SessionKey) async {
+        await editQueue(.mergeQueued(sessionId: key.sessionId, promptIds: promptIds), of: key)
+    }
+
     /// Sends a queue edit; a prompt that started meanwhile is refused as such.
     private func editQueue(_ command: CommandBody, of key: SessionKey) async {
         do {

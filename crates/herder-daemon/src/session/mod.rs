@@ -207,6 +207,7 @@ mod attachments;
 pub mod failover;
 pub mod fork;
 pub(crate) mod journal;
+mod merge;
 mod routing;
 mod setup;
 mod tasks;
@@ -632,6 +633,10 @@ impl SessionManager {
                 session_id,
                 prompt_id,
             } => (session_id, Request::SendQueuedNow { prompt_id }),
+            CommandBody::MergeQueued {
+                session_id,
+                prompt_ids,
+            } => (session_id, Request::MergeQueued { prompt_ids }),
             CommandBody::SetModel { session_id, model } => {
                 (session_id, Request::SetModel { model })
             }

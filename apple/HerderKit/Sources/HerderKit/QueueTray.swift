@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The messages waiting in a session's queue on its machine, stacked above the composer in the
 /// order they will run. Each can be sent now, ahead of the rest, removed, or dragged to another
-/// place; edits from other clients arrive with the session list.
+/// place, and a user's messages can be merged into one; edits from other clients arrive with the
+/// session list.
 struct QueueTray: View {
     let fleet: Fleet
     let key: SessionKey
@@ -21,10 +22,24 @@ struct QueueTray: View {
 
     var body: some View {
         let shown = Self.ordered(queue, by: moved)
+        let mergeable = Self.mergeable(shown)
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: "clock")
                 Text(running ? "Queued · runs when this turn ends" : "Queued · runs in this order")
+                Spacer(minLength: 0)
+                if !mergeable.isEmpty {
+                    Button { merge(mergeable) } label: {
+                        Label("Merge into one", systemImage: "arrow.triangle.merge")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.secondary)
+                            .padding(.horizontal, 8)
+                            .frame(height: 20)
+                            .background(Theme.raised, in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Merge your queued messages into one, so they run as one turn")
+                }
             }
             .font(.caption)
             .foregroundStyle(Theme.tertiary)
@@ -38,7 +53,7 @@ struct QueueTray: View {
                         .listRowSeparator(.hidden)
                         .frame(height: Self.rowHeight)
                         .overlay(alignment: .top) { Rectangle().fill(Theme.stroke.opacity(0.5)).frame(height: 1) }
-                        .contextMenu { menu(prompt, at: index, in: shown) }
+                        .contextMenu { menu(prompt, at: index, in: shown, merging: mergeable) }
                         #if os(iOS)
                         .swipeActions(edge: .trailing) {
                             Button(role: .destructive) { remove(prompt) } label: { Label("Remove", systemImage: "trash") }
@@ -66,7 +81,9 @@ struct QueueTray: View {
     }
 
     @ViewBuilder
-    private func menu(_ prompt: QueuedPrompt, at index: Int, in shown: [QueuedPrompt]) -> some View {
+    private func menu(
+        _ prompt: QueuedPrompt, at index: Int, in shown: [QueuedPrompt], merging mergeable: [PromptId]
+    ) -> some View {
         Button { Task { await fleet.sendQueuedNow(prompt.promptId, in: key) } } label: {
             Label("Send Now", systemImage: "arrow.up")
         }
@@ -74,12 +91,23 @@ struct QueueTray: View {
             .disabled(index == 0)
         Button { move(index, to: index + 2, in: shown) } label: { Label("Move Down", systemImage: "arrow.down.to.line") }
             .disabled(index == shown.count - 1)
+        if mergeable.contains(prompt.promptId) {
+            Button { merge(mergeable) } label: {
+                Label("Merge into One Message", systemImage: "arrow.triangle.merge")
+            }
+        }
         Divider()
         Button(role: .destructive) { remove(prompt) } label: { Label("Remove", systemImage: "trash") }
     }
 
     private func remove(_ prompt: QueuedPrompt) {
         Task { await fleet.removeQueued(prompt.promptId, from: key) }
+    }
+
+    /// Merges `promptIds` into one on the machine; the tray shows the merged message once its
+    /// queue arrives.
+    private func merge(_ promptIds: [PromptId]) {
+        Task { await fleet.mergeQueued(promptIds, in: key) }
     }
 
     /// Moves the message at `source` to `destination`, an index in the order before the move,
@@ -103,6 +131,14 @@ struct QueueTray: View {
               destination != source, destination != source + 1
         else { return nil }
         return (ids[source], destination < ids.count ? ids[destination] : nil)
+    }
+
+    /// The messages "Merge into one" merges, in the order shown: those the user who sent the
+    /// first of them sent, not another agent's, which keep who sent them; none unless two are.
+    static func mergeable(_ shown: [QueuedPrompt]) -> [PromptId] {
+        guard let first = shown.first(where: { $0.agentMessage == nil }) else { return [] }
+        let ids = shown.filter { $0.agentMessage == nil && $0.by == first.by }.map(\.promptId)
+        return ids.count >= 2 ? ids : []
     }
 
     /// The queue in the order of `moved`, when a drag left one; prompts it lacks go last.

@@ -798,6 +798,110 @@ async fn queued_prompts_are_removed_moved_and_sent_now_until_they_start() {
 }
 
 #[tokio::test]
+async fn queued_prompts_merge_into_one_turn_with_all_their_images() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "merge.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Hold.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    let image = |name: &str| Image {
+        media_type: "image/png".into(),
+        data: Bytes([b"\x89PNG\r\n\x1a\n".as_slice(), name.as_bytes()].concat()),
+    };
+    for (text, images) in [
+        ("See [Image #1].", vec![image("one")]),
+        ("No image.", Vec::new()),
+        (
+            "[Image #1] and [Image #2].",
+            vec![image("two"), image("three")],
+        ),
+    ] {
+        let prompt = prompt_with(&session, text, images);
+        assert_eq!(
+            daemon.manager.handle(bob(), prompt).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    let ids: Vec<PromptId> = published_queue(&mut daemon, &session)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
+    let merge = |prompt_ids: Vec<PromptId>| CommandBody::MergeQueued {
+        session_id: session.clone(),
+        prompt_ids,
+    };
+
+    // Fewer than two prompts, or one listed twice, are bad requests; an unknown one is not
+    // found. Nothing changes.
+    for (prompt_ids, code) in [
+        (vec![ids[0].clone()], ErrorCode::BadRequest),
+        (vec![ids[0].clone(), ids[0].clone()], ErrorCode::BadRequest),
+        (
+            vec![ids[0].clone(), PromptId::new("unknown")],
+            ErrorCode::NotFound,
+        ),
+    ] {
+        let refused = daemon.manager.handle(bob(), merge(prompt_ids)).await;
+        assert_eq!(refused.unwrap_err().code, code);
+    }
+    assert_eq!(daemon.manager.sessions().await.unwrap()[0].queue.len(), 3);
+
+    let result = daemon.manager.handle(bob(), merge(ids.clone())).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    let merged = "See [Image #1].\n\nNo image.\n\n[Image #2] and [Image #3].";
+    assert_eq!(
+        published_queue(&mut daemon, &session),
+        [(merged.to_owned(), ids[0].clone())]
+    );
+    let heads = daemon.manager.sessions().await.unwrap();
+    let listed = &heads[0].queue[0];
+    assert_eq!((listed.images, listed.by.as_ref()), (3, Some(&bob())));
+
+    // It runs as one turn, which the script only matches with the merged text and images.
+    let interrupt = CommandBody::Interrupt {
+        session_id: session.clone(),
+    };
+    daemon.manager.handle(alice(), interrupt).await.unwrap();
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-2"))
+        .await;
+    daemon.until_status(SessionStatus::Idle).await;
+    let journal = daemon.journal(&session).await;
+    let prompts: Vec<String> = describe(&journal)
+        .into_iter()
+        .filter(|line| line.contains(": user "))
+        .collect();
+    assert_eq!(
+        prompts,
+        [
+            "alice: user turn-1 Hold.".to_owned(),
+            format!("bob: user turn-2 {merged}"),
+        ]
+    );
+    let sent: Vec<_> = daemon
+        .commands
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|command| match command {
+            AdapterCommand::SendPrompt { images, .. } => Some(images.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        [Vec::new(), vec![image("one"), image("two"), image("three")]]
+    );
+
+    // Once it has started, its prompts can no longer be merged.
+    let refused = daemon.manager.handle(bob(), merge(ids)).await;
+    assert_eq!(refused.unwrap_err().code, ErrorCode::Conflict);
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn limit_reached_fails_the_turn_and_needs_you() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "limit_reached.jsonl", Default::default()).await;

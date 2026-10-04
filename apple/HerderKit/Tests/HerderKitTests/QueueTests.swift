@@ -15,10 +15,25 @@ struct QueueTests {
         #expect(QueueTray.move(0, to: -1, in: ids) == nil)
     }
 
+    @Test func mergesTheUsersOwnPromptsAroundOthers() {
+        func prompt(_ id: String, by: String?, agent: Bool = false) -> QueuedPrompt {
+            QueuedPrompt(
+                promptId: id, text: id, images: 0, by: by,
+                agentMessage: agent ? AgentMessage(senderSessionId: "s0", messageId: "m-\(id)", hopCount: 1, permissionCeiling: .ask) : nil)
+        }
+        let queue = [
+            prompt("a", by: nil, agent: true), prompt("b", by: "alice"), prompt("c", by: "bob"),
+            prompt("d", by: nil, agent: true), prompt("e", by: "alice"),
+        ]
+        #expect(QueueTray.mergeable(queue) == ["b", "e"])
+        #expect(QueueTray.mergeable(Array(queue.prefix(3))) == [])
+        #expect(QueueTray.mergeable([]) == [])
+    }
+
     /// The fake daemon's hold account holds its first turn until it is interrupted; prompts
     /// queue behind it (`crates/herder-ffi/fixtures/hold.jsonl`).
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func theTrayRemovesReordersAndSendsOneNowAndFollowsOtherClients() async throws {
+    func theTrayRemovesReordersMergesAndSendsOneNowAndFollowsOtherClients() async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("cannot open a fresh profile")
@@ -56,6 +71,13 @@ struct QueueTests {
             command: .moveQueued(sessionId: key.sessionId, promptId: id("A."), before: id("C.")))
         #expect(await eventually { texts() == ["A.", "C."] })
 
+        // Two more merge into one, which keeps the first one's place.
+        for text in ["D.", "E."] { await fleet.submit(text, to: key) }
+        #expect(await eventually { texts() == ["A.", "C.", "D.", "E."] })
+        await fleet.mergeQueued([id("D."), id("E.")], in: key)
+        #expect(await eventually { texts() == ["A.", "C.", "D.\n\nE."] })
+        #expect(fleet.refusals[key] == nil)
+
         // Sent now, it stops the held turn and runs first; the rest follows.
         let first = id("A.")
         await fleet.sendQueuedNow(first, in: key)
@@ -65,7 +87,7 @@ struct QueueTests {
             let users = Transcript.blocks(model).compactMap { block -> String? in
                 if case .user(_, let text, _, _, _) = block { text } else { nil }
             }
-            return users == ["Hold.", "A.", "C."] && model.turn == nil
+            return users == ["Hold.", "A.", "C.", "D.\n\nE."] && model.turn == nil
         })
         #expect(texts().isEmpty)
 

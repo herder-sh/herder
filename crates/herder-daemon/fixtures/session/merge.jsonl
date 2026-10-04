@@ -1,0 +1,9 @@
+# A turn held until it is interrupted; the three prompts queued behind it, merged into one,
+# run as one turn with all their images, the markers counting across them.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Hold."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "turn-1"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "See [Image #1].\n\nNo image.\n\n[Image #2] and [Image #3].", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpvbmU="}, {"media_type": "image/png", "data": "iVBORw0KGgp0d28="}, {"media_type": "image/png", "data": "iVBORw0KGgp0aHJlZQ=="}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
