@@ -536,6 +536,87 @@ async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
     assert!(client.machines().is_empty());
 }
 
+/// A dead address before a live one costs a head start, not a connect timeout; the order the
+/// user sets holds, persists, and moves a connection that is up to an address that comes first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn addresses_race_in_order_and_the_first_that_answers_wins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client");
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    // Accepts TCP connections in its backlog and never answers them, as a route that is down
+    // behind a VPN often does.
+    let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead_addr = dead.local_addr().unwrap().to_string();
+    let live = daemon.addr.to_string();
+    let link = PairingUri {
+        hosts: vec![dead_addr.clone(), live.clone()],
+        fingerprint: daemon.fingerprint.clone(),
+        code: daemon.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+    };
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
+    let started = std::time::Instant::now();
+    let host = pair_one(&client, link.to_string()).await.unwrap().host_id;
+    client.synced(host.clone()).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    let machine = &client.machines()[0];
+    assert_eq!(machine.addresses, [dead_addr.clone(), live.clone()]);
+    assert_eq!(machine.address.as_deref(), Some(live.as_str()));
+
+    // A new first address that answers takes over the connection.
+    let relay = Relay::start(daemon.addr).await;
+    let via_relay = relay.addr.to_string();
+    client
+        .set_addresses(host.clone(), vec![via_relay.clone(), live.clone()])
+        .unwrap();
+    wait_machine(&client, |machine| {
+        machine.address.as_deref() == Some(via_relay.as_str())
+    })
+    .await;
+    client.synced(host.clone()).await.unwrap();
+
+    // Dropping the address in use moves the connection to one still listed.
+    client
+        .set_addresses(host.clone(), vec![live.clone()])
+        .unwrap();
+    wait_machine(&client, |machine| {
+        machine.address.as_deref() == Some(live.as_str())
+    })
+    .await;
+    assert_eq!(
+        client.set_addresses(host.clone(), Vec::new()),
+        Err(Error::Local {
+            message: "a machine needs at least one address".into()
+        })
+    );
+    assert!(
+        client
+            .set_addresses(host.clone(), vec!["box:x".into()])
+            .is_err()
+    );
+    // A typed address gets the default port.
+    client
+        .set_addresses(host.clone(), vec![live.clone(), "box.local".into()])
+        .unwrap();
+    drop(client);
+
+    let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
+    assert_eq!(
+        client.machines()[0].addresses,
+        [live, "box.local:7447".to_owned()]
+    );
+    drop(dead);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     let tmp = tempfile::tempdir().unwrap();

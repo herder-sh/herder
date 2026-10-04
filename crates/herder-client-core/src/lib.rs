@@ -16,7 +16,8 @@
 //! profile, `<config_dir>/machines.json`, holds each machine's addresses, the pinned SHA-256
 //! of its certificate, and the device key this device presents to it (one key per machine).
 //! [`Client::pair`] adds every machine a `herder://pair` link names, [`Client::rename`]
-//! changes the name it is shown by on this device, and [`Client::forget`] removes it.
+//! changes the name it is shown by on this device, [`Client::set_addresses`] the addresses it
+//! is reached at, and [`Client::forget`] removes it.
 //!
 //! [`Client::share`] makes one link that pairs another device with every connected machine:
 //! each daemon mints a one-time code for this device's user and role there, so the new device
@@ -25,8 +26,12 @@
 //!
 //! # Connections
 //!
-//! Each machine has one supervisor task, the only thing that connects or retries. It tries
-//! the machine's addresses in order; after a failure or a lost connection it waits a capped,
+//! Each machine has one supervisor task, the only thing that connects or retries. It races
+//! the machine's addresses in their order of preference, each with a 300 ms head start over the
+//! next, and keeps the first that answers. Pairing saves the link's addresses private network
+//! ones first and Tailscale ones last; after that the user's order holds. A wake, as on a
+//! network change, also moves a connection that is up to an address that comes before its own,
+//! once one answers. After a failure or a lost connection it waits a capped,
 //! jittered exponential backoff (250 ms doubling to 30 s) and tries again, forever. A
 //! connection silent for 45 s, despite pings, counts as lost. [`Machine::connection`] says
 //! where it stands, and [`Client::synced`] waits until a connection is up and the daemon has
@@ -91,6 +96,7 @@
 
 #![warn(missing_docs)]
 
+mod address;
 pub mod auth;
 mod cache;
 mod offline;
@@ -123,7 +129,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 7;
+pub const CLIENT_API_VERSION: u32 = 8;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,8 +191,11 @@ pub struct Machine {
     pub host_id: HostId,
     /// The name it was given with [`Client::rename`], else the daemon's host name.
     pub name: String,
-    /// Addresses tried in order, as `host:port`.
+    /// Addresses as `host:port`, in order of preference: connecting races them, each with a
+    /// head start over the next. Set with [`Client::set_addresses`].
     pub addresses: Vec<String>,
+    /// The address the current connection uses; `None` while not connected.
+    pub address: Option<String>,
     /// SHA-256 of the pinned daemon certificate, lowercase hex.
     pub fingerprint: String,
     /// Where the connection stands.
@@ -398,12 +407,18 @@ impl Client {
     /// or its addresses and why it did not pair.
     async fn prove(&self, uri: PairingUri) -> Result<SavedMachine, (Vec<String>, String)> {
         let addresses = uri.hosts.clone();
+        let normalized = uri
+            .hosts
+            .iter()
+            .map(|host| address::normalize(host))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|message| (addresses.clone(), message))?;
         let device =
             DeviceKey::generate().map_err(|err| (addresses.clone(), format!("{err:#}")))?;
         let mut saved = SavedMachine {
             host_id: HostId::new(""),
             name: String::new(),
-            addresses: uri.hosts,
+            addresses: address::default_order(normalized),
             fingerprint: uri.fingerprint.to_ascii_lowercase(),
             device_key: device.to_pem().to_owned(),
         };
@@ -413,9 +428,10 @@ impl Client {
             resume: Vec::new(),
             pairing_code: Some(uri.code),
         };
-        let (ws, hello) = supervisor::connect(&saved, &device, hello)
-            .await
-            .map_err(|message| (addresses, message))?;
+        let (ws, hello, _) =
+            supervisor::connect(&saved.addresses, &saved.fingerprint, &device, hello)
+                .await
+                .map_err(|message| (addresses, message))?;
         // The supervisor opens its own connection; this one only proved the code.
         drop(ws);
         saved.host_id = hello.host_id;
@@ -538,6 +554,36 @@ impl Client {
         }
         profile::save(&self.inner.config_dir, &all)?;
         machine.rename(name);
+        Ok(())
+    }
+
+    /// Connects to a machine at `addresses`, in this order of preference, from now on, and
+    /// saves that. Each is a host name or an IP address, with an optional port (7447 by
+    /// default). A connection that is up stays up unless it uses an address no longer listed;
+    /// one that uses an address the new order puts after one that answers moves there.
+    pub fn set_addresses(&self, host_id: HostId, addresses: Vec<String>) -> Result<(), Error> {
+        let mut normalized: Vec<String> = Vec::new();
+        for text in &addresses {
+            let address = address::normalize(text).map_err(|message| Error::Local { message })?;
+            if !normalized.contains(&address) {
+                normalized.push(address);
+            }
+        }
+        if normalized.is_empty() {
+            return Err(Error::Local {
+                message: "a machine needs at least one address".to_owned(),
+            });
+        }
+        let machines = self.lock();
+        let machine = find(&machines, &host_id)?;
+        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
+        for saved in &mut all {
+            if saved.host_id == host_id {
+                saved.addresses.clone_from(&normalized);
+            }
+        }
+        profile::save(&self.inner.config_dir, &all)?;
+        machine.set_addresses(normalized);
         Ok(())
     }
 

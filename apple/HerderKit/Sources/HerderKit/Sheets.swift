@@ -656,6 +656,7 @@ struct MachineSettingsSheet: View {
     let hostId: HostId
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var newAddress = ""
     @State private var editingAccount: Account?
     @State private var showingAccountSettings = false
     @State private var addingAccount = false
@@ -710,11 +711,14 @@ struct MachineSettingsSheet: View {
                     .padding(12)
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
+                Field(label: "Addresses",
+                      hint: "Tried first to last: each gets a head start over the ones below it, so the first that answers wins. The port defaults to 7447.") {
+                    addresses(machine)
+                }
                 Field(label: "Machine") {
                     VStack(alignment: .leading, spacing: 10) {
                         DetailRow(label: "Your role", value: machine.role.map { $0 == .owner ? "Owner" : "Member" }
                                   ?? "Known once connected")
-                        DetailRow(label: "Addresses", value: machine.addresses.joined(separator: "\n"), mono: true)
                         DetailRow(label: "Fingerprint", value: grouped(machine.fingerprint), mono: true)
                         DetailRow(label: "Host id", value: machine.hostId, mono: true)
                         if !machine.hosts.isEmpty {
@@ -785,6 +789,53 @@ struct MachineSettingsSheet: View {
         } message: {
             Text("Pair again to get it back.")
         }
+    }
+
+    /// The machine's addresses in order, each movable and removable, and a field to add one.
+    private func addresses(_ machine: Machine) -> some View {
+        let addresses = machine.addresses
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(addresses.enumerated()), id: \.element) { index, address in
+                HStack(spacing: 10) {
+                    Text("\(index + 1)").monospacedDigit().foregroundStyle(Theme.tertiary)
+                    Text(address).font(Theme.monoSmall).foregroundStyle(Theme.text).textSelection(.enabled)
+                    if address == machine.address {
+                        Text("In use").font(.caption.weight(.semibold)).foregroundStyle(Theme.success)
+                    }
+                    Spacer()
+                    Button("Move Up", systemImage: "chevron.up") { move(addresses, from: index, to: index - 1) }
+                        .disabled(index == 0)
+                    Button("Move Down", systemImage: "chevron.down") { move(addresses, from: index, to: index + 1) }
+                        .disabled(index == addresses.count - 1)
+                    Button("Remove", systemImage: "minus.circle") {
+                        perform { try fleet.setAddresses(hostId, to: addresses.filter { $0 != address }) }
+                    }
+                    .disabled(addresses.count == 1)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .font(.subheadline)
+            }
+            HStack(spacing: 10) {
+                InputBox(placeholder: "Host or IP, e.g. box.tailnet.ts.net", text: $newAddress, mono: true)
+                ActionButton(title: "Add", style: .secondary) {
+                    perform {
+                        try fleet.setAddresses(hostId, to: addresses + [newAddress.trimmingCharacters(in: .whitespaces)])
+                        newAddress = ""
+                    }
+                }
+                .frame(width: 120)
+                .disabled(newAddress.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(12)
+        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+    }
+
+    private func move(_ addresses: [String], from: Int, to: Int) {
+        var addresses = addresses
+        addresses.swapAt(from, to)
+        perform { try fleet.setAddresses(hostId, to: addresses) }
     }
 
     private func perform(_ action: () throws -> Void) {

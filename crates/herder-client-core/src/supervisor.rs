@@ -23,7 +23,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
-use futures_util::stream::SplitSink;
+use futures_util::future::BoxFuture;
+use futures_util::stream::{FuturesUnordered, SplitSink};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult, Cursor, ErrorInfo,
@@ -52,6 +53,10 @@ use crate::{ConnectionQuality, ConnectionState, Error, Machine, SessionUpdate, n
 
 /// Time one address gets for TCP, TLS, the WebSocket upgrade and the hellos.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Head start each address gets over the next one when connecting; one that fails sooner
+/// starts the next at once.
+const HEAD_START: Duration = Duration::from_millis(300);
 
 /// First retry delay; each failed attempt doubles it, up to [`BACKOFF_CAP`].
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
@@ -103,13 +108,15 @@ enum Op {
     Suspend,
     /// The app is in the foreground: reconnect now, or probe the connection that is up.
     Wake,
+    /// The machine's addresses changed: reconnect now, or move to one that comes first.
+    Readdress,
 }
 
 /// A machine's supervisor: the state its task maintains, and the handle the client drives it
 /// through.
 pub(crate) struct Supervisor {
-    /// The machine as saved when the supervisor started; its name may have changed since
-    /// ([`Supervisor::saved`]).
+    /// The machine as saved when the supervisor started; its name and addresses may have
+    /// changed since ([`Supervisor::saved`]).
     pub(crate) saved: SavedMachine,
     state: Mutex<State>,
     /// Bumped whenever [`Supervisor::view`] would change.
@@ -118,6 +125,8 @@ pub(crate) struct Supervisor {
     pub(crate) stop: CancellationToken,
     /// The client's config dir, which holds the offline cache.
     config_dir: PathBuf,
+    /// Names the client in daemon logs.
+    client: String,
     /// Held across each offline cache save, from taking the state to writing it.
     saving: Mutex<()>,
 }
@@ -126,6 +135,10 @@ pub(crate) struct Supervisor {
 struct State {
     /// The machine's display name, once renamed.
     name: Option<String>,
+    /// Addresses in order of preference.
+    addresses: Vec<String>,
+    /// The address the current connection uses.
+    address: Option<String>,
     connection: Option<ConnectionState>,
     quality: Quality,
     role: Option<Role>,
@@ -288,7 +301,10 @@ impl Supervisor {
             message: format!("the device key of {}: {err:#}", saved.name),
         })?;
         let (ops, queue) = mpsc::unbounded_channel();
-        let state = State::cached(offline::load(&config_dir, &saved.host_id));
+        let state = State {
+            addresses: saved.addresses.clone(),
+            ..State::cached(offline::load(&config_dir, &saved.host_id))
+        };
         let supervisor = Arc::new(Self {
             saved,
             state: Mutex::new(state),
@@ -296,9 +312,10 @@ impl Supervisor {
             ops,
             stop,
             config_dir,
+            client,
             saving: Mutex::new(()),
         });
-        tokio::spawn(run(Arc::clone(&supervisor), device, client, queue));
+        tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
     }
 
@@ -349,10 +366,19 @@ impl Supervisor {
     /// The machine as it should be saved now.
     pub(crate) fn saved(&self) -> SavedMachine {
         let mut saved = self.saved.clone();
-        if let Some(name) = &self.lock().name {
+        let state = self.lock();
+        if let Some(name) = &state.name {
             saved.name.clone_from(name);
         }
+        saved.addresses.clone_from(&state.addresses);
         saved
+    }
+
+    /// Connects to `addresses`, in this order of preference, from now on.
+    pub(crate) fn set_addresses(&self, addresses: Vec<String>) {
+        self.lock().addresses = addresses;
+        self.notify();
+        let _ = self.ops.send(Op::Readdress);
     }
 
     /// Shows the machine as `name` from now on.
@@ -369,7 +395,8 @@ impl Supervisor {
                 .name
                 .clone()
                 .unwrap_or_else(|| self.saved.name.clone()),
-            addresses: self.saved.addresses.clone(),
+            addresses: state.addresses.clone(),
+            address: state.address.clone(),
             fingerprint: self.saved.fingerprint.clone(),
             connection: state
                 .connection
@@ -687,6 +714,7 @@ impl Supervisor {
             state.resources = None;
             state.session_usage.clear();
             state.vault = None;
+            state.address = None;
             state.quality.disconnected();
         }
         state.connection = Some(connection);
@@ -710,6 +738,35 @@ impl Supervisor {
 
     fn notify(&self) {
         self.changed.send_modify(|version| *version += 1);
+    }
+
+    /// A connection to the first of the addresses before the current connection's that
+    /// answers, which proves it reachable and is then dropped; `None` when the current
+    /// connection uses the first address.
+    fn better(&self) -> Option<BoxFuture<'static, Result<String, String>>> {
+        let better = {
+            let state = self.lock();
+            let current = state.address.as_ref()?;
+            let index = state.addresses.iter().position(|a| a == current)?;
+            state.addresses[..index].to_vec()
+        };
+        if better.is_empty() {
+            return None;
+        }
+        // It loaded when the supervisor started.
+        let device = DeviceKey::from_pem(&self.saved.device_key).ok()?;
+        let fingerprint = self.saved.fingerprint.clone();
+        let hello = ClientHello {
+            protocol_version: PROTOCOL_VERSION,
+            client: self.client.clone(),
+            resume: Vec::new(),
+            pairing_code: None,
+        };
+        Some(Box::pin(async move {
+            connect(&better, &fingerprint, &device, hello)
+                .await
+                .map(|(_, _, address)| address)
+        }))
     }
 
     /// Where each wanted session resumes.
@@ -906,12 +963,7 @@ enum Ended {
     Replaced(String),
 }
 
-async fn run(
-    supervisor: Arc<Supervisor>,
-    device: DeviceKey,
-    client: String,
-    mut ops: mpsc::UnboundedReceiver<Op>,
-) {
+async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::UnboundedReceiver<Op>) {
     let mut pending: Vec<Pending> = Vec::new();
     // Syncs waiting for their answer, by token, sent again on each new connection.
     let mut syncs: HashMap<String, oneshot::Sender<()>> = HashMap::new();
@@ -920,22 +972,24 @@ async fn run(
     let saved = &supervisor.saved;
     loop {
         supervisor.set_connection(ConnectionState::Connecting);
+        let addresses = supervisor.lock().addresses.clone();
         let hello = ClientHello {
             protocol_version: PROTOCOL_VERSION,
-            client: client.clone(),
+            client: supervisor.client.clone(),
             resume: supervisor.cursors(),
             pairing_code: None,
         };
         let connected = tokio::select! {
             () = supervisor.stop.cancelled() => return,
-            connected = connect(saved, &device, hello) => connected,
+            connected = connect(&addresses, &saved.fingerprint, &device, hello) => connected,
         };
         let (error, now) = match connected {
-            Ok((ws, hello)) => {
+            Ok((ws, hello, address)) => {
                 attempt = 0;
                 {
                     let mut state = supervisor.lock();
                     state.role = Some(hello.role);
+                    state.address = Some(address);
                     state.dirty = true;
                 }
                 supervisor.set_connection(ConnectionState::Connected);
@@ -972,6 +1026,10 @@ async fn run(
                 op = ops.recv() => match op {
                     Some(Op::Wake) => {
                         suspended = false;
+                        attempt = 0;
+                        break;
+                    }
+                    Some(Op::Readdress) => {
                         attempt = 0;
                         break;
                     }
@@ -1050,6 +1108,9 @@ async fn serve(
     // PROBE_TIMEOUT. Only that pong clears it: frames read before it may have been buffered
     // before a suspension.
     let mut probe: Option<(String, Instant)> = None;
+    // A connection to an address before this one's, which a wake or new addresses start;
+    // once one answers, this connection is replaced to move there.
+    let mut better: Option<BoxFuture<'static, Result<String, String>>> = None;
     loop {
         let deadline = probe.as_ref().map(|(_, sent)| *sent + PROBE_TIMEOUT);
         let probed = async {
@@ -1062,6 +1123,23 @@ async fn serve(
             () = supervisor.stop.cancelled() => return Ended::Stopped,
             () = probed => {
                 return Ended::Replaced("the daemon did not answer the wake probe".to_owned());
+            }
+            reached = async {
+                match better.as_mut() {
+                    Some(reaching) => reaching.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match reached {
+                    Ok(address) => {
+                        return Ended::Replaced(format!("moving to {address}, which comes first"));
+                    }
+                    Err(error) => {
+                        debug!(machine = %supervisor.saved.name, "no better address: {error}");
+                        better = None;
+                        continue;
+                    }
+                }
             }
             _ = save.tick() => {
                 save_in_background(supervisor);
@@ -1131,6 +1209,9 @@ async fn serve(
                                 "the connection was silent through a suspension".to_owned(),
                             );
                         }
+                        if better.is_none() {
+                            better = supervisor.better();
+                        }
                         if probe.is_none() {
                             let payload = ulid::Ulid::new().to_string();
                             let ping = Message::Ping(payload.clone().into_bytes().into());
@@ -1139,6 +1220,19 @@ async fn serve(
                                 return Ended::Lost(error);
                             }
                         }
+                        continue;
+                    }
+                    Some(Op::Readdress) => {
+                        let state = supervisor.lock();
+                        if let Some(address) = &state.address
+                            && !state.addresses.contains(address)
+                        {
+                            return Ended::Replaced(format!(
+                                "{address} is no longer one of the machine's addresses"
+                            ));
+                        }
+                        drop(state);
+                        better = supervisor.better();
                         continue;
                     }
                 };
@@ -1314,21 +1408,54 @@ fn once(body: CommandBody) -> ClientMessage {
     })
 }
 
-/// Connects to the first of `saved`'s addresses that answers, as `device`, and exchanges hellos.
+/// Connects to the first of `addresses` that answers, pinned to `fingerprint`, as `device`,
+/// and exchanges hellos; returns the address it connected to.
+///
+/// The addresses race in order: each starts [`HEAD_START`] after the one before, or as soon as
+/// every attempt so far failed, and the first to finish its hello wins. An address that comes
+/// first wins whenever it answers about as fast as the rest, and a dead one delays the next by
+/// [`HEAD_START`], not [`CONNECT_TIMEOUT`].
 pub(crate) async fn connect(
-    saved: &SavedMachine,
+    addresses: &[String],
+    fingerprint: &str,
     device: &DeviceKey,
     hello: ClientHello,
-) -> Result<(Ws, ServerHello), String> {
-    let config = client_config(&saved.fingerprint, device).map_err(|err| format!("{err:#}"))?;
+) -> Result<(Ws, ServerHello, String), String> {
+    let config = client_config(fingerprint, device).map_err(|err| format!("{err:#}"))?;
     let connector = TlsConnector::from(Arc::new(config));
+    let attempt = |address: &String| {
+        let (address, connector, hello) = (address.clone(), connector.clone(), hello.clone());
+        async move {
+            let result =
+                tokio::time::timeout(CONNECT_TIMEOUT, connect_to(&address, &connector, &hello))
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow!("no answer in {CONNECT_TIMEOUT:?}")));
+            (address, result)
+        }
+    };
+    let mut queue = addresses.iter();
+    let mut running = FuturesUnordered::new();
     let mut errors = Vec::new();
-    for address in &saved.addresses {
-        let attempt = connect_to(address, &connector, &hello);
-        match tokio::time::timeout(CONNECT_TIMEOUT, attempt).await {
-            Ok(Ok(connected)) => return Ok(connected),
-            Ok(Err(err)) => errors.push(format!("{address}: {err:#}")),
-            Err(_) => errors.push(format!("{address}: no answer in {CONNECT_TIMEOUT:?}")),
+    let next_start = tokio::time::sleep(HEAD_START);
+    tokio::pin!(next_start);
+    loop {
+        if running.is_empty() {
+            let Some(address) = queue.next() else { break };
+            running.push(attempt(address));
+            next_start.as_mut().reset(Instant::now() + HEAD_START);
+        }
+        let waiting = !queue.as_slice().is_empty();
+        tokio::select! {
+            Some((address, result)) = running.next() => match result {
+                Ok((ws, hello)) => return Ok((ws, hello, address)),
+                Err(err) => errors.push(format!("{address}: {err:#}")),
+            },
+            () = &mut next_start, if waiting => {
+                if let Some(address) = queue.next() {
+                    running.push(attempt(address));
+                    next_start.as_mut().reset(Instant::now() + HEAD_START);
+                }
+            }
         }
     }
     if errors.is_empty() {
