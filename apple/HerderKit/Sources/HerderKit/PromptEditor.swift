@@ -21,8 +21,7 @@ struct PromptEditor: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let view = ChipTextView(usingTextLayoutManager: true)
-        view.coordinator = context.coordinator
-        view.delegate = context.coordinator
+        context.coordinator.attach(view)
         view.isRichText = false
         view.importsGraphics = false
         view.allowsUndo = true
@@ -44,7 +43,6 @@ struct PromptEditor: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        context.coordinator.view = view
         return scroll
     }
 
@@ -75,11 +73,20 @@ struct PromptEditor: NSViewRepresentable {
         [.font: font, .foregroundColor: NSColor(Theme.text)]
     }
 
-    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         var parent: PromptEditor
         weak var view: ChipTextView?
+        /// While `show` replaces the text: the binding already holds it.
+        private var showing = false
 
         init(_ parent: PromptEditor) { self.parent = parent }
+
+        func attach(_ view: ChipTextView) {
+            self.view = view
+            view.coordinator = self
+            view.delegate = self
+            view.textStorage?.delegate = self
+        }
 
         /// The text as the binding holds it: each chip back to its marker.
         func text(of view: NSTextView) -> String {
@@ -95,7 +102,8 @@ struct PromptEditor: NSViewRepresentable {
             return out
         }
 
-        /// Shows `text`, its markers as chips, keeping the caret where it was or at the end.
+        /// Shows `text`, its markers as chips, keeping the caret where it was, or at the end if it
+        /// was there (as when dictation adds to the text).
         func show(_ text: String, in view: NSTextView) {
             let shown = NSMutableAttributedString()
             var rest = text.startIndex
@@ -110,9 +118,12 @@ struct PromptEditor: NSViewRepresentable {
             }
             shown.append(NSAttributedString(string: String(text[rest...]), attributes: PromptEditor.attributes))
             let caret = view.selectedRange()
+            let wasAtEnd = caret.location == 0 || caret.location >= (view.string as NSString).length
+            showing = true
             view.textStorage?.setAttributedString(shown)
+            showing = false
             let end = shown.length
-            view.setSelectedRange(caret.location <= end && caret.location > 0 ? NSRange(location: min(caret.location, end), length: 0) : NSRange(location: end, length: 0))
+            view.setSelectedRange(NSRange(location: wasAtEnd ? end : min(caret.location, end), length: 0))
         }
 
         /// Inserts text with markers at the caret, as typing would.
@@ -123,9 +134,15 @@ struct PromptEditor: NSViewRepresentable {
             show(parent.text, in: view)
         }
 
-        func textDidChange(_ notification: Notification) {
-            guard let view else { return }
-            parent.text = text(of: view)
+        /// Every edit to the characters, typed or undone, goes to the binding. Undo does not
+        /// send `textDidChange`, so the storage is what is watched.
+        nonisolated func textStorage(_ storage: NSTextStorage, didProcessEditing mask: NSTextStorageEditActions,
+                                     range: NSRange, changeInLength: Int) {
+            guard mask.contains(.editedCharacters) else { return }
+            MainActor.assumeIsolated {
+                guard !showing, let view else { return }
+                parent.text = text(of: view)
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) { parent.focused = true }
@@ -133,19 +150,32 @@ struct PromptEditor: NSViewRepresentable {
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                let before = text(of: textView)
-                let caret = textView.selectedRange()
-                if caret.location == (textView.string as NSString).length {
-                    parent.text = ListContinuation.newline(after: before)
-                    show(parent.text, in: textView)
-                } else {
-                    textView.insertText("\n", replacementRange: caret)
-                }
-                return true
+            if NSApp?.currentEvent?.modifierFlags.contains(.shift) == true {
+                newline(in: textView)
+            } else {
+                parent.submit()
             }
-            parent.submit()
             return true
+        }
+
+        /// Shift-Enter: a new line at the caret; at the end, one that continues a list. It goes
+        /// in as typing does, so the caret follows it and Undo takes it back.
+        func newline(in textView: NSTextView) {
+            let caret = textView.selectedRange()
+            let length = (textView.string as NSString).length
+            guard caret.location == length else {
+                textView.insertText("\n", replacementRange: caret)
+                return
+            }
+            let before = text(of: textView)
+            let after = ListContinuation.newline(after: before)
+            if after.hasPrefix(before) {
+                textView.insertText(String(after.dropFirst(before.count)), replacementRange: caret)
+            } else {
+                // An empty item ends the list: its marker, plain text at the end, goes.
+                let removed = before.utf16.count - after.utf16.count
+                textView.insertText("", replacementRange: NSRange(location: length - removed, length: removed))
+            }
         }
 
         func chip(_ token: PromptText.Token) -> PromptChip {
