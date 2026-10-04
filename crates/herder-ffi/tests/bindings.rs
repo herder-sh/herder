@@ -48,7 +48,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[test]
 fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let daemon = runtime.block_on(FakeDaemon::start()).unwrap();
+    let daemon = runtime.block_on(FakeDaemon::start("fake-host")).unwrap();
     let config = tempfile::tempdir().unwrap();
 
     let link = parse_pairing_uri(daemon.link.clone()).unwrap();

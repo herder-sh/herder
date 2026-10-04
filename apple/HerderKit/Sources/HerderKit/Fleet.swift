@@ -323,20 +323,19 @@ public final class Fleet {
         }
     }
 
-    /// Pairs with the daemons a `herder://pair` link names: the first that paired, or why
-    /// the first failed when none did.
+    /// Pairs with every machine a `herder://pair` link names: one result per machine, in the
+    /// link's order.
     @discardableResult
-    public func pair(link: String) async throws -> Machine {
+    public func pair(link: String) async throws -> [PairResult] {
         let results = try await client.pair(link: link)
         update(client.machines())
-        var failure: String?
-        for result in results {
-            switch result {
-            case .paired(let machine): return machine
-            case .failed(_, let error): failure = failure ?? error
-            }
-        }
-        throw HerderError.Pairing(detail: failure ?? "the link names no machine")
+        return results
+    }
+
+    /// A link that pairs another device with every connected machine, as this device's user
+    /// with its role on each.
+    public func share() async throws -> SharedLink {
+        try await client.share()
     }
 
     func rename(_ hostId: HostId, to name: String) throws {

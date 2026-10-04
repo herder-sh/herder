@@ -14,7 +14,7 @@ struct ForkTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let host = try await fleet.pair(link: daemon.link)
+        let host = try await fleet.pair(daemon)
         let original = try await fleet.createSession(
             on: host.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
             mode: .ask, prompt: "Say hello.")
