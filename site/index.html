@@ -4,7 +4,155 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>herder · every coding agent, every account, every machine</title>
-<meta name="description" content="herder drives Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Open source, Apache-2.0.">
+<meta name="description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<link rel="canonical" href="https://herder.sh/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="herder">
+<meta property="og:url" content="https://herder.sh/">
+<meta property="og:title" content="herder · every coding agent, every account, every machine">
+<meta property="og:description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<meta property="og:image" content="https://herder.sh/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The herder wordmark over: every coding agent, every account, every machine.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="herder · every coding agent, every account, every machine">
+<meta name="twitter:description" content="herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.">
+<meta name="twitter:image" content="https://herder.sh/og.png">
+<link rel="alternate" type="text/plain" href="llms.txt" title="llms.txt">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "Organization",
+   "@id": "https://herder.sh/#org",
+   "name": "herder",
+   "url": "https://herder.sh/",
+   "logo": "https://herder.sh/apple-touch-icon.png",
+   "sameAs": [
+    "https://github.com/herder-sh"
+   ]
+  },
+  {
+   "@type": "WebSite",
+   "@id": "https://herder.sh/#site",
+   "name": "herder",
+   "url": "https://herder.sh/",
+   "publisher": {
+    "@id": "https://herder.sh/#org"
+   }
+  },
+  {
+   "@type": "SoftwareApplication",
+   "@id": "https://herder.sh/#app",
+   "name": "herder",
+   "url": "https://herder.sh/",
+   "description": "herder runs Claude Code, Codex, Cursor and OpenCode across all your accounts and machines, with failover between accounts, from a terminal UI, a Mac app or your phone. Free and open source.",
+   "applicationCategory": "DeveloperApplication",
+   "operatingSystem": "Linux, macOS",
+   "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+   },
+   "license": "https://www.apache.org/licenses/LICENSE-2.0",
+   "downloadUrl": "https://github.com/herder-sh/herder/releases/latest",
+   "installUrl": "https://herder.sh/install",
+   "screenshot": "https://herder.sh/img/tui-session-1600.webp",
+   "publisher": {
+    "@id": "https://herder.sh/#org"
+   }
+  },
+  {
+   "@type": "FAQPage",
+   "@id": "https://herder.sh/#faq",
+   "mainEntity": [
+    {
+     "@type": "Question",
+     "name": "What is herder?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How do I install herder?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "On Linux (x86_64 or arm64), install herder with curl -fsSL https://herder.sh/install | sh. The script downloads a static binary, checks its sha256 and puts it in ~/.local/bin/herder. Then herder service install runs the herder daemon now and at every boot, and herder update moves to the latest release."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Which coding agents does herder support?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can herder use several accounts of the same provider?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Does herder see my Claude or OpenAI login tokens?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "No. herder never reads, stores, copies or relays provider login tokens. You log in with the vendor's own login flow, which herder runs in a terminal on the machine, and the credentials stay where the vendor's CLI keeps them."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Can herder run agents on several machines?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes. Run the herder daemon on each Linux machine, pair them with herder pair, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Is there a herder app for Mac and iPhone?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run herder over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Why does macOS say the herder app can't be opened?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move herder.app to Applications and run xattr -dr com.apple.quarantine /Applications/herder.app, or try to open it once and then choose Open Anyway in System Settings, Privacy & Security."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "How much does herder cost?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "herder is free and open source under the Apache-2.0 licence. You keep paying your agent providers (Anthropic, OpenAI, Cursor and so on) as you do today; herder adds no fee of its own."
+     }
+    },
+    {
+     "@type": "Question",
+     "name": "Is herder ready to use?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "herder is pre-1.0 and changes quickly, so expect rough edges. Releases are published on GitHub, and bugs and ideas go to GitHub issues at github.com/herder-sh/herder."
+     }
+    }
+   ]
+  }
+ ]
+}
+</script>
 <meta name="theme-color" content="#1a1b26">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -182,39 +330,43 @@ herder service install</code></pre>
     <div class="qs">
       <details open>
         <summary>What is herder?</summary>
-        <p>herder runs coding agents across many machines. A daemon on each Linux machine hosts agent sessions in the vendor's own CLI, and you watch and steer them from the herder terminal UI, the Mac app or a phone.</p>
+        <p>herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH.</p>
       </details>
       <details>
-        <summary>How do I install it?</summary>
-        <p>On Linux, run <code>curl -fsSL https://herder.sh/install | sh</code>. It installs a static binary to <code>~/.local/bin/herder</code> after checking its sha256. Then <code>herder service install</code> runs the daemon now and at every boot, and <code>herder update</code> moves to the latest release.</p>
+        <summary>How do I install herder?</summary>
+        <p>On Linux (x86_64 or arm64), install herder with <code>curl -fsSL https://herder.sh/install | sh</code>. The script downloads a static binary, checks its sha256 and puts it in <code>~/.local/bin/herder</code>. Then <code>herder service install</code> runs the herder daemon now and at every boot, and <code>herder update</code> moves to the latest release.</p>
       </details>
       <details>
-        <summary>Which coding agents does it support?</summary>
-        <p>Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's unmodified CLI, so you keep the agent you already use.</p>
+        <summary>Which coding agents does herder support?</summary>
+        <p>herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself.</p>
       </details>
       <details>
-        <summary>Does herder see my login tokens?</summary>
-        <p>No. herder never reads, stores, copies or relays provider login tokens. Each account is the vendor CLI running under its own config dir, logged in with the vendor's own tool.</p>
+        <summary>Can herder use several accounts of the same provider?</summary>
+        <p>Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself.</p>
       </details>
       <details>
-        <summary>How does account failover work?</summary>
-        <p>When a session hits a provider's usage limit, herder moves it to another account of that provider that still has room. It only reacts to a limit; it never switches accounts ahead of time. With no account left, a session with a known reset time waits and retries on its own.</p>
+        <summary>Does herder see my Claude or OpenAI login tokens?</summary>
+        <p>No. herder never reads, stores, copies or relays provider login tokens. You log in with the vendor's own login flow, which herder runs in a terminal on the machine, and the credentials stay where the vendor's CLI keeps them.</p>
+      </details>
+      <details>
+        <summary>Can herder run agents on several machines?</summary>
+        <p>Yes. Run the herder daemon on each Linux machine, pair them with <code>herder pair</code>, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline.</p>
+      </details>
+      <details>
+        <summary>Is there a herder app for Mac and iPhone?</summary>
+        <p>Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.</p>
       </details>
       <details id="faq-mac">
-        <summary>The Mac app won't open. Now what?</summary>
-        <p>The Mac app is not notarized yet, so Gatekeeper blocks it on first open. Move <code>herder.app</code> to Applications and run <code>xattr -dr com.apple.quarantine /Applications/herder.app</code>, or open it once and choose Open Anyway in System Settings › Privacy &amp; Security.</p>
+        <summary>Why does macOS say the herder app can't be opened?</summary>
+        <p>The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move <code>herder.app</code> to Applications and run <code>xattr -dr com.apple.quarantine /Applications/herder.app</code>, or try to open it once and then choose Open Anyway in System Settings, Privacy &amp; Security.</p>
       </details>
       <details>
-        <summary>Is there a phone app?</summary>
-        <p>The iPhone app is built but not on the App Store yet. Meanwhile, run <code>herder</code> over SSH or mosh from a phone SSH app such as Termius or Moshi; the terminal UI adapts to narrow screens.</p>
+        <summary>How much does herder cost?</summary>
+        <p>herder is free and open source under the Apache-2.0 licence. You keep paying your agent providers (Anthropic, OpenAI, Cursor and so on) as you do today; herder adds no fee of its own.</p>
       </details>
       <details>
-        <summary>What does it cost?</summary>
-        <p>Nothing. herder is free and open source under the Apache-2.0 licence. You pay your agent providers as you do today.</p>
-      </details>
-      <details>
-        <summary>Is it ready?</summary>
-        <p>herder is pre-1.0 and moves fast. Expect rough edges, and things changing under you. Bugs and ideas go to GitHub issues.</p>
+        <summary>Is herder ready to use?</summary>
+        <p>herder is pre-1.0 and changes quickly, so expect rough edges. Releases are published on GitHub, and bugs and ideas go to GitHub issues at github.com/herder-sh/herder.</p>
       </details>
     </div>
   </section>

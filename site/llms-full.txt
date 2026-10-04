@@ -1,0 +1,100 @@
+# herder
+
+> herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. It drives each vendor's own, unmodified CLI and never touches provider login tokens. Free and open source under Apache-2.0. Website: https://herder.sh. Source: https://github.com/herder-sh/herder.
+
+## What herder is
+
+herder has three parts, all built on one shared Rust client core:
+
+- `herder daemon` runs on each Linux machine and hosts agent sessions. It runs the unmodified Claude Code, Codex, Cursor or OpenCode CLI, each account under its own config dir, and keeps every session in an append-only journal.
+- Bare `herder` opens the terminal UI. It works over SSH or mosh, including from a phone: below 65 columns it shows one pane at a time, and every view works with the arrow keys, Tab and Enter.
+- The herder Mac app is a native app for Apple silicon. It shows approvals, questions, pull requests and sessions on every paired machine. The iPhone app shares its code and is not on the App Store yet.
+
+herder is pre-1.0 and changes quickly.
+
+## Install
+
+On Linux (x86_64 or arm64):
+
+```sh
+curl -fsSL https://herder.sh/install | sh
+herder service install   # run the daemon now and at every boot (systemd user service)
+herder update            # replace herder with the latest release
+```
+
+The script installs a static binary to `~/.local/bin/herder` after checking its sha256. Set `HERDER_VERSION=1.2.3` to install a specific release.
+
+The Mac app is a zip on the latest GitHub release (https://github.com/herder-sh/herder/releases/latest). It is not notarized yet: move `herder.app` to Applications and run `xattr -dr com.apple.quarantine /Applications/herder.app`.
+
+## Get started
+
+1. Install herder and run `herder service install`.
+2. Run `herder` to open the terminal UI. Add an account with `n`: the vendor's own login runs in a terminal on the machine; herder only shows you that terminal.
+3. Run `herder pair` to print a pairing link and QR code. Paste the link into the Mac app's Add Machine, or run `herder connect <link>` on another computer.
+
+## Features
+
+- Failover across accounts: when a session hits a usage limit, herder moves it to another account of the same provider that has room left. It only switches after a limit is hit, never pre-emptively. With no account left and a known reset time, the session waits for the reset and retries by itself.
+- A fleet of machines: run a daemon on every machine, pair once, and see every session in one list. `herder fork` continues a session's history on another host.
+- Vault: an optional herder daemon in vault mode keeps a durable copy of every session journal its hosts replicate to it, and catches up after either side was offline. A host paired with a host code can only replicate its own sessions and reads nothing else on the vault.
+- Phone and desktop: the terminal UI, the Mac app, or any phone SSH app. Allow or deny tool calls and answer agent questions from wherever you are.
+- Multi-agent tasks: an agent can spawn child sessions, prompt them, wait for them, answer their questions or escalate to you. The daemon serves these task tools to every agent over MCP.
+- Login tokens stay yours: herder never reads, stores, copies or relays provider login tokens.
+- Terminals are owner-only: only owners of a daemon can open a shell on it; members can drive sessions but never get a shell.
+- Scriptable: `herder session new`, `send`, `wait`, `status`, `list`, `archive`. Every command takes `--json` and never prompts.
+- Coming soon: a usage view across every account and machine, and shared skills for every agent on every machine.
+
+## Scripting sessions
+
+```sh
+id=$(echo "Fix the flaky test" | herder session new --repo /src/app --account work \
+  --mode auto-edit --branch fix-flaky)
+herder session wait "$id" --timeout 3600 --json
+echo "Now open a PR" | herder session send "$id"
+herder session send "$id" --approve <approval id>
+herder session status "$id" --json
+```
+
+`wait` exits 0 when the session is idle, 2 when it needs you, 3 on error and 4 on timeout.
+
+## FAQ
+
+### What is herder?
+
+herder is an open-source tool that runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A herder daemon on each Linux machine hosts agent sessions in the vendor's own unmodified CLI, and you watch and steer every session from the herder terminal UI, the herder Mac app, or a phone over SSH.
+
+### How do I install herder?
+
+On Linux (x86_64 or arm64), install herder with `curl -fsSL https://herder.sh/install | sh`. The script downloads a static binary, checks its sha256 and puts it in `~/.local/bin/herder`. Then `herder service install` runs the herder daemon now and at every boot, and `herder update` moves to the latest release.
+
+### Which coding agents does herder support?
+
+herder supports Claude Code, Codex, Cursor and OpenCode. herder drives each vendor's own unmodified CLI, so the agent behaves exactly as it does when you run it yourself.
+
+### Can herder use several accounts of the same provider?
+
+Yes. herder runs each account under its own config dir, so one machine can hold several Claude or Codex accounts. When a session hits a usage limit, herder moves it to another account of the same provider that has room left. herder only switches after a limit is hit, never ahead of time. If no account has room and the reset time is known, the session waits for the reset and carries on by itself.
+
+### Does herder see my Claude or OpenAI login tokens?
+
+No. herder never reads, stores, copies or relays provider login tokens. You log in with the vendor's own login flow, which herder runs in a terminal on the machine, and the credentials stay where the vendor's CLI keeps them.
+
+### Can herder run agents on several machines?
+
+Yes. Run the herder daemon on each Linux machine, pair them with `herder pair`, and the terminal UI and the Mac app show the sessions of every machine in one list. An optional herder vault keeps a durable copy of every session journal and catches up after either side was offline.
+
+### Is there a herder app for Mac and iPhone?
+
+Yes for Mac: the herder Mac app runs on Apple silicon and is a free download from the latest GitHub release. The iPhone app shares its code but is not on the App Store yet; until then, run `herder` over SSH or mosh from a phone SSH app such as Termius or Moshi, and the terminal UI adapts to the narrow screen.
+
+### Why does macOS say the herder app can't be opened?
+
+The herder Mac app is not notarized by Apple yet, so Gatekeeper blocks it the first time. Move `herder.app` to Applications and run `xattr -dr com.apple.quarantine /Applications/herder.app`, or try to open it once and then choose Open Anyway in System Settings, Privacy & Security.
+
+### How much does herder cost?
+
+herder is free and open source under the Apache-2.0 licence. You keep paying your agent providers (Anthropic, OpenAI, Cursor and so on) as you do today; herder adds no fee of its own.
+
+### Is herder ready to use?
+
+herder is pre-1.0 and changes quickly, so expect rough edges. Releases are published on GitHub, and bugs and ideas go to GitHub issues at github.com/herder-sh/herder.
