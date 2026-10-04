@@ -1179,7 +1179,7 @@ fn unprompted(event: &AdapterEvent) -> TurnId {
 }
 
 #[tokio::test]
-async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply() {
+async fn a_background_agent_works_between_turns_and_its_result_starts_one() {
     let fixture = Fixture::parse(
         "inline",
         &[
@@ -1208,6 +1208,21 @@ async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply(
             })),
             reply("Started a review."),
             success(),
+            // The agent works on after its turn ended.
+            out(json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_grep", "name": "Grep", "input": {"pattern": "TODO"},
+                }]},
+                "parent_tool_use_id": "toolu_agent",
+            })),
+            out(json!({
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_grep", "content": "src/lib.rs",
+                }]},
+                "parent_tool_use_id": "toolu_agent",
+            })),
             // The agent ends while no turn runs: the CLI says so and starts a turn itself.
             out(json!({
                 "type": "system", "subtype": "task_notification", "task_id": "a1",
@@ -1242,7 +1257,43 @@ async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply(
         .unwrap();
     let launched = until(&mut session, is_turn_end).await;
     assert_eq!(launched[0], started());
+    assert!(
+        launched.contains(&AdapterEvent::BackgroundAgents { running: 1 }),
+        "{launched:?}"
+    );
     assert_eq!(launched.last(), Some(&completed()));
+
+    // The agent's own lines join its call, in the turn that launched it.
+    let nested = |n, body| AdapterEvent::ItemCompleted {
+        item: Item {
+            parent_call_id: Some(id(1)),
+            ..item(n, body)
+        },
+    };
+    assert_eq!(
+        until(&mut session, |event| matches!(
+            event,
+            AdapterEvent::ItemCompleted { item } if item.id == id(5)
+        ))
+        .await,
+        [
+            nested(
+                4,
+                ItemBody::ToolCall {
+                    name: "Grep".into(),
+                    input: json!({"pattern": "TODO"}),
+                }
+            ),
+            nested(
+                5,
+                ItemBody::ToolResult {
+                    call_id: id(4),
+                    output: "src/lib.rs".into(),
+                    is_error: false,
+                }
+            ),
+        ]
+    );
 
     let own = until(&mut session, is_turn_end).await;
     let turn_id = unprompted(&own[0]);
@@ -1254,7 +1305,7 @@ async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply(
             },
             // The agent's result answers the call that started it.
             item_in(
-                4,
+                6,
                 &turn_id,
                 ItemBody::ToolResult {
                     call_id: id(1),
@@ -1262,7 +1313,9 @@ async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply(
                     is_error: false,
                 }
             ),
-            item_in(5, &turn_id, message("The review found 2 issues.")),
+            // Only now, with its reply's turn open, is the agent no longer counted.
+            AdapterEvent::BackgroundAgents { running: 0 },
+            item_in(7, &turn_id, message("The review found 2 issues.")),
             AdapterEvent::TurnCompleted { turn_id },
         ]
     );
@@ -1273,7 +1326,7 @@ async fn a_background_agents_result_starts_a_turn_that_records_it_and_the_reply(
         [
             started(),
             AdapterEvent::ItemCompleted {
-                item: item(6, message("Fixed."))
+                item: item(8, message("Fixed."))
             },
             completed(),
         ]

@@ -187,6 +187,9 @@ pub(super) struct Actor {
     /// A turn the CLI started on its own just as `turn`'s prompt was sent: the adapter holds
     /// the prompt until it ends.
     cli_turn: Option<TurnId>,
+    /// Agents the adapter runs in the background. They outlive their turn, so the session stays
+    /// `running` between turns while any work.
+    background: u32,
     /// The host's admission of the running turn, or of the next one while it waits to start.
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
@@ -240,6 +243,7 @@ impl Actor {
             adapter: None,
             turn: None,
             cli_turn: None,
+            background: 0,
             permit: None,
             waiting: None,
             prompt: None,
@@ -624,7 +628,8 @@ impl Actor {
                     let command = AdapterCommand::SetModel {
                         model: model.clone(),
                     };
-                    self.change(|caps| caps.native_model_switch, command)?;
+                    self.change(|caps| caps.native_model_switch, command)
+                        .await?;
                     self.record(
                         by,
                         EventBody::ModelSwitched {
@@ -640,7 +645,8 @@ impl Actor {
             Request::SetPermissionMode { mode } => {
                 if mode != self.session.permission_mode {
                     let command = AdapterCommand::SetPermissionMode { mode };
-                    self.change(|caps| caps.native_permission_mode_switch, command)?;
+                    self.change(|caps| caps.native_permission_mode_switch, command)
+                        .await?;
                     self.record(by, EventBody::PermissionModeChanged { mode })
                         .await
                         .map_err(super::internal)?;
@@ -1380,6 +1386,7 @@ impl Actor {
         }
         if let Some(adapter) = self.adapter.take() {
             let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
+            self.background_gone().await;
         }
         self.record(by, body.clone())
             .await
@@ -1445,7 +1452,7 @@ impl Actor {
 
     /// Prepares a setting change: sends `command` when the running adapter applies it natively,
     /// otherwise stops an idle adapter so the next start picks the setting up.
-    fn change(
+    async fn change(
         &mut self,
         native: impl Fn(&Capabilities) -> bool,
         command: AdapterCommand,
@@ -1465,6 +1472,7 @@ impl Actor {
         }
         if let Some(adapter) = self.adapter.take() {
             tokio::spawn(stop(adapter));
+            self.background_gone().await;
         }
         Ok(())
     }
@@ -1951,6 +1959,7 @@ impl Actor {
                         if let Some(adapter) = self.adapter.take() {
                             tokio::spawn(stop(adapter));
                         }
+                        self.background = 0;
                         settled = SessionStatus::Error;
                         oom
                     }
@@ -2082,7 +2091,35 @@ impl Actor {
                     warn!(%session_id, "cannot save the CLI's session id: {err:#}");
                 }
             }
+            AdapterEvent::BackgroundAgents { running } => {
+                self.background = running;
+                self.settle_background().await;
+            }
             AdapterEvent::Exited { error } => self.exited(error).await,
+        }
+    }
+
+    /// The adapter was stopped, and its background agents with it.
+    async fn background_gone(&mut self) {
+        if std::mem::take(&mut self.background) > 0 {
+            self.settle_background().await;
+        }
+    }
+
+    /// `running` while background agents work and nothing else gives the session a status of
+    /// its own (a turn, its setup or a queued prompt), `idle` again once none do.
+    async fn settle_background(&mut self) {
+        if self.turn.is_some() || self.setup.is_some() || !self.queue.is_empty() {
+            return;
+        }
+        match self.session.status {
+            SessionStatus::Idle if self.background > 0 => {
+                self.set_status(SessionStatus::Running).await;
+            }
+            SessionStatus::Running if self.background == 0 => {
+                self.set_status(SessionStatus::Idle).await;
+            }
+            _ => {}
         }
     }
 
@@ -2126,7 +2163,12 @@ impl Actor {
         self.permit = None;
         self.prompt = None;
         if self.queue.is_empty() {
-            self.set_status(settled).await;
+            // Background agents work on past the turn, and the session with them.
+            let status = match settled {
+                SessionStatus::Idle if self.background > 0 => SessionStatus::Running,
+                settled => settled,
+            };
+            self.set_status(status).await;
         }
         let finished = completed
             && self.session.parent.is_some()
@@ -2222,6 +2264,7 @@ impl Actor {
             if let Some(adapter) = self.adapter.take() {
                 let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
             }
+            self.background = 0;
             self.queue.push_front(Prompt {
                 retry: true,
                 retry_at: Some(at),
@@ -2282,6 +2325,7 @@ impl Actor {
     /// the transcript.
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
+        let background = std::mem::take(&mut self.background) > 0;
         let error = match error {
             Some(error) => Some(self.out_of_memory(&error).await.unwrap_or(error)),
             None => None,
@@ -2312,6 +2356,9 @@ impl Actor {
             } else if open.is_some() {
                 self.set_status(SessionStatus::NeedsYou).await;
             }
+        }
+        if background {
+            self.settle_background().await;
         }
         if let (Some(turn_id), Some(summary)) = (open, summary) {
             self.report(turn_id, summary, false).await;

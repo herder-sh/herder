@@ -294,6 +294,12 @@ pub enum AdapterEvent {
         /// The new mode.
         mode: PermissionMode,
     },
+    /// How many agents the provider runs in the background, sent whenever the number changes.
+    /// They outlive the turn that started them, but not the CLI: none run after `Exited`.
+    BackgroundAgents {
+        /// Background agents still working.
+        running: u32,
+    },
     /// The CLI reported its own id for this session, the one [`StartRequest::resume`] takes;
     /// sent when it is first known and again whenever it changes.
     SessionIdentified {

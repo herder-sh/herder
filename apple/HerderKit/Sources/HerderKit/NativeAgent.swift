@@ -37,7 +37,10 @@ struct NativeAgent: Hashable, Identifiable {
         output.hasPrefix("Async agent launched") || output.contains("\nagentId: ") && output.contains("\noutput_file: ")
     }
 
-    init(item: Item, items: [Item], runningTurn: TurnId?, streaming: [Item] = [], times: [String: Date] = [:]) {
+    /// `working` is whether the session is running: the daemon keeps it so while background
+    /// agents work, between turns too.
+    init(item: Item, items: [Item], runningTurn: TurnId?, working: Bool = false, streaming: [Item] = [],
+         times: [String: Date] = [:]) {
         id = ID(turnId: item.turnId, callId: item.id)
         var input: [String: Any] = [:]
         if case .toolCall(_, let json) = item.body {
@@ -66,10 +69,9 @@ struct NativeAgent: Hashable, Identifiable {
             } else {
                 result = launched ? nil : output
                 endedAt = launched ? nil : times["\(last.turnId)/\(last.id)"]
-                // Without its completion, a launch is known to run only while the turn that
-                // launched it does.
+                // Without its completion, a launch is known to run only while the session does.
                 outcome = streamingResult ? .running : isError ? .failed
-                    : launched ? (runningTurn == item.turnId ? .running : .unknown) : .ok
+                    : launched ? (working || runningTurn == item.turnId ? .running : .unknown) : .ok
             }
         } else {
             launched = false
@@ -100,8 +102,8 @@ struct NativeAgent: Hashable, Identifiable {
             if case .item(let item) = entry { item } else { nil }
         } + model.streaming
         guard let item = items.first(where: { $0.id == id.callId && $0.turnId == id.turnId }) else { return nil }
-        return NativeAgent(item: item, items: items, runningTurn: model.turn, streaming: model.streaming,
-                           times: model.itemTimes)
+        return NativeAgent(item: item, items: items, runningTurn: model.turn, working: model.status == .running,
+                           streaming: model.streaming, times: model.itemTimes)
     }
 
     static func summary(_ agents: [NativeAgent]) -> String {

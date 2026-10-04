@@ -4967,9 +4967,8 @@ async fn a_turn_the_cli_starts_is_journaled_without_a_prompt_and_queues_the_next
             "-: turn_started turn-1",
             "-: tool_call Agent",
             "-: tool_result Async agent launched successfully.",
+            // The agent works on in the background: the session stays running.
             "-: turn_completed turn-1",
-            "-: status Idle",
-            "-: status Running",
             "-: turn_started cli-1",
             "-: tool_result Found 2 issues.",
             "-: assistant cli-1 The review found 2 issues.",
