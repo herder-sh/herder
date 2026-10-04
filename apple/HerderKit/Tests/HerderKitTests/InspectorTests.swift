@@ -37,7 +37,7 @@ struct InspectorTests {
             .prLinked(pr: pr(.open)),
             .prUpdated(pr: pr(.open, ci: .failing)),
             .prUpdated(pr: pr(.merged)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
             .sessionStatusChanged(status: .idle, retryAt: nil),
             .titleChanged(title: "Fix the build", source: .auto),
             .modelSwitched(model: "sonnet"),
@@ -81,10 +81,10 @@ struct InspectorTests {
         var script = Script()
         let model = script.model([
             created(),
-            .turnStarted(turnId: "t1"), tool("Bash"), .turnCompleted(turnId: "t1"),
+            .turnStarted(turnId: "t1"), tool("Bash"), .turnCompleted(turnId: "t1", usage: nil),
             .modelSwitched(model: "sonnet"),
             .turnStarted(turnId: "t2"), tool("Bash", turn: "t2"), tool("Bash", turn: "t2"), .turnInterrupted(turnId: "t2"),
-            .turnStarted(turnId: "t3"), .turnCompleted(turnId: "t3"),
+            .turnStarted(turnId: "t3"), .turnCompleted(turnId: "t3", usage: nil),
             .turnStarted(turnId: "t4"),
         ])
         let log = model.stats.turnLog

@@ -77,7 +77,7 @@ struct NativeAgentTests {
             nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
             nestedItem("old", .assistantMessage(text: "Old work"), parent: "a"),
             nestedItem("result", .toolResult(callId: "a", output: "Failed", isError: true)),
-            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "t2"),
+            .turnCompleted(turnId: "t1", usage: nil), .turnStarted(turnId: "t2"),
             nestedItem("a", .toolCall(name: "Agent", input: agentInput), turn: "t2"),
             nestedItem("new", .assistantMessage(text: "New work"), turn: "t2", parent: "a"),
         ])
@@ -97,7 +97,7 @@ struct NativeAgentTests {
             created(), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Task", input: agentInput)),
             nestedItem("result", .toolResult(callId: "a", output: "First line\nSecond line", isError: false)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.result == "First line\nSecond line")
@@ -127,7 +127,7 @@ struct NativeAgentTests {
             created(), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Background review","run_in_background":true}"#)),
             nestedItem("launch", .toolResult(callId: "a", output: "Agent launched", isError: false)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.outcome == .unknown)
@@ -155,7 +155,7 @@ struct NativeAgentTests {
         #expect(running?.duration(at: .distantFuture) != nil)
 
         var ended = model
-        ended.apply(script.event(.turnCompleted(turnId: "t1")))
+        ended.apply(script.event(.turnCompleted(turnId: "t1", usage: nil)))
         let after = NativeAgent.find(reference, in: ended)
         #expect(after?.result == nil)
         #expect(after?.outcome == .unknown)
@@ -170,7 +170,7 @@ struct NativeAgentTests {
             created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
             nestedItem("launch", .toolResult(callId: "a", output: launchMetadata, isError: false)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
             nestedItem("a-grep", .toolCall(name: "Grep", input: #"{"pattern":"TODO"}"#), parent: "a"),
         ])
         let reference = NativeAgent.ID(turnId: "t1", callId: "a")
@@ -192,10 +192,10 @@ struct NativeAgentTests {
             created(), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
             nestedItem("launch", .toolResult(callId: "a", output: launchMetadata, isError: false)),
-            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "cli"),
+            .turnCompleted(turnId: "t1", usage: nil), .turnStarted(turnId: "cli"),
             nestedItem("done", .toolResult(callId: "a", output: "Found 2 issues", isError: false), turn: "cli"),
             nestedItem("reply", .assistantMessage(text: "The review found 2 issues"), turn: "cli"),
-            .turnCompleted(turnId: "cli"),
+            .turnCompleted(turnId: "cli", usage: nil),
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.launched == true)
@@ -211,7 +211,7 @@ struct NativeAgentTests {
             created(), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Review","run_in_background":true}"#)),
             nestedItem("launch", .toolResult(callId: "a", output: "Unknown agent type", isError: true)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.launched == false)
@@ -226,7 +226,7 @@ struct NativeAgentTests {
             nestedItem("a", .toolCall(name: "Agent", input: #"{"description":"Count files","prompt":"Count","subagent_type":"Explore","model":"haiku"}"#)),
             nestedItem("a-text", .assistantMessage(text: "Counting"), parent: "a"),
             nestedItem("result", .toolResult(callId: "a", output: "**42** files", isError: false)),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
         ])
         let agent = NativeAgent.find(.init(turnId: "t1", callId: "a"), in: model)
         #expect(agent?.background == false)

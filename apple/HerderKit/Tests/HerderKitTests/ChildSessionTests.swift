@@ -37,7 +37,7 @@ struct ChildSessionTests {
         #expect(model.progress.label == "Waiting for a free slot")
         model.apply(SessionUpdate(events: [
             script.event(.sessionStatusChanged(status: .running, retryAt: nil)), script.event(.turnStarted(turnId: "c1")),
-            script.event(.turnCompleted(turnId: "c1")), script.event(.sessionStatusChanged(status: .idle, retryAt: nil)),
+            script.event(.turnCompleted(turnId: "c1", usage: nil)), script.event(.sessionStatusChanged(status: .idle, retryAt: nil)),
         ], streaming: []))
         #expect(model.progress == .done)
         #expect(model.turnEnds["c1"] == .completed)
@@ -61,7 +61,7 @@ struct ChildSessionTests {
         var script = Script("01C")
         // Events are a second apart: the first turn runs 1s, the second started at 6s.
         let model = script.model([
-            created(task: "Write tests", parent: "01P"), .turnStarted(turnId: "c1"), .turnCompleted(turnId: "c1"),
+            created(task: "Write tests", parent: "01P"), .turnStarted(turnId: "c1"), .turnCompleted(turnId: "c1", usage: nil),
             .sessionStatusChanged(status: .idle, retryAt: nil), .sessionStatusChanged(status: .running, retryAt: nil),
             .turnStarted(turnId: "c2"),
         ])
