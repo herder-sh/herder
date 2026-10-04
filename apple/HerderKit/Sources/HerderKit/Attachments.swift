@@ -89,7 +89,38 @@ enum ImageAttachment {
         }
         return []
     }
+    #else
+    /// The clipboard's images, when it holds any. Items copied as bytes come as they are;
+    /// those copied as pictures, as PNG.
+    static func from(_ board: UIPasteboard) -> [Herder.Image] {
+        let images = images(in: board.items)
+        if !images.isEmpty { return images }
+        return (board.images ?? []).compactMap { picture in
+            picture.pngData().flatMap { try? make($0, type: .png) }
+        }
+    }
     #endif
+
+    /// The images among pasteboard items, one per item that holds an image's bytes: in a type
+    /// the daemon takes if the item has one, else in another to be converted.
+    static func images(in items: [[String: Any]]) -> [Herder.Image] {
+        let accepted = Set(imageMediaTypes())
+        func taken(_ type: UTType) -> Bool { type.preferredMIMEType.map { accepted.contains($0) } ?? false }
+        return items.compactMap { item in
+            let candidates = item.compactMap { entry -> (type: UTType, data: Data)? in
+                guard let type = UTType(entry.key), type.conforms(to: .image), let data = entry.value as? Data
+                else { return nil }
+                return (type, data)
+            }
+            .sorted { a, b in
+                taken(a.type) != taken(b.type) ? taken(a.type) : a.type.identifier < b.type.identifier
+            }
+            for candidate in candidates {
+                if let image = try? make(candidate.data, type: candidate.type) { return image }
+            }
+            return nil
+        }
+    }
 
     /// Loads dropped items' images.
     @MainActor static func load(_ providers: [NSItemProvider]) async -> [Herder.Image] {

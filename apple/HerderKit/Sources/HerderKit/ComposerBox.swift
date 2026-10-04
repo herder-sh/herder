@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 import AppKit
 #else
 import GameController
+import PhotosUI
 #endif
 
 /// The prompt box: the text on top, and inside its bottom edge the settings and permission menus
@@ -29,15 +30,17 @@ struct ComposerBox<Footer: View>: View {
     let send: () -> Void
     let stop: () -> Void
     @ViewBuilder var footer: Footer
-    @FocusState private var focused: Bool
+    @State private var editing = false
     /// Long pastes, shown as chips and sent in place of their markers.
     @State private var pastes: [String] = []
     @State private var imageError: String?
     @State private var dictation = Dictation()
     /// The text before dictation started; what is heard follows it.
     @State private var dictatedAfter = ""
-    #if os(macOS)
-    @State private var editing = false
+    #if os(iOS)
+    /// Photos picked to attach, until they load.
+    @State private var picked: [PhotosPickerItem] = []
+    @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
     var body: some View {
@@ -55,23 +58,14 @@ struct ComposerBox<Footer: View>: View {
                     .padding(.bottom, 8)
                 #else
                 if !images.isEmpty { AttachmentStrip(images: images, remove: remove) }
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.body)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(2...12)
-                    .focused($focused)
-                    .onSubmit(submit)
-                    .onKeyPress(.return, phases: .down) { press in
-                        guard press.modifiers.contains(.shift) else { return .ignored }
-                        text = ListContinuation.newline(after: text)
-                        return .handled
+                PromptEditor(text: $text, focused: $editing, addImages: add, addPaste: addPaste, submit: submit)
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.top, 16)
+                    .padding(.horizontal, compact ? 14 : 18)
+                    .padding(.top, compact ? 12 : 16)
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .accessibilityIdentifier("composer")
                 #endif
                 // The permission menu drops its label before the row runs wider than the box.
                 ViewThatFits(in: .horizontal) {
@@ -90,15 +84,17 @@ struct ComposerBox<Footer: View>: View {
                 Task { text += add(await ImageAttachment.load(providers)) }
                 return true
             }
-            HStack(spacing: 14) { footer }
+            HStack(spacing: compact ? 10 : 14) { footer }
                 .font(.footnote)
                 .foregroundStyle(Theme.tertiary)
-                .padding(.horizontal, 16)
+                // One line on a phone too: what does not fit truncates rather than wrapping.
+                .lineLimit(compact ? 1 : nil)
+                .padding(.horizontal, compact ? 12 : 16)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.surface.opacity(0.6),
                             in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
-                .padding(.horizontal, 18)
+                .padding(.horizontal, compact ? 12 : 18)
         }
         .onAppear { if focusesOnAppear { focus() } }
         .onChange(of: text) {
@@ -131,12 +127,20 @@ struct ComposerBox<Footer: View>: View {
             }
             DictationButton(listening: dictation.listening, action: toggleDictation)
             #if os(macOS)
-            Button(action: attach) {
-                SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
-                    .foregroundStyle(Theme.secondary).frame(width: 30, height: 30).contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .help("Attach images (or paste or drop them)")
+            Button(action: attach) { attachLabel }
+                .buttonStyle(.plain)
+                .help("Attach images (or paste or drop them)")
+            #else
+            PhotosPicker(selection: $picked, matching: .images, preferredItemEncoding: .compatible) { attachLabel }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Attach images")
+                .accessibilityIdentifier("attach-images")
+                .onChange(of: picked) {
+                    guard !picked.isEmpty else { return }
+                    let items = picked
+                    picked = []
+                    Task { await attach(items) }
+                }
             #endif
             if running && trimmed.isEmpty && images.isEmpty {
                 CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
@@ -149,11 +153,20 @@ struct ComposerBox<Footer: View>: View {
         }
     }
 
-    private var isFocused: Bool {
+    private var isFocused: Bool { editing }
+
+    private var attachLabel: some View {
+        SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
+            .foregroundStyle(Theme.secondary).frame(width: 30, height: 30).contentShape(.rect)
+            .hitTarget()
+    }
+
+    /// A phone's width: the box and its footer sit closer to the edges.
+    private var compact: Bool {
         #if os(macOS)
-        editing
+        false
         #else
-        focused
+        sizeClass == .compact
         #endif
     }
 
@@ -167,13 +180,7 @@ struct ComposerBox<Footer: View>: View {
         #endif
     }
 
-    private func focus() {
-        #if os(macOS)
-        editing = true
-        #else
-        focused = true
-        #endif
-    }
+    private func focus() { editing = true }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -229,6 +236,21 @@ struct ComposerBox<Footer: View>: View {
         } catch {
             imageError = error.localizedDescription
         }
+    }
+    #else
+    /// Attaches photos picked from the library, in the order they were picked.
+    private func attach(_ items: [PhotosPickerItem]) async {
+        var added: [Herder.Image] = []
+        imageError = nil
+        for item in items {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else { continue }
+                added.append(try ImageAttachment.make(data, type: item.supportedContentTypes.first { $0.conforms(to: .image) }))
+            } catch {
+                imageError = error.localizedDescription
+            }
+        }
+        text += add(added)
     }
     #endif
 }
