@@ -166,7 +166,7 @@ struct FleetView: View {
     #endif
 }
 
-/// What needs you, then what is running, then what finished.
+/// What needs you, then every session that is not archived, in the order they were created.
 struct HomeView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
@@ -191,10 +191,8 @@ struct HomeView: View {
                         ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet, selection: selection) }
                     }
                 }
-                SessionGroup(title: "Active", sessions: lists.active.filter { $0.matches(query) }, fleet: fleet,
+                SessionGroup(title: "Sessions", sessions: lists.home.filter { $0.matches(query) }, fleet: fleet,
                              selection: selection)
-                SessionGroup(title: "Recent", sessions: Array(lists.recent.filter { $0.matches(query) }.prefix(20)),
-                             fleet: fleet, selection: selection)
             }
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)

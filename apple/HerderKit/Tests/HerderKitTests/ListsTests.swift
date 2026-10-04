@@ -36,20 +36,27 @@ struct ListsTests {
         ]
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])], sessions: sessions)
         #expect(lists.requests.map(\.requestId) == ["b", "a"])
-        #expect(lists.active.isEmpty)
     }
 
-    @Test func activeSessionsStayInTheOrderTheyWereCreated() {
+    @Test func homeKeepsSessionsInTheOrderTheyWereCreatedWhateverTheirState() {
         var older = Script("01A")
-        var newer = Script("01B")
-        // The older session works on after the newer one: its activity is the latest.
+        var middle = Script("01B")
+        var newer = Script("01C")
+        var archived = Script("01D")
         let running = EventBody.sessionStatusChanged(status: .running, retryAt: nil)
-        let newerModel = newer.model([created(), running])
+        // The older session works on after the others: its activity is the latest.
         let olderModel = older.model([created(), running, .turnStarted(turnId: "t"), .turnStarted(turnId: "u")])
+        let newerModel = newer.model([created()])
         #expect(olderModel.updatedAt! > newerModel.updatedAt!)
-        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])],
-                          sessions: [older.key: olderModel, newer.key: newerModel])
-        #expect(lists.active.map(\.key.sessionId) == ["01B", "01A"])
+        let sessions = [
+            older.key: olderModel,
+            middle.key: middle.model([created(), .sessionStatusChanged(status: .error, retryAt: nil)]),
+            newer.key: newerModel,
+            archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
+        ]
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])],
+                          sessions: sessions)
+        #expect(lists.home.map(\.key.sessionId) == ["01C", "01B", "01A"])
     }
 
     @Test func childrenFollowTheirParentOldestFirst() {
@@ -133,7 +140,7 @@ struct ListsTests {
         // The live session waits for a project; the archived one keeps none in the list.
         #expect(lists.projects.map(\.projectId) == [nil])
         #expect(lists.projects[0].sessions.map(\.key) == [live.key])
-        #expect(lists.recent.map(\.key) == [live.key])
+        #expect(lists.home.map(\.key) == [live.key])
 
         let withoutLive = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [
             archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
