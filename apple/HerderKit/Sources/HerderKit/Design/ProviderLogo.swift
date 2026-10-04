@@ -1,20 +1,37 @@
 import Herder
 import SwiftUI
 
-/// A provider's logo, drawn in the tint it is given: the vendor's mark where herder has it,
-/// else the provider's initial on a rounded tile.
+/// A provider's logo in its brand colour: the vendor's mark where herder has it, else the
+/// provider's initial on a rounded tile.
 struct ProviderMark: View {
     let provider: Provider
     var size: CGFloat = 16
 
     var body: some View {
-        if let logo = ProviderLogo(provider) {
-            logo.frame(width: size, height: size)
-        } else {
-            Text(ModelCatalog.providerName(provider).prefix(1))
-                .font(.system(size: size * 0.62, weight: .bold, design: .rounded))
-                .frame(width: size, height: size)
-                .overlay(RoundedRectangle(cornerRadius: size * 0.28).strokeBorder(lineWidth: max(1, size / 14)))
+        Group {
+            if let logo = ProviderLogo(provider) {
+                logo.frame(width: size, height: size)
+            } else {
+                Text(ModelCatalog.providerName(provider).prefix(1))
+                    .font(.system(size: size * 0.62, weight: .bold, design: .rounded))
+                    .frame(width: size, height: size)
+                    .overlay(RoundedRectangle(cornerRadius: size * 0.28).strokeBorder(lineWidth: max(1, size / 14)))
+            }
+        }
+        .foregroundStyle(Self.color(provider))
+    }
+
+    /// A provider's brand colour, tuned to read on both themes; the monochrome brands get a
+    /// neutral of their own so they still tell apart.
+    static func color(_ provider: Provider) -> Color {
+        switch provider {
+        case "claude": Color(light: 0xC15F3C, dark: 0xD97757)
+        case "codex": Color(light: 0x0D8A6B, dark: 0x10A37F)
+        case "gemini": Color(light: 0x2F6FD6, dark: 0x5B9BF0)
+        case "cursor": Color(light: 0x26251E, dark: 0xEDECEC)
+        case "grok": Color(light: 0x4A4F57, dark: 0xB8BEC8)
+        case "opencode": Color(light: 0x3A3A3A, dark: 0xCFCECD)
+        default: Theme.secondary
         }
     }
 }

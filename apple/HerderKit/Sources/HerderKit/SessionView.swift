@@ -9,6 +9,8 @@ struct SessionView: View {
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
     @State private var forking = false
+    /// The machine the fork sheet opens on, when picked from a menu.
+    @State private var forkTarget: HostId?
     @State private var completedFork: SessionKey?
     @State private var pushedFork: SessionKey?
     @State private var switching = false
@@ -79,7 +81,7 @@ struct SessionView: View {
             completedFork = nil
             if let open { open(key) } else { pushedFork = key }
         }) {
-            ForkSessionSheet(fleet: fleet, key: key) { completedFork = $0 }
+            ForkSessionSheet(fleet: fleet, key: key, preselect: forkTarget) { completedFork = $0 }
         }
         .navigationDestination(isPresented: Binding(
             get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }
@@ -164,8 +166,6 @@ struct SessionView: View {
             }
             if let model {
                 Menu {
-                    Button("Fork Session…", systemImage: "arrow.triangle.branch") { forking = true }
-                        .disabled(!model.loaded || model.parent != nil)
                     if model.state != .archived {
                         if model.turn != nil {
                             Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
@@ -177,11 +177,7 @@ struct SessionView: View {
                             .disabled(fleet.archiving.contains(key))
                     }
                 } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(Theme.secondary)
-                        .frame(width: 44, height: 44)
-                        .background(Theme.raised, in: .rect(cornerRadius: 8))
+                    HeaderLabel(symbol: "ellipsis", title: nil)
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
@@ -209,7 +205,10 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model, switching: $switching, forking: $forking)
+                Composer(fleet: fleet, key: key, model: model) { host in
+                    forkTarget = host
+                    forking = true
+                }
             }
         }
         .frame(maxWidth: 784)
@@ -261,8 +260,8 @@ private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
     let model: SessionModel
-    @Binding var switching: Bool
-    @Binding var forking: Bool
+    /// Opens the fork sheet, on a machine when one was picked.
+    let fork: (HostId?) -> Void
     @State private var text = ""
     @State private var images: [Herder.Image] = []
 
@@ -294,21 +293,14 @@ private struct Composer: View {
                     guard let account else { return }
                     Task { await fleet.switchSession(key, to: account, model: choice.model) }
                 },
+                settings: [accountSection(accounts), machineSection],
                 setMode: { mode in Task { await fleet.setMode(mode, of: key) } },
                 send: send,
                 stop: { Task { await fleet.interrupt(key) } }
             ) {
-                Button { forking = true } label: {
-                    Label(machine?.name ?? "Machine", systemImage: "desktopcomputer")
-                }
-                .buttonStyle(.plain)
-                .help("Fork this session onto a machine")
-                .disabled(!model.loaded || model.parent != nil)
-                FooterItem(symbol: "person.crop.circle", text: account?.label ?? model.accountId ?? "") {
-                    ForEach(accounts.filter { $0.provider == model.provider }, id: \.accountId) { other in
-                        Button(other.label) { Task { await fleet.switchSession(key, to: other, model: "") } }
-                    }
-                }
+                FooterMenu(section: machineSection, text: machine?.name ?? "Machine",
+                           help: "Where it runs; pick another machine to fork onto it")
+                FooterMenu(section: accountSection(accounts), text: account?.label ?? model.accountId ?? "")
                 Spacer()
                 if let branch = model.branch {
                     Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1)
@@ -319,6 +311,32 @@ private struct Composer: View {
             }
         }
     }
+
+    /// The provider's accounts on the machine; picking one moves the session to it.
+    private func accountSection(_ accounts: [Account]) -> SettingsSection {
+        SettingsSection(
+            kind: .account,
+            options: SettingsOption.accounts(accounts, provider: model.provider, current: model.accountId)
+        ) { id in
+            guard let other = accounts.first(where: { $0.accountId == id }) else { return }
+            Task { await fleet.switchSession(key, to: other, model: "") }
+        }
+    }
+
+    /// The machines; picking another opens the fork sheet on it.
+    private var machineSection: SettingsSection {
+        SettingsSection(
+            kind: .machine,
+            options: SettingsOption.machines(fleet.machines, current: key.hostId) { machine in
+                forkable ? ForkSessionModel.ineligible(machine, source: key, provider: model.provider) : "Cannot fork"
+            },
+            hint: "Another forks onto it",
+            action: .init(title: "Fork Session…", symbol: "arrow.triangle.branch", enabled: forkable) { fork(nil) }
+        ) { fork($0) }
+    }
+
+    /// A child session stays with its parent; a session forks once it has loaded.
+    private var forkable: Bool { model.loaded && model.parent == nil }
 
     private var placeholder: String {
         if !model.questions.isEmpty { return "Type an answer…" }
@@ -444,18 +462,12 @@ struct DraftSessionView: View {
                 mode: mode,
                 running: false,
                 choose: { choice = $0 },
+                settings: [machineSection],
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}
             ) {
-                FooterItem(symbol: "desktopcomputer", text: machine?.name ?? "") {
-                    ForEach(machines, id: \.hostId) { other in
-                        Button(other.name) {
-                            hostId = other.hostId
-                            choice = fleet.draftChoice(choice, movedTo: hostId, projectId: draft.projectId)
-                        }
-                    }
-                }
+                FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
                 Label("New worktree", systemImage: "folder.badge.plus")
                 Spacer()
                 Label("From the default branch", systemImage: "arrow.triangle.branch")
@@ -475,6 +487,14 @@ struct DraftSessionView: View {
             choice = fleet.draftChoice(on: hostId, projectId: draft.projectId)
             mode = fleet.machines.first { $0.hostId == draft.hostId }?.projects
                 .first { $0.projectId == draft.projectId }?.defaultPermissionMode ?? ModePreference.mode(for: draft)
+        }
+    }
+
+    /// The machines it can start on; picking one moves the draft there.
+    private var machineSection: SettingsSection {
+        SettingsSection(kind: .machine, options: SettingsOption.machines(machines, current: hostId) { _ in nil }) { id in
+            hostId = id
+            choice = fleet.draftChoice(choice, movedTo: id, projectId: draft.projectId)
         }
     }
 
@@ -533,17 +553,30 @@ struct HeaderButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                if let title { Text(title).lineLimit(1) }
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(selected ? Theme.onPrimary : tint)
-            .padding(.horizontal, title == nil ? 0 : 10)
-            .frame(minWidth: 30, minHeight: 30)
-            .background(selected ? Theme.primary : Theme.raised, in: .rect(cornerRadius: 8))
-            .contentShape(.rect)
+            HeaderLabel(symbol: symbol, title: title, tint: tint, selected: selected)
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// What every header button and menu shows: an icon and an optional label on the chat
+/// bubble's fill, 32 points high.
+struct HeaderLabel: View {
+    let symbol: String
+    let title: String?
+    var tint: Color = Theme.secondary
+    var selected = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+            if let title { Text(title).lineLimit(1) }
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(selected ? Theme.onPrimary : tint)
+        .padding(.horizontal, title == nil ? 0 : 11)
+        .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
+        .background(selected ? Theme.primary : Theme.bubble, in: .rect(cornerRadius: 9))
+        .contentShape(.rect)
     }
 }

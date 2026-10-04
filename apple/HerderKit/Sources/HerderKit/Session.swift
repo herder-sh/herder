@@ -233,7 +233,11 @@ struct SessionModel {
         let side: (Handoff.Kind, Handoff.Side)
         var from: HostId?
         switch event.body {
-        case .modelSwitched(let model): side = (.model, Handoff.Side(provider: provider, model: model, accountId: accountId))
+        case .modelSwitched(let model):
+            // From the provider's default to the model the CLI reports is the model resolving,
+            // not a handoff.
+            guard self.model?.isEmpty == false else { return nil }
+            side = (.model, Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .accountSwitched(let accountId):
             side = (.account, Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .providerSwitched(let provider, let accountId, let model):
