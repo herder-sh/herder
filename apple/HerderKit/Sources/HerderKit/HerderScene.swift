@@ -31,7 +31,11 @@ public struct HerderScene: Scene {
             guard case .opened(let fleet) = profile else { return }
             switch phase {
             case .active: fleet.wake()
+            #if os(iOS)
+            // iOS freezes a backgrounded app and may kill its sockets; a Mac app keeps running
+            // hidden or minimised, so it keeps reconnecting and keeps every list current.
             case .background: fleet.suspend()
+            #endif
             default: break
             }
         }
