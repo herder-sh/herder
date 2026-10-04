@@ -196,12 +196,14 @@ impl<B: Backend> Shared<B> {
                 };
                 let login = self.logins.start(&account, &logging_in)?;
                 let pending = login.pending;
+                let done = Box::new(pending.check());
                 let terminal_id = terminals.open_login(
                     account_id,
                     login.command,
                     cols,
                     rows,
                     outbox,
+                    done,
                     Box::new(move |exit_code| pending.finish(exit_code)),
                 )?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
