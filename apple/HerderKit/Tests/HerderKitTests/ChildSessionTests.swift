@@ -83,9 +83,8 @@ struct ChildSessionTests {
         let lists = Lists(
             machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])], sessions: sessions)
         // The idle parent leads its running child; the idle child shows only in its project.
-        #expect(lists.active.map(\.title) == ["Lead", "Build"])
-        #expect(lists.active.map(\.depth) == [0, 1])
-        #expect(lists.active.first?.children == 2)
-        #expect(lists.recent.map(\.title) == ["Solo"])
+        #expect(lists.home.map(\.title) == ["Solo", "Lead", "Build"])
+        #expect(lists.home.map(\.depth) == [0, 0, 1])
+        #expect(lists.home[1].children == 2)
     }
 }
