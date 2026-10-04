@@ -66,9 +66,16 @@ enum ImageAttachment {
         return smaller
     }
 
-    /// The clipboard's images, when it holds any.
-    static func fromPasteboard() -> [Herder.Image] {
-        let board = NSPasteboard.general
+    /// Whether a pasteboard holds an image, by its types alone, without reading it.
+    static func available(_ board: NSPasteboard = .general) -> Bool {
+        board.availableType(from: [.png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier),
+                                   NSPasteboard.PasteboardType(UTType.gif.identifier),
+                                   NSPasteboard.PasteboardType(UTType.webP.identifier)]) != nil
+            || board.canReadObject(forClasses: [NSURL.self], options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]])
+    }
+
+    /// A pasteboard's images, when it holds any: the clipboard's, or a drag's.
+    static func from(_ board: NSPasteboard = .general) -> [Herder.Image] {
         if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL],
            !urls.isEmpty {
             return urls.compactMap { url in
