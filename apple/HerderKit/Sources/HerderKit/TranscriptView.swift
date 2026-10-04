@@ -89,8 +89,8 @@ struct NoticeLine: View {
     }
 }
 
-/// A handoff, as a rule across the transcript: what the session ran on, then what it runs on
-/// from here. A failover, the daemon's own handoff, shows in the accent.
+/// A handoff, as one line across the transcript: what the session ran on, then what it runs on
+/// from here, whatever moved it.
 struct HandoffDivider: View {
     let handoff: Handoff
     let accounts: [Account]
@@ -99,8 +99,7 @@ struct HandoffDivider: View {
         HStack(spacing: 12) {
             Rectangle().fill(Theme.stroke).frame(height: 1)
             HStack(spacing: 8) {
-                Label("Handoff", systemImage: handoff.failover ? "exclamationmark.arrow.triangle.2.circlepath" : "arrow.left.arrow.right")
-                    .foregroundStyle(handoff.failover ? Theme.accent : Theme.tertiary)
+                Label("Handoff", systemImage: "arrow.left.arrow.right").foregroundStyle(Theme.tertiary)
                 side(handoff.from).foregroundStyle(Theme.secondary)
                 Image(systemName: "arrow.right").foregroundStyle(Theme.tertiary)
                 side(handoff.to).foregroundStyle(Theme.accent)
@@ -108,7 +107,6 @@ struct HandoffDivider: View {
             .font(.caption.weight(.medium))
             .lineLimit(1)
             .layoutPriority(1)
-            .help(help)
             Rectangle().fill(Theme.stroke).frame(height: 1)
         }
         .padding(.vertical, 6)
@@ -130,11 +128,6 @@ struct HandoffDivider: View {
     private func account(_ id: AccountId?) -> String {
         guard let id else { return "?" }
         return accounts.first { $0.accountId == id }?.label ?? id
-    }
-
-    private var help: String {
-        let to = "\(handoff.to.provider.map(ModelCatalog.providerName) ?? "") \(ModelCatalog.name(handoff.to.model ?? "", provider: handoff.to.provider)) on account \(account(handoff.to.accountId))"
-        return handoff.failover ? "The last account hit its limit; moved to \(to)" : "Now on \(to)"
     }
 }
 

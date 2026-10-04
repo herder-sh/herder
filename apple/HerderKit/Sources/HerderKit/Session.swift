@@ -163,7 +163,7 @@ struct SessionModel {
         }
         func handoff(_ kind: Handoff.Kind, to: Handoff.Side) {
             log.append(.handoff(Handoff(
-                id: event.seq, kind: kind, failover: kind != .model && event.by == nil,
+                id: event.seq, kind: kind,
                 from: Handoff.Side(provider: provider, model: model, accountId: accountId), to: to)))
         }
         func asked(_ what: String, _ text: String, _ routedTo: Route, _ reason: EscalationReason?) {
@@ -480,8 +480,6 @@ struct Handoff: Hashable {
     }
     let id: UInt64
     let kind: Kind
-    /// Whether the daemon moved the session because the last account hit its limit.
-    let failover: Bool
     let from: Side
     let to: Side
 }

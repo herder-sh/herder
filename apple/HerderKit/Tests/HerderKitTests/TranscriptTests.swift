@@ -106,7 +106,7 @@ struct TranscriptTests {
         model.apply(SessionUpdate(events: [
             script.event(.modelSwitched(model: "haiku"), by: "tomas"),
             script.event(.accountSwitched(accountId: "work"), by: "tomas"),
-            // The daemon's own switch: a failover.
+            // The daemon's own switch is a handoff like any other.
             script.event(.providerSwitched(provider: "codex", accountId: "gpt", model: "gpt-6.1-sol")),
         ], streaming: []))
         let handoffs = Transcript.blocks(model).compactMap { block -> Handoff? in
@@ -116,7 +116,6 @@ struct TranscriptTests {
         #expect(handoffs.map(\.kind) == [.model, .account, .provider])
         #expect(handoffs.map(\.from) == [claude("opus", "main"), claude("haiku", "main"), claude("haiku", "work")])
         #expect(handoffs.map(\.to) == [claude("haiku", "main"), claude("haiku", "work"), Handoff.Side(provider: "codex", model: "gpt-6.1-sol", accountId: "gpt")])
-        #expect(handoffs.map(\.failover) == [false, false, true])
     }
 
     @Test func aSentPromptShowsWhereItIsUntilTheSessionTakesIt() {
