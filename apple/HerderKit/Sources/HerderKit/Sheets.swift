@@ -199,6 +199,8 @@ struct Draft: Hashable, Identifiable {
     var projectId: String?
     var repo: String?
     var id: String { "\(hostId)/\(projectId ?? repo ?? "")" }
+    /// What the draft is kept on this device by: its project or path, on whichever machine.
+    var key: String { projectId ?? repo ?? "" }
 
     /// What creating its session names: the project when known, else the path; the daemon
     /// takes exactly one. A just-added project keeps its path only to show it.
