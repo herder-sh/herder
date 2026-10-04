@@ -5,7 +5,8 @@
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, and prints instead the link
 //! a device paired with both shares (`Client::share`), which pairs with both at once; the
-//! repository is the first's, and the first has a session waiting on an approval.
+//! repository is the first's, and the first has a session waiting on an approval and one whose
+//! turn ran long tool calls (`fixtures/tools.jsonl`).
 
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -47,8 +48,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Pairs a device with every daemon, starts a session on the first that waits on an approval,
-/// and returns the link the device shares.
+/// Pairs a device with every daemon, starts a session on the first that waits on an approval
+/// and one that runs long tool calls, and returns the link the device shares.
 async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
     let profile = tempfile::tempdir()?;
     let client = Client::open(profile.path().display().to_string(), "fake-daemon".into())?;
@@ -74,35 +75,44 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
     .await
     .context("the sharing device did not connect")?;
     let host = HostId::new("fake-host-1");
-    let created = client
-        .send(
-            host.clone(),
-            CommandBody::CreateSession {
-                repo: Some(daemons[0].repo.clone()),
-                project_id: None,
-                branch: None,
-                account_id: Some(AccountId::new(support::APPROVAL_ACCOUNT)),
-                provider: None,
-                model: None,
-                permission_mode: None,
-                max_children: None,
-                failover_pin: None,
-            },
-        )
-        .await?;
-    let CommandResult::SessionCreated { session_id } = created else {
-        bail!("the daemon did not create a session: {created:?}");
-    };
-    client
-        .send(
-            host,
-            CommandBody::SendPrompt {
-                session_id,
-                text: "Run the tests.".into(),
-                images: Vec::new(),
-            },
-        )
-        .await?;
+    // In this order: the daemon numbers turns across sessions, and each script names its turns.
+    for (account, prompt) in [
+        (support::APPROVAL_ACCOUNT, "Run the tests."),
+        (
+            support::TOOLS_ACCOUNT,
+            "Fix the manual connection and the address ordering.",
+        ),
+    ] {
+        let created = client
+            .send(
+                host.clone(),
+                CommandBody::CreateSession {
+                    repo: Some(daemons[0].repo.clone()),
+                    project_id: None,
+                    branch: None,
+                    account_id: Some(AccountId::new(account)),
+                    provider: None,
+                    model: None,
+                    permission_mode: None,
+                    max_children: None,
+                    failover_pin: None,
+                },
+            )
+            .await?;
+        let CommandResult::SessionCreated { session_id } = created else {
+            bail!("the daemon did not create a session: {created:?}");
+        };
+        client
+            .send(
+                host.clone(),
+                CommandBody::SendPrompt {
+                    session_id,
+                    text: prompt.into(),
+                    images: Vec::new(),
+                },
+            )
+            .await?;
+    }
     let shared = client.share().await?;
     if let Some(skipped) = shared.skipped.first() {
         bail!("{} was not shared: {}", skipped.host_id, skipped.error);

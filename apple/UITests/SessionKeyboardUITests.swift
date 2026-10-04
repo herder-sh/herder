@@ -8,18 +8,7 @@ final class SessionKeyboardUITests: XCTestCase {
     func testSessionOpensWithoutTheKeyboardAndDraggingTheTranscriptDismissesIt() throws {
         let app = XCUIApplication()
         app.launch()
-        if app.buttons["Add Machine"].firstMatch.waitForExistence(timeout: 2) {
-            let link = try XCTUnwrap(
-                ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
-            app.buttons["Add Machine"].firstMatch.tap()
-            let field = app.descendants(matching: .any)["pairing-link"].firstMatch
-            XCTAssertTrue(field.waitForExistence(timeout: 5))
-            field.tap()
-            field.typeText(link)
-            app.buttons["Pair"].tap()
-            XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 15))
-            app.buttons["Done"].tap()
-        }
+        try app.pairUnlessPaired()
 
         let session = app.descendants(matching: .any)["request-session"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 15))

@@ -454,7 +454,6 @@ struct FooterMenu: View {
             .hitTarget()
         }
         .buttonStyle(.plain)
-        .fixedSize()
         .help(help ?? section.kind.rawValue)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 1) {

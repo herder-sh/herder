@@ -33,8 +33,6 @@ struct SessionView: View {
     @State private var typedPR = ""
     /// Where the transcript is scrolled, and where each session shown here was left.
     @State private var scroll = TranscriptScroll()
-    /// Bumped on every send, so the transcript jumps to its end.
-    @State private var sent = 0
 
     var body: some View {
         let model = fleet.sessions[key]
@@ -44,7 +42,11 @@ struct SessionView: View {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
             }
+            // The header, transcript and controls each take the width they are offered and no
+            // more, so a row that cannot shrink spills out of its own frame instead of widening
+            // the session past the screen (`.frame(maxWidth:)` alone takes a wider child's width).
             header(model, summary)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .overlay(alignment: .leading) {
                     if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
                 }
@@ -63,6 +65,7 @@ struct SessionView: View {
                     }
                     ForEach(blocks) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     }
                     if model?.loaded == true && model?.status == .waitingForCapacity {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
@@ -70,8 +73,8 @@ struct SessionView: View {
                     }
                 }
                 .scrollTargetLayout()
-                .frame(maxWidth: 760)
-                .frame(maxWidth: .infinity)
+                .frame(minWidth: 0, maxWidth: 760)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .padding(16)
                 .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(TranscriptScroll.end) }
                 .onAppear { if let top = scroll.land() { proxy.scrollTo(top, anchor: .top) } }
@@ -81,7 +84,12 @@ struct SessionView: View {
             .accessibilityIdentifier("transcript")
             .modifier(FollowsGrowth(key: key, scroll: $scroll))
             .id(key)
-            .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
+            // A message sent from here jumps the transcript to its end once the message is in it,
+            // so it lands on the message rather than where the end was before it; unanimated, as
+            // an animated jump through the lazy rows can stop on rows not laid out yet.
+            .onChange(of: model?.outbox.last?.id) { _, sent in
+                if sent != nil { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
+            }
             }
             if let model {
                 controls(model, summary)
@@ -265,14 +273,14 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model, sent: { sent += 1 }) { host in
+                Composer(fleet: fleet, key: key, model: model) { host in
                     forkTarget = host
                     forking = true
                 }
             }
         }
-        .frame(maxWidth: 784)
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: 784)
+        .frame(minWidth: 0, maxWidth: .infinity)
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 10)
@@ -363,8 +371,6 @@ private struct Composer: View {
     let fleet: Fleet
     let key: SessionKey
     let model: SessionModel
-    /// Called on every send.
-    let sent: () -> Void
     /// Opens the fork sheet, on a machine when one was picked.
     let fork: (HostId?) -> Void
     @State private var text = ""
@@ -404,9 +410,12 @@ private struct Composer: View {
                 send: send,
                 stop: { Task { await fleet.interrupt(key) } }
             ) {
+                // Where the footer is short of room, the branch truncates first, then the account.
                 FooterMenu(section: machineSection, text: machine?.name ?? "Machine",
                            help: "Where it runs; pick another machine to fork onto it")
+                    .layoutPriority(2)
                 FooterMenu(section: accountSection(accounts), text: account?.label ?? model.accountId ?? "")
+                    .layoutPriority(1)
                 Spacer()
                 if let branch = model.branch {
                     Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1)
@@ -458,7 +467,6 @@ private struct Composer: View {
         guard !text.isEmpty || !images.isEmpty else { return }
         self.text = ""
         self.images = []
-        sent()
         if model.state == .archived {
             Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }
         } else {

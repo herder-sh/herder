@@ -201,6 +201,11 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
   `LazyVStack`), so it reads the same on a 27" display and fits a phone with no horizontal
   scroll. Nothing inside may force a width: code blocks and tables scroll horizontally inside
   their own box (`MarkdownText`, `MarkdownTable`, cells capped at 320 pt).
+- **A row never widens the session.** The header, each transcript row and the controls are
+  framed `.frame(minWidth: 0, maxWidth: …)`, which takes the offered width whatever the content
+  asks; `.frame(maxWidth:)` alone takes a wider child's width and so pushes the whole session
+  past the screen. Text that comes from data (a machine, account, model or branch name, a
+  command, output) has a line limit and truncates; it is never `fixedSize()`.
 - User messages are right-aligned bubbles (`Theme.bubble`, 18 pt corners) with 48 pt of space
   on the left. Assistant text is unframed markdown. Tool calls group into one quiet card of
   one-line rows (`ToolGroup`, `ToolRow`), reasoning is one italic line, notices are rules across
@@ -221,12 +226,13 @@ typing.
   `PromptEditor` on the Mac), then inside its bottom edge the model menu (`ModelPicker`), the
   permission menu, dictation, attach (Mac; paste and drop everywhere) and the send button, which
   turns into stop while a turn runs with an empty prompt (`CircleButton`).
-- Under it, a footer bar (`FooterMenu`): machine, account, branch. A child session tints the box
+- Under it, a footer bar (`FooterMenu`): machine, account, branch, each truncating to fit. A child session tints the box
   edge with `Theme.child`.
 - The column is the transcript's plus 24 pt (784 pt), centred, 12 pt from the window edges.
 - **Focus:** on the Mac the prompt is focused when a session opens. On iPhone it is not: the
   session opens on its transcript, and the keyboard appears when the user taps the prompt.
-  Dragging the transcript dismisses the keyboard.
+  Dragging the transcript dismisses the keyboard, and so does sending: the sent message shows
+  at the end of the transcript.
 - Read-only sessions (moved, or on an offline host) show a lock line in its place.
 
 ### 5.5 Queue (`QueueTray`)
@@ -372,6 +378,7 @@ iPhone layout fixes land in P7.21.
 | Pull Requests | `mac-pull-requests.png` | [`p7-22/ios-pull-requests.png`](screenshots/p7-22/ios-pull-requests.png), [`p7-22/ios-pull-requests-session.png`](screenshots/p7-22/ios-pull-requests-session.png) |
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
+| Session with long tool rows, after a send | — | [`p7-29/after-tool-rows.png`](screenshots/p7-29/after-tool-rows.png), [`p7-29/after-sent.png`](screenshots/p7-29/after-sent.png) (before: [`p7-29/before-tool-rows.png`](screenshots/p7-29/before-tool-rows.png), [`p7-29/before-sent.png`](screenshots/p7-29/before-sent.png)) |
 | Session menu | — | `ios-session-menu.png` |
 | Session PRs with descendants' (1, 5, 60) | [`p7-28/mac-1.png`](screenshots/p7-28/mac-1.png), [`p7-28/mac-5.png`](screenshots/p7-28/mac-5.png), [`p7-28/mac-60.png`](screenshots/p7-28/mac-60.png), [`p7-28/mac-60-all.png`](screenshots/p7-28/mac-60-all.png), [`p7-28/mac-60-search.png`](screenshots/p7-28/mac-60-search.png) | [`p7-28/ios-1.png`](screenshots/p7-28/ios-1.png), [`p7-28/ios-5.png`](screenshots/p7-28/ios-5.png), [`p7-28/ios-60.png`](screenshots/p7-28/ios-60.png), [`p7-28/ios-60-all.png`](screenshots/p7-28/ios-60-all.png) |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |

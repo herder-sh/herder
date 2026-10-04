@@ -1,6 +1,7 @@
 //! A daemon for the bindings' tests and samples: in-process, on localhost, with one account
 //! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
-//! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on.
+//! a third replaying `fixtures/approval.jsonl`, a fourth replaying `fixtures/tools.jsonl`, and a
+//! git repository to create a session on.
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
 //! owner may change that limit.
 
@@ -35,6 +36,10 @@ pub const HOLD_ACCOUNT: &str = "hold";
 
 /// An account whose turn waits on an approval, for the apps to show a request.
 pub const APPROVAL_ACCOUNT: &str = "approval";
+
+/// An account whose turns run long tool calls, for the apps to lay out rows wider than a phone;
+/// its label is as long as real ones get.
+pub const TOOLS_ACCOUNT: &str = "tools";
 
 /// Turns the daemon runs at once until an owner changes it.
 pub const MAX_TURNS: u32 = 4;
@@ -83,6 +88,7 @@ impl FakeDaemon {
             (ACCOUNT, "Fake", "hello.jsonl"),
             (HOLD_ACCOUNT, "Hold", "hold.jsonl"),
             (APPROVAL_ACCOUNT, "Approval", "approval.jsonl"),
+            (TOOLS_ACCOUNT, "Claude Max · team workspace", "tools.jsonl"),
         ] {
             // Each account has a provider of its own, as a provider has one script.
             let provider = Provider::Other(account.into());

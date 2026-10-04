@@ -182,6 +182,11 @@ struct ComposerBox<Footer: View>: View {
         text = PromptText.expand(text, pastes: pastes)
         pastes = []
         send()
+        // On iPhone the keyboard goes once the prompt is sent, leaving the transcript in view;
+        // where the prompt takes focus as it appears, it keeps it for the next one.
+        #if os(iOS)
+        if !focusesOnAppear { focused = false }
+        #endif
     }
 
     private func toggleDictation() {
