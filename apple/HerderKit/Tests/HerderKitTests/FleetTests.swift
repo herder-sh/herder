@@ -27,7 +27,7 @@ struct FleetTests {
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
 
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         #expect(machine.name == "fake-host")
         #expect(fleet.machines.map(\.hostId) == [machine.hostId])
         #expect(await eventually { fleet.machines.first?.connection == .connected })
@@ -44,7 +44,7 @@ struct FleetTests {
                 Issue.record("cannot open a fresh profile")
                 return
             }
-            try await fleet.pair(link: daemon.link)
+            try await fleet.pair(daemon)
             fleet.suspend()
         }
         // Reopened, as on an app launch: the machine connects before the view follows.
@@ -68,7 +68,7 @@ struct FleetTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
 
         let key = try await fleet.createSession(
@@ -95,7 +95,7 @@ struct FleetTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let key = try await fleet.createSession(
             on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
@@ -118,7 +118,7 @@ struct FleetTests {
         }
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let key = try await fleet.createSession(
             on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
@@ -152,7 +152,7 @@ struct FleetTests {
             throw CocoaError(.fileReadUnknown)
         }
         let following = Task { await fleet.follow() }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let key = try await fleet.createSession(
             on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",

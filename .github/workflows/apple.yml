@@ -56,10 +56,11 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
-      - name: Test the iOS app on a simulator against the fake daemon
+      - name: Test the iOS app on a simulator against the fake daemons
         run: |
-          # The fake daemon runs until its stdin closes, so keep it open for the job.
-          (sleep 3600 | target/debug/examples/fake_daemon > "$RUNNER_TEMP/fake_daemon.out" &)
+          # Two daemons and the link a device paired with both shares. They run until stdin
+          # closes, so keep it open for the job.
+          (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
           until [ -s "$RUNNER_TEMP/fake_daemon.out" ]; do sleep 1; done
           device=$(xcrun simctl list devices available -j |
             jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')

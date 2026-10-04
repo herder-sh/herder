@@ -33,7 +33,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let account = NewAccount(accountId: "work", provider: "claude", label: nil, configDir: nil)
         let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, account: account)
@@ -55,7 +55,7 @@ struct AccountSettingsTests {
             Issue.record("cannot open profile")
             return
         }
-        let machine = try await fleet.pair(link: daemon.link)
+        let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let original = machine.accounts.first
         do {

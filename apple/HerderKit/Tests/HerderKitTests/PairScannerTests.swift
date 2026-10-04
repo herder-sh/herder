@@ -24,6 +24,12 @@ struct PairScannerTests {
         #expect(pairingLink(in: "herder connect '\(link)'") == link)
     }
 
+    @Test func findsALinkOfSeveralMachines() {
+        let shared = link + "&host=10.0.0.9%3A7447&fp=" + String(repeating: "cd", count: 32) + "&code=MNPQR-STVWX"
+        #expect(pairingLink(in: shared) == shared)
+        #expect(pairingLink(in: "Pair with \(shared) now") == shared)
+    }
+
     @Test func rejectsWhatIsNotAPairingLink() {
         #expect(pairingLink(in: "") == nil)
         #expect(pairingLink(in: "https://herder.sh") == nil)

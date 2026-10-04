@@ -9,6 +9,8 @@ import AppKit
 /// The sheets the app presents.
 enum AppSheet: Identifiable, Hashable {
     case pair
+    /// A link that pairs another device with this one's machines.
+    case share
     /// A new session: pick its project first.
     case newSession
     /// A new project: a first session in a repository herder does not list yet.
@@ -24,6 +26,7 @@ extension AppSheet {
     func view(fleet: Fleet, drafted: @escaping (Draft) -> Void) -> some View {
         switch self {
         case .pair: PairSheet(fleet: fleet)
+        case .share: ShareSheet(fleet: fleet)
         case .newSession: ProjectPicker(fleet: fleet, newProject: false, picked: drafted)
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .projectSettings(let projectId): ProjectSettingsSheet(fleet: fleet, projectId: projectId)
@@ -32,72 +35,100 @@ extension AppSheet {
     }
 }
 
-/// Pairs with a machine from the `herder://pair` link `herder pair` prints.
+/// Pairs with the machines a `herder://pair` link names: the one `herder pair` prints, or one
+/// another device shares for all of its machines.
 struct PairSheet: View {
     let fleet: Fleet
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
     @State private var error: String?
     @State private var scanning = false
+    /// Each machine's result, once a link of several machines, or one that failed, paired.
+    @State private var results: [PairResult]?
 
     var body: some View {
         SheetScaffold(title: "Add Machine", subtitle: "Pair this device with a machine running herder.",
-                      height: uri == nil ? 440 : 600) {
-            Field(label: "1 · On the machine") {
-                HStack {
-                    Text("herder pair").font(Theme.mono).foregroundStyle(Theme.text)
-                    Spacer()
-                    CopyButton(text: "herder pair")
-                }
-                .padding(12)
-                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-            }
-            Field(label: scanLabel) {
-                VStack(alignment: .trailing, spacing: 8) {
-                    #if os(iOS)
-                    ActionButton(title: "Scan QR Code", style: .primary) { scanning = true }
-                        .accessibilityIdentifier("scan-pairing-code")
-                    #endif
-                    InputBox(placeholder: "herder://pair?host=…&fp=…&code=…", text: $link, mono: true, lines: 3...5)
-                        .accessibilityIdentifier("pairing-link")
-                    Button("Paste", systemImage: "doc.on.clipboard") { link = Clipboard.string ?? link }
-                        .buttonStyle(.plain)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Theme.secondary)
-                }
-            }
-            if let uri {
-                Field(label: "3 · Check it is your machine",
-                      hint: "The fingerprint must match the one `herder pair` printed.") {
+                      height: machines == nil ? 440 : 600) {
+            if let results {
+                Field(label: "Results") {
                     VStack(alignment: .leading, spacing: 10) {
-                        DetailRow(label: "Addresses", value: uri.hosts.joined(separator: "\n"), mono: true)
-                        DetailRow(label: "Fingerprint", value: grouped(uri.fingerprint), mono: true)
-                        if let paired = fleet.machines.first(where: { $0.fingerprint == uri.fingerprint }) {
-                            Text("Already paired as \(paired.name): pairing again gives it a new key.")
-                                .font(.footnote)
-                                .foregroundStyle(Theme.accent)
-                        }
+                        ForEach(Array(results.enumerated()), id: \.offset) { PairResultRow(result: $0.element) }
                     }
                     .padding(12)
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
-            } else if !trimmed.isEmpty {
-                Text("That is not a herder pairing link.").font(.footnote).foregroundStyle(Theme.failure)
-            }
-            if let error {
-                Text(error).font(.footnote).foregroundStyle(Theme.failure)
+            } else {
+                steps
             }
         } footer: {
             Spacer()
-            ActionButton(title: "Pair", style: .primary) { await pair() }
-                .frame(maxWidth: 200)
-                .disabled(uri == nil)
-                .opacity(uri == nil ? 0.4 : 1)
-                .keyboardShortcut(.defaultAction)
+            if results == nil {
+                ActionButton(title: "Pair", style: .primary) { await pair() }
+                    .frame(maxWidth: 200)
+                    .disabled(machines == nil)
+                    .opacity(machines == nil ? 0.4 : 1)
+                    .keyboardShortcut(.defaultAction)
+            } else {
+                ActionButton(title: "Done", style: .primary) { dismiss() }
+                    .frame(maxWidth: 200)
+                    .keyboardShortcut(.defaultAction)
+            }
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $scanning) { PairScanner { link = $0 } }
         #endif
+    }
+
+    @ViewBuilder private var steps: some View {
+        Field(label: "1 · On the machine") {
+            HStack {
+                Text("herder pair").font(Theme.mono).foregroundStyle(Theme.text)
+                Spacer()
+                CopyButton(text: "herder pair")
+            }
+            .padding(12)
+            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+        }
+        Field(label: scanLabel,
+              hint: "Or, on a device already paired, open Machines › Pair Another Device.") {
+            VStack(alignment: .trailing, spacing: 8) {
+                #if os(iOS)
+                ActionButton(title: "Scan QR Code", style: .primary) { scanning = true }
+                    .accessibilityIdentifier("scan-pairing-code")
+                #endif
+                InputBox(placeholder: "herder://pair?host=…&fp=…&code=…", text: $link, mono: true, lines: 3...5)
+                    .accessibilityIdentifier("pairing-link")
+                Button("Paste", systemImage: "doc.on.clipboard") { link = Clipboard.string ?? link }
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Theme.secondary)
+            }
+        }
+        if let machines {
+            Field(label: machines.count == 1 ? "3 · Check it is your machine" : "3 · Check they are your \(machines.count) machines",
+                  hint: "A fingerprint must match the one `herder pair` printed on its machine.") {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(machines.enumerated()), id: \.offset) { _, uri in
+                        VStack(alignment: .leading, spacing: 10) {
+                            DetailRow(label: "Addresses", value: uri.hosts.joined(separator: "\n"), mono: true)
+                            DetailRow(label: "Fingerprint", value: grouped(uri.fingerprint), mono: true)
+                            if let paired = fleet.machines.first(where: { $0.fingerprint == uri.fingerprint }) {
+                                Text("Already paired as \(paired.name): pairing again gives it a new key.")
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            }
+        } else if !trimmed.isEmpty {
+            Text("That is not a herder pairing link.").font(.footnote).foregroundStyle(Theme.failure)
+        }
+        if let error {
+            Text(error).font(.footnote).foregroundStyle(Theme.failure)
+        }
     }
 
     #if os(iOS)
@@ -108,15 +139,45 @@ struct PairSheet: View {
     private var trimmed: String { link.trimmingCharacters(in: .whitespacesAndNewlines) }
     /// The link in what was pasted, which may be all of `herder pair`'s output.
     private var found: String? { pairingLink(in: link) }
-    private var uri: PairingUri? { found.flatMap { try? parsePairingUri(link: $0) } }
+    private var machines: [PairingUri]? { found.flatMap { try? parsePairingLink(link: $0) }?.machines }
 
     private func pair() async {
         guard let found else { return }
         do {
-            try await fleet.pair(link: found)
-            dismiss()
+            let results = try await fleet.pair(link: found)
+            // One machine that paired needs no report: it shows in the list.
+            if results.count == 1, case .paired = results[0] {
+                dismiss()
+            } else {
+                self.results = results
+            }
         } catch {
             self.error = describe(error)
+        }
+    }
+}
+
+/// One machine of a link: paired, or why not.
+private struct PairResultRow: View {
+    let result: PairResult
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            switch result {
+            case .paired(let machine):
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(machine.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text("Paired").font(.caption).foregroundStyle(Theme.secondary)
+                }
+            case .failed(let addresses, let error):
+                Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.failure)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(addresses.first ?? "A machine").font(Theme.mono).foregroundStyle(Theme.text)
+                    Text("Not paired: \(error)").font(.caption).foregroundStyle(Theme.failure)
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
 }

@@ -1,4 +1,6 @@
 import Foundation
+import Herder
+@testable import HerderKit
 
 /// The fake daemon of crates/herder-ffi (`examples/fake_daemon.rs`), run as a sidecar. Its path
 /// comes from `HERDER_FAKE_DAEMON`; tests that need it are skipped without it.
@@ -11,10 +13,12 @@ final class FakeDaemon {
     private let process = Process()
     private let stdin = Pipe()
 
-    init() throws {
+    /// A daemon of host `name`.
+    init(name: String = "fake-host") throws {
         guard let path = Self.path else { throw CocoaError(.fileNoSuchFile) }
         let stdout = Pipe()
         process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = [name]
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
@@ -39,6 +43,18 @@ final class FakeDaemon {
         }
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n").prefix(count).map(String.init)
+    }
+}
+
+extension Fleet {
+    /// Pairs with `daemon`, the one machine its link names.
+    @discardableResult
+    func pair(_ daemon: FakeDaemon) async throws -> Machine {
+        let results = try await pair(link: daemon.link)
+        guard case .paired(let machine) = results.first, results.count == 1 else {
+            throw HerderError.Pairing(detail: "did not pair: \(results)")
+        }
+        return machine
     }
 }
 
