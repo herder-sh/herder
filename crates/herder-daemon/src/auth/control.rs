@@ -319,7 +319,7 @@ const LOCAL_BRIDGES: [&str; 7] = ["docker", "br-", "veth", "virbr", "podman", "c
 /// Where clients can reach a daemon bound to `listen`: that address itself, or for a wildcard
 /// bind the addresses of this machine's interfaces that are up, except container bridges and
 /// loopback; loopback only when there is nothing else.
-fn addresses(listen: SocketAddr) -> Vec<String> {
+pub(crate) fn addresses(listen: SocketAddr) -> Vec<String> {
     if !listen.ip().is_unspecified() {
         return vec![listen.to_string()];
     }

@@ -349,6 +349,10 @@ pub enum CommandBody {
     /// of its config; owners only. What the vault holds stays there. Refused with `not_found`
     /// when it backs up nowhere.
     UnlinkVault,
+    /// Mint a one-time code, as `herder pair` does, that pairs another device as the caller's
+    /// own user with the caller's role, so a shared code never grants more than the sharer
+    /// has; owners and members alike. Answered with `device_pairing`.
+    PairDevice,
     /// On a vault, mint a one-time code that pairs a host to replicate here and only that,
     /// as `herder pair --host` does; owners only. Answered with `host_pairing`.
     PairVaultHost {

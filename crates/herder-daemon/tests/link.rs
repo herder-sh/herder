@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use herder_client_core::{Client, Error, Machine, PairingUri};
+use herder_client_core::{Client, Error, Machine, PairResult, PairingUri};
 use herder_daemon::auth::DeviceRole;
 use herder_daemon::auth::control::{self, Request, Response};
 use herder_protocol::{
@@ -168,6 +168,14 @@ fn open(dir: &Path) -> Client {
     Client::open(dir.to_str().unwrap().to_owned(), "herder-test".into()).unwrap()
 }
 
+/// The machine a link of one machine paired with.
+fn one_machine(results: Vec<PairResult>) -> Machine {
+    match <[PairResult; 1]>::try_from(results) {
+        Ok([PairResult::Paired { machine }]) => machine,
+        other => panic!("expected one paired machine: {other:?}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -180,12 +188,20 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
 
     // The owner pairs with both; a member pairs with the host.
     let owner = open(&tmp.path().join("owner"));
-    let on_vault = owner.pair(vault.link("alice", None).await).await.unwrap();
-    let on_host = owner.pair(host.link("alice", None).await).await.unwrap();
+    let on_vault = owner
+        .pair(vault.link("alice", None).await)
+        .await
+        .map(one_machine)
+        .unwrap();
+    let on_host = owner
+        .pair(host.link("alice", None).await)
+        .await
+        .map(one_machine)
+        .unwrap();
     let (vault_id, host_id) = (on_vault.host_id.clone(), on_host.host_id.clone());
     let member = open(&tmp.path().join("member"));
     let link = host.link("bob", Some(Role::Member)).await;
-    let as_member = member.pair(link).await.unwrap().host_id;
+    let as_member = member.pair(link).await.map(one_machine).unwrap().host_id;
     machine_when(&owner, |m| {
         m.host_id == host_id && m.role == Some(Role::Owner)
     })
@@ -245,7 +261,11 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         fingerprint: on_vault.fingerprint.clone(),
         code: code.clone(),
     };
-    assert!(stranger.pair(host_code_link.to_string()).await.is_err());
+    let as_host = stranger.pair(host_code_link.to_string()).await.unwrap();
+    assert!(
+        matches!(&as_host[..], [PairResult::Failed { .. }]),
+        "{as_host:?}"
+    );
 
     let CommandResult::HostPairing { code, .. } = send(
         &owner,
@@ -277,7 +297,12 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     }
     let vault_member = open(&tmp.path().join("vault-member"));
     let link = vault.link("carol", Some(Role::Member)).await;
-    let carol_vault = vault_member.pair(link).await.unwrap().host_id;
+    let carol_vault = vault_member
+        .pair(link)
+        .await
+        .map(one_machine)
+        .unwrap()
+        .host_id;
     for command in [
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),

@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use herder_client_core::Client;
+use herder_client_core::{Client, PairResult};
 use ratatui::crossterm::event::{self, Event, MouseEventKind};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -433,15 +433,18 @@ fn open_url(url: String, tx: mpsc::UnboundedSender<Msg>) {
     }
 }
 
-/// Pairs with the daemon of `link` and sends the outcome to the loop.
+/// Pairs with the daemon of `link`, a link of one machine, and sends the outcome to the loop.
 fn pair(client: &Client, link: String, tx: mpsc::UnboundedSender<Msg>) {
     let client = client.clone();
     tokio::spawn(async move {
-        let result = client
-            .pair(link)
-            .await
-            .map(Box::new)
-            .map_err(|err| err.to_string());
+        let result = match client.pair(link).await.map(Vec::into_iter) {
+            Err(err) => Err(err.to_string()),
+            Ok(mut results) => match results.next() {
+                Some(PairResult::Paired { machine }) => Ok(Box::new(machine)),
+                Some(PairResult::Failed { error, .. }) => Err(format!("pairing failed: {error}")),
+                None => Err("the link names no machine".to_owned()),
+            },
+        };
         let _ = tx.send(Msg::Paired(result));
     });
 }

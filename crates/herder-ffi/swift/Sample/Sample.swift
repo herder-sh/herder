@@ -38,7 +38,10 @@ struct Sample {
         let config = FileManager.default.temporaryDirectory
             .appendingPathComponent("herder-swift-\(UUID().uuidString)")
         let client = try Client.open(configDir: config.path, client: "herder-swift-sample/0")
-        let machine = try await client.pair(link: link)
+        let results = try await client.pair(link: link)
+        guard results.count == 1, case .paired(let machine) = results[0] else {
+            throw Failure(description: "expected one paired machine, got \(results)")
+        }
         try check(machine.name == "fake-host", "paired with \(machine.name)")
         let host = machine.hostId
         try await client.synced(hostId: host)

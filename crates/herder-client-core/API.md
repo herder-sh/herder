@@ -37,8 +37,8 @@ adapting anything:
 | Rust                                                          | UniFFI                          |
 | ------------------------------------------------------------- | ------------------------------- |
 | `Client`, `SessionSubscription`, `TerminalStream`, `Changes`  | objects (`Arc`, `Send + Sync`)  |
-| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `PairingUri` | records          |
-| `ConnectionState`, `TerminalEvent`                            | enums with named fields         |
+| `Machine`, `ConnectionQuality`, `SessionUpdate`, `NewAccount`, `PairingUri`, `PairingLink`, `SharedLink`, `SkippedMachine` | records |
+| `ConnectionState`, `TerminalEvent`, `PairResult`              | enums with named fields         |
 | `Error`                                                       | error enum with named fields    |
 | `async fn` methods                                            | async methods on a tokio runtime (`async_runtime = "tokio"`) |
 | protocol newtype ids (`HostId`, `SessionId`, ...)             | custom types over `String`      |
@@ -55,8 +55,8 @@ Rules the surface keeps, and `public_api` checks the object rules:
   `AsyncSequence`, Kotlin in a `Flow`. Dropping (in Swift/Kotlin: releasing) the object
   unsubscribes or detaches.
 - `Client::open` must be called within a tokio runtime; the FFI layer owns that runtime.
-- `PairingUri` parses with `FromStr` and formats with `Display`. UniFFI cannot export trait
-  impls on records, so the FFI layer exports them as two plain functions.
+- `PairingUri` and `PairingLink` parse with `FromStr` and format with `Display`. UniFFI
+  cannot export trait impls on records, so the FFI layer exports them as plain functions.
 
 The `auth` module is Rust-only plumbing (TLS device keys and certificate pinning) for whatever
 else connects to a daemon as a device: the vault's replicator in `herder-daemon`, and tests.
@@ -72,7 +72,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`              |
+| Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `SetModel`, `SetPermissionMode`, `ComposeDown` |
 | Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
@@ -97,7 +97,8 @@ everything stops once the last clone is dropped.
 | `open(config_dir: String, client: String) -> Result<Client, Error>` | Opens the profile in `config_dir`, starts from its offline cache, and starts connecting to every saved machine. `client` names the client in daemon logs. |
 | `machines() -> Vec<Machine>` | Every paired machine, in pairing order. |
 | `changes() -> Changes` | Notifications that `machines()` changed. |
-| `async pair(link: String) -> Result<Machine, Error>` | Pairs with the daemon a `herder://pair` link names and saves it. |
+| `async pair(link: String) -> Result<Vec<PairResult>, Error>` | Pairs with every machine a `herder://pair` link names, at once, and saves each that paired; one `PairResult` per machine, in the link's order. Fails only with `InvalidLink`. |
+| `async share() -> Result<SharedLink, Error>` | Asks every connected machine for a one-time code (`pair_device`) and builds one link that pairs another device with all of them, as this device's user with its role on each. A machine not connected, or that refuses or does not answer within 10 s, is skipped. Fails with `Pairing` when no machine gave a code. |
 | `rename(host_id: HostId, name: String) -> Result<(), Error>` | Shows a machine as `name` on this device. |
 | `forget(host_id: HostId) -> Result<(), Error>` | Unpairs a machine on this device. |
 | `async synced(host_id: HostId) -> Result<(), Error>` | Waits until a machine is connected and has sent everything owed for what was sent before. |
@@ -134,13 +135,22 @@ everything stops once the last clone is dropped.
 - `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
   `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
-- `PairingUri` — `hosts: Vec<String>`, `fingerprint: String`, `code: String`; `FromStr`
-  (fails with `Error::InvalidLink`) and `Display` (`herder://pair?…`).
+- `PairingUri` — one machine of a link: `hosts: Vec<String>`, `fingerprint: String`,
+  `code: String`; `FromStr` (fails with `Error::InvalidLink`, also for a link of several
+  machines) and `Display` (`herder://pair?…`).
+- `PairingLink` — `machines: Vec<PairingUri>`, never empty; `FromStr` (fails with
+  `Error::InvalidLink`) and `Display`. See [Pairing links](#pairing-links).
+- `SharedLink` — what `share()` made: `link: PairingLink`, `shared: Vec<HostId>` (the
+  machines it pairs with, in its order), `skipped: Vec<SkippedMachine>`, `expires_at:
+  Timestamp` (when its first code stops working).
+- `SkippedMachine` — `host_id`, `error: String` (not connected, refused, or no answer).
 
 ### Enums
 
 - `ConnectionState` — `Connecting`, `Connected`, `Disconnected { error: String }`.
 - `TerminalEvent` — `Output { data: Vec<u8> }`, `Reattached`, `Closed { exit_code: Option<i32> }`.
+- `PairResult` — `Paired { machine: Machine }`, `Failed { addresses: Vec<String>, error:
+  String }` (nothing was saved for that machine).
 - `Error` — `InvalidLink { message }`, `Pairing { message }`, `UnknownMachine { host_id }`,
   `Rejected { info: ErrorInfo }` (the daemon refused; `info.code` says why, e.g. `forbidden`,
   `read_only`), `Local { message }`, `Closed`.
@@ -180,6 +190,33 @@ ends. A ping still unanswered when the next is due counts in `missed_pongs`; the
 `wake()` sends counts its round trip too. `connected_since` and `reconnects` say how stable
 the connection is. Each pong updates the machine, so `Changes` fires about every 15 s per
 connected machine.
+
+## Pairing links
+
+A `herder://pair` link names one or more machines. Each is a group of query parameters: one
+or more `host` (`host:port`, tried in order), `fp` (SHA-256 of the daemon's certificate,
+lowercase hex) and `code` (its one-time pairing code). A group is complete once it has all
+three, and the next parameter after a complete group starts the next machine. `herder pair`
+prints a link of one group, which parses unchanged:
+
+```
+herder://pair?host=192.168.1.5%3A7447&fp=<hex>&code=ABCDE-FGHJK
+herder://pair?host=192.168.1.5%3A7447&fp=<hex>&code=ABCDE-FGHJK&host=10.0.0.9%3A7447&host=%5Bfd00%3A%3A9%5D%3A7447&fp=<hex>&code=MNPQR-STVWX
+```
+
+`Client::share` builds the second kind: each daemon answers `pair_device` with a code that
+pairs a new device as the sharer's own user with the sharer's role (so never more than the
+sharer may do; members still get no terminals) and the addresses that daemon advertises,
+not the ones the sharer reached it on. The new device gets its own key on every machine,
+revocable on its own; the sharer's keys never leave it. The share is one-time: machines
+paired later are not passed on.
+
+## Changes in version 7
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `pair(link) -> Result<Machine, Error>` | `pair(link) -> Result<Vec<PairResult>, Error>` | A link may name several machines; each pairs or fails on its own. |
+| — | `share() -> Result<SharedLink, Error>`, `PairingLink`, `SharedLink`, `SkippedMachine`, `PairResult` | Pair another device with every machine this one has, from one QR code. |
 
 ## Changes in version 6
 

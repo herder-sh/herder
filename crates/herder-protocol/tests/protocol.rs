@@ -160,6 +160,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             pairing_code: "ABCDE-FGHJK".into(),
         }),
         command(CommandBody::UnlinkVault),
+        command(CommandBody::PairDevice),
         command(CommandBody::PairVaultHost {
             host_name: "devbox".into(),
         }),
@@ -389,6 +390,15 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     total_bytes: 500_000_000_000,
                     used_bytes: 420_000_000_000,
                 }),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::DevicePairing {
+                code: "ABCDE-FGHJK".into(),
+                fingerprint: "3f9a".repeat(16),
+                addresses: vec!["192.168.1.20:7447".into(), "[fd00::20]:7447".into()],
+                expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -1577,6 +1587,32 @@ fn vault_link_commands_have_their_wire_form() {
     assert_eq!(
         serde_json::to_value(&unlinked).unwrap(),
         json!({ "type": "vault_link", "is_vault": false })
+    );
+}
+
+#[test]
+fn device_pairing_has_its_wire_form() {
+    assert_eq!(
+        serde_json::to_value(CommandBody::PairDevice).unwrap(),
+        json!({ "type": "pair_device" })
+    );
+    let pairing = CommandResult::DevicePairing {
+        code: "ABCDE-FGHJK".into(),
+        fingerprint: "ab".into(),
+        addresses: vec!["192.168.1.20:7447".into()],
+        expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
+    };
+    let wire = json!({
+        "type": "device_pairing",
+        "code": "ABCDE-FGHJK",
+        "fingerprint": "ab",
+        "addresses": ["192.168.1.20:7447"],
+        "expires_at": "2026-10-03T12:10:00Z",
+    });
+    assert_eq!(serde_json::to_value(&pairing).unwrap(), wire);
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(wire).unwrap(),
+        pairing
     );
 }
 

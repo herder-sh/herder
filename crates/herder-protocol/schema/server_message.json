@@ -835,6 +835,43 @@
           ]
         },
         {
+          "description": "A one-time code that pairs another device as the caller's user, answering\n`pair_device`: everything a `herder://pair` link names for this daemon.",
+          "type": "object",
+          "properties": {
+            "addresses": {
+              "description": "Addresses the daemon advertises as `host:port`, most likely reachable first; not\nnecessarily the one the caller reached it on.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "code": {
+              "description": "The code, for the new device's hello.",
+              "type": "string"
+            },
+            "expires_at": {
+              "description": "When the code stops working.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "fingerprint": {
+              "description": "SHA-256 of the daemon's TLS certificate, lowercase hex.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "device_pairing"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "fingerprint",
+            "addresses",
+            "expires_at"
+          ]
+        },
+        {
           "description": "A one-time code that pairs a host with this vault to replicate and only that,\nanswering `pair_vault_host`.",
           "type": "object",
           "properties": {

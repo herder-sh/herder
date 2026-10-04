@@ -4,7 +4,8 @@ UniFFI bindings of `herder-client-core` for the Swift and Kotlin apps. The API i
 client-core's (`crates/herder-client-core/API.md`), with three additions described in
 `src/lib.rs`: the client owns its tokio runtime, errors are `HerderError` (Kotlin:
 `HerderException`), and pairing links parse and format with `parsePairingUri` and
-`pairingUriToString`. Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
+`pairingUriToString` (one machine) and `parsePairingLink` and `pairingLinkToString` (one or
+more, as `Client.share` makes them). Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
 terminal bytes are byte arrays and a tool call's input is JSON text.
 
 The `ffi` workflow builds both packages and runs their samples; this is what it does.

@@ -1012,6 +1012,19 @@
           ]
         },
         {
+          "description": "Mint a one-time code, as `herder pair` does, that pairs another device as the caller's\nown user with the caller's role, so a shared code never grants more than the sharer\nhas; owners and members alike. Answered with `device_pairing`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pair_device"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "On a vault, mint a one-time code that pairs a host to replicate here and only that,\nas `herder pair --host` does; owners only. Answered with `host_pairing`.",
           "type": "object",
           "properties": {

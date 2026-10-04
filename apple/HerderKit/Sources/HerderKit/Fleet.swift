@@ -323,12 +323,20 @@ public final class Fleet {
         }
     }
 
-    /// Pairs with the daemon a `herder://pair` link names.
+    /// Pairs with the daemons a `herder://pair` link names: the first that paired, or why
+    /// the first failed when none did.
     @discardableResult
     public func pair(link: String) async throws -> Machine {
-        let machine = try await client.pair(link: link)
+        let results = try await client.pair(link: link)
         update(client.machines())
-        return machine
+        var failure: String?
+        for result in results {
+            switch result {
+            case .paired(let machine): return machine
+            case .failed(_, let error): failure = failure ?? error
+            }
+        }
+        throw HerderError.Pairing(detail: failure ?? "the link names no machine")
     }
 
     func rename(_ hostId: HostId, to name: String) throws {

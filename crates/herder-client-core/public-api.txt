@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 6;
+pub const CLIENT_API_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -38,6 +38,26 @@ pub struct Machine {
     pub vault: Option<VaultStatus>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum PairResult {
+    Paired { machine: Machine },
+    Failed { addresses: Vec<String>, error: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedLink {
+    pub link: PairingLink,
+    pub shared: Vec<HostId>,
+    pub skipped: Vec<SkippedMachine>,
+    pub expires_at: Timestamp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedMachine {
+    pub host_id: HostId,
+    pub error: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
     Connecting,
@@ -75,7 +95,11 @@ impl Client {
 }
 
 impl Client {
-    pub async fn pair(&self, link: String) -> Result<Machine, Error> {}
+    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, Error> {}
+}
+
+impl Client {
+    pub async fn share(&self) -> Result<SharedLink, Error> {}
 }
 
 impl Client {
@@ -197,9 +221,18 @@ pub struct PairingUri {
     pub code: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairingLink {
+    pub machines: Vec<PairingUri>,
+}
+
 impl fmt::Display for PairingUri {}
 
 impl FromStr for PairingUri {}
+
+impl fmt::Display for PairingLink {}
+
+impl FromStr for PairingLink {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalEvent {

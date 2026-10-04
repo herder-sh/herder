@@ -405,6 +405,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UnlinkVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }
+        | CommandBody::PairDevice
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }

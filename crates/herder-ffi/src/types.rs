@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use herder_client_core::{
-    ConnectionQuality, ConnectionState, Machine, NewAccount, PairingUri, SessionUpdate,
-    TerminalEvent,
+    ConnectionQuality, ConnectionState, Machine, NewAccount, PairResult, PairingLink, PairingUri,
+    SessionUpdate, SharedLink, SkippedMachine, TerminalEvent,
 };
 use herder_protocol::{
     Account, AccountId, AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalId,
@@ -134,6 +134,36 @@ pub struct PairingUri {
     pub hosts: Vec<String>,
     pub fingerprint: String,
     pub code: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct PairingLink {
+    pub machines: Vec<PairingUri>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum PairResult {
+    Paired {
+        machine: Machine,
+    },
+    Failed {
+        addresses: Vec<String>,
+        error: String,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct SharedLink {
+    pub link: PairingLink,
+    pub shared: Vec<HostId>,
+    pub skipped: Vec<SkippedMachine>,
+    pub expires_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct SkippedMachine {
+    pub host_id: HostId,
+    pub error: String,
 }
 
 #[uniffi::remote(Enum)]
@@ -556,6 +586,7 @@ pub enum CommandBody {
         pairing_code: String,
     },
     UnlinkVault,
+    PairDevice,
     PairVaultHost {
         host_name: String,
     },
@@ -627,6 +658,12 @@ pub enum CommandResult {
         is_vault: bool,
         vault: Option<LinkedVault>,
         volume: Option<VaultVolume>,
+    },
+    DevicePairing {
+        code: String,
+        fingerprint: String,
+        addresses: Vec<String>,
+        expires_at: Timestamp,
     },
     HostPairing {
         code: String,

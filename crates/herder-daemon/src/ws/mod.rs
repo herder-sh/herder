@@ -17,8 +17,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, CommandBody, CommandId, CommandResult, DeviceId, ErrorInfo, Event, HostId, Role, Seq,
-    SessionHead, SessionId, TerminalPurpose, UserId,
+    Account, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo, Event, HostId,
+    Role, Seq, SessionHead, SessionId, TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,8 @@ pub use tls::{Tls, fingerprint};
 pub(crate) type Ws =
     tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
 
-use crate::auth::Auth;
+use crate::auth::control::addresses;
+use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::login::{Logins, NewAccount};
@@ -149,6 +150,8 @@ struct Shared<B> {
     host: Host,
     /// The host's link to its vault, which answers the vault link commands; a vault has none.
     link: OnceLock<Arc<Link>>,
+    /// The address the server listens on, set once it does; `pair_device` advertises it.
+    listen: OnceLock<SocketAddr>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -234,9 +237,34 @@ impl<B: Backend> Shared<B> {
             {
                 return link.command(command).await;
             }
+            CommandBody::PairDevice => return self.pair_device(identity),
             command => return self.backend.command(identity, command_id, command).await,
         }
         Ok(CommandResult::Applied)
+    }
+
+    /// A one-time code that pairs another device as `identity`'s user, with this daemon's
+    /// own addresses rather than the one the caller reached it on.
+    fn pair_device(&self, identity: &Identity) -> Result<CommandResult, ErrorInfo> {
+        let Some(listen) = self.listen.get() else {
+            return Err(ErrorInfo {
+                code: ErrorCode::Internal,
+                message: "the daemon is not listening yet".to_owned(),
+            });
+        };
+        let pairing = self
+            .auth
+            .mint_for(&identity.user_id, PAIRING_TTL)
+            .map_err(|err| ErrorInfo {
+                code: ErrorCode::Internal,
+                message: format!("{err:#}"),
+            })?;
+        Ok(CommandResult::DevicePairing {
+            code: pairing.code,
+            fingerprint: self.tls.fingerprint().to_owned(),
+            addresses: addresses(*listen),
+            expires_at: pairing.expires_at,
+        })
     }
 }
 
@@ -263,6 +291,7 @@ impl<B: Backend> Server<B> {
                 commands: Commands::default(),
                 host,
                 link: OnceLock::new(),
+                listen: OnceLock::new(),
             }),
         }
     }
@@ -273,6 +302,12 @@ impl<B: Backend> Server<B> {
             .link
             .set(link)
             .map_err(|_| anyhow::anyhow!("the vault is linked already"))
+    }
+
+    /// Takes `listen` for the address clients reach the server on; [`Server::run`] does it
+    /// itself, the vault, which accepts connections for the server, before it serves one.
+    pub(crate) fn listening_on(&self, listen: SocketAddr) {
+        let _ = self.shared.listen.set(listen);
     }
 
     /// Serves one client whose handshakes are done and whose first text frame, `first`, was
@@ -292,6 +327,10 @@ impl<B: Backend> Server<B> {
 
     /// Accepts connections on `listener` until `shutdown`, which also closes every connection.
     pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
+        match listener.local_addr() {
+            Ok(listen) => self.listening_on(listen),
+            Err(err) => warn!("cannot tell the address the server listens on: {err}"),
+        }
         let hub = Arc::clone(&self.shared.hub);
         let flusher = tokio::spawn({
             let shutdown = shutdown.clone();
