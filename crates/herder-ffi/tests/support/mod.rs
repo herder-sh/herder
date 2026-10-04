@@ -1,6 +1,6 @@
 //! A daemon for the bindings' tests and samples: in-process, on localhost, with one account
 //! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
-//! and a git repository to create a session on.
+//! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,9 @@ pub const ACCOUNT: &str = "fake";
 /// An account whose turn runs until it is interrupted, for prompts to queue behind it.
 pub const HOLD_ACCOUNT: &str = "hold";
 
+/// An account whose turn waits on an approval, for the apps to show a request.
+pub const APPROVAL_ACCOUNT: &str = "approval";
+
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
     /// A pairing link with a fresh code, for user `sample`, who becomes the owner.
@@ -58,6 +61,7 @@ impl FakeDaemon {
         for (account, label, script) in [
             (ACCOUNT, "Fake", "hello.jsonl"),
             (HOLD_ACCOUNT, "Hold", "hold.jsonl"),
+            (APPROVAL_ACCOUNT, "Approval", "approval.jsonl"),
         ] {
             // Each account has a provider of its own, as a provider has one script.
             let provider = Provider::Other(account.into());

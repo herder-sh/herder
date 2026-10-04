@@ -5,8 +5,10 @@ import SwiftUI
 struct RequestCard: View {
     let request: PendingRequest
     let fleet: Fleet
-    /// Shows which session asked; off inside that session's own view.
+    /// Shows which session asked, in a row that opens it; off inside that session's own view.
     var showsSession = true
+    /// Where the session row opens the session on iPad and the Mac; `nil` pushes it.
+    var selection: Binding<SessionKey?>? = nil
     var more = 0
     @State private var answer = ""
     @State private var sending = false
@@ -25,15 +27,7 @@ struct RequestCard: View {
                 Text(request.age).font(.caption).foregroundStyle(Theme.tertiary)
             }
             .foregroundStyle(Theme.accent)
-            if showsSession {
-                HStack(spacing: 6) {
-                    StatusGlyph(state: request.session.state, size: 7)
-                    Text(request.session.title).foregroundStyle(Theme.text)
-                    Text("· \(request.session.machine)").foregroundStyle(Theme.tertiary)
-                }
-                .font(.footnote.weight(.medium))
-                .lineLimit(1)
-            }
+            if showsSession { sessionLink }
             switch request.kind {
             case .approval(let summary):
                 Text(summary)
@@ -77,6 +71,38 @@ struct RequestCard: View {
         .padding(14)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
+    }
+
+    /// The session that asks, opening it as a session row does.
+    @ViewBuilder private var sessionLink: some View {
+        if let selection {
+            Button { selection.wrappedValue = request.session.key } label: { sessionLine }
+                .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: request.session.key) { sessionLine }
+                .buttonStyle(.plain)
+        }
+    }
+
+    private var sessionLine: some View {
+        HStack(spacing: 6) {
+            StatusGlyph(state: request.session.state, size: 7)
+            Text(request.session.title).foregroundStyle(Theme.text)
+            Text("· \(request.session.machine)").foregroundStyle(Theme.tertiary)
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Theme.tertiary)
+        }
+        .font(.footnote.weight(.medium))
+        .lineLimit(1)
+        #if os(iOS)
+        .frame(minHeight: 44)
+        #else
+        .frame(minHeight: 28)
+        #endif
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("request-session")
+        .accessibilityHint("Opens the session")
     }
 
     @ViewBuilder private var reasonLines: some View {
