@@ -44,7 +44,7 @@ impl SessionLog {
         }
         match &event.body {
             EventBody::ItemAdded { item } => self.streaming.retain(|live| live.id != item.id),
-            EventBody::TurnCompleted { turn_id }
+            EventBody::TurnCompleted { turn_id, .. }
             | EventBody::TurnInterrupted { turn_id }
             | EventBody::TurnFailed { turn_id, .. } => {
                 self.streaming.retain(|live| live.turn_id != *turn_id);

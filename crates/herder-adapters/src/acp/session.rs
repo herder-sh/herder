@@ -559,7 +559,10 @@ impl Session {
                         turn_id,
                         error: error(ErrorClass::Fatal, "the agent refused the prompt"),
                     },
-                    _ => AdapterEvent::TurnCompleted { turn_id },
+                    _ => AdapterEvent::TurnCompleted {
+                        turn_id,
+                        usage: None,
+                    },
                 },
                 Err(err) => AdapterEvent::TurnFailed {
                     turn_id,

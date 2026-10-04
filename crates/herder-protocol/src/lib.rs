@@ -21,6 +21,7 @@ mod resources;
 mod server;
 mod settings;
 mod types;
+mod usage;
 
 pub use attachment::{
     Attachment, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_IMAGE_BYTES,
@@ -54,6 +55,7 @@ pub use settings::{
     ResourceSettings, TaskSettings, TitleSettings,
 };
 pub use types::{PermissionMode, Provider, clean_title};
+pub use usage::{TurnUsage, UsagePeriod, UsageTotal};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
 pub const PROTOCOL_VERSION: u32 = 4;

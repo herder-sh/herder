@@ -295,6 +295,18 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::SetResourceLimits { max_turns: 6 }),
         command(CommandBody::GetSettings),
+        command(CommandBody::GetUsageSummary {
+            period: UsagePeriod::Day,
+        }),
+        command(CommandBody::GetUsageSummary {
+            period: UsagePeriod::Week,
+        }),
+        command(CommandBody::GetUsageSummary {
+            period: UsagePeriod::ThirtyDays,
+        }),
+        command(CommandBody::GetUsageSummary {
+            period: UsagePeriod::Month,
+        }),
         command(CommandBody::SetSettings {
             settings: Box::new(settings()),
         }),
@@ -527,6 +539,63 @@ fn server_fixtures() -> Vec<ServerMessage> {
         },
         ServerMessage::CommandAccepted {
             command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::UsageSummary {
+                period: UsagePeriod::Month,
+                since: "2026-10-01T00:00:00Z".parse().unwrap(),
+                totals: vec![
+                    UsageTotal {
+                        account_id: AccountId::new("01J9ACCOUNT"),
+                        provider: Provider::Claude,
+                        model: "claude-opus-4-1".into(),
+                        turns: 12,
+                        input: 48_000,
+                        output: 9_500,
+                        cache_read: 1_200_000,
+                        cache_write: 64_000,
+                        cost_usd: 4.82,
+                        cost_estimated: false,
+                    },
+                    UsageTotal {
+                        account_id: AccountId::new("01J9CODEX"),
+                        provider: Provider::Codex,
+                        model: "gpt-5-codex".into(),
+                        turns: 3,
+                        input: 20_000,
+                        output: 4_000,
+                        cache_read: 80_000,
+                        cache_write: 0,
+                        cost_usd: 0.31,
+                        cost_estimated: true,
+                    },
+                ],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::UsageSummary {
+                period: UsagePeriod::Day,
+                since: "2026-10-03T12:00:00Z".parse().unwrap(),
+                totals: Vec::new(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::UsageSummary {
+                period: UsagePeriod::Week,
+                since: "2026-09-27T12:00:00Z".parse().unwrap(),
+                totals: Vec::new(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::UsageSummary {
+                period: UsagePeriod::ThirtyDays,
+                since: "2026-09-04T12:00:00Z".parse().unwrap(),
+                totals: Vec::new(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::DevicePairing {
                 code: "ABCDE-FGHJK".into(),
                 fingerprint: "3f9a".repeat(16),
@@ -665,7 +734,42 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 }),
             },
         ),
-        event(10, None, EventBody::TurnCompleted { turn_id: turn_id() }),
+        event(
+            10,
+            None,
+            EventBody::TurnCompleted {
+                turn_id: turn_id(),
+                usage: Some(TurnUsage {
+                    input: 1_200,
+                    output: 340,
+                    cache_read: 18_000,
+                    cache_write: 2_048,
+                    cost_usd: Some(0.0425),
+                    cost_estimated: false,
+                }),
+            },
+        ),
+        event(
+            10,
+            None,
+            EventBody::TurnCompleted {
+                turn_id: turn_id(),
+                usage: Some(TurnUsage {
+                    input: 900,
+                    output: 120,
+                    cost_estimated: false,
+                    ..TurnUsage::default()
+                }),
+            },
+        ),
+        event(
+            10,
+            None,
+            EventBody::TurnCompleted {
+                turn_id: turn_id(),
+                usage: None,
+            },
+        ),
         event(11, owner, EventBody::TurnInterrupted { turn_id: turn_id() }),
         event(
             12,
@@ -1768,6 +1872,134 @@ fn vault_link_commands_have_their_wire_form() {
     assert_eq!(
         serde_json::to_value(&unlinked).unwrap(),
         json!({ "type": "vault_link", "is_vault": false })
+    );
+}
+
+#[test]
+fn turn_usage_has_its_wire_form_and_may_be_absent() {
+    let completed = EventBody::TurnCompleted {
+        turn_id: TurnId::new("t1"),
+        usage: Some(TurnUsage {
+            input: 10,
+            output: 20,
+            cache_read: 30,
+            cache_write: 40,
+            cost_usd: Some(0.5),
+            cost_estimated: true,
+        }),
+    };
+    let wire = json!({
+        "type": "turn_completed",
+        "turn_id": "t1",
+        "usage": {
+            "input": 10,
+            "output": 20,
+            "cache_read": 30,
+            "cache_write": 40,
+            "cost_usd": 0.5,
+            "cost_estimated": true,
+        },
+    });
+    assert_eq!(serde_json::to_value(&completed).unwrap(), wire);
+    assert_eq!(
+        serde_json::from_value::<EventBody>(wire).unwrap(),
+        completed
+    );
+
+    // A turn completed before turn usage existed, or whose provider reported none.
+    let bare = json!({ "type": "turn_completed", "turn_id": "t1" });
+    let decoded = serde_json::from_value::<EventBody>(bare.clone()).unwrap();
+    assert_eq!(
+        decoded,
+        EventBody::TurnCompleted {
+            turn_id: TurnId::new("t1"),
+            usage: None,
+        }
+    );
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), bare);
+
+    // An unknown cost is left out.
+    let unpriced = TurnUsage {
+        input: 1,
+        ..TurnUsage::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&unpriced).unwrap(),
+        json!({ "input": 1, "output": 0, "cache_read": 0, "cache_write": 0, "cost_estimated": false })
+    );
+}
+
+#[test]
+fn usage_summary_has_its_wire_form() {
+    for (period, name) in [
+        (UsagePeriod::Day, "24h"),
+        (UsagePeriod::Week, "7d"),
+        (UsagePeriod::ThirtyDays, "30d"),
+        (UsagePeriod::Month, "month"),
+    ] {
+        let wire = json!({ "type": "get_usage_summary", "period": name });
+        assert_eq!(
+            serde_json::to_value(CommandBody::GetUsageSummary { period }).unwrap(),
+            wire
+        );
+        assert_eq!(
+            serde_json::from_value::<CommandBody>(wire).unwrap(),
+            CommandBody::GetUsageSummary { period }
+        );
+    }
+    let summary = CommandResult::UsageSummary {
+        period: UsagePeriod::Week,
+        since: "2026-09-27T12:00:00Z".parse().unwrap(),
+        totals: vec![UsageTotal {
+            account_id: AccountId::new("work"),
+            provider: Provider::Claude,
+            model: "opus".into(),
+            turns: 2,
+            input: 1,
+            output: 2,
+            cache_read: 3,
+            cache_write: 4,
+            cost_usd: 1.25,
+            cost_estimated: false,
+        }],
+    };
+    let wire = json!({
+        "type": "usage_summary",
+        "period": "7d",
+        "since": "2026-09-27T12:00:00Z",
+        "totals": [{
+            "account_id": "work",
+            "provider": "claude",
+            "model": "opus",
+            "turns": 2,
+            "input": 1,
+            "output": 2,
+            "cache_read": 3,
+            "cache_write": 4,
+            "cost_usd": 1.25,
+            "cost_estimated": false,
+        }],
+    });
+    assert_eq!(serde_json::to_value(&summary).unwrap(), wire);
+    assert_eq!(
+        serde_json::from_value::<CommandResult>(wire).unwrap(),
+        summary
+    );
+}
+
+#[test]
+fn usage_periods_start_where_they_say() {
+    let now: Timestamp = "2026-10-04T15:30:00Z".parse().unwrap();
+    let start = |period: UsagePeriod| period.start(now).to_string();
+    assert_eq!(start(UsagePeriod::Day), "2026-10-03T15:30:00Z");
+    assert_eq!(start(UsagePeriod::Week), "2026-09-27T15:30:00Z");
+    assert_eq!(start(UsagePeriod::ThirtyDays), "2026-09-04T15:30:00Z");
+    assert_eq!(start(UsagePeriod::Month), "2026-10-01T00:00:00Z");
+    // The month is UTC's: just after midnight UTC on the first, it has only begun.
+    let first: Timestamp = "2026-11-01T00:00:01Z".parse().unwrap();
+    assert_eq!(
+        UsagePeriod::Month.start(first).to_string(),
+        "2026-11-01T00:00:00Z"
     );
 }
 

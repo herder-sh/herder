@@ -18,8 +18,8 @@ use herder_protocol::{
     Pressure, Project, ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary,
     PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route,
     SessionHead, SessionId, SessionStatus, SessionUsage, TaskSettings, Terminal, TerminalId,
-    TerminalPurpose, Timestamp, TitleSettings, TitleSource, TurnError, TurnId, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    TerminalPurpose, Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage,
+    UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -216,6 +216,7 @@ pub enum EventBody {
     },
     TurnCompleted {
         turn_id: TurnId,
+        usage: Option<TurnUsage>,
     },
     TurnInterrupted {
         turn_id: TurnId,
@@ -610,6 +611,9 @@ pub enum CommandBody {
     GetProjectIcon {
         project_id: ProjectId,
     },
+    GetUsageSummary {
+        period: UsagePeriod,
+    },
     GetVaultLink,
     LinkVault {
         addresses: Vec<String>,
@@ -709,6 +713,11 @@ pub enum CommandResult {
         icon: String,
         media_type: String,
         data: Bytes,
+    },
+    UsageSummary {
+        period: UsagePeriod,
+        since: Timestamp,
+        totals: Vec<UsageTotal>,
     },
     VaultLink {
         is_vault: bool,
@@ -932,6 +941,38 @@ pub struct UsageWindow {
     pub window: String,
     pub used_percent: f64,
     pub resets_at: Option<Timestamp>,
+}
+
+#[uniffi::remote(Record)]
+pub struct TurnUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost_usd: Option<f64>,
+    pub cost_estimated: bool,
+}
+
+#[uniffi::remote(Enum)]
+pub enum UsagePeriod {
+    Day,
+    Week,
+    ThirtyDays,
+    Month,
+}
+
+#[uniffi::remote(Record)]
+pub struct UsageTotal {
+    pub account_id: AccountId,
+    pub provider: Provider,
+    pub model: String,
+    pub turns: u64,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost_usd: f64,
+    pub cost_estimated: bool,
 }
 
 #[uniffi::remote(Record)]

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, ApprovalId, Attachment, HostId, ItemId, PermissionMode, Provider, QuestionId, Seq,
-    SessionId, Timestamp, TurnId, UserId,
+    SessionId, Timestamp, TurnId, TurnUsage, UserId,
 };
 
 /// One journal record: `seq` orders it within its session, `by` names the user who caused it.
@@ -89,6 +89,9 @@ pub enum EventBody {
     TurnCompleted {
         /// The finished turn.
         turn_id: TurnId,
+        /// Tokens and cost of the turn; absent when the provider did not report them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
     },
     /// The turn was stopped by an interrupt command.
     TurnInterrupted {

@@ -162,7 +162,10 @@ async fn prompt_streams_the_reply() {
             AdapterEvent::ItemCompleted {
                 item: message("item-1", "ok")
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     shutdown(session).await;
@@ -249,7 +252,10 @@ async fn permission_request_is_asked_and_answered() {
     );
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -273,7 +279,10 @@ async fn full_access_allows_without_asking() {
     );
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -466,7 +475,10 @@ async fn seed_goes_in_front_of_the_first_prompt() {
     let events = until(&mut session, is_turn_end).await;
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -527,7 +539,10 @@ async fn grok_streams_the_reply_and_switches_models_natively() {
     );
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 
@@ -594,7 +609,10 @@ async fn grok_asks_before_a_command_and_runs_it_once_allowed() {
     );
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -634,7 +652,10 @@ async fn an_agent_that_advertises_images_gets_them_as_image_blocks() {
     let events = prompt_with_image(&adapter).await;
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     assert!(adapter.accepts_images());
 }
@@ -652,7 +673,10 @@ async fn an_agent_that_takes_no_images_gets_a_line_naming_each_and_is_believed()
     let events = prompt_with_image(&adapter).await;
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     assert!(!adapter.accepts_images());
     assert!(!AcpAdapter::new(AgentProfile::grok()).accepts_images());

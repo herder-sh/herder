@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -138,6 +138,28 @@ CREATE TABLE agent_message_receipts (
 const V11: &str = "
 ALTER TABLE queued_prompts ADD COLUMN prompt_id TEXT NOT NULL DEFAULT '';
 UPDATE queued_prompts SET prompt_id = lower(hex(randomblob(16)));
+";
+
+/// Daemon state, not a projection: the tokens and cost of each completed turn, with the
+/// account, provider and model it ran on, kept for usage summaries. `at_ms` is when the turn
+/// completed, in Unix milliseconds, so periods compare as numbers.
+const V12: &str = "
+CREATE TABLE turn_usage (
+    session_id     TEXT    NOT NULL,
+    turn_id        TEXT    NOT NULL,
+    account_id     TEXT    NOT NULL,
+    provider       TEXT    NOT NULL,
+    model          TEXT    NOT NULL,
+    input          INTEGER NOT NULL,
+    output         INTEGER NOT NULL,
+    cache_read     INTEGER NOT NULL,
+    cache_write    INTEGER NOT NULL,
+    cost_usd       REAL,
+    cost_estimated INTEGER NOT NULL,
+    at_ms          INTEGER NOT NULL,
+    PRIMARY KEY (session_id, turn_id)
+) STRICT;
+CREATE INDEX turn_usage_at ON turn_usage (at_ms);
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

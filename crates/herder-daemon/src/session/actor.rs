@@ -1717,7 +1717,11 @@ impl Actor {
         let turn_id = setup.turn_id;
         self.needs_setup = message.is_some();
         let Some(message) = message else {
-            self.log(EventBody::TurnCompleted { turn_id }).await;
+            self.log(EventBody::TurnCompleted {
+                turn_id,
+                usage: None,
+            })
+            .await;
             if self.queue.is_empty() {
                 self.set_status(SessionStatus::Idle).await;
             }
@@ -1928,13 +1932,14 @@ impl Actor {
                 }
                 self.log(EventBody::TurnStarted { turn_id }).await;
             }
-            AdapterEvent::TurnCompleted { turn_id } => {
+            AdapterEvent::TurnCompleted { turn_id, usage } => {
                 let summary = self
                     .last_reply
                     .take()
                     .unwrap_or_else(|| "The turn ended without a final message.".to_owned());
                 let body = EventBody::TurnCompleted {
                     turn_id: turn_id.clone(),
+                    usage,
                 };
                 self.turn_ended(turn_id, body, SessionStatus::Idle, summary)
                     .await;
@@ -2519,11 +2524,13 @@ const KEPT_DIRTY: &str = "\n\n(herder kept this child live instead of archiving 
 /// The journal event for `event` when it ends the turn `turn_id`.
 fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {
     match event {
-        AdapterEvent::TurnCompleted { turn_id: ended } if ended == turn_id => {
-            Some(EventBody::TurnCompleted {
-                turn_id: ended.clone(),
-            })
-        }
+        AdapterEvent::TurnCompleted {
+            turn_id: ended,
+            usage,
+        } if ended == turn_id => Some(EventBody::TurnCompleted {
+            turn_id: ended.clone(),
+            usage: usage.clone(),
+        }),
         AdapterEvent::TurnInterrupted { turn_id: ended } if ended == turn_id => {
             Some(EventBody::TurnInterrupted {
                 turn_id: ended.clone(),
@@ -2650,7 +2657,7 @@ fn setup_unfinished(journal: &[herder_protocol::Event]) -> bool {
                     unfinished = Some(item.turn_id.clone());
                 }
             }
-            EventBody::TurnCompleted { turn_id } if unfinished.as_ref() == Some(turn_id) => {
+            EventBody::TurnCompleted { turn_id, .. } if unfinished.as_ref() == Some(turn_id) => {
                 unfinished = None;
             }
             _ => {}

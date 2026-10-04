@@ -822,6 +822,38 @@
           ]
         },
         {
+          "description": "The tokens and cost of the turns completed on this daemon's host over a period,\nanswering `get_usage_summary`.",
+          "type": "object",
+          "properties": {
+            "period": {
+              "description": "The period asked for.",
+              "$ref": "#/$defs/UsagePeriod"
+            },
+            "since": {
+              "description": "When it starts, as [`UsagePeriod::start`] has it at the time of the answer.",
+              "type": "string",
+              "format": "date-time"
+            },
+            "totals": {
+              "description": "One total per account and model with a turn in the period, ordered by account,\nthen model.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/UsageTotal"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "usage_summary"
+            }
+          },
+          "required": [
+            "type",
+            "period",
+            "since",
+            "totals"
+          ]
+        },
+        {
           "description": "Where the daemon backs its sessions up, answering `get_vault_link`.",
           "type": "object",
           "properties": {
@@ -1446,6 +1478,17 @@
             "type": {
               "type": "string",
               "const": "turn_completed"
+            },
+            "usage": {
+              "description": "Tokens and cost of the turn; absent when the provider did not report them.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -3248,6 +3291,149 @@
     "TurnId": {
       "description": "Identifies a turn within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "TurnUsage": {
+      "description": "Tokens and cost of one turn, as its provider reported them.",
+      "type": "object",
+      "properties": {
+        "cache_read": {
+          "description": "Input tokens read from the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write": {
+          "description": "Input tokens written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost_estimated": {
+          "description": "Whether `cost_usd` is herder's estimate from its price table rather than the\nprovider's own figure.",
+          "type": "boolean"
+        },
+        "cost_usd": {
+          "description": "What the turn costs at the provider's API prices, in US dollars; absent when neither\nthe provider nor herder's price table knows the model.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input": {
+          "description": "Input tokens, not counting those read from or written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens, reasoning included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write",
+        "cost_estimated"
+      ]
+    },
+    "UsagePeriod": {
+      "description": "A period to add usage up over, ending now.",
+      "oneOf": [
+        {
+          "description": "The last 24 hours.",
+          "type": "string",
+          "const": "24h"
+        },
+        {
+          "description": "The last 7 days.",
+          "type": "string",
+          "const": "7d"
+        },
+        {
+          "description": "The last 30 days.",
+          "type": "string",
+          "const": "30d"
+        },
+        {
+          "description": "The current calendar month, in UTC, to date.",
+          "type": "string",
+          "const": "month"
+        }
+      ]
+    },
+    "UsageTotal": {
+      "description": "What one account used with one model over a period, on one daemon.",
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "description": "The account the turns ran on.",
+          "$ref": "#/$defs/AccountId"
+        },
+        "cache_read": {
+          "description": "Input tokens read from the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write": {
+          "description": "Input tokens written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost_estimated": {
+          "description": "Whether some turn's cost was herder's estimate, or unknown and so left out of\n`cost_usd`.",
+          "type": "boolean"
+        },
+        "cost_usd": {
+          "description": "The turns' known costs added up, in US dollars.",
+          "type": "number",
+          "format": "double"
+        },
+        "input": {
+          "description": "Input tokens, as [`TurnUsage::input`] counts them.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "model": {
+          "description": "The model, in the provider's own naming.",
+          "type": "string"
+        },
+        "output": {
+          "description": "Output tokens.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "provider": {
+          "description": "The account's provider.",
+          "$ref": "#/$defs/Provider"
+        },
+        "turns": {
+          "description": "Completed turns counted.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "account_id",
+        "provider",
+        "model",
+        "turns",
+        "input",
+        "output",
+        "cache_read",
+        "cache_write",
+        "cost_usd",
+        "cost_estimated"
+      ]
     },
     "UsageWindow": {
       "description": "Usage of one provider limit window, such as a five-hour or weekly limit.",

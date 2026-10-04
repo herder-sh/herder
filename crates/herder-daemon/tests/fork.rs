@@ -661,7 +661,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     // The fork goes on on B, its CLI seeded with the transcript.
     b.prompt(&fork, "Third.").await.unwrap();
     b.journal_until(&fork, |body| {
-        matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "b-turn-1")
+        matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-1")
     })
     .await;
     let seeds = b.seeds.lock().unwrap().clone();

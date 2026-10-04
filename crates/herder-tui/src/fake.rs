@@ -788,6 +788,7 @@ pub fn chat() -> App {
                 ),
                 EventBody::TurnCompleted {
                     turn_id: TurnId::new(t1),
+                    usage: None,
                 },
             ],
         ),

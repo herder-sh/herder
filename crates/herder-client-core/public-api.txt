@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 9;
+pub const CLIENT_API_VERSION: u32 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId,
     DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptId, Provider,
-    QuestionId, Seq, SessionId, TerminalId,
+    QuestionId, Seq, SessionId, TerminalId, UsagePeriod,
 };
 
 /// A client-to-daemon message.
@@ -452,6 +452,14 @@ pub enum CommandBody {
     GetProjectIcon {
         /// The project, one of this daemon's.
         project_id: ProjectId,
+    },
+    /// Add up the tokens and cost of the turns completed on this daemon's host over `period`,
+    /// per account and model; owners and members alike. Answered with `usage_summary`. Each
+    /// daemon answers for its own host; clients add the answers of their machines up. It
+    /// changes nothing, so a resend is answered afresh.
+    GetUsageSummary {
+        /// The period, ending now.
+        period: UsagePeriod,
     },
     /// Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.
     /// It changes nothing, so a resend is answered afresh.

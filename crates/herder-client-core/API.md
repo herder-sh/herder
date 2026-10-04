@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 9`
+`CLIENT_API_VERSION = 10`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -34,7 +34,9 @@ says what exists, why, and how it maps to foreign languages.
   `UploadHistory` command (`HistoryPart`) and `ForkSession`'s `relay` (`Relay`), and so were the `GetSettings`, `SetSettings` and
   `RestartDaemon` commands with their `Settings` result (`DaemonSettings`). Uploading a
   project's icon added, compatibly, the `SetProjectIcon` command and `Project.icon_uploaded`. The `MergeQueued`
-  command was added compatibly too.
+  command was added compatibly too. P11.1 added, compatibly, `TurnCompleted.usage` (`TurnUsage`)
+  and the `GetUsageSummary` command with its `UsageSummary` result (`UsagePeriod`,
+  `UsageTotal`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -394,3 +396,16 @@ place, and answers the same way; a value the daemon cannot run with is refused w
 reconnect as after any restart. Accounts, projects and the vault link keep their own commands.
 Only owners may do any of this. The wire change is additive (protocol 4) and this API is
 unchanged.
+
+### Turn usage (client API 10)
+
+`EventBody::TurnCompleted` carries an optional `usage` (`TurnUsage`): the turn's input,
+output, cache-read and cache-write tokens, and its cost in US dollars, with `cost_estimated`
+set when herder priced the tokens itself rather than taking the provider's figure. It is
+absent when the provider reported nothing, and in turns journaled before it existed.
+`send(host, GetUsageSummary { period })`, with `period` one of the last 24 hours, 7 days,
+30 days or the current UTC calendar month, answers `UsageSummary { period, since, totals }`:
+one `UsageTotal` per account and model with a turn on that daemon's host in the period.
+Owners and members may ask; each daemon answers for its own host, and a client adds its
+machines' answers up. The wire change is additive (protocol 4); the native shape of
+`TurnCompleted` and `CommandResult` changes (client API 10).
