@@ -80,6 +80,25 @@ struct ListsTests {
         #expect(lists.projects[0].machines == ["alpha", "beta"])
     }
 
+    @Test func aRemovedProjectLeavesTheListWithItsArchivedSessions() {
+        // The machine lists neither the project nor a project for its sessions: it was removed.
+        var archived = Script("01A")
+        var live = Script("01B")
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B"])], sessions: [
+            archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
+            live.key: live.model([created()]),
+        ])
+        // The live session waits for a project; the archived one keeps none in the list.
+        #expect(lists.projects.map(\.projectId) == [nil])
+        #expect(lists.projects[0].sessions.map(\.key) == [live.key])
+        #expect(lists.recent.map(\.key) == [live.key])
+
+        let withoutLive = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [
+            archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
+        ])
+        #expect(withoutLive.projects.isEmpty)
+    }
+
     @Test func aVaultSessionShowsItsHostAndWhetherItIsOffline() {
         var script = Script("01A", host: "vault")
         var vault = machine("vault", name: "vault", sessions: ["01A"], hosts: [
