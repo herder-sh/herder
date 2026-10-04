@@ -193,10 +193,11 @@ struct PRStrip: View {
     }
 }
 
-/// Every session's PRs, by project and session; a session opens beside them.
+/// Every session's PRs, by project and session; a session opens beside them, or is pushed.
 struct PullRequestsView: View {
     let fleet: Fleet
-    @Binding var selection: SessionKey?
+    /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
+    var selection: Binding<SessionKey?>?
     var query = ""
     @AppStorage("prsOpenOnly") private var openOnly = true
 
@@ -224,7 +225,7 @@ struct PullRequestsView: View {
                         SectionHeading(title: group.project)
                         ForEach(group.sessions, id: \.session.key) { entry in
                             VStack(alignment: .leading, spacing: 2) {
-                                Button { selection = entry.session.key } label: {
+                                SessionButton(key: entry.session.key, open: selection.map { selection in { selection.wrappedValue = $0 } }) {
                                     HStack(spacing: 8) {
                                         StatusGlyph(state: entry.session.state, size: 7)
                                         Text(entry.session.title).font(.subheadline.weight(.semibold))
@@ -236,11 +237,10 @@ struct PullRequestsView: View {
                                     .padding(.top, 10)
                                     .contentShape(.rect)
                                 }
-                                .buttonStyle(.plain)
                                 ForEach(entry.prs, id: \.number) { PRRow(pr: $0, fleet: fleet, key: entry.session.key) }
                             }
                             .padding(.bottom, 6)
-                            .background(selection == entry.session.key ? Theme.raised.opacity(0.6) : Theme.surface,
+                            .background(selection?.wrappedValue == entry.session.key ? Theme.raised.opacity(0.6) : Theme.surface,
                                         in: .rect(cornerRadius: Theme.corner))
                         }
                     }
@@ -248,5 +248,9 @@ struct PullRequestsView: View {
             }
             .padding(16)
         }
+        .background(Theme.background)
+        .refreshable { fleet.wake() }
+        .navigationTitle("Pull Requests")
+        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 }
