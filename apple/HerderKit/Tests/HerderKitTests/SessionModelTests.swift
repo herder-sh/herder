@@ -32,6 +32,14 @@ func created(task: String? = nil, parent: SessionId? = nil, branch: String = "he
 }
 
 struct SessionModelTests {
+    @Test func aGeneratedTitleNamesTheSessionOverItsBranch() {
+        var script = Script()
+        var model = script.model([created()])
+        #expect(model.title == "herder/abc")
+        model.apply(script.event(.titleChanged(title: "Start iOS App Development", source: .auto)))
+        #expect(model.title == "Start iOS App Development")
+    }
+
     @Test func statusComesFromStatusEvents() {
         var script = Script()
         let model = script.model([created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1")])
