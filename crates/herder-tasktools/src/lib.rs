@@ -81,7 +81,10 @@ impl Tool {
                  does not see your conversation, so `prompt` must say everything it needs. \
                  Returns at once with the child's id and branch while the child works in the \
                  background; call wait_for to get its report. Children cannot spawn children, \
-                 and a task has a limit on children (5 unless the user changed it). When this \
+                 and a task has a limit on live children (5 unless the user changed it). A \
+                 child that completes a turn with nothing queued and a clean worktree is \
+                 archived automatically right after it reports: its worktree is removed, its \
+                 branch kept, and it stops counting toward the limit. When this \
                  machine is too loaded for another agent, fails with `host_busy` and \
                  `retry_after_secs`: keep working or call wait_for, then retry."
             }
@@ -97,13 +100,16 @@ impl Tool {
                 "Send a follow-up prompt to a child: a correction, the next step, or a reply to \
                  its report. An idle child starts its next turn on it at once; a working child \
                  gets it after its current turn ends, in the order sent, and `queued` is then \
-                 true. Either way its report comes through wait_for. To unblock a child waiting \
-                 on a question or approval, use answer instead."
+                 true. Either way its report comes through wait_for. An archived child is \
+                 unarchived first, with its worktree back on its branch, and counts toward your \
+                 limit on children again. To unblock a child waiting on a question or approval, \
+                 use answer instead."
             }
             Tool::Status => {
                 "Snapshot of your children: each one's task, branch, status, latest report, and \
-                 the questions and approval requests waiting for your answer. Returns at once; \
-                 use wait_for to block until something changes."
+                 the questions and approval requests waiting for your answer. Children archived \
+                 after they finished are listed too, as `archived`, with their latest report. \
+                 Returns at once; use wait_for to block until something changes."
             }
             Tool::WaitFor => {
                 "Block until a child needs you: it finished a turn (`report`), or it asked a \
@@ -112,7 +118,11 @@ impl Tool {
                  is already waiting; each event is returned once. Pass `child` to wait for that \
                  child only, or omit it to wait for any. Returns `timeout` when `timeout_secs` \
                  pass first, and `idle` at once when no awaited child is working and nothing \
-                 waits for you."
+                 waits for you. A child that completed its turn with nothing queued is archived by \
+                 the time you get its report, with `status` `archived`; one whose worktree has \
+                 uncommitted or untracked changes stays `idle`, and its summary says so. A \
+                 child whose turn failed or was interrupted, or that waits on a question or \
+                 approval, is never archived automatically."
             }
             Tool::Answer => {
                 "Answer a question or approval request that a child put to you, unblocking it. \

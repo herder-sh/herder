@@ -18,9 +18,9 @@ use herder_daemon::session::{
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
-    CommandBody, CommandResult, EscalationReason, Event, EventBody, Item, ItemBody, ItemId,
-    PermissionMode, Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus, TurnId,
-    UserId,
+    CommandBody, CommandResult, ErrorClass, EscalationReason, Event, EventBody, Item, ItemBody,
+    ItemId, PermissionMode, Provider, QuestionId, Route, SessionHead, SessionId, SessionStatus,
+    TurnError, TurnId, UserId,
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
@@ -30,8 +30,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// A provider whose agent answers every prompt `Done: <prompt>` after a moment, and never
-/// ends a turn on `Hang.`. It blocks on a request until it is answered: on `Ask.` it asks a
+/// A provider whose agent answers every prompt `Done: <prompt>` after a moment, never ends a
+/// turn on `Hang.`, and fails the turn on `Fail.`. It blocks on a request until it is answered: on `Ask.` it asks a
 /// question with choices A and B, on `Write <path>.` it asks to write the file, and on
 /// `Run <command>.` to run the command.
 struct Echo;
@@ -88,6 +88,15 @@ impl Adapter for Echo {
                                     .await;
                             }
                             if text == "Hang." {
+                                continue;
+                            }
+                            if text == "Fail." {
+                                let error = TurnError {
+                                    class: ErrorClass::Fatal,
+                                    message: "it broke".into(),
+                                };
+                                let failed = AdapterEvent::TurnFailed { turn_id, error };
+                                let _ = events.send(failed).await;
                                 continue;
                             }
                             let arg = |prefix: &str| {
@@ -357,6 +366,14 @@ impl Daemon {
         self.until_n(session_id, 1, matching).await;
     }
 
+    /// The worktree `session_id` was created with.
+    async fn worktree(&self, session_id: &SessionId) -> PathBuf {
+        match &self.journal(session_id).await[0].body {
+            EventBody::SessionCreated { worktree, .. } => PathBuf::from(worktree),
+            other => panic!("expected session_created, got {other:?}"),
+        }
+    }
+
     /// The latest status `session_id` journaled.
     async fn status(&self, session_id: &SessionId) -> SessionStatus {
         let journal = self.journal(session_id).await;
@@ -474,11 +491,13 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
     let (child_a, child_b) = (id(&a["child"]), id(&b["child"]));
     assert_ne!(a["branch"], b["branch"]);
 
+    // Each child finished its turn with a clean worktree, so it is archived by the time its
+    // report comes.
     let mut reports = BTreeSet::new();
     for _ in 0..2 {
         let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
         assert_eq!(event["kind"], "report", "{event}");
-        assert_eq!(event["status"], "idle", "{event}");
+        assert_eq!(event["status"], "archived", "{event}");
         reports.insert((
             event["child"].as_str().unwrap().to_owned(),
             event["summary"].as_str().unwrap().to_owned(),
@@ -537,7 +556,10 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
         panic!("expected session_created, got {:?}", child[0].body);
     };
     assert_eq!(repo, daemon.repo.to_str().unwrap());
-    assert!(Path::new(worktree).is_dir());
+    // Archived: the worktree is gone, the branch kept.
+    assert!(!Path::new(worktree).exists());
+    let kept = format!("refs/heads/{branch}");
+    git(&daemon.repo, &["show-ref", "--verify", "--quiet", &kept]);
     assert_eq!(branch, a["branch"].as_str().unwrap());
     assert_eq!(account_id, &AccountId::new("account-1"));
     assert_eq!(model, "echo-1");
@@ -562,7 +584,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
                 "child": child_a.as_str(),
                 "task": "Fix A",
                 "branch": a["branch"],
-                "status": "idle",
+                "status": "archived",
                 "last_report": "Done: Do A.",
                 "open_questions": [],
             },
@@ -570,7 +592,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
                 "child": child_b.as_str(),
                 "task": "Fix B",
                 "branch": b["branch"],
-                "status": "idle",
+                "status": "archived",
                 "last_report": "Done: Do B.",
                 "open_questions": [],
             },
@@ -619,15 +641,16 @@ async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
     let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 2 }).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
-    let spawn = json!({ "task": "T", "prompt": "Do it." });
-    let first = id(&tools.ok("spawn", spawn.clone()).await["child"]);
-    tools.ok("spawn", spawn.clone()).await;
+    // Children blocked on a question stay live.
+    let ask = json!({ "task": "T", "prompt": "Ask." });
+    let first = id(&tools.ok("spawn", ask.clone()).await["child"]);
+    tools.ok("spawn", ask.clone()).await;
     for _ in 0..2 {
-        let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
-        assert_eq!(report["kind"], "report");
+        let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(request["kind"], "request");
     }
 
-    let refused = tools.call("spawn", spawn.clone()).await;
+    let refused = tools.call("spawn", ask.clone()).await;
     assert!(refused.is_error, "{refused:?}");
     let error: Value = serde_json::from_str(&refused.content[0].text).unwrap();
     assert_eq!(error["code"], "limit_exceeded");
@@ -639,23 +662,24 @@ async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
     // The limit is per task: another primary spawns freely, and one created with its own
     // limit keeps to that.
     let other = daemon.primary(PermissionMode::Ask).await;
-    daemon.connect(&other).ok("spawn", spawn.clone()).await;
+    daemon.connect(&other).ok("spawn", ask.clone()).await;
     let own = daemon.primary_with(PermissionMode::Ask, Some(1)).await;
     let mut own_tools = daemon.connect(&own);
-    own_tools.ok("spawn", spawn.clone()).await;
+    own_tools.ok("spawn", ask.clone()).await;
     assert_eq!(
-        own_tools.fails("spawn", spawn.clone()).await,
+        own_tools.fails("spawn", ask.clone()).await,
         "limit_exceeded"
     );
 
-    // An archived child no longer counts.
-    let archive = CommandBody::ArchiveSession {
-        session_id: first,
-        force: false,
-    };
-    daemon.manager.handle(alice(), archive).await.unwrap();
-    tools.ok("spawn", spawn.clone()).await;
-    assert_eq!(tools.fails("spawn", spawn).await, "limit_exceeded");
+    // Once answered, the first child finishes and is archived, which frees its slot by the
+    // time its report comes.
+    let answer = json!({ "child": first.as_str(), "question_id": "question-1", "choice": 0 });
+    tools.ok("answer", answer).await;
+    let wait = json!({ "child": first.as_str(), "timeout_secs": 10 });
+    let report = tools.ok("wait_for", wait).await;
+    assert_eq!(report["status"], "archived", "{report}");
+    tools.ok("spawn", ask.clone()).await;
+    assert_eq!(tools.fails("spawn", ask).await, "limit_exceeded");
 }
 
 /// A host with `GIB`s of memory available, which the test changes.
@@ -783,10 +807,10 @@ async fn a_child_cannot_spawn_and_reaches_only_its_own_children() {
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
     let child = id(&tools
-        .ok("spawn", json!({ "task": "T", "prompt": "Do it." }))
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
         .await["child"]);
-    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
-    assert_eq!(report["kind"], "report");
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
 
     // The child's CLI has started, so it holds a token and can call the tools.
     let mut child_tools = daemon.connect(&child);
@@ -832,9 +856,17 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
     assert_eq!(first["status"], "running");
     let second = tools.ok("wait_for", wait.clone()).await;
     assert_eq!(second["summary"], "Done: Second.");
-    assert_eq!(second["status"], "idle");
+    assert_eq!(second["status"], "archived");
+    let worktree = daemon.worktree(&child).await;
+    assert!(!worktree.exists());
 
-    // An idle child starts at once.
+    // A finished child is unarchived, back on its branch, and starts at once.
+    let send = json!({ "child": child.as_str(), "text": "Third." });
+    assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
+    assert!(worktree.is_dir());
+    let third = tools.ok("wait_for", wait).await;
+    assert_eq!(third["summary"], "Done: Third.");
+    assert_eq!(third["status"], "archived");
     let send = json!({ "child": child.as_str(), "text": "Hang." });
     assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
     let wait = json!({ "child": child.as_str(), "timeout_secs": 1 });
@@ -843,10 +875,67 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
         json!({ "kind": "timeout" })
     );
     daemon
-        .until_n(&primary, 2, |body| {
+        .until_n(&primary, 3, |body| {
             matches!(body, EventBody::ChildReported { .. })
         })
         .await;
+}
+
+#[tokio::test]
+async fn children_that_have_not_finished_cleanly_and_primaries_stay_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+
+    // A child with an open question stays live.
+    let dirty = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    assert_eq!(daemon.status(&dirty).await, SessionStatus::Running);
+
+    // Its turn ends with an untracked file in its worktree: it stays idle, and says why.
+    let worktree = daemon.worktree(&dirty).await;
+    std::fs::write(worktree.join("notes.txt"), "half done").unwrap();
+    let answer = json!({ "child": dirty.as_str(), "question_id": "question-1", "choice": 0 });
+    tools.ok("answer", answer).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["status"], "idle", "{report}");
+    let summary = report["summary"].as_str().unwrap();
+    assert!(summary.starts_with("Answered: "), "{summary}");
+    assert!(
+        summary.contains("uncommitted or untracked changes"),
+        "{summary}"
+    );
+    assert!(worktree.join("notes.txt").is_file());
+    assert_eq!(daemon.status(&dirty).await, SessionStatus::Idle);
+
+    // A failed child stays live.
+    let failed = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Fail." }))
+        .await["child"]);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["child"], failed.as_str());
+    assert_eq!(report["status"], "needs_you", "{report}");
+    assert!(daemon.worktree(&failed).await.is_dir());
+
+    // A primary's finished turns never archive it.
+    daemon.start(&primary).await;
+    daemon
+        .until_n(&primary, 2, |body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::Idle,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert_eq!(daemon.status(&primary).await, SessionStatus::Idle);
+    assert!(daemon.worktree(&primary).await.is_dir());
 }
 
 #[tokio::test]
@@ -1202,7 +1291,7 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
         .await;
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["summary"], r#"Answered: {"type":"text","text":"B"}"#);
-    assert_eq!(report["status"], "idle");
+    assert_eq!(report["status"], "archived");
 }
 
 #[tokio::test]

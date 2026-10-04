@@ -18,6 +18,12 @@
 //! oldest first, each once. The queue lives in memory: a daemon restart drops reports no
 //! `wait_for` took, which stay in the primary's journal and in `status`.
 //!
+//! A child that completes a turn with nothing queued, its worktree clean, is archived right
+//! after its report is journaled and before `wait_for` hears of it: its worktree is removed,
+//! its branch kept, and it no longer counts toward `max_children`. A child whose worktree has
+//! changes stays idle, and its report says why. A failed or interrupted turn, and a primary,
+//! never archive a session. `send` to an archived child unarchives it before the prompt.
+//!
 //! A child's question or approval request routed to the primary ([`super::routing`]) joins
 //! the same queue, and stays in `status.open_questions` until it is answered, escalated, or
 //! its turn ends; a request that leaves the primary before a `wait_for` took it leaves the
@@ -373,7 +379,8 @@ impl SessionManager {
                 format!(
                     "this task already has {live} live children, and its limit is \
                      {max_children}; give the remaining work to a child you have with `send`, \
-                     or do it yourself. A child stops counting once the user archives it"
+                     or do it yourself. A child stops counting once it is archived, as it is \
+                     when it finishes a turn with a clean worktree"
                 ),
             ));
         }
@@ -531,7 +538,13 @@ impl SessionManager {
         caller: SessionId,
         input: SendInput,
     ) -> Result<SendOutput, ToolError> {
-        self.child(&caller, &input.child).await?;
+        let child = self.child(&caller, &input.child).await?;
+        // A finished child was archived; the follow-up brings it back on its branch.
+        if child.status == SessionStatus::Archived {
+            self.send(input.child.clone(), None, actor::Request::Unarchive)
+                .await
+                .map_err(tool_error)?;
+        }
         let queued = self
             .prompt(&input.child, input.text)
             .await

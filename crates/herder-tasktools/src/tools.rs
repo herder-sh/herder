@@ -84,7 +84,7 @@ pub struct ChildStatus {
     pub task: String,
     /// Branch the child works on, in this repository.
     pub branch: String,
-    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue.
+    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when herder archived it after it finished a turn (send unarchives it).
     pub status: SessionStatus,
     /// Summary of its latest finished turn; absent before the first one ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,7 +141,7 @@ pub enum WaitForOutput {
         turn_id: TurnId,
         /// The child's final message of that turn, or what went wrong.
         summary: String,
-        /// The child's status now.
+        /// The child's status now: `archived` when herder archived it after this turn.
         status: SessionStatus,
     },
     /// A child is blocked on a question or approval request waiting for your answer.
