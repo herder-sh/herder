@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs herder to ~/.local/bin/herder.
 #
-#   curl -fsSL https://raw.githubusercontent.com/herder-sh/herder/main/install.sh | sh
+#   curl -fsSL https://herder.sh/install | sh
 #
 # HERDER_VERSION=1.2.3 picks a release instead of the latest one. HERDER_DOWNLOAD_BASE
 # replaces https://github.com/herder-sh/herder/releases, laid out the same way:
