@@ -705,6 +705,7 @@ mode bar does. Unlike Herdr, it has its own row and never covers content.
 | `v` | group by project / machine | | `z` | fold or unfold a task subtree |
 | `b`* | toggle sidebar (`ctrl+x b` only) | | `d`* | toggle details panel (`ctrl+x d` only) |
 | `T` | theme picker | | `r` | reconnect |
+| `E` | rename the session (`r` is reconnect) | | `R` | ask AI to title the session again |
 | `1`–`9` | jump to the Nth attention row (leader only; bare digits answer) | | `q` | quit (`ctrl+c` twice) |
 
 \* These two exist only under the leader, because bare `b` already scrolls up a page.

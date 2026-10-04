@@ -85,6 +85,10 @@ pub enum Action {
     OpenFork,
     /// Input to the fork dialog.
     Fork(crate::fork::Input),
+    /// Rename the selected or open session: the palette, with its `rename` line to edit.
+    Rename,
+    /// Ask AI to title the selected or open session again from its conversation so far.
+    Retitle,
     /// Arm the leader: the next key is a NAVIGATE key, from any mode.
     Leader,
     /// Go to another session: the sidebar, or on a phone the switcher.
@@ -247,6 +251,12 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         KeyCode::Char('F') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
             Action::OpenFork
         }
+        KeyCode::Char('E') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
+            Action::Rename
+        }
+        KeyCode::Char('R') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
+            Action::Retitle
+        }
         _ => return None,
     };
     Some(action)
@@ -271,6 +281,8 @@ pub fn for_leader(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('s') => Action::OpenSwitch,
         KeyCode::Char('t') => Action::Terminals,
         KeyCode::Char('F') => Action::OpenFork,
+        KeyCode::Char('E') => Action::Rename,
+        KeyCode::Char('R') => Action::Retitle,
         KeyCode::Char('I') => Action::Inbox(InboxAction::Toggle),
         KeyCode::Char('P') => Action::Pr(PrAction::ToggleAll),
         KeyCode::Char('p') => Action::Pr(PrAction::FocusStrip),
@@ -355,6 +367,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("v", "group sessions by project or by machine"),
     ("H", "show or hide archived sessions"),
     ("F", "fork a session onto a host"),
+    ("E / R", "rename the session / ask AI to title it again"),
     ("i / I", "inbox, from the sessions / from anywhere"),
     (
         "Enter / l",

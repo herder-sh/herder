@@ -27,7 +27,7 @@ expression: terminal.backend()
 "    mode <mode>  read_only, ask, auto_...    "
 "    switch  switch account, provide...  s    "
 "    stop  interrupt the runnin...  ctrl+c    "
-"    archive  archive the session (arch...    "
+"    rename <title>  rename the session  E    "
 "                                             "
 "   enter run  tab complete  esc close        "
 "                                             "
