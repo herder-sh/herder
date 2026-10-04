@@ -726,7 +726,7 @@ impl View {
                 self.last_message = None;
                 self.last_error = None;
             }
-            EventBody::TurnCompleted { turn_id } | EventBody::TurnInterrupted { turn_id } => {
+            EventBody::TurnCompleted { turn_id, .. } | EventBody::TurnInterrupted { turn_id } => {
                 self.turn_ended(&turn_id);
             }
             EventBody::TurnFailed { turn_id, error } => {
@@ -1090,6 +1090,7 @@ mod tests {
             2,
             EventBody::TurnCompleted {
                 turn_id: TurnId::new("t1"),
+                usage: None,
             },
         )]);
         assert!(view.questions.is_empty());

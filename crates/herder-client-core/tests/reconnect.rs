@@ -301,7 +301,7 @@ fn turn_ended(turn: &str) -> impl Fn(&View) -> bool {
     let turn = TurnId::new(turn);
     move |view| {
         view.has(|body| match body {
-            EventBody::TurnCompleted { turn_id } | EventBody::TurnFailed { turn_id, .. } => {
+            EventBody::TurnCompleted { turn_id, .. } | EventBody::TurnFailed { turn_id, .. } => {
                 *turn_id == turn
             }
             _ => false,

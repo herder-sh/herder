@@ -1351,6 +1351,24 @@
           ]
         },
         {
+          "description": "Add up the tokens and cost of the turns completed on this daemon's host over `period`,\nper account and model; owners and members alike. Answered with `usage_summary`. Each\ndaemon answers for its own host; clients add the answers of their machines up. It\nchanges nothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "period": {
+              "description": "The period, ending now.",
+              "$ref": "#/$defs/UsagePeriod"
+            },
+            "type": {
+              "type": "string",
+              "const": "get_usage_summary"
+            }
+          },
+          "required": [
+            "type",
+            "period"
+          ]
+        },
+        {
           "description": "Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.\nIt changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
@@ -2013,6 +2031,17 @@
             "type": {
               "type": "string",
               "const": "turn_completed"
+            },
+            "usage": {
+              "description": "Tokens and cost of the turn; absent when the provider did not report them.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TurnUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -3330,6 +3359,80 @@
     "TurnId": {
       "description": "Identifies a turn within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "TurnUsage": {
+      "description": "Tokens and cost of one turn, as its provider reported them.",
+      "type": "object",
+      "properties": {
+        "cache_read": {
+          "description": "Input tokens read from the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cache_write": {
+          "description": "Input tokens written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost_estimated": {
+          "description": "Whether `cost_usd` is herder's estimate from its price table rather than the\nprovider's own figure.",
+          "type": "boolean"
+        },
+        "cost_usd": {
+          "description": "What the turn costs at the provider's API prices, in US dollars; absent when neither\nthe provider nor herder's price table knows the model.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input": {
+          "description": "Input tokens, not counting those read from or written to the prompt cache.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output": {
+          "description": "Output tokens, reasoning included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write",
+        "cost_estimated"
+      ]
+    },
+    "UsagePeriod": {
+      "description": "A period to add usage up over, ending now.",
+      "oneOf": [
+        {
+          "description": "The last 24 hours.",
+          "type": "string",
+          "const": "24h"
+        },
+        {
+          "description": "The last 7 days.",
+          "type": "string",
+          "const": "7d"
+        },
+        {
+          "description": "The last 30 days.",
+          "type": "string",
+          "const": "30d"
+        },
+        {
+          "description": "The current calendar month, in UTC, to date.",
+          "type": "string",
+          "const": "month"
+        }
+      ]
     },
     "UserId": {
       "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",

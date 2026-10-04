@@ -1293,6 +1293,7 @@ mod tests {
 
         let ended = EventBody::TurnCompleted {
             turn_id: TurnId::new("turn-1"),
+            usage: None,
         };
         fake::feed(&mut app, "h1", "s2", update("s2", 5, vec![ended], vec![]));
         let session = &app.sessions[&key("h1", "s2")];

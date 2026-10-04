@@ -134,7 +134,10 @@ async fn full_turn_streams_an_assistant_message() {
                     resets_at: None,
                 }]
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);
@@ -193,7 +196,10 @@ async fn approval_blocks_the_turn_until_answered() {
                     }
                 )
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);
@@ -250,7 +256,10 @@ async fn question_blocks_the_turn_until_answered() {
                     }
                 )
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);

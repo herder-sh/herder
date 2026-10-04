@@ -989,7 +989,10 @@ impl Session {
         self.asks.clear();
         let turn_id = turn.id;
         self.emit(match end {
-            TurnEnd::Completed => AdapterEvent::TurnCompleted { turn_id },
+            TurnEnd::Completed => AdapterEvent::TurnCompleted {
+                turn_id,
+                usage: None,
+            },
             TurnEnd::Interrupted => AdapterEvent::TurnInterrupted { turn_id },
             TurnEnd::Failed(error) => AdapterEvent::TurnFailed { turn_id, error },
         })

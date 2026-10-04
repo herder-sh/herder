@@ -37,7 +37,9 @@ says what exists, why, and how it maps to foreign languages.
   command was added compatibly too. P11.5 added, compatibly, the skill library: the
   `SetSkillsRepo`, `PutSkill` (`SkillFile`), `DeleteSkill`, `ImportSkill`, `PullSkills` and
   `SetSkillEnabled` commands, and the `SkillsStatus` (`LibrarySkill`, `ProviderReload`,
-  `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages.
+  `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages. P11.1 added,
+  compatibly, `TurnCompleted.usage` (`TurnUsage`) and the `GetUsageSummary` command with its
+  `UsageSummary` result (`UsagePeriod`, `UsageTotal`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -407,3 +409,16 @@ place, and answers the same way; a value the daemon cannot run with is refused w
 reconnect as after any restart. Accounts, projects and the vault link keep their own commands.
 Only owners may do any of this. The wire change is additive (protocol 4) and this API is
 unchanged.
+
+### Turn usage (client API 10)
+
+`EventBody::TurnCompleted` carries an optional `usage` (`TurnUsage`): the turn's input,
+output, cache-read and cache-write tokens, and its cost in US dollars, with `cost_estimated`
+set when herder priced the tokens itself rather than taking the provider's figure. It is
+absent when the provider reported nothing, and in turns journaled before it existed.
+`send(host, GetUsageSummary { period })`, with `period` one of the last 24 hours, 7 days,
+30 days or the current UTC calendar month, answers `UsageSummary { period, since, totals }`:
+one `UsageTotal` per account and model with a turn on that daemon's host in the period.
+Owners and members may ask; each daemon answers for its own host, and a client adds its
+machines' answers up. The wire change is additive (protocol 4); the native shape of
+`TurnCompleted` and `CommandResult` changes (client API 10).

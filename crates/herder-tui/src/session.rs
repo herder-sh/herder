@@ -348,7 +348,7 @@ impl Session {
                 self.turn_started = Some(at);
                 None
             }
-            EventBody::TurnCompleted { turn_id } => {
+            EventBody::TurnCompleted { turn_id, .. } => {
                 let took = self.turn_ended(&turn_id, at);
                 Some(Entry::TurnEnded {
                     took,

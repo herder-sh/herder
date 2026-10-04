@@ -203,7 +203,10 @@ fn started() -> AdapterEvent {
 }
 
 fn completed() -> AdapterEvent {
-    AdapterEvent::TurnCompleted { turn_id: turn() }
+    AdapterEvent::TurnCompleted {
+        turn_id: turn(),
+        usage: None,
+    }
 }
 
 #[test]
@@ -1316,7 +1319,10 @@ async fn a_background_agent_works_between_turns_and_its_result_starts_one() {
             // Only now, with its reply's turn open, is the agent no longer counted.
             AdapterEvent::BackgroundAgents { running: 0 },
             item_in(7, &turn_id, message("The review found 2 issues.")),
-            AdapterEvent::TurnCompleted { turn_id },
+            AdapterEvent::TurnCompleted {
+                turn_id,
+                usage: None
+            },
         ]
     );
 
@@ -1386,7 +1392,10 @@ async fn a_prompt_sent_during_a_turn_the_cli_started_waits_for_its_end() {
         events,
         [
             item_in(2, &turn_id, message("Checked.")),
-            AdapterEvent::TurnCompleted { turn_id },
+            AdapterEvent::TurnCompleted {
+                turn_id,
+                usage: None
+            },
             started(),
             AdapterEvent::ItemCompleted {
                 item: item(3, message("ok"))

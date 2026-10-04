@@ -22,6 +22,7 @@ mod server;
 mod settings;
 mod skills;
 mod types;
+mod usage;
 
 pub use attachment::{
     Attachment, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_IMAGE_BYTES,
@@ -59,6 +60,7 @@ pub use skills::{
     SkillReload, SkillSource, SkillsStatus, is_valid_skill_name,
 };
 pub use types::{PermissionMode, Provider, clean_title};
+pub use usage::{TurnUsage, UsagePeriod, UsageTotal};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
 pub const PROTOCOL_VERSION: u32 = 4;

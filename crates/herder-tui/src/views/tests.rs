@@ -157,6 +157,7 @@ pub(super) fn herd() -> App {
     let ended = vec![
         EventBody::TurnCompleted {
             turn_id: herder_protocol::TurnId::new("turn-1"),
+            usage: None,
         },
         fake::status(SessionStatus::Idle),
     ];
