@@ -108,17 +108,13 @@ struct MachineCard: View {
                         .foregroundStyle(machine.connected ? Theme.text : Theme.tertiary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(machine.name).font(.headline).foregroundStyle(Theme.text)
-                        HStack(spacing: 5) {
-                            ConnectionMark(state: machine.connection)
-                            Text(machine.connection.label).lineLimit(2)
-                            if let since {
-                                TimelineView(.periodic(from: .now, by: 30)) { context in
-                                    Text("· \(machine.connected ? "for" : "since") \(Timestamp.age(since, now: context.date) == "now" ? "a moment" : Timestamp.age(since, now: context.date))")
-                                }
+                        TimelineView(.periodic(from: .now, by: 30)) { context in
+                            // One line: the age, then the role, drop before the state would wrap.
+                            ViewThatFits(in: .horizontal) {
+                                status([age(now: context.date), role, vault])
+                                status([role, vault])
+                                status([])
                             }
-                            if machine.role == .owner { Text("· Owner") }
-                            if machine.role == .member { Text("· Member") }
-                            if !machine.hosts.isEmpty { Text("· Vault") }
                         }
                         .font(.caption)
                         .foregroundStyle(Theme.secondary)
@@ -132,6 +128,7 @@ struct MachineCard: View {
                             .foregroundStyle(Theme.tertiary)
                     }
                     .font(.caption.weight(.medium))
+                    .fixedSize()
                     IconButton(symbol: "gearshape", help: "Machine Settings", action: settings)
                 }
                 if let cpu = machine.cpu, let memory = machine.memory {
@@ -165,6 +162,30 @@ struct MachineCard: View {
         }
         .opacity(machine.connected ? 1 : 0.75)
     }
+
+    private func status(_ details: [String?]) -> some View {
+        HStack(spacing: 5) {
+            ConnectionMark(state: machine.connection)
+            Text(([machine.connection.label] + details.compactMap { $0 }).joined(separator: " · "))
+                .lineLimit(1)
+        }
+    }
+
+    private func age(now: Date) -> String? {
+        guard let since else { return nil }
+        let age = Timestamp.age(since, now: now)
+        return "\(machine.connected ? "for" : "since") \(age == "now" ? "a moment" : age)"
+    }
+
+    private var role: String? {
+        switch machine.role {
+        case .owner: "Owner"
+        case .member: "Member"
+        default: nil
+        }
+    }
+
+    private var vault: String? { machine.hosts.isEmpty ? nil : "Vault" }
 }
 
 /// A machine's connection state as a mark: filled when connected, a dashed ring while

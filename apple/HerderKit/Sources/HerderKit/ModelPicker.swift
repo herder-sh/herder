@@ -23,7 +23,7 @@ struct ModelPicker: View {
             .padding(.horizontal, 8)
             .frame(height: 32)
             .background(open ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
-            .contentShape(.rect)
+            .hitTarget()
         }
         .buttonStyle(.plain)
         .fixedSize()
@@ -445,7 +445,7 @@ struct FooterMenu: View {
                 Image(systemName: "chevron.down").font(.caption2)
             }
             .foregroundStyle(open ? Theme.secondary : Theme.tertiary)
-            .contentShape(.rect)
+            .hitTarget()
         }
         .buttonStyle(.plain)
         .fixedSize()
