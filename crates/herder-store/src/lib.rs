@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, JournalRecord,
+    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, HostId, JournalRecord,
     PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus,
     Timestamp, TitleSource, UserId,
 };
@@ -57,7 +57,7 @@ pub enum Error {
     /// A `session_created` event was appended to a session that already has events.
     #[error("session {0} already exists")]
     SessionExists(SessionId),
-    /// A `session_created` event names a parent session that does not exist.
+    /// A `session_created` event names a parent session of this host that does not exist.
     #[error("parent session {0} does not exist")]
     UnknownParent(SessionId),
     /// The event cannot be stored, such as one with an `Unknown` body or status.
@@ -102,6 +102,9 @@ pub struct Session {
     pub permission_mode: PermissionMode,
     /// Primary session of the task this session is a child of; `None` for a top-level session.
     pub parent: Option<SessionId>,
+    /// Host of the parent when it lives on another machine; `None` when the parent, if any,
+    /// is a session of this host.
+    pub parent_host: Option<HostId>,
     /// Short label of the session's task, shown in the task tree.
     pub task: Option<String>,
     /// Current title, from the latest `title_changed`; `None` until the first.
@@ -180,7 +183,7 @@ impl Store {
     /// in one transaction; returns the event as stored.
     ///
     /// A session's first event must be `session_created`, and only its first; the parent it
-    /// names, if any, must already exist.
+    /// names, if any, must already exist, unless `parent_host` places it on another machine.
     pub fn append(&mut self, event: NewEvent) -> Result<Event> {
         let body = serde_json::to_value(&event.body)?;
         let event_type = match body.get("type") {
@@ -204,6 +207,7 @@ impl Store {
         }
         if let EventBody::SessionCreated {
             parent: Some(parent),
+            parent_host: None,
             ..
         } = &event.body
             && latest_seq(&tx, parent)? == 0
@@ -588,8 +592,8 @@ fn queued_prompt(row: &Row<'_>) -> rusqlite::Result<QueuedPrompt> {
 }
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,
-    model, permission_mode, parent, task, status, last_seq, updated_at, title, title_source
-    FROM sessions";
+    model, permission_mode, parent, task, status, last_seq, updated_at, title, title_source,
+    parent_host FROM sessions";
 
 fn latest_seq(conn: &Connection, session: &SessionId) -> Result<Seq> {
     let max: Option<Seq> = conn
@@ -626,6 +630,7 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         updated_at: row.get(12)?,
         title: row.get(13)?,
         title_source: get_tag(row, 14)?,
+        parent_host: row.get::<_, Option<String>>(15)?.map(HostId::new),
     })
 }
 

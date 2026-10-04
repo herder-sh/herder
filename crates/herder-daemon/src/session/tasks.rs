@@ -416,6 +416,7 @@ impl SessionManager {
         drop(admitted);
         let body = EventBody::ChildSpawned {
             child_session_id: child.clone(),
+            host_id: None,
             task: input.task,
         };
         self.inner

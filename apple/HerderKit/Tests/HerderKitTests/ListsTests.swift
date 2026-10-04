@@ -12,7 +12,7 @@ func machine(
                                    maxRttMs: nil, missedPongs: 0),
         role: .owner,
         sessions: sessions.map {
-            SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, task: nil,
+            SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, parentHost: nil, task: nil,
                         title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0, queue: [])
         },
         hosts: hosts, projects: projects, accounts: [], failover: FailoverSettings(pin: false), terminals: [],

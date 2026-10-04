@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, Event, EventBody,
-    Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, PromptId, Provider,
-    PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TitleSource, TurnId, UserId,
+    HostId, Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, PromptId,
+    Provider, PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TitleSource, TurnId,
+    UserId,
 };
 use herder_store::{
     COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
@@ -33,6 +34,7 @@ fn created() -> EventBody {
         model: "opus".into(),
         permission_mode: PermissionMode::Ask,
         parent: None,
+        parent_host: None,
         task: None,
         max_children: None,
         failover_pin: None,
@@ -63,6 +65,7 @@ fn child_created(parent: &SessionId, task: &str) -> EventBody {
         model,
         permission_mode,
         parent: Some(parent.clone()),
+        parent_host: None,
         task: Some(task.into()),
         max_children: None,
         failover_pin: None,
@@ -142,6 +145,7 @@ fn fold(events: &[Event]) -> Projections {
             model,
             permission_mode,
             parent,
+            parent_host,
             task,
             ..
         } = &event.body
@@ -156,6 +160,7 @@ fn fold(events: &[Event]) -> Projections {
                 model: model.clone(),
                 permission_mode: *permission_mode,
                 parent: parent.clone(),
+                parent_host: parent_host.clone(),
                 task: task.clone(),
                 title: None,
                 title_source: None,
@@ -353,6 +358,7 @@ fn children_list_a_task_tree() {
                 second + 1,
                 EventBody::ChildSpawned {
                     child_session_id: child.clone(),
+                    host_id: None,
                     task: task.into(),
                 },
             ))
@@ -419,6 +425,28 @@ fn a_child_needs_an_existing_parent() {
     assert!(matches!(err, Err(Error::UnknownParent(id)) if id == child));
     assert_eq!(store.latest_seq(&child).unwrap(), 0);
     assert_eq!(store.session(&child).unwrap(), None);
+}
+
+#[test]
+fn a_child_of_a_remote_parent_needs_no_local_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    let primary = SessionId::new("remote-primary");
+    let child = SessionId::new("child");
+    let host = HostId::new("mac");
+
+    let mut body = child_created(&primary, "build");
+    if let EventBody::SessionCreated { parent_host, .. } = &mut body {
+        *parent_host = Some(host.clone());
+    }
+    store.append(new_event(&child, 0, body)).unwrap();
+
+    let session = store.session(&child).unwrap().unwrap();
+    assert_eq!(session.parent, Some(primary.clone()));
+    assert_eq!(session.parent_host, Some(host));
+    // The remote primary is not a session of this store.
+    assert_eq!(store.session(&primary).unwrap(), None);
+    assert_projections_match_journal(&store, &child);
 }
 
 #[test]
@@ -596,11 +624,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
 
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     store
         .append(new_event(
             &s,
@@ -612,17 +640,29 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap();
     drop(store);
 
+    // Back to the v11 schema, as a build before remote parents left it; reopening migrates
+    // it, and a session from before has no remote parent.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("ALTER TABLE sessions DROP COLUMN parent_host; PRAGMA user_version = 11;")
+        .unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(version(&path), 12);
+    assert_eq!(store.session(&s).unwrap().unwrap().parent_host, None);
+    drop(store);
+
     // Back to the v7 schema, as a build before session titles left it; reopening migrates
     // it, and the session is untitled until its first title.
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+            "ALTER TABLE sessions DROP COLUMN parent_host;
+             ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -632,14 +672,15 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+            "ALTER TABLE sessions DROP COLUMN parent_host;
+             ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
              ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -663,14 +704,15 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
+            "ALTER TABLE sessions DROP COLUMN parent_host;
+             ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
              DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -682,7 +724,8 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "ALTER TABLE session_prs DROP COLUMN head_branch;
+            "ALTER TABLE sessions DROP COLUMN parent_host;
+             ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches;
              DROP TABLE command_results;
              DROP TABLE queued_prompts;
@@ -696,7 +739,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 11);
+    assert_eq!(version(&path), 12);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -717,13 +760,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 12)
+        .pragma_update(None, "user_version", 13)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 12,
-            supported: 11
+            found: 13,
+            supported: 12
         })
     ));
 }
@@ -1037,7 +1080,8 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
+            "ALTER TABLE sessions DROP COLUMN parent_host;
+         ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
          DROP TABLE IF EXISTS agent_message_receipts; PRAGMA user_version = 8;",

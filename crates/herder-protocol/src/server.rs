@@ -275,6 +275,10 @@ pub struct SessionHead {
     /// Primary session of the task this session is a child of; absent for a top-level session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<SessionId>,
+    /// Host the parent runs on when it lives on another machine; absent when the parent, if
+    /// any, is a session of the same host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_host: Option<HostId>,
     /// Short label of the session's task, shown in the task tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,

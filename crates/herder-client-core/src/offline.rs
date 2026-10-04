@@ -113,6 +113,7 @@ mod tests {
                 head_seq: 1,
                 status: SessionStatus::Idle,
                 parent: None,
+                parent_host: None,
                 task: None,
                 title: None,
                 project_id: None,

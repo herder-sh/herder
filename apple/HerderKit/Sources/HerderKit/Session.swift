@@ -104,7 +104,7 @@ struct SessionModel {
         updatedAt = at
         if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
         switch event.body {
-        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, let task, _, _):
+        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _, _):
             self.repo = repo
             self.worktree = worktree
             self.branch = branch
@@ -225,7 +225,7 @@ struct SessionModel {
         case .questionAnswered(let id, let answer, let answeredBy):
             let text = answerText(id, answer)
             notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
-        case .childSpawned(let child, let task): log.append(.child(sessionId: child, task: task))
+        case .childSpawned(let child, _, let task): log.append(.child(sessionId: child, task: task))
         case .childReported(let child, let turnId, let summary):
             log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
         case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
@@ -286,7 +286,7 @@ struct SessionModel {
             moments.append(Moment(id: event.seq, at: at, turn: turn, kind: kind))
         }
         switch event.body {
-        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _): add(.created(branch: branch))
+        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _, _): add(.created(branch: branch))
         case .branchCheckedOut(let branch): add(.setting("Checked out \(branch)"))
         case .permissionModeChanged(let mode): add(.setting("Permissions set to \(mode.label.lowercased())"))
         case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
@@ -315,7 +315,7 @@ struct SessionModel {
         case .questionAsked(_, let turnId, let text, _, _, _): add(.question(text), turn: turnId)
         case .questionAnswered(let id, let answer, let answeredBy):
             add(.answered(answerText(id, answer), byUser: answeredBy == .user))
-        case .childSpawned(let child, let task): add(.spawned(child, task: task))
+        case .childSpawned(let child, _, let task): add(.spawned(child, task: task))
         case .childReported(let child, let turnId, let summary): add(.reported(child, summary: summary), turn: turnId)
         case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
             guard let handoff = handoff(event) else { break }
@@ -398,7 +398,7 @@ struct SessionModel {
     /// An event as one line of the session's history.
     static func describe(_ body: EventBody) -> String {
         switch body {
-        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _):
+        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _, _):
             return "Created on \(branch) · \(provider) \(model) · \(accountId)"
         case .branchCheckedOut(let branch): return "Checked out \(branch)"
         case .sessionStatusChanged(let status, _): return "Status: \(status)"
@@ -426,7 +426,7 @@ struct SessionModel {
         case .questionAsked(_, _, let text, _, _, _): return "Question: \(firstLine(text))"
         case .questionEscalated: return "Question escalated to you"
         case .questionAnswered: return "Question answered"
-        case .childSpawned(_, let task): return "Spawned child: \(task)"
+        case .childSpawned(_, _, let task): return "Spawned child: \(task)"
         case .childReported(_, _, let summary): return "Child reported: \(firstLine(summary))"
         case .modelSwitched(let model): return "Model: \(model)"
         case .accountSwitched(let accountId): return "Account: \(accountId)"

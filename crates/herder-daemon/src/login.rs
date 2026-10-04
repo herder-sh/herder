@@ -848,6 +848,7 @@ mod tests {
                     model: "fake".into(),
                     permission_mode: PermissionMode::Ask,
                     parent: None,
+                    parent_host: None,
                     task: None,
                     max_children: None,
                     failover_pin: None,

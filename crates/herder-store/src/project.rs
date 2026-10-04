@@ -1,6 +1,6 @@
 //! Projections: the read models each appended event updates, inside the append's transaction.
 
-use herder_protocol::{Event, EventBody, PullRequest, SessionId, SessionStatus};
+use herder_protocol::{Event, EventBody, HostId, PullRequest, SessionId, SessionStatus};
 use rusqlite::{Transaction, params};
 
 use crate::{Result, tag};
@@ -18,13 +18,14 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             model,
             permission_mode,
             parent,
+            parent_host,
             task,
             ..
         } => {
             tx.prepare_cached(
                 "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
-                     model, permission_mode, parent, task, status, last_seq, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                     model, permission_mode, parent, parent_host, task, status, last_seq, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             )?
             .execute(params![
                 id,
@@ -36,6 +37,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 model,
                 tag(permission_mode)?,
                 parent.as_ref().map(SessionId::as_str),
+                parent_host.as_ref().map(HostId::as_str),
                 task,
                 tag(&SessionStatus::Idle)?,
                 event.seq,

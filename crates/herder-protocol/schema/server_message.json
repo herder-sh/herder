@@ -1374,6 +1374,17 @@
                 }
               ]
             },
+            "parent_host": {
+              "description": "Host the parent runs on when it lives on another machine; absent when the parent,\nif any, is a session of this host.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HostId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "permission_mode": {
               "description": "Starting permission mode.",
               "$ref": "#/$defs/PermissionMode"
@@ -1778,6 +1789,17 @@
             "child_session_id": {
               "description": "The child, whose `session_created` names this session as its parent.",
               "$ref": "#/$defs/SessionId"
+            },
+            "host_id": {
+              "description": "Host the child runs on when it is another machine; absent when the child is a\nsession of this host.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HostId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "task": {
               "description": "Short label of the child's task.",
@@ -3041,6 +3063,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_host": {
+          "description": "Host the parent runs on when it lives on another machine; absent when the parent, if\nany, is a session of the same host.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostId"
             },
             {
               "type": "null"

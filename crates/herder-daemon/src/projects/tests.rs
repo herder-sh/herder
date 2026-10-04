@@ -358,6 +358,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 max_children: None,
                 failover_pin: None,
                 parent: None,
+                parent_host: None,
                 task: None,
             },
         })
@@ -583,6 +584,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
                     max_children: None,
                     failover_pin: None,
                     parent: None,
+                    parent_host: None,
                     task: None,
                 },
             })

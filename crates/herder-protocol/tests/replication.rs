@@ -63,6 +63,7 @@ impl Host {
             status: SessionStatus::Running,
             prs: Vec::new(),
             parent: None,
+            parent_host: None,
             task: None,
             title: None,
             head_seq: self.journals[session_id].len() as Seq,
