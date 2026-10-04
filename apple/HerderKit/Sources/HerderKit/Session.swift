@@ -42,6 +42,8 @@ struct SessionModel {
     var mode: PermissionMode?
     var parent: SessionId?
     var task: String?
+    /// The title a user or the small model gave the session, from `title_changed`.
+    var titled: String?
     var status: SessionStatus = .idle
     var turn: TurnId?
     var approvals: [Pending] = []
@@ -145,7 +147,9 @@ struct SessionModel {
             }
         case .prUnlinked(let number):
             prs.removeAll { $0.number == number }
-        case .itemAdded, .childSpawned, .childReported, .titleChanged, .unknown:
+        case .titleChanged(let title, _):
+            titled = title
+        case .itemAdded, .childSpawned, .childReported, .unknown:
             break
         }
     }
@@ -331,10 +335,10 @@ struct SessionModel {
         }
     }
 
-    /// The task label, else the branch, as the TUI names a session in a project; `nil` until
-    /// the session's creation is known.
+    /// The session's title, else its task label, else its branch, as the TUI names a session
+    /// in a project; `nil` until the session's creation is known.
     var title: String? {
-        task ?? branch
+        titled ?? task ?? branch
     }
 
     /// What the session is doing now, or the last thing it said.
