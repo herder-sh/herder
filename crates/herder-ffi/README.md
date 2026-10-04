@@ -8,7 +8,8 @@ client-core's (`crates/herder-client-core/API.md`), with three additions describ
 more, as `Client.share` makes them). Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
 terminal bytes are byte arrays and a tool call's input is JSON text.
 
-The `ffi` workflow builds both packages and runs their samples; this is what it does.
+The `ffi` workflow builds and tests the Kotlin package, and the `apple` workflow the Swift one
+(through `apple/scripts/build-ffi.sh`); this is what they do.
 
 ## The fake daemon
 

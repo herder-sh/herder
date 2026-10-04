@@ -21,7 +21,9 @@ open apple/herder.xcodeproj         # schemes herder-iOS and herder-macOS
 ```
 
 Run `build-ffi.sh` again whenever the Rust side changes. The xcframework has arm64 slices
-only, so the apps run on Apple silicon Macs and simulators.
+only, so the apps run on Apple silicon Macs and simulators. Working on the Mac app or HerderKit
+alone, `apple/scripts/build-ffi.sh aarch64-apple-darwin` builds just the Mac slice, which is
+much faster.
 
 ## Release
 

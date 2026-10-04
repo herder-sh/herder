@@ -2,6 +2,9 @@ name: apple
 
 # Builds and tests the iOS and macOS apps in apple/ on the client core's Swift bindings, and
 # uploads the macOS app as an artifact. Runs only when the apps or what they build on change.
+# The bindings, xcframework and fake daemon build once and are cached by the Rust sources they
+# come from, so a change to the apps alone skips the Rust build; the iOS and macOS jobs then
+# run side by side on them.
 
 on:
   pull_request:
@@ -34,24 +37,54 @@ env:
   CARGO_PROFILE_RELEASE_STRIP: debuginfo
 
 jobs:
-  apps:
-    name: apps
+  bindings:
+    name: bindings
     runs-on: macos-latest
+    outputs:
+      key: ${{ steps.key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
+      - id: key
+        run: >-
+          echo "key=apple-ffi-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**',
+          'apple/scripts/build-ffi.sh') }}" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ steps.key.outputs.key }}
       - name: Install the toolchain and the Apple targets
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Build the bindings, the xcframework and the fake daemon
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: apple/scripts/build-ffi.sh
+      - name: Run the Swift sample against the fake daemon
+        if: steps.cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        run: swift run --package-path crates/herder-ffi/swift herder-sample "$PWD/target/debug/examples/fake_daemon"
+
+  ios:
+    name: ios
+    needs: bindings
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.bindings.outputs.key }}
+          fail-on-cache-miss: true
       - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
         run: xcodebuild -downloadComponent MetalToolchain
-      - name: Build the bindings, the xcframework and the fake daemon
-        run: apple/scripts/build-ffi.sh
-      - name: Test HerderKit against the fake daemon
-        env:
-          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
-        run: swift test --package-path apple/HerderKit
       - name: Generate the Xcode project
         run: |
           brew install xcodegen
@@ -66,13 +99,38 @@ jobs:
             jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
             xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
-            -destination "platform=iOS Simulator,id=$device"
+            -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
       - name: Build the iOS app for devices
         run: >-
           xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
-          -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO
+          -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO
+
+  macos:
+    name: macos
+    needs: bindings
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ needs.bindings.outputs.key }}
+          fail-on-cache-miss: true
+      # build-mac-release.sh reads the version with cargo.
+      - name: Install the toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Test HerderKit against the fake daemon
+        env:
+          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
+        run: swift test --disable-index-store --package-path apple/HerderKit
       - name: Build, ad-hoc sign and zip the macOS app
-        run: apple/scripts/build-mac-release.sh
+        run: |
+          brew install xcodegen
+          apple/scripts/build-mac-release.sh
       - uses: actions/upload-artifact@v4
         with:
           name: herder-app-macos-arm64

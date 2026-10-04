@@ -1,10 +1,10 @@
 name: ffi
 
-# Builds the Swift and Kotlin bindings of herder-client-core (crates/herder-ffi) and runs
-# their samples against a fake daemon: an xcframework (iOS device, iOS simulator, macOS;
-# arm64) on macOS, an AAR (arm64-v8a, x86_64) on Linux, each uploaded as an artifact. Runs
-# only when the bindings or what they wrap change; the required `ci` check builds and tests
-# herder-ffi's Rust side with the rest of the workspace.
+# Builds the Kotlin bindings of herder-client-core (crates/herder-ffi) and tests them against a
+# fake daemon on the JVM, and uploads the AAR (arm64-v8a, x86_64) as an artifact. Runs only
+# when the bindings or what they wrap change. The `apple` workflow builds the Swift bindings
+# and runs their sample; the required `ci` check builds and tests herder-ffi's Rust side with
+# the rest of the workspace.
 
 on:
   pull_request:
@@ -71,53 +71,4 @@ jobs:
         with:
           name: herder-android
           path: ${{ env.KOTLIN }}/android/build/outputs/aar/android-release.aar
-          if-no-files-found: error
-
-  swift:
-    name: swift
-    runs-on: macos-latest
-    env:
-      SWIFT: crates/herder-ffi/swift
-      TARGETS: aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
-      # Match Package.swift's platforms, for the C and assembly that ring builds.
-      MACOSX_DEPLOYMENT_TARGET: "13.0"
-      IPHONEOS_DEPLOYMENT_TARGET: "16.0"
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the toolchain and the Apple targets
-        run: |
-          rustup show active-toolchain || rustup toolchain install
-          rustup target add $TARGETS
-      - uses: Swatinem/rust-cache@v2
-      - name: Build the host library, the bindings generator and the fake daemon
-        run: cargo build -p herder-ffi --features bindgen --lib --bin uniffi-bindgen --example fake_daemon
-      - name: Generate the Swift bindings
-        run: |
-          target/debug/uniffi-bindgen generate --library target/debug/libherder_ffi.dylib \
-            --language swift --no-format --out-dir "$RUNNER_TEMP/swift"
-          mkdir -p "$SWIFT/build/Sources/Herder" "$SWIFT/build/headers"
-          mv "$RUNNER_TEMP/swift/Herder.swift" "$SWIFT/build/Sources/Herder/"
-          mv "$RUNNER_TEMP/swift/HerderFFI.h" "$SWIFT/build/headers/"
-          mv "$RUNNER_TEMP/swift/HerderFFI.modulemap" "$SWIFT/build/headers/module.modulemap"
-      - name: Build the static libraries
-        run: |
-          for target in $TARGETS; do
-            cargo rustc -p herder-ffi --lib --release --target "$target" --crate-type staticlib
-          done
-      - name: Build the xcframework
-        run: |
-          args=()
-          for target in $TARGETS; do
-            args+=(-library "target/$target/release/libherder_ffi.a" -headers "$SWIFT/build/headers")
-          done
-          xcodebuild -create-xcframework "${args[@]}" -output "$SWIFT/build/HerderFFI.xcframework"
-      - name: Run the Swift sample against the fake daemon
-        timeout-minutes: 5
-        run: swift run --package-path "$SWIFT" herder-sample "$PWD/target/debug/examples/fake_daemon"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: herder-apple
-          path: |
-            ${{ env.SWIFT }}/build/HerderFFI.xcframework
-            ${{ env.SWIFT }}/build/Sources/Herder/Herder.swift
           if-no-files-found: error
