@@ -108,7 +108,7 @@ Rules:
   search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Home (badged with the
   needs-you count), Projects, PRs, Machines. A vault shows inside Machines. Each tab is its own
-  `NavigationStack` (`homePath`, `projectsPath`), so switching tabs keeps each tab's place.
+  `NavigationStack` (`homePath`, `projectsPath`, `prsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
   parent.
@@ -358,7 +358,7 @@ iPhone layout fixes land in P7.21.
 |---|---|---|
 | Home | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
-| Pull Requests | `mac-pull-requests.png` | — (no PRs tab yet, P7.22) |
+| Pull Requests | `mac-pull-requests.png` | [`p7-22/ios-pull-requests.png`](screenshots/p7-22/ios-pull-requests.png), [`p7-22/ios-pull-requests-session.png`](screenshots/p7-22/ios-pull-requests-session.png) |
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
@@ -374,8 +374,6 @@ iPhone layout fixes land in P7.21.
 - iPhone session view clips its header and transcript off the left edge; the inspector is a
   300 pt side pane that pushes the chat off screen; lists mix archived sessions with live ones
   (iPhone Projects) — [P7.21](https://app.basecamp.com/6276894/buckets/49114742/todos/10369340239).
-- Compact width has no Pull Requests and no Vault: the tab bar is Home · Projects · Machines —
-  [P7.22](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353269).
 - New Session (`ProjectPicker`, fixed 520 pt) clips off both edges on iPhone, and the session's
   PR popover (`PRStrip`, 520 pt) is wider than the screen —
   [P7.23](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353278).

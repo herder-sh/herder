@@ -7,6 +7,40 @@ enum SidebarItem: Hashable {
     case project(String)
 }
 
+/// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab
+/// and a vault inside Machines.
+enum CompactTab: Hashable, CaseIterable {
+    case home, projects, pullRequests, machines
+
+    /// The tab that shows a sidebar entry.
+    init(_ item: SidebarItem) {
+        switch item {
+        case .home: self = .home
+        case .project: self = .projects
+        case .pullRequests: self = .pullRequests
+        case .machines, .vault: self = .machines
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .home: "Home"
+        case .projects: "Projects"
+        case .pullRequests: "PRs"
+        case .machines: "Machines"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .home: "tray.full"
+        case .projects: "square.stack.3d.up"
+        case .pullRequests: "arrow.triangle.pull"
+        case .machines: "server.rack"
+        }
+    }
+}
+
 /// The fleet: tabs on iPhone; herder's own sidebar and panes on iPad and the Mac.
 struct FleetView: View {
     let fleet: Fleet
@@ -14,9 +48,10 @@ struct FleetView: View {
     @State private var item: SidebarItem = .home
     @State private var session: SessionKey?
     @State private var draft: Draft?
-    @State private var tab = 0
+    @State private var tab = CompactTab.home
     @State private var homePath: [SessionKey] = []
     @State private var projectsPath: [SessionKey] = []
+    @State private var prsPath: [SessionKey] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -30,6 +65,10 @@ struct FleetView: View {
             #endif
         }
         .tint(Theme.text)
+        #if os(iOS)
+        // An iPad going compact keeps the section it showed.
+        .onChange(of: sizeClass) { if sizeClass == .compact { tab = CompactTab(item) } }
+        #endif
         .sheet(item: $sheet) { sheet in
             sheet.view(fleet: fleet) { draft = $0 }
         }
@@ -87,31 +126,41 @@ struct FleetView: View {
             item = .project(projectId)
         }
         session = key
-        tab = 0
+        tab = .home
         homePath = [key]
     }
 
     #if os(iOS)
     private var tabs: some View {
         TabView(selection: $tab) {
+            ForEach(CompactTab.allCases, id: \.self) { tab in
+                self.tab(tab)
+                    .tabItem { Label(tab.title, systemImage: tab.symbol) }
+                    .badge(tab == .home ? fleet.lists.requests.count : 0)
+                    .tag(tab)
+            }
+        }
+    }
+
+    @ViewBuilder private func tab(_ tab: CompactTab) -> some View {
+        switch tab {
+        case .home:
             NavigationStack(path: $homePath) {
                 HomeView(fleet: fleet, sheet: $sheet)
                     .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
             }
             .environment(\.sessionPath, $homePath)
-            .tabItem { Label("Home", systemImage: "tray.full") }
-            .badge(fleet.lists.requests.count)
-            .tag(0)
+        case .projects:
             NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, sheet: $sheet, draft: $draft, projects: fleet.lists.projects)
                     .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
             }
             .environment(\.sessionPath, $projectsPath)
-            .tabItem { Label("Projects", systemImage: "square.stack.3d.up") }
-            .tag(1)
-            NavigationStack { MachinesView(fleet: fleet, sheet: $sheet) }
-                .tabItem { Label("Machines", systemImage: "server.rack") }
-                .tag(2)
+        case .pullRequests:
+            NavigationStack(path: $prsPath) { PullRequestsView(fleet: fleet) }
+                .environment(\.sessionPath, $prsPath)
+        case .machines:
+            NavigationStack { MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true) }
         }
     }
     #endif

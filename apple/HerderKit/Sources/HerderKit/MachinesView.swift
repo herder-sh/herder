@@ -1,29 +1,36 @@
 import Herder
 import SwiftUI
 
-/// The machines: connection, load, each account's usage, and a vault's hosts.
+/// The machines: connection, load, each account's usage, and on compact width a vault's hosts.
 struct MachinesView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
+    /// Shows each paired vault under the machines, where it has no section of its own.
+    var showsVaults = false
     @State private var renaming: MachineSummary?
     @State private var forgetting: MachineSummary?
     @State private var error: String?
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
-                ForEach(fleet.lists.machines) { machine in
-                    MachineCard(machine: machine, since: fleet.connectionLog[machine.hostId]?.last?.at) {
-                        sheet = .machineSettings(hostId: machine.hostId)
-                    }
-                        .contextMenu {
-                            Button("Settings…", systemImage: "gearshape") { sheet = .machineSettings(hostId: machine.hostId) }
-                            Button("Rename…", systemImage: "pencil") { renaming = machine }
-                            Button("Forget", systemImage: "trash", role: .destructive) { forgetting = machine }
+            VStack(alignment: .leading, spacing: 28) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
+                    ForEach(fleet.lists.machines) { machine in
+                        MachineCard(machine: machine, since: fleet.connectionLog[machine.hostId]?.last?.at) {
+                            sheet = .machineSettings(hostId: machine.hostId)
                         }
+                            .contextMenu {
+                                Button("Settings…", systemImage: "gearshape") { sheet = .machineSettings(hostId: machine.hostId) }
+                                Button("Rename…", systemImage: "pencil") { renaming = machine }
+                                Button("Forget", systemImage: "trash", role: .destructive) { forgetting = machine }
+                            }
+                    }
+                    if let error {
+                        Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                    }
                 }
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.failure)
+                if showsVaults {
+                    ForEach(fleet.vaults) { VaultSection(vault: $0) }
                 }
             }
             .padding(.horizontal, 16)
