@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use herder_protocol::{Role, ServerMessage};
 
@@ -319,6 +320,66 @@ fn host_resources_are_published_when_they_change() {
     assert_eq!(busy.running_turns, 1);
     assert_eq!(busy.waiting_turns, 1);
     assert_eq!(busy.constraint, Some(Constraint::MaxTurns));
+}
+
+#[test]
+fn a_new_turn_limit_applies_at_once_and_never_stops_a_running_turn() {
+    let (admission, _host) = admission(1);
+    let first = admitted(admission.request(&turn()));
+    let mut second = waiting(admission.request(&turn()));
+    let mut third = waiting(admission.request(&turn()));
+
+    admission.set_max_turns(2);
+    let second = second
+        .try_recv()
+        .expect("the raised limit admits the next turn");
+    assert!(
+        third.try_recv().is_err(),
+        "the limit has room for one more only"
+    );
+
+    admission.set_max_turns(1);
+    let resources = admission.resources();
+    assert_eq!(
+        (resources.running_turns, resources.max_turns),
+        (2, 1),
+        "both turns run on"
+    );
+    drop(first);
+    assert!(third.try_recv().is_err(), "one turn runs, the new limit");
+    drop(second);
+    third.try_recv().expect("admitted once under the limit");
+}
+
+#[tokio::test]
+async fn a_new_turn_limit_is_published_at_once() {
+    let (admission, _host) = admission(1);
+    let admission = Arc::new(admission);
+    let hub = Arc::new(Hub::default());
+    let client = Arc::new(Outbox::default());
+    hub.connect(&client, Role::Member);
+    let shutdown = CancellationToken::new();
+    let run = tokio::spawn({
+        let (admission, hub, shutdown) = (admission.clone(), hub.clone(), shutdown.clone());
+        async move { admission.run(&hub, shutdown).await }
+    });
+    let next = || async {
+        tokio::time::timeout(RECHECK_INTERVAL / 2, async {
+            loop {
+                if let Some(ServerMessage::HostResources(resources)) = client.pop() {
+                    return resources;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("published before the next tick")
+    };
+    assert_eq!(next().await.max_turns, 1);
+    admission.set_max_turns(3);
+    assert_eq!(next().await.max_turns, 3);
+    shutdown.cancel();
+    run.await.unwrap();
 }
 
 #[test]

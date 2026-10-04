@@ -452,8 +452,8 @@ impl Auth {
 }
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// bringing down containers, browsing folders, changing projects, backing up to a vault,
-/// and forking sessions onto the host are for owners only.
+/// bringing down containers, browsing folders, changing projects or the turn limit, backing
+/// up to a vault, and forking sessions onto the host are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -475,6 +475,11 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     if matches!(command, CommandBody::SetAccountSettings { .. }) && identity.role != Role::Owner {
         return Err(forbidden(
             "changing accounts is for the daemon's owners only",
+        ));
+    }
+    if matches!(command, CommandBody::SetResourceLimits { .. }) && identity.role != Role::Owner {
+        return Err(forbidden(
+            "changing how many turns run at once is for the daemon's owners only",
         ));
     }
     let host = matches!(
@@ -866,6 +871,20 @@ mod tests {
             label: "Work".into(),
             config_dir: None,
         };
+        assert!(authorize(&alice, &command).is_ok());
+        alice.role = Role::Member;
+        assert_eq!(
+            authorize(&alice, &command).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn only_owners_may_change_the_turn_limit() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let command = CommandBody::SetResourceLimits { max_turns: 4 };
         assert!(authorize(&alice, &command).is_ok());
         alice.role = Role::Member;
         assert_eq!(

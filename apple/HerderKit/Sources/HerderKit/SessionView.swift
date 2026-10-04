@@ -17,6 +17,7 @@ struct SessionView: View {
     @State private var showsTerminal = false
     @State private var showsPRs = false
     @Environment(\.sessionPath) private var path
+    @State private var showsMachineSettings = false
     @AppStorage("listHidden") private var listHidden = false
     @AppStorage("inspectorShown") private var inspectorShown = false
     /// The inspector as a sheet, on compact width; not kept, unlike the pane.
@@ -56,12 +57,16 @@ struct SessionView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
-                    } else if blocks.isEmpty {
+                    } else if blocks.isEmpty && model?.status != .waitingForCapacity {
                         Text("No turns yet. Send a prompt to start.").foregroundStyle(Theme.tertiary)
                             .frame(maxWidth: .infinity).padding(40)
                     }
                     ForEach(blocks) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
+                    }
+                    if model?.loaded == true && model?.status == .waitingForCapacity {
+                        let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
+                        WaitingForCapacityNote(load: resources.map(TurnLoad.init)) { showsMachineSettings = true }
                     }
                 }
                 .scrollTargetLayout()
@@ -114,6 +119,7 @@ struct SessionView: View {
             if let key = pushedFork { SessionView(fleet: fleet, key: key) }
         }
         .sheet(isPresented: $switching) { SwitchSheet(fleet: fleet, key: key) }
+        .sheet(isPresented: $showsMachineSettings) { MachineSettingsSheet(fleet: fleet, hostId: key.hostId) }
         .sheet(isPresented: $inspectorSheet) {
             SessionInspector(fleet: fleet, key: key)
                 .presentationDetents([.medium, .large])

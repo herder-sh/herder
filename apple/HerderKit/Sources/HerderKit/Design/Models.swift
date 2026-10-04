@@ -93,6 +93,8 @@ struct MachineSummary: Hashable, Identifiable {
     let cpu: Double?
     let memory: Double?
     let running: Int
+    /// The host's turns against its limit, once it has reported them; a vault has none.
+    var turns: TurnLoad?
     let sessions: Int
     let accounts: [AccountSummary]
     let hosts: [FleetHostSummary]

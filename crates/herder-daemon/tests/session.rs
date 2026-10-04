@@ -2909,14 +2909,18 @@ impl ReadHost for FakeHost {
     }
 }
 
-/// Admits `daemon`'s turns on a 4-core `host`, at most `max_turns` at once.
-fn admit(daemon: &Daemon, max_turns: u32, host: &FakeHost) -> Arc<Admission> {
+/// Admits `daemon`'s turns on a 4-core `host`, at most `max_turns` at once, keeping a new
+/// limit in `dir`'s `daemon.toml`.
+fn admit(daemon: &Daemon, dir: &Path, max_turns: u32, host: &FakeHost) -> Arc<Admission> {
     let config = ResourcesConfig {
         max_turns: Some(max_turns),
         ..ResourcesConfig::default()
     };
     let admission = Arc::new(Admission::new(config.budget(4), Box::new(host.clone())));
-    daemon.manager.admit_turns(Arc::clone(&admission)).unwrap();
+    daemon
+        .manager
+        .admit_turns(Arc::clone(&admission), dir.join("daemon.toml"))
+        .unwrap();
     admission
 }
 
@@ -2925,7 +2929,7 @@ async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends
     let dir = tempfile::tempdir().unwrap();
     let scripts = ["hold.jsonl", "admitted.jsonl"];
     let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
-    let admission = admit(&daemon, 1, &FakeHost::new(8 * GIB));
+    let admission = admit(&daemon, dir.path(), 1, &FakeHost::new(8 * GIB));
     let first = daemon.create().await;
     let second = daemon.create().await;
     daemon.prompt(alice(), &first, "Hold the machine.").await;
@@ -2996,11 +3000,67 @@ async fn with_one_turn_allowed_a_second_sessions_turn_waits_until_the_first_ends
 }
 
 #[tokio::test]
+async fn a_raised_turn_limit_starts_a_waiting_turn_and_a_lowered_one_stops_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("daemon.toml");
+    std::fs::write(&config, "# mine\n[resources]\nnice = 5\n").unwrap();
+    let scripts = ["hold.jsonl", "hold_second.jsonl"];
+    let mut daemon = Daemon::open_scripts(dir.path(), &scripts, Default::default()).await;
+    let admission = admit(&daemon, dir.path(), 1, &FakeHost::new(8 * GIB));
+    let first = daemon.create().await;
+    let second = daemon.create().await;
+    daemon.prompt(alice(), &first, "Hold the machine.").await;
+    daemon
+        .events_until(|body| matches!(body, EventBody::TurnStarted { .. }))
+        .await;
+    daemon.prompt(bob(), &second, "Wait your turn.").await;
+    daemon.until_status(SessionStatus::WaitingForCapacity).await;
+
+    let limit = |max_turns| CommandBody::SetResourceLimits { max_turns };
+    for out_of_range in [0, herder_protocol::MAX_TURNS_LIMIT + 1] {
+        let refused = daemon.manager.handle(alice(), limit(out_of_range)).await;
+        assert_eq!(refused.unwrap_err().code, ErrorCode::BadRequest);
+    }
+    // Raised: the waiting turn starts at once, with no recheck.
+    daemon.manager.handle(alice(), limit(2)).await.unwrap();
+    daemon
+        .until_event(|event| {
+            event.session_id == second && matches!(event.body, EventBody::TurnStarted { .. })
+        })
+        .await;
+    let host = admission.resources();
+    assert_eq!(
+        (host.running_turns, host.max_turns, host.waiting_turns),
+        (2, 2, 0)
+    );
+
+    // Lowered: both turns run on; only new ones would wait.
+    daemon.manager.handle(alice(), limit(1)).await.unwrap();
+    let host = admission.resources();
+    assert_eq!(
+        (host.running_turns, host.max_turns, host.constraint),
+        (2, 1, Some(Constraint::MaxTurns))
+    );
+    for session in [&first, &second] {
+        let journal = describe(&daemon.journal(session).await);
+        assert!(
+            journal.last().unwrap().starts_with("-: turn_started"),
+            "{journal:#?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "# mine\n[resources]\nnice = 5\nmax_turns = 1\n"
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn a_turn_waits_while_memory_is_short_and_starts_once_there_is_room() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     let host = FakeHost::new(GIB);
-    let admission = admit(&daemon, 4, &host);
+    let admission = admit(&daemon, dir.path(), 4, &host);
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.until_status(SessionStatus::WaitingForCapacity).await;
@@ -3027,7 +3087,7 @@ async fn a_turn_waits_while_memory_is_short_and_starts_once_there_is_room() {
 async fn restart_keeps_a_prompt_waiting_for_capacity_and_runs_it_once_there_is_room() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
-    admit(&daemon, 4, &FakeHost::new(GIB));
+    admit(&daemon, dir.path(), 4, &FakeHost::new(GIB));
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
     daemon.until_status(SessionStatus::WaitingForCapacity).await;
@@ -3040,7 +3100,7 @@ async fn restart_keeps_a_prompt_waiting_for_capacity_and_runs_it_once_there_is_r
         ["alice: session_created", "-: status WaitingForCapacity"]
     );
     let host = FakeHost::new(GIB);
-    let admission = admit(&daemon, 4, &host);
+    let admission = admit(&daemon, dir.path(), 4, &host);
     daemon.manager.resume().await.unwrap();
     // Back in the host's line, without a command.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -4360,7 +4420,7 @@ async fn limit_reset_retries_at_the_deadline_and_releases_capacity() {
     )
     .await;
     let host = FakeHost::new(8 * GIB);
-    let admission = admit(&daemon, 1, &host);
+    let admission = admit(&daemon, dir.path(), 1, &host);
     let (session, _) = wait_for_limit(&mut daemon, dir.path()).await;
     assert_eq!(admission.resources().running_turns, 0);
     tokio::time::pause();

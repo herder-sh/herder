@@ -174,7 +174,7 @@ pub async fn serve(
         config.resources.budget(resources::cores()),
         Box::new(resources::ProcHost::default()),
     ));
-    sessions.admit_turns(Arc::clone(&admission))?;
+    sessions.admit_turns(Arc::clone(&admission), config.path.clone())?;
     let budget = admission.budget();
     info!(
         max_turns = budget.max_turns,

@@ -121,8 +121,16 @@ struct MachineCard: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
-                        if machine.running > 0 {
-                            Text("\(machine.running) running").foregroundStyle(Theme.running)
+                        HStack(spacing: 6) {
+                            if machine.running > 0 {
+                                Text("\(machine.running) running").foregroundStyle(Theme.running)
+                            }
+                            if let turns = machine.turns {
+                                Text(turns.fraction)
+                                    .monospacedDigit()
+                                    .foregroundStyle(turns.waiting > 0 ? Theme.accent : Theme.tertiary)
+                                    .help(turns.usage)
+                            }
                         }
                         Text(machine.sessions == 1 ? "1 session" : "\(machine.sessions) sessions")
                             .foregroundStyle(Theme.tertiary)

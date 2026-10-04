@@ -46,7 +46,8 @@
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
-//! are admitted within; see [`ResourcesConfig`] for its keys and defaults.
+//! are admitted within; see [`ResourcesConfig`] for its keys and defaults. An owner changing
+//! the turn limit from a client sets its `max_turns` ([`set_max_turns`]).
 //!
 //! Accounts added from a client ([`crate::login`]) are appended to this file as new
 //! `[[accounts]]` entries, which creates it when it does not exist yet; the rest of the file is
@@ -934,6 +935,26 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
     Ok(())
 }
 
+/// Sets `max_turns` in the `[resources]` table of the config file at `path`, adding the table
+/// or the key when missing and keeping a comment after the value; the rest of the file is
+/// kept as written, and only a file that still loads replaces it.
+pub fn set_max_turns(path: &Path, max_turns: u32) -> Result<()> {
+    edit_config(path, |doc, _| {
+        let table = doc
+            .entry("resources")
+            .or_insert(toml_edit::table())
+            .as_table_like_mut()
+            .with_context(|| format!("resources in {} is not a table", path.display()))?;
+        let mut value = toml_edit::Value::from(i64::from(max_turns));
+        if let Some(previous) = table.get("max_turns").and_then(toml_edit::Item::as_value) {
+            *value.decor_mut() = previous.decor().clone();
+        }
+        table.insert("max_turns", toml_edit::Item::Value(value));
+        Ok(())
+    })?;
+    Ok(())
+}
+
 /// The `[[project]]` entry `entry` of `doc`, the config file at `path`, counted in file order,
 /// or a new entry appended when `None`.
 fn project_table<'a>(
@@ -1491,6 +1512,29 @@ mod tests {
     }
 
     #[test]
+    fn the_turn_limit_is_set_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        set_max_turns(&path, 3).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[resources]\nmax_turns = 3\n"
+        );
+
+        let kept = "# my daemon\nlisten = \"127.0.0.1:7777\"\n\n[resources]\n\
+                    nice = 5\nmax_turns = 2 # two at most\n\n[failover]\npin = true\n";
+        std::fs::write(&path, kept).unwrap();
+        set_max_turns(&path, 6).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            kept.replace("max_turns = 2", "max_turns = 6")
+        );
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.resources.max_turns, Some(6));
+        assert_eq!(config.resources.nice, 5);
+    }
+
+    #[test]
     fn out_of_range_resources_are_rejected() {
         let tmp = tempfile::tempdir().unwrap();
         for (text, key) in [
@@ -1499,6 +1543,7 @@ mod tests {
             ("child_cpu_weight = 0", "child_cpu_weight"),
             ("nice = 20", "nice"),
             ("max_turns = 0", "max_turns"),
+            ("max_turns = 65", "max_turns"),
             ("max_memory_pressure = 0", "max_memory_pressure"),
             ("max_load_percent = 0", "max_load_percent"),
         ] {

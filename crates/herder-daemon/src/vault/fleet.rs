@@ -410,6 +410,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::RevokeVaultHost { .. }
         | CommandBody::PairDevice
         | CommandBody::SetAccountSettings { .. }
+        | CommandBody::SetResourceLimits { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

@@ -1,6 +1,8 @@
 //! A daemon for the bindings' tests and samples: in-process, on localhost, with one account
 //! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
 //! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on.
+//! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
+//! owner may change that limit.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,7 @@ use herder_adapters::fake::FakeAdapter;
 use herder_client_core::PairingUri;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
+use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
@@ -32,6 +35,24 @@ pub const HOLD_ACCOUNT: &str = "hold";
 
 /// An account whose turn waits on an approval, for the apps to show a request.
 pub const APPROVAL_ACCOUNT: &str = "approval";
+
+/// Turns the daemon runs at once until an owner changes it.
+pub const MAX_TURNS: u32 = 4;
+
+/// A host with room for every turn: 8 cores, 16 GiB, half of it available.
+struct Roomy;
+
+impl ReadHost for Roomy {
+    fn read(&self) -> Result<Reading> {
+        Ok(Reading {
+            memory_total: 16 << 30,
+            memory_available: 8 << 30,
+            load_1m: 1.0,
+            cpu_percent: 12.0,
+            pressure: None,
+        })
+    }
+}
 
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
@@ -92,6 +113,16 @@ impl FakeDaemon {
         };
         let shutdown = CancellationToken::new();
         let sessions = SessionManager::open(setup, shutdown.clone()).await?;
+        let resources = ResourcesConfig {
+            max_turns: Some(MAX_TURNS),
+            ..ResourcesConfig::default()
+        };
+        let admission = Arc::new(Admission::new(resources.budget(8), Box::new(Roomy)));
+        sessions.admit_turns(Arc::clone(&admission), dir.join("daemon.toml"))?;
+        tokio::spawn({
+            let (hub, shutdown) = (Arc::clone(&hub), shutdown.clone());
+            async move { admission.run(&hub, shutdown).await }
+        });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let link = PairingUri {
             hosts: vec![listener.local_addr()?.to_string()],

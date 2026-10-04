@@ -56,6 +56,9 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// Most characters a session title may have.
 pub const MAX_TITLE_CHARS: usize = 80;
 
+/// Most turns a host may be set to run at once with `set_resource_limits`.
+pub const MAX_TURNS_LIMIT: u32 = 64;
+
 /// Per-session sequence number of a durable event: starts at 1 and increases by 1 per event.
 pub type Seq = u64;
 

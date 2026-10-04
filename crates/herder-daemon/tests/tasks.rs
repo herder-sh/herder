@@ -706,7 +706,10 @@ async fn spawn_on_a_busy_host_is_refused_with_a_retry_hint() {
     let available = Arc::new(Mutex::new(8));
     let config = ResourcesConfig::default();
     let admission = Admission::new(config.budget(8), Box::new(FakeHost(available.clone())));
-    daemon.manager.admit_turns(Arc::new(admission)).unwrap();
+    daemon
+        .manager
+        .admit_turns(Arc::new(admission), dir.path().join("daemon.toml"))
+        .unwrap();
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
     let spawn = json!({ "task": "T", "prompt": "Do it." });
@@ -738,7 +741,10 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
     };
     let host = FakeHost(Arc::new(Mutex::new(8)));
     let admission = Arc::new(Admission::new(config.budget(8), Box::new(host)));
-    daemon.manager.admit_turns(admission.clone()).unwrap();
+    daemon
+        .manager
+        .admit_turns(admission.clone(), dir.path().join("daemon.toml"))
+        .unwrap();
     let primary = daemon.primary(PermissionMode::Ask).await;
     // The primary's turn runs on, holding the only slot, while it calls the task tools.
     let prompt = CommandBody::SendPrompt {
@@ -1725,7 +1731,10 @@ async fn agent_delivery_receipts_survive_archive_and_scope_keys_by_sender() {
         ResourcesConfig::default().budget(8),
         Box::new(FakeHost(Arc::new(Mutex::new(1)))),
     );
-    daemon.manager.admit_turns(Arc::new(admission)).unwrap();
+    daemon
+        .manager
+        .admit_turns(Arc::new(admission), dir.path().join("daemon.toml"))
+        .unwrap();
     let args = json!({"session_id":b,"text":"Review","message_id":"same-key"});
     for source in [&a, &c] {
         let result = daemon

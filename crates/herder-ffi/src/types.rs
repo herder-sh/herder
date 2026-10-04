@@ -612,6 +612,9 @@ pub enum CommandBody {
         label: String,
         config_dir: Option<String>,
     },
+    SetResourceLimits {
+        max_turns: u32,
+    },
     AddAccount {
         account_id: AccountId,
         provider: Provider,
