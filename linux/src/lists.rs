@@ -584,6 +584,7 @@ pub mod tests {
             default_account: None,
             setup_command: None,
             icon: None,
+            icon_uploaded: false,
         }];
         let nas = machine("h2", "nas", vec![head("s1", Some("github.com/org/app"))]);
         let mut vault = machine(
