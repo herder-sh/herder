@@ -65,21 +65,8 @@ struct TranscriptBlockView: View {
             NoticeLine(notice: notice)
         case .handoff(let handoff):
             HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [],
-                           machineName: machineName)
+                           machineName: { fleet.machineName($0, of: key) })
         }
-    }
-
-    /// What to call a machine: its name, else the name a vault lists it under, else its short id.
-    /// Through a vault, this session runs on the host the vault lists it under.
-    private func machineName(_ id: HostId?) -> String {
-        guard var id else { return "?" }
-        if id == hostId, let runsOn = fleet.machines.first(where: { $0.hostId == id })?
-            .sessions.first(where: { $0.sessionId == key.sessionId })?.hostId {
-            id = runsOn
-        }
-        if let machine = fleet.machines.first(where: { $0.hostId == id }) { return machine.name }
-        if let host = fleet.machines.lazy.flatMap(\.hosts).first(where: { $0.hostId == id }) { return host.hostName }
-        return String(id.suffix(6))
     }
 }
 
@@ -105,6 +92,21 @@ struct NoticeLine: View {
     }
 }
 
+extension Fleet {
+    /// What to call a machine: its name, else the name a vault lists it under, else its short id.
+    /// Through a vault, the session `key` runs on the host the vault lists it under.
+    func machineName(_ id: HostId?, of key: SessionKey) -> String {
+        guard var id else { return "?" }
+        if id == key.hostId, let runsOn = machines.first(where: { $0.hostId == id })?
+            .sessions.first(where: { $0.sessionId == key.sessionId })?.hostId {
+            id = runsOn
+        }
+        if let machine = machines.first(where: { $0.hostId == id }) { return machine.name }
+        if let host = machines.lazy.flatMap(\.hosts).first(where: { $0.hostId == id }) { return host.hostName }
+        return String(id.suffix(6))
+    }
+}
+
 /// A handoff, as one line across the transcript: what the session ran on, then what it runs on
 /// from here, whatever moved it.
 struct HandoffDivider: View {
@@ -118,9 +120,11 @@ struct HandoffDivider: View {
             Rectangle().fill(Theme.stroke).frame(height: 1)
             HStack(spacing: 8) {
                 Label("Handoff", systemImage: "arrow.left.arrow.right").foregroundStyle(Theme.tertiary)
-                side(handoff.from).foregroundStyle(Theme.secondary)
+                HandoffSide(handoff: handoff, side: handoff.from, accounts: accounts, machineName: machineName)
+                    .foregroundStyle(Theme.secondary)
                 Image(systemName: "arrow.right").foregroundStyle(Theme.tertiary)
-                side(handoff.to).foregroundStyle(Theme.accent)
+                HandoffSide(handoff: handoff, side: handoff.to, accounts: accounts, machineName: machineName)
+                    .foregroundStyle(Theme.accent)
             }
             .font(.caption.weight(.medium))
             .lineLimit(1)
@@ -129,10 +133,17 @@ struct HandoffDivider: View {
         }
         .padding(.vertical, 6)
     }
+}
 
-    /// A move between machines names the machines; an account switch, the accounts; the
-    /// others, the models.
-    @ViewBuilder private func side(_ side: Handoff.Side) -> some View {
+/// A side of a handoff: a move between machines names the machines; an account switch, the
+/// accounts; the others, the models.
+struct HandoffSide: View {
+    let handoff: Handoff
+    let side: Handoff.Side
+    let accounts: [Account]
+    let machineName: (HostId?) -> String
+
+    var body: some View {
         HStack(spacing: 5) {
             if handoff.kind == .machine {
                 Image(systemName: "desktopcomputer")
