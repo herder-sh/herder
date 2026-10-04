@@ -33,7 +33,7 @@ use super::tasks::Tasks;
 use super::titles;
 use super::{AccountConfig, Inner, error};
 use crate::handoff;
-use crate::resources::{Permit, Ticket, processes};
+use crate::resources::{OomKill, Permit, Ticket, processes};
 use crate::worktree::{self, checkpoint};
 
 /// How long a stopping session waits for its CLI to exit.
@@ -2322,17 +2322,27 @@ impl Actor {
     }
 
     /// The CLI is gone: fails a turn it left open; the next prompt starts it again, seeded with
-    /// the transcript.
+    /// the transcript. A CLI killed for memory between turns, such as while its background
+    /// agents built, fails a turn of its own to say so, or the session would just go quiet.
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let background = std::mem::take(&mut self.background) > 0;
-        let error = match error {
-            Some(error) => Some(self.out_of_memory(&error).await.unwrap_or(error)),
+        let oom = match &error {
+            Some(error) => self.out_of_memory(error).await,
             None => None,
         };
         self.prompt = None;
         self.cli_turn = None;
-        let open = self.turn.take();
+        let mut open = self.turn.take();
+        if open.is_none() && oom.is_some() {
+            let turn_id = (self.inner.turn_ids)();
+            self.log(EventBody::TurnStarted {
+                turn_id: turn_id.clone(),
+            })
+            .await;
+            open = Some(turn_id);
+        }
+        let error = oom.or(error);
         self.permit = None;
         self.void_requests().await;
         let mut summary = None;
@@ -2367,27 +2377,33 @@ impl Actor {
     }
 
     /// The error to journal instead of `error`, when the CLI failed because the kernel's OOM
-    /// killer killed a process in its scope: `error` names neither, as the CLI only saw a
+    /// killer or systemd-oomd killed in its scope: `error` names neither, as the CLI only saw a
     /// signal.
     async fn out_of_memory(&self, error: &TurnError) -> Option<TurnError> {
         if error.class != ErrorClass::Fatal {
             return None;
         }
         let scopes = self.inner.scopes.get()?;
-        if !scopes.oom_killed(&self.session.session_id).await {
-            return None;
-        }
+        let kill = scopes.oom_killed(&self.session.session_id).await?;
         let limit = scopes.limits(self.session.parent.is_some()).memory_max / (1024 * 1024);
         warn!(
             session_id = %self.session.session_id,
+            ?kill,
             "the agent CLI failed after an OOM kill in its scope: {}", error.message
         );
+        let cause = match kill {
+            OomKill::Kernel => format!(
+                "the kernel killed it, or a process it ran, at its session's {limit} MiB limit"
+            ),
+            OomKill::Oomd => "systemd-oomd stopped it and everything it ran, as the host was \
+                              short of memory"
+                .to_owned(),
+        };
         Some(TurnError {
             class: ErrorClass::Fatal,
             message: format!(
-                "the agent ran out of memory: the kernel killed it, or a process it ran, at its \
-                 session's {limit} MiB limit ({}). The next prompt restarts the agent from the \
-                 session's transcript",
+                "the agent ran out of memory: {cause} ({}). The next prompt restarts the agent \
+                 from the session's transcript",
                 error.message
             ),
         })

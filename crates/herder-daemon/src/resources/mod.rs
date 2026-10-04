@@ -13,9 +13,14 @@
 //! --scope` execs into the CLI, so the CLI keeps its pid, environment, working directory and
 //! pipes, and everything it starts lands in the scope too.
 //!
-//! - `MemoryHigh` throttles the scope by reclaiming hard; `MemoryMax` is where the kernel
-//!   OOM-kills inside it. Swap is off for the scope: the host has gigabytes of it, and a scope
-//!   paging out to disk stalls the whole machine just as running out of memory does.
+//! - `MemoryMax` is where the kernel OOM-kills inside the scope. Swap is off for the scope: the
+//!   host has gigabytes of it, and a scope paging out to disk stalls the whole machine just as
+//!   running out of memory does.
+//! - `MemoryHigh` is left out by default (`memory_high_percent = 100`). Without swap, a scope
+//!   held at it stalls on reclaim instead of failing, and the stall is memory pressure in the
+//!   user's `app.slice`, which systemd-oomd watches (`ManagedOOMMemoryPressure=kill`, 50% for
+//!   20 s by default): oomd then kills the whole scope, agent included, where `MemoryMax` alone
+//!   would have killed one compiler.
 //! - `OOMPolicy=continue` kills only the process that ran out, such as one `rustc`, and leaves
 //!   the agent running to see its command fail; systemd's default would stop the whole scope.
 //! - The limits come from the daemon's `[resources]` table ([`ResourcesConfig`]), computed from
@@ -29,10 +34,10 @@
 //! [`ServerMessage::SessionResources`](herder_protocol::ServerMessage::SessionResources)
 //! through the [`Hub`] when it changed; once neither is left, it publishes one zero usage.
 //!
-//! When a session's CLI fails, [`Scopes::oom_killed`] says whether the kernel's OOM killer
-//! killed a process in its scope: from the scope's `memory.events` while the scope lives, else
-//! from the entry systemd journals for the unit as the kill happens, since a scope whose last
-//! process died is gone at once.
+//! When a session's CLI fails, [`Scopes::oom_killed`] says whether the kernel's OOM killer or
+//! systemd-oomd killed in its scope: from the scope's `memory.events` while the scope lives,
+//! else from the entry systemd journals for the unit as the kill happens, since a scope whose
+//! last process died is gone at once. oomd kills leave no trace in `memory.events`.
 //!
 //! Archiving a session stops what it left running ([`Scopes::stop`], [`processes`]); its
 //! containers stay up and listed, for the user to bring down.
@@ -79,6 +84,9 @@ const JOURNAL_RETRY: Duration = Duration::from_millis(200);
 /// systemd's `MESSAGE_ID` for "The kernel OOM killer killed some processes in this unit".
 const UNIT_OOM_MESSAGE_ID: &str = "fe6faa94e7774663a0da52717891d8ef";
 
+/// systemd's `MESSAGE_ID` for "systemd-oomd killed some processes in this unit".
+const UNIT_OOMD_MESSAGE_ID: &str = "d989611b15e44c9dbf31e3c81256e4ed";
+
 /// How long the startup probe may take.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -87,7 +95,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// ```toml
 /// [resources]
 /// memory_max_percent = 40   # of the host's RAM, per session
-/// memory_high_percent = 80  # of memory_max, where throttling starts
+/// memory_high_percent = 100 # of memory_max, where throttling starts; 100 is none
 /// cpu_weight = 100          # primaries; systemd's default for everything else is 100
 /// child_cpu_weight = 50     # child sessions
 /// nice = 10
@@ -101,7 +109,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct ResourcesConfig {
     /// Memory one session may use, in percent of the host's RAM.
     pub memory_max_percent: u8,
-    /// Where the scope starts being throttled, in percent of the session's memory maximum.
+    /// Where the scope starts being throttled, in percent of the session's memory maximum; at
+    /// 100 it never is.
     pub memory_high_percent: u8,
     /// CPU weight of a primary session's scope, 1 to 10000.
     pub cpu_weight: u16,
@@ -123,7 +132,7 @@ impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
             memory_max_percent: 40,
-            memory_high_percent: 80,
+            memory_high_percent: 100,
             cpu_weight: 100,
             child_cpu_weight: 50,
             nice: 10,
@@ -186,7 +195,11 @@ impl ResourcesConfig {
             } else {
                 self.cpu_weight
             },
-            memory_high: memory_max / 100 * u64::from(self.memory_high_percent),
+            // Multiplied first, so 100 percent is `memory_max` to the byte and sets no throttle.
+            memory_high: u64::try_from(
+                u128::from(memory_max) * u128::from(self.memory_high_percent) / 100,
+            )
+            .unwrap_or(memory_max),
             memory_max,
             nice: self.nice.max(host.nice),
         }
@@ -211,7 +224,7 @@ impl ResourcesConfig {
 pub struct Limits {
     /// systemd `CPUWeight`.
     pub cpu_weight: u16,
-    /// systemd `MemoryHigh`, in bytes.
+    /// systemd `MemoryHigh`, in bytes; left unset from `memory_max` up.
     pub memory_high: u64,
     /// systemd `MemoryMax`, in bytes.
     pub memory_max: u64,
@@ -259,13 +272,16 @@ pub fn launcher(unit: &str, limits: &Limits) -> Vec<OsString> {
         .map(str::to_owned)
         .to_vec();
     argv.push(format!("--unit={unit}"));
-    for property in [
-        format!("CPUWeight={}", limits.cpu_weight),
-        format!("MemoryHigh={}", limits.memory_high),
+    let mut properties = vec![format!("CPUWeight={}", limits.cpu_weight)];
+    if limits.memory_high < limits.memory_max {
+        properties.push(format!("MemoryHigh={}", limits.memory_high));
+    }
+    properties.extend([
         format!("MemoryMax={}", limits.memory_max),
         "MemorySwapMax=0".to_owned(),
         "OOMPolicy=continue".to_owned(),
-    ] {
+    ]);
+    for property in properties {
         argv.push(format!("--property={property}"));
     }
     argv.push(format!("--nice={}", limits.nice));
@@ -290,8 +306,17 @@ pub fn unit_name(session: &SessionId, n: u64) -> String {
     format!("herder-{session}-{n}.scope")
 }
 
-/// Whether the kernel's OOM killer killed a process in the scope unit it is given.
-pub type OomCheck = Box<dyn Fn(String) -> BoxFuture<'static, bool> + Send + Sync>;
+/// Who killed in the scope unit it is given for memory, if anyone did.
+pub type OomCheck = Box<dyn Fn(String) -> BoxFuture<'static, Option<OomKill>> + Send + Sync>;
+
+/// Who killed in a scope for memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OomKill {
+    /// The kernel's OOM killer, at the scope's `MemoryMax`: one process, maybe the CLI.
+    Kernel,
+    /// systemd-oomd, for the host's memory pressure: every process in the scope.
+    Oomd,
+}
 
 /// Every session's current scope, and whether scopes are used at all.
 pub struct Scopes {
@@ -449,13 +474,10 @@ impl Scopes {
             .map(|live| live.unit.clone())
     }
 
-    /// Whether the kernel's OOM killer killed a process in `session`'s latest scope; false
-    /// with limits off.
-    pub async fn oom_killed(&self, session: &SessionId) -> bool {
-        match self.unit(session) {
-            Some(unit) => (self.oom)(unit).await,
-            None => false,
-        }
+    /// Who killed in `session`'s latest scope for memory, if anyone did; `None` with limits off.
+    pub async fn oom_killed(&self, session: &SessionId) -> Option<OomKill> {
+        let unit = self.unit(session)?;
+        (self.oom)(unit).await
     }
 
     /// The pids of `session`'s live processes: those in its scopes, or with limits off,
@@ -609,23 +631,24 @@ async fn probe() -> Result<(), String> {
     }
 }
 
-/// Whether the kernel's OOM killer killed a process in `unit`: its cgroup's count while it
-/// exists, else systemd's journal entry for the unit.
-async fn systemd_oom_killed(unit: String) -> bool {
+/// Who killed in `unit` for memory: the kernel, by its cgroup's count while it exists, else
+/// whoever systemd's journal entries for the unit name. oomd kills only ever show there.
+async fn systemd_oom_killed(unit: String) -> Option<OomKill> {
     if let Some(dir) = cgroup_of(&unit).await
         && let Ok(events) = tokio::fs::read_to_string(dir.join("memory.events")).await
+        && oom_kills(&events) > 0
     {
-        return oom_kills(&events) > 0;
+        return Some(OomKill::Kernel);
     }
     for attempt in 0..JOURNAL_TRIES {
         if attempt > 0 {
             tokio::time::sleep(JOURNAL_RETRY).await;
         }
-        if journaled_oom(&unit).await {
-            return true;
+        if let Some(kill) = journaled_oom(&unit).await {
+            return Some(kill);
         }
     }
-    false
+    None
 }
 
 /// The `oom_kill` count of a cgroup's `memory.events`.
@@ -637,18 +660,40 @@ fn oom_kills(memory_events: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// Whether systemd journaled an OOM kill in `unit`.
-async fn journaled_oom(unit: &str) -> bool {
+/// Who systemd journaled an OOM kill in `unit` by, if anyone.
+async fn journaled_oom(unit: &str) -> Option<OomKill> {
     let output = Command::new("journalctl")
-        .args(["--user", "--quiet", "--no-pager", "--output=cat"])
+        .args([
+            "--user",
+            "--quiet",
+            "--no-pager",
+            "--output=cat",
+            "--output-fields=MESSAGE_ID",
+        ])
         .arg(format!("--unit={unit}"))
         .arg(format!("MESSAGE_ID={UNIT_OOM_MESSAGE_ID}"))
+        .arg(format!("MESSAGE_ID={UNIT_OOMD_MESSAGE_ID}"))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)
         .output();
     match tokio::time::timeout(PROBE_TIMEOUT, output).await {
-        Ok(Ok(output)) => output.status.success() && !output.stdout.trim_ascii().is_empty(),
-        _ => false,
+        Ok(Ok(output)) if output.status.success() => {
+            oom_killer(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => None,
+    }
+}
+
+/// Who killed, from the `MESSAGE_ID`s of a unit's OOM entries, one per line; oomd when both
+/// did, as it took every process.
+fn oom_killer(message_ids: &str) -> Option<OomKill> {
+    let ids: Vec<&str> = message_ids.lines().map(str::trim).collect();
+    if ids.contains(&UNIT_OOMD_MESSAGE_ID) {
+        Some(OomKill::Oomd)
+    } else if ids.contains(&UNIT_OOM_MESSAGE_ID) {
+        Some(OomKill::Kernel)
+    } else {
+        None
     }
 }
 

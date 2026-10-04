@@ -120,10 +120,11 @@
 //! An owner changes the turn limit live from a client ([`crate::settings`]): [`Admission`]
 //! applies it at once and the daemon's config file keeps it.
 //!
-//! When the agent's CLI fails after the kernel's OOM killer killed a process in its scope
+//! When the agent's CLI fails after the kernel's OOM killer or systemd-oomd killed in its scope
 //! ([`Scopes::oom_killed`]), the turn fails with an error that says so and the session is
 //! `error`; the CLI is stopped, and the next prompt starts a new one seeded with the transcript,
-//! as after a restart.
+//! as after a restart. A CLI killed between turns, such as while its background agents ran,
+//! fails a turn herder starts for it (no `by`, no prompt), so the transcript still says so.
 //!
 //! Once [`SessionManager::track_containers`] runs, owners can bring down a Compose project
 //! that one of a session's tracked containers belongs to.
