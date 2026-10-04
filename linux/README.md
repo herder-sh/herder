@@ -29,6 +29,15 @@ cd linux
 cargo run
 ```
 
+To give the app its icon in the launcher and dock, install its desktop entry and icon (the
+entry runs `herder-gtk`, so put the built binary on your `PATH`):
+
+```sh
+install -Dm644 data/sh.herder.Herder.desktop ~/.local/share/applications/sh.herder.Herder.desktop
+install -Dm644 data/icons/hicolor/scalable/apps/sh.herder.Herder.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/sh.herder.Herder.svg
+```
+
 The tests build the window and need a display: run them under `xvfb-run cargo test`, or with
 `GDK_BACKEND=broadway` and `gtk4-broadwayd` running. One drives a full turn against a real
 daemon with the fake adapter. `cargo test screenshots -- --ignored` renders the screenshots in
