@@ -195,3 +195,26 @@ struct DefaultAccountTests {
         #expect(Transcript.queued(model).map(\.text) == ["next"])
     }
 }
+
+struct TurnFailureTests {
+    @Test func aLimitSaysSoAndWhenItResets() {
+        let error = TurnError(class: .limitReached, message: "You've hit your individual spend limit · run /usage-credits to raise it, or visit claude.ai/admin-settings/usage · your session limit resets 11:20pm (Europe/Vilnius)")
+        #expect(TurnFailure.summary(error) == "usage limit reached · resets 11:20pm (Europe/Vilnius)")
+    }
+
+    @Test func otherErrorsKeepTheirFirstClause() {
+        #expect(TurnFailure.summary(TurnError(class: .fatal, message: "boom")) == "boom")
+        #expect(TurnFailure.summary(TurnError(class: .transient, message: "overloaded · try again\nlater")) == "overloaded")
+    }
+
+    @Test func aShortenedFailureKeepsTheWholeMessage() {
+        var script = Script()
+        let message = "spend limit · your session limit resets 9pm"
+        let model = script.model([created(), .turnStarted(turnId: "t1"), .turnFailed(turnId: "t1", error: TurnError(class: .limitReached, message: message))])
+        let notice = Transcript.blocks(model).compactMap { block -> Notice? in
+            if case .notice(let notice) = block { notice } else { nil }
+        }.last
+        #expect(notice?.text == "Turn failed: usage limit reached · resets 9pm")
+        #expect(notice?.detail == message)
+    }
+}

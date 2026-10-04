@@ -154,8 +154,8 @@ struct SessionModel {
     /// (crates/herder-tui/src/views/transcript.rs); before `apply` changes the state, so an
     /// answer can name the choice it picked.
     private mutating func record(_ event: Event) {
-        func notice(_ text: String, _ tone: Notice.Tone = .info) {
-            log.append(.notice(Notice(id: event.seq, text: text, tone: tone)))
+        func notice(_ text: String, _ tone: Notice.Tone = .info, detail: String? = nil) {
+            log.append(.notice(Notice(id: event.seq, text: text, tone: tone, detail: detail)))
         }
         func handoff(_ kind: Handoff.Kind, to: Handoff.Side) {
             log.append(.handoff(Handoff(
@@ -181,7 +181,9 @@ struct SessionModel {
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")
         case .turnInterrupted: notice("Turn interrupted")
-        case .turnFailed(_, let error): notice("Turn failed: \(error.message)", .error)
+        case .turnFailed(_, let error):
+            let summary = TurnFailure.summary(error)
+            notice("Turn failed: \(summary)", .error, detail: summary == error.message ? nil : error.message)
         case .approvalRequested(_, _, _, let summary, let routedTo, let reason):
             asked("Approval", summary, routedTo, reason)
         case .questionAsked(_, _, let text, _, let routedTo, let reason):
@@ -436,6 +438,30 @@ struct Notice: Hashable {
     let id: UInt64
     let text: String
     let tone: Tone
+    /// The whole of what `text` shortens, shown on hover or a click.
+    var detail: String?
+}
+
+/// A failed turn's error, in a line: what went wrong, without the provider's advice. The whole
+/// message stays for the line's detail.
+enum TurnFailure {
+    static func summary(_ error: TurnError) -> String {
+        let parts = error.message.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        switch error.class {
+        case .limitReached:
+            // "… your session limit resets 11:20pm (Europe/Vilnius)" → "resets 11:20pm (…)"
+            let reset = parts.lazy.compactMap { part in
+                part.range(of: "resets ", options: .caseInsensitive).map { String(part[$0.lowerBound...]) }
+            }.first
+            return ["usage limit reached", reset].compactMap { $0 }.joined(separator: " · ")
+        case .auth:
+            return "the account needs signing in again"
+        case .transient, .fatal:
+            let first = parts.first ?? error.message
+            let sentence = first.split(separator: "\n").first.map(String.init) ?? first
+            return sentence.count > 100 ? String(sentence.prefix(99)) + "…" : sentence
+        }
+    }
 }
 
 /// The session moved to another model, account or provider: what it ran on, and what it runs on
