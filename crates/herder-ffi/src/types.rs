@@ -599,6 +599,10 @@ pub enum CommandBody {
     RemoveProject {
         project_id: ProjectId,
     },
+    SetProjectIcon {
+        project_id: ProjectId,
+        icon: Option<Image>,
+    },
     GetProjectIcon {
         project_id: ProjectId,
     },
@@ -949,6 +953,8 @@ pub struct Project {
     // Defaults to nil so Swift and Kotlin code building a `Project` need not name it.
     #[uniffi(default)]
     pub icon: Option<String>,
+    #[uniffi(default)]
+    pub icon_uploaded: bool,
 }
 
 // Resources

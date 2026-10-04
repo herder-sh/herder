@@ -6,12 +6,16 @@
 //! two folders down. A file is an icon when its extension gives one of
 //! [`PROJECT_ICON_MEDIA_TYPES`] and it has at most [`MAX_PROJECT_ICON_BYTES`]; nothing outside
 //! the clone is ever read, so a symlink leading out of it is no icon.
+//!
+//! An owner may upload an icon instead ([`upload`]): it is kept in the daemon's data dir, one
+//! file per project, and [`uploaded`] reads it back. It wins over everything [`find`] looks at.
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use herder_protocol::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES};
+use anyhow::Context;
+use herder_protocol::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, ProjectId};
 use sha2::{Digest, Sha256};
 
 /// Where icons usually are, relative to the clone, in the order they are tried.
@@ -53,6 +57,26 @@ pub struct Icon {
     pub media_type: &'static str,
     /// The file's bytes.
     pub data: Vec<u8>,
+    /// Whether an owner uploaded it, rather than it being found in the clone.
+    pub uploaded: bool,
+}
+
+impl Icon {
+    fn new(media_type: &'static str, data: Vec<u8>, uploaded: bool) -> Self {
+        Self {
+            hash: sha256_hex(&data),
+            media_type,
+            data,
+            uploaded,
+        }
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The icon of the clone at `clone`: the file `explicit` names relative to it, else the first
@@ -101,15 +125,7 @@ fn read(root: &Path, relative: &Path) -> Option<Icon> {
     if data.is_empty() || data.len() > MAX_PROJECT_ICON_BYTES {
         return None;
     }
-    let hash = Sha256::digest(&data)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Some(Icon {
-        hash,
-        media_type,
-        data,
-    })
+    Some(Icon::new(media_type, data, false))
 }
 
 /// The media type a file's extension gives, if an icon may have it.
@@ -124,6 +140,64 @@ fn media_type(path: &Path) -> Option<&'static str> {
     };
     debug_assert!(PROJECT_ICON_MEDIA_TYPES.contains(&media_type));
     Some(media_type)
+}
+
+/// The extension an uploaded icon of `media_type` is kept under, for each of
+/// [`PROJECT_ICON_MEDIA_TYPES`]; `None` for any other media type.
+fn extension(media_type: &str) -> Option<&'static str> {
+    Some(match media_type {
+        "image/png" => "png",
+        "image/svg+xml" => "svg",
+        "image/x-icon" => "ico",
+        "image/jpeg" => "jpg",
+        _ => return None,
+    })
+}
+
+/// The file names `project`'s uploaded icon may have in the uploads dir, one per media type:
+/// the SHA-256 of its id, which may hold any character, as lowercase hex, and the extension.
+fn upload_names(project: &ProjectId) -> impl Iterator<Item = (&'static str, String)> {
+    let stem = sha256_hex(project.as_str().as_bytes());
+    PROJECT_ICON_MEDIA_TYPES
+        .into_iter()
+        .filter_map(move |media_type| {
+            Some((media_type, format!("{stem}.{}", extension(media_type)?)))
+        })
+}
+
+/// The icon uploaded for `project` into `dir`, if there is one. Blocks on the file system.
+pub fn uploaded(dir: &Path, project: &ProjectId) -> Option<Icon> {
+    upload_names(project).find_map(|(media_type, name)| {
+        let data = fs::read(dir.join(name)).ok()?;
+        Some(Icon::new(media_type, data, true))
+    })
+}
+
+/// Keeps `icon`, a media type and the bytes of an image of it, as `project`'s uploaded icon in
+/// `dir`, written atomically and replacing any earlier upload; `None` deletes the upload. The
+/// caller checked the media type and size. Blocks on the file system.
+pub fn upload(dir: &Path, project: &ProjectId, icon: Option<(&str, &[u8])>) -> anyhow::Result<()> {
+    let mut kept = None;
+    if let Some((media_type, data)) = icon {
+        let (_, name) = upload_names(project)
+            .find(|(allowed, _)| *allowed == media_type)
+            .with_context(|| format!("{media_type} is no project icon media type"))?;
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        crate::data_dir::write_private(dir, &name, data)?;
+        kept = Some(name);
+    }
+    for (_, name) in upload_names(project) {
+        if kept.as_ref() == Some(&name) {
+            continue;
+        }
+        let path = dir.join(name);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).with_context(|| format!("removing {}", path.display())),
+        }
+    }
+    Ok(())
 }
 
 /// The largest PNG of at most [`MAX_PROJECT_ICON_BYTES`] in the first

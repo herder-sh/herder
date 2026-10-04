@@ -403,6 +403,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::AddProject { .. }
         | CommandBody::SetProjectSettings { .. }
         | CommandBody::RemoveProject { .. }
+        | CommandBody::SetProjectIcon { .. }
         | CommandBody::GetProjectIcon { .. }
         | CommandBody::GetVaultLink
         | CommandBody::LinkVault { .. }

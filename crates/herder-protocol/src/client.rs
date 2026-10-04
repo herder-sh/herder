@@ -419,7 +419,20 @@ pub enum CommandBody {
         /// The project, one of this daemon's.
         project_id: ProjectId,
     },
-    /// Fetch a project's icon, the file its `icon` names; owners and members alike. Answered
+    /// Set or clear a project's uploaded icon on this host, kept in the daemon's data dir;
+    /// owners only. An uploaded icon wins over the `[[project]]` entry's `icon` and over the
+    /// files found in the clone. Answered with `applied`; the project list follows with the
+    /// new `icon` and `icon_uploaded`. Refused with `bad_request` when the media type is not
+    /// one of [`crate::PROJECT_ICON_MEDIA_TYPES`], or the data is empty or over
+    /// [`crate::MAX_PROJECT_ICON_BYTES`].
+    SetProjectIcon {
+        /// The project, one of this daemon's.
+        project_id: ProjectId,
+        /// The image to use; absent clears the upload, so the icon is found in the clone again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<Image>,
+    },
+    /// Fetch a project's icon, the image its `icon` names; owners and members alike. Answered
     /// with `project_icon`, or refused with `not_found` when the project has none. It changes
     /// nothing, so a resend is answered afresh.
     GetProjectIcon {

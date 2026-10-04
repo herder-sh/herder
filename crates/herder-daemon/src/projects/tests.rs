@@ -22,6 +22,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         default_account: None,
         setup_command: None,
         icon: None,
+        icon_uploaded: false,
     }
 }
 
@@ -292,6 +293,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
             host: host(),
             config: Arc::new(Overrides::new(
                 tmp.path().join("daemon.toml"),
+                tmp.path().join("project-icons"),
                 ProjectsConfig {
                     roots: vec![root.clone()],
                     entries: vec![ProjectEntry {
@@ -384,6 +386,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             host: host(),
             config: Arc::new(Overrides::new(
                 tmp.path().join("daemon.toml"),
+                tmp.path().join("project-icons"),
                 ProjectsConfig::default(),
             )),
             hub: Arc::clone(&hub),
@@ -451,7 +454,11 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     )
     .await
     .unwrap();
-    let overrides = Arc::new(Overrides::new(file.clone(), ProjectsConfig::default()));
+    let overrides = Arc::new(Overrides::new(
+        file.clone(),
+        tmp.path().join("project-icons"),
+        ProjectsConfig::default(),
+    ));
     sessions
         .manage_projects(host(), Arc::clone(&overrides))
         .unwrap();
@@ -612,6 +619,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
     .unwrap();
     let overrides = Arc::new(Overrides::new(
         file.clone(),
+        tmp.path().join("project-icons"),
         crate::config::read_projects(&file).unwrap(),
     ));
     sessions
@@ -754,6 +762,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
     .unwrap();
     let overrides = Arc::new(Overrides::new(
         file.clone(),
+        tmp.path().join("project-icons"),
         crate::config::read_projects(&file).unwrap(),
     ));
     sessions
@@ -834,6 +843,162 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
     );
     let projects = next_projects(&outbox).await;
     assert_eq!(projects[0].icon, Some(sha(b"<svg/>")));
+
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn an_uploaded_icon_wins_until_it_is_cleared() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("Projects");
+    let app = root.join("app");
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    fs::write(app.join("logo.png"), b"png").unwrap();
+    let file = tmp.path().join("daemon.toml");
+    fs::write(
+        &file,
+        format!(
+            "[projects]\nroots = [\"{}\"]\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            root.display(),
+        ),
+    )
+    .unwrap();
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Owner);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store: herder_store::Store::open(tmp.path().join("herder.db")).unwrap(),
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::new(),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    let icons = tmp.path().join("project-icons");
+    let overrides = Arc::new(Overrides::new(
+        file.clone(),
+        icons.clone(),
+        crate::config::read_projects(&file).unwrap(),
+    ));
+    sessions
+        .manage_projects(host(), Arc::clone(&overrides))
+        .unwrap();
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: overrides,
+            hub: Arc::clone(&hub),
+            sessions: sessions.clone(),
+            sessions_changed: Arc::new(Notify::new()),
+        }
+        .run(shutdown.clone()),
+    );
+    let sha = |data: &[u8]| -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(data)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
+    let listed = |projects: Vec<Project>| (projects[0].icon.clone(), projects[0].icon_uploaded);
+    assert_eq!(
+        listed(next_projects(&outbox).await),
+        (Some(sha(b"png")), false)
+    );
+
+    let owner = herder_protocol::UserId::new("owner");
+    let handle = |command| sessions.handle(owner.clone(), command);
+    let set = |media_type: &str, data: Vec<u8>| herder_protocol::CommandBody::SetProjectIcon {
+        project_id: ProjectId::new("github.com/org/app"),
+        icon: Some(herder_protocol::Image {
+            media_type: media_type.into(),
+            data: herder_protocol::Bytes(data),
+        }),
+    };
+    let fetch = || {
+        handle(herder_protocol::CommandBody::GetProjectIcon {
+            project_id: ProjectId::new("github.com/org/app"),
+        })
+    };
+
+    // Refused uploads change nothing.
+    for bad in [
+        set("image/gif", b"gif".to_vec()),
+        set("image/png", Vec::new()),
+        set(
+            "image/png",
+            vec![0; herder_protocol::MAX_PROJECT_ICON_BYTES + 1],
+        ),
+    ] {
+        let error = handle(bad).await.unwrap_err();
+        assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
+    }
+    let unknown = herder_protocol::CommandBody::SetProjectIcon {
+        project_id: ProjectId::new("github.com/org/other"),
+        icon: None,
+    };
+    let error = handle(unknown).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+    assert!(!icons.exists());
+
+    // An upload wins over the entry's icon and is listed at once.
+    assert_eq!(
+        handle(set("image/png", b"uploaded".to_vec())).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    assert_eq!(
+        listed(next_projects(&outbox).await),
+        (Some(sha(b"uploaded")), true)
+    );
+    assert_eq!(
+        fetch().await,
+        Ok(herder_protocol::CommandResult::ProjectIcon {
+            icon: sha(b"uploaded"),
+            media_type: "image/png".into(),
+            data: herder_protocol::Bytes(b"uploaded".to_vec()),
+        })
+    );
+
+    // A new upload of another type replaces it, and gives a new hash.
+    assert_eq!(
+        handle(set("image/svg+xml", b"<svg/>".to_vec())).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    assert_eq!(
+        listed(next_projects(&outbox).await),
+        (Some(sha(b"<svg/>")), true)
+    );
+    assert_eq!(fs::read_dir(&icons).unwrap().count(), 1);
+
+    // Cleared, the upload's file is gone and the entry's icon is back.
+    let clear = herder_protocol::CommandBody::SetProjectIcon {
+        project_id: ProjectId::new("github.com/org/app"),
+        icon: None,
+    };
+    assert_eq!(
+        handle(clear).await,
+        Ok(herder_protocol::CommandResult::Applied)
+    );
+    assert_eq!(
+        listed(next_projects(&outbox).await),
+        (Some(sha(b"png")), false)
+    );
+    assert_eq!(fs::read_dir(&icons).unwrap().count(), 0);
+    let Ok(herder_protocol::CommandResult::ProjectIcon { icon, .. }) = fetch().await else {
+        panic!("expected the entry's icon");
+    };
+    assert_eq!(icon, sha(b"png"));
 
     shutdown.cancel();
     task.await.unwrap();

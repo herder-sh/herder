@@ -32,7 +32,8 @@ says what exists, why, and how it maps to foreign languages.
   `SendQueuedNow` commands. The `SetResourceLimits` command, with `MAX_TURNS_LIMIT`, was
   added compatibly too. Handing a session off between machines added, compatibly, the
   `UploadHistory` command (`HistoryPart`) and `ForkSession`'s `relay` (`Relay`), and so were the `GetSettings`, `SetSettings` and
-  `RestartDaemon` commands with their `Settings` result (`DaemonSettings`).
+  `RestartDaemon` commands with their `Settings` result (`DaemonSettings`). Uploading a
+  project's icon added, compatibly, the `SetProjectIcon` command and `Project.icon_uploaded`.
 
 ## Shape, and how it maps to UniFFI
 
@@ -79,7 +80,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
-| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon file, to cache it by | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk) |
+| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon, to cache it by, and `icon_uploaded`, whether an owner uploaded it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |

@@ -182,6 +182,17 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::RemoveProject {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
+        command(CommandBody::SetProjectIcon {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+            icon: Some(Image {
+                media_type: "image/png".into(),
+                data: Bytes(b"\x89PNG".to_vec()),
+            }),
+        }),
+        command(CommandBody::SetProjectIcon {
+            project_id: ProjectId::new("github.com/herder-sh/herder"),
+            icon: None,
+        }),
         command(CommandBody::GetProjectIcon {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
@@ -970,6 +981,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     icon: Some(
                         "5f1d5c3b2a7e9e0c4b1f8a6d3e2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a0".into(),
                     ),
+                    icon_uploaded: true,
                 },
                 Project {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
@@ -979,6 +991,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     default_account: None,
                     setup_command: None,
                     icon: None,
+                    icon_uploaded: false,
                 },
             ],
         },
@@ -1650,9 +1663,10 @@ fn project_optional_fields_may_be_absent() {
             project.default_permission_mode,
             project.default_account,
             project.setup_command,
-            project.icon
+            project.icon,
+            project.icon_uploaded
         ),
-        (None, None, None, None)
+        (None, None, None, None, false)
     );
 
     let command: CommandBody = serde_json::from_value(json!({
@@ -1685,6 +1699,28 @@ fn project_optional_fields_may_be_absent() {
         serde_json::to_value(&icon).unwrap(),
         json!({ "type": "get_project_icon", "project_id": "github.com/org/repo" })
     );
+    let set = CommandBody::SetProjectIcon {
+        project_id: ProjectId::new("github.com/org/repo"),
+        icon: Some(Image {
+            media_type: "image/png".into(),
+            data: Bytes(b"png".to_vec()),
+        }),
+    };
+    let wire = json!({
+        "type": "set_project_icon",
+        "project_id": "github.com/org/repo",
+        "icon": { "media_type": "image/png", "data": "cG5n" }
+    });
+    assert_eq!(serde_json::to_value(&set).unwrap(), wire);
+    assert_eq!(serde_json::from_value::<CommandBody>(wire).unwrap(), set);
+    let clear = CommandBody::SetProjectIcon {
+        project_id: ProjectId::new("github.com/org/repo"),
+        icon: None,
+    };
+    let wire = json!({ "type": "set_project_icon", "project_id": "github.com/org/repo" });
+    assert_eq!(serde_json::to_value(&clear).unwrap(), wire);
+    assert_eq!(serde_json::from_value::<CommandBody>(wire).unwrap(), clear);
+
     let icon = CommandResult::ProjectIcon {
         icon: "ab12".into(),
         media_type: "image/png".into(),

@@ -17,8 +17,10 @@
 //! config file and takes effect at once ([`Overrides`]); discovery then rescans and publishes
 //! the list. Removing never touches the repositories themselves.
 //!
-//! Each project's `icon` is an image file found in its first clone ([`icon`]); discovery
-//! reads it on every full scan, and `get_project_icon` reads it again when asked.
+//! Each project's `icon` is the image an owner uploaded with `set_project_icon`, kept in the
+//! daemon's data dir, else an image file found in its first clone ([`icon`]); discovery reads
+//! it on every full scan, and `get_project_icon` reads it again when asked. Setting or
+//! clearing an upload rescans and publishes the list at once, as changing the entries does.
 
 pub mod icon;
 pub mod scan;
@@ -99,15 +101,19 @@ pub struct ProjectEntry {
 pub struct Overrides {
     /// The daemon's config file.
     file: PathBuf,
+    /// Where uploaded icons are kept ([`icon::upload`]).
+    icons: PathBuf,
     config: RwLock<ProjectsConfig>,
     changed: Notify,
 }
 
 impl Overrides {
-    /// Starts from `config`, as loaded from the config file `file`, where changes go.
-    pub fn new(file: PathBuf, config: ProjectsConfig) -> Self {
+    /// Starts from `config`, as loaded from the config file `file`, where changes go, with
+    /// uploaded icons kept in the folder `icons`.
+    pub fn new(file: PathBuf, icons: PathBuf, config: ProjectsConfig) -> Self {
         Self {
             file,
+            icons,
             config: RwLock::new(config),
             changed: Notify::new(),
         }
@@ -121,7 +127,13 @@ impl Overrides {
             .clone()
     }
 
-    /// Resolves once a client changed the entries since the last call returned.
+    /// Where uploaded icons are kept.
+    pub fn icons(&self) -> &Path {
+        &self.icons
+    }
+
+    /// Resolves once a client changed the entries or an uploaded icon since the last call
+    /// returned.
     pub async fn changed(&self) {
         self.changed.notified().await;
     }
@@ -183,6 +195,14 @@ impl Overrides {
         Ok(())
     }
 
+    /// Keeps `icon`, a media type and the bytes of an image of it, as `project`'s uploaded
+    /// icon, or deletes the upload when `None` ([`icon::upload`]). Blocks on the file system.
+    pub fn set_icon(&self, project: &ProjectId, icon: Option<(&str, &[u8])>) -> anyhow::Result<()> {
+        icon::upload(&self.icons, project, icon)?;
+        self.changed.notify_one();
+        Ok(())
+    }
+
     fn replace(&self, config: ProjectsConfig) {
         *self.config.write().unwrap_or_else(PoisonError::into_inner) = config;
         self.changed.notify_one();
@@ -203,10 +223,13 @@ fn entry_of(entries: &[ProjectEntry], project: &Project) -> Option<usize> {
     })
 }
 
-/// The icon of `project`, as discovery listed it, in its first clone that exists, trying first
-/// the `icon` of the entry in `entries` that shapes it ([`icon::find`]). Blocks on the file
-/// system.
-pub fn icon(project: &Project, entries: &[ProjectEntry]) -> Option<icon::Icon> {
+/// The icon of `project`, as discovery listed it: the one uploaded into `icons`
+/// ([`icon::uploaded`]), else the one in its first clone that exists, trying first the `icon`
+/// of the entry in `entries` that shapes it ([`icon::find`]). Blocks on the file system.
+pub fn icon(project: &Project, entries: &[ProjectEntry], icons: &Path) -> Option<icon::Icon> {
+    if let Some(uploaded) = icon::uploaded(icons, &project.project_id) {
+        return Some(uploaded);
+    }
     let explicit = entry_of(entries, project).and_then(|index| entries[index].icon.as_deref());
     let clone = project
         .paths
@@ -292,6 +315,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                 default_permission_mode: entry.and_then(|e| e.default_permission_mode),
                 setup_command: entry.and_then(|e| e.setup_command.clone()),
                 icon: None,
+                icon_uploaded: false,
                 project_id,
             }
         })
@@ -426,7 +450,12 @@ impl Discovery {
                     origin: origin.clone(),
                 })
                 .collect();
-            let projects = with_icons(resolve(&self.host, &list, &config.entries), config).await;
+            let projects = with_icons(
+                resolve(&self.host, &list, &config.entries),
+                config,
+                self.config.icons().to_owned(),
+            )
+            .await;
             if published.as_ref() != Some(&projects) {
                 debug!(projects = projects.len(), "project list changed");
                 self.hub.projects_changed(projects.clone());
@@ -437,13 +466,19 @@ impl Discovery {
     }
 }
 
-/// `projects` with the hash of each one's icon under `config`.
-async fn with_icons(mut projects: Vec<Project>, config: ProjectsConfig) -> Vec<Project> {
+/// `projects` with the hash of each one's icon under `config` and the uploads in `icons`.
+async fn with_icons(
+    mut projects: Vec<Project>,
+    config: ProjectsConfig,
+    icons: PathBuf,
+) -> Vec<Project> {
     let listed = projects.clone();
     let icons = tokio::task::spawn_blocking(move || {
         listed
             .iter()
-            .map(|project| icon(project, &config.entries).map(|icon| icon.hash))
+            .map(|project| {
+                icon(project, &config.entries, &icons).map(|icon| (icon.hash, icon.uploaded))
+            })
             .collect()
     })
     .await
@@ -452,7 +487,8 @@ async fn with_icons(mut projects: Vec<Project>, config: ProjectsConfig) -> Vec<P
         Vec::new()
     });
     for (project, icon) in projects.iter_mut().zip(icons) {
-        project.icon = icon;
+        project.icon_uploaded = icon.as_ref().is_some_and(|(_, uploaded)| *uploaded);
+        project.icon = icon.map(|(hash, _)| hash);
     }
     projects
 }

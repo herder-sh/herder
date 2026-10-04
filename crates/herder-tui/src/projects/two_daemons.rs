@@ -100,6 +100,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
             host: host.id.clone(),
             config: Arc::new(Overrides::new(
                 dir.join("daemon.toml"),
+                dir.join("project-icons"),
                 ProjectsConfig::default(),
             )),
             hub: Arc::clone(&hub),

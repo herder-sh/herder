@@ -1088,6 +1088,7 @@ mod tests {
             default_account: None,
             setup_command: None,
             icon: None,
+            icon_uploaded: false,
         }];
         hub.projects_changed(projects.clone());
         let message = ServerMessage::Projects { projects };

@@ -23,12 +23,14 @@ pub const IMAGE_NOT_BACKED_UP: &str = "image not backed up";
 /// WebSocket frame.
 pub const MAX_PROMPT_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
-/// An image sent with a prompt.
+/// An image file a client sends: with a prompt, or as a project's icon.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Image {
-    /// One of [`IMAGE_MEDIA_TYPES`]; the bytes must be an image of that type.
+    /// The image's media type: one of [`IMAGE_MEDIA_TYPES`] with a prompt, of
+    /// [`crate::PROJECT_ICON_MEDIA_TYPES`] as an icon; the bytes must be an image of that type.
     pub media_type: String,
-    /// The image file's bytes, at most [`MAX_IMAGE_BYTES`].
+    /// The image file's bytes: at most [`MAX_IMAGE_BYTES`] with a prompt, at most
+    /// [`crate::MAX_PROJECT_ICON_BYTES`] as an icon.
     pub data: Bytes,
 }
 

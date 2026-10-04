@@ -483,6 +483,10 @@ struct ProjectSettingsForm: View {
     var body: some View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
+            SettingsGroup(title: "Appearance") {
+                ProjectIconRow(fleet: fleet, machine: machine, project: project, error: $error)
+            }
+            .disabled(!owner)
             SettingsGroup(title: "New sessions") {
                 SettingRow(label: "Permissions", detail: "What agents may do without asking") {
                     FooterItem(symbol: "lock.shield", text: mode?.label ?? "Ask each time") {
