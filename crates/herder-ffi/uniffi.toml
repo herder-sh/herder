@@ -1,6 +1,2 @@
 [bindings.swift]
 module_name = "Herder"
-
-[bindings.kotlin]
-package_name = "sh.herder.ffi"
-cdylib_name = "herder_ffi"

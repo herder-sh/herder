@@ -1,4 +1,4 @@
-//! UniFFI bindings of `herder-client-core`, for the Swift and Kotlin apps.
+//! UniFFI bindings of `herder-client-core`, for the Swift apps.
 //!
 //! The objects wrap their client-core counterparts one to one, and the records and enums are
 //! the client-core and protocol types themselves, declared to UniFFI in [`types`]. `API.md`

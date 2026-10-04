@@ -34,7 +34,7 @@ repo in parallel; these rules keep that safe. Follow them exactly.
 | `herder-tui`         | ratatui client                                               |
 | `herder`             | The single binary: `herder daemon`, bare `herder` = TUI      |
 
-Non-Rust clients live in `apple/`, `android/`, `linux/`; vault manifests in `deploy/`.
+The native apps (macOS, iOS) live in `apple/`; vault manifests in `deploy/`.
 
 ## Done
 
