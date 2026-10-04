@@ -218,8 +218,27 @@ struct MarkdownText: View {
     }
 
     static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        var string = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(text)
+        autolink(&string)
+        return string
+    }
+
+    /// Links bare `http(s)://` URLs, which Markdown leaves as text, outside code spans and links.
+    /// Scheme-less matches stay text: file names like `main.rs` would read as domains.
+    static func autolink(_ string: inout AttributedString) {
+        let plain = String(string.characters)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
+        for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+            guard let url = match.url, let range = Range(match.range, in: plain),
+                  ["http://", "https://"].contains(where: plain[range].lowercased().hasPrefix) else { continue }
+            let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
+            let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
+            let linked = string[start..<end].runs.contains {
+                $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
+            }
+            if !linked { string[start..<end].link = url }
+        }
     }
 
     enum Part: Equatable {
