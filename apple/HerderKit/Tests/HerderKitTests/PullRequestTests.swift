@@ -32,6 +32,70 @@ struct PullRequestTests {
     }
 }
 
+struct PRRollupTests {
+    private func session(_ id: String, task: String, parent: SessionId? = nil, prs: [PullRequest]) -> (SessionKey, SessionModel) {
+        var script = Script(id)
+        let model = script.model([created(task: task, parent: parent)] + prs.map { .prLinked(pr: $0) })
+        return (script.key, model)
+    }
+
+    /// A primary with one PR, two children (one with a grandchild) and an unrelated session.
+    private var tree: [SessionKey: SessionModel] {
+        Dictionary(uniqueKeysWithValues: [
+            session("01P", task: "Primary", prs: [pr(181, .open)]),
+            session("01C", task: "Child b", parent: "01P", prs: [pr(190, .merged), pr(191, .open)]),
+            session("01G", task: "Grandchild", parent: "01C", prs: [pr(200, .closed), pr(201, .draft)]),
+            session("01D", task: "Child a", parent: "01P", prs: [pr(181, .open), pr(185, .merged)]),
+            session("01X", task: "Elsewhere", prs: [pr(300, .open)]),
+        ])
+    }
+
+    @Test func theRollupHoldsOwnAndNestedDescendantsPRsOnce() {
+        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
+        #expect(rollup.groups.map(\.title) == ["Primary", "Child a", "Child b", "Grandchild"])
+        #expect(rollup.groups.map(\.depth) == [0, 1, 1, 2])
+        // #181 is linked to the primary and to Child a: it shows under the primary only.
+        #expect(rollup.groups.map { $0.prs.map(\.number) } == [[181], [185], [191, 190], [201, 200]])
+        #expect(rollup.all.count == 6)
+        // A child's own roll-up leaves its parent and siblings out.
+        let child = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01C"), sessions: tree)
+        #expect(child.groups.map(\.title) == ["Child b", "Grandchild"])
+    }
+
+    @Test func eachGroupSortsOpenDraftMergedClosed() {
+        let (key, model) = session("01P", task: "Primary",
+                                   prs: [pr(1, .closed), pr(2, .merged), pr(3, .draft), pr(4, .open), pr(5, .open)])
+        let rollup = PRRollup(of: key, sessions: [key: model])
+        #expect(rollup.groups[0].prs.map(\.number) == [5, 4, 3, 2, 1])
+        #expect(rollup.groups[0].finished.map(\.number) == [2, 1])
+        #expect(PRRollup.folded(rollup.groups[0].finished) == "1 merged · 1 closed")
+        #expect(PRRollup.folded([pr(7, .merged), pr(8, .merged)]) == "2 merged")
+    }
+
+    @Test func theChipSaysTheCountAndHowManyAreOpen() {
+        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
+        #expect(rollup.chip == "6 PRs · 3 open")
+        #expect(rollup.urgent == .open)
+        let (key, model) = session("01P", task: "Primary", prs: [pr(181, .merged)])
+        let single = PRRollup(of: key, sessions: [key: model])
+        #expect(single.chip == "#181")
+        #expect(single.urgent == .merged)
+        let (done, finished) = session("01P", task: "Primary", prs: [pr(1, .merged), pr(2, .closed)])
+        #expect(PRRollup(of: done, sessions: [done: finished]).chip == "2 PRs")
+    }
+
+    @Test func theListFiltersToOpenAndSearchesNumberTitleAndBranch() {
+        let rollup = PRRollup(of: SessionKey(hostId: "host-a", sessionId: "01P"), sessions: tree)
+        let open = rollup.shown(openOnly: true, query: "")
+        #expect(open.map(\.title) == ["Primary", "Child b", "Grandchild"])
+        #expect(open.flatMap { $0.prs.map(\.number) } == [181, 191, 201])
+        #expect(rollup.shown(openOnly: false, query: "#19").flatMap { $0.prs.map(\.number) } == [191, 190])
+        #expect(rollup.shown(openOnly: false, query: "PR 200").flatMap { $0.prs.map(\.number) } == [200])
+        #expect(rollup.shown(openOnly: false, query: "b185").map(\.title) == ["Child a"])
+        #expect(rollup.shown(openOnly: true, query: "nothing").isEmpty)
+    }
+}
+
 struct FollowUpTests {
     @Test func aSearchMatchesNameBranchWorktreeAndPullRequests() {
         let pr = PullRequest(number: 103, url: "", title: "Session view", headBranch: nil, state: .open, ci: .none,

@@ -16,6 +16,7 @@ struct SessionView: View {
     @State private var switching = false
     @State private var showsTerminal = false
     @State private var showsPRs = false
+    @Environment(\.sessionPath) private var path
     @AppStorage("listHidden") private var listHidden = false
     @AppStorage("inspectorShown") private var inspectorShown = false
     /// The inspector as a sheet, on compact width; not kept, unlike the pane.
@@ -170,16 +171,17 @@ struct SessionView: View {
             }
             .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
-            if let model, !model.prs.isEmpty {
-                HeaderButton(symbol: "arrow.triangle.pull", title: model.prs.count == 1 ? "#\(model.prs[0].number)" : "\(model.prs.count) PRs",
-                             tint: model.prs.sorted { $0.state.rank < $1.state.rank }.first?.state.color ?? Theme.secondary) {
+            let rollup = PRRollup(of: key, sessions: fleet.sessions)
+            if !rollup.groups.isEmpty {
+                HeaderButton(symbol: "arrow.triangle.pull", title: rollup.chip,
+                             tint: rollup.urgent?.color ?? Theme.secondary) {
                     showsPRs.toggle()
                 }
                 .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
-                    PRStrip(fleet: fleet, key: key, prs: model.prs)
-                        .frame(width: 520)
-                        .background(Theme.surface)
-                        .preferredColorScheme(.dark)
+                    PRStrip(fleet: fleet, key: key, rollup: rollup) { child in
+                        showsPRs = false
+                        if let open { open(child) } else { path?.wrappedValue.append(child) }
+                    }
                 }
             }
             if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
