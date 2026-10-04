@@ -175,6 +175,25 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     assert_eq!(info.code, herder_protocol::ErrorCode::NotFound);
     assert!(info.message.contains("gone"), "{}", info.message);
 
+    // The skill commands pass through; this daemon has no library yet.
+    assert_eq!(machine.skills, None);
+    let refused = block_on(client.send(
+        host.clone(),
+        CommandBody::PutSkill {
+            name: "deploy".into(),
+            files: vec![herder_protocol::SkillFile {
+                path: "SKILL.md".into(),
+                data: herder_protocol::Bytes(b"---".to_vec()),
+                executable: false,
+            }],
+        },
+    ))
+    .unwrap_err();
+    let HerderError::Rejected { info } = refused else {
+        panic!("expected a refusal, got {refused:?}");
+    };
+    assert_eq!(info.code, herder_protocol::ErrorCode::Unsupported);
+
     // Backgrounded and back, the client syncs again.
     client.suspend();
     client.wake();

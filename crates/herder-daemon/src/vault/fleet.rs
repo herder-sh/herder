@@ -417,6 +417,12 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::GetSettings
         | CommandBody::SetSettings { .. }
         | CommandBody::RestartDaemon
+        | CommandBody::SetSkillsRepo { .. }
+        | CommandBody::PutSkill { .. }
+        | CommandBody::DeleteSkill { .. }
+        | CommandBody::ImportSkill { .. }
+        | CommandBody::PullSkills
+        | CommandBody::SetSkillEnabled { .. }
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

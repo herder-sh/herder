@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 9`
+`CLIENT_API_VERSION = 10`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -34,7 +34,10 @@ says what exists, why, and how it maps to foreign languages.
   `UploadHistory` command (`HistoryPart`) and `ForkSession`'s `relay` (`Relay`), and so were the `GetSettings`, `SetSettings` and
   `RestartDaemon` commands with their `Settings` result (`DaemonSettings`). Uploading a
   project's icon added, compatibly, the `SetProjectIcon` command and `Project.icon_uploaded`. The `MergeQueued`
-  command was added compatibly too.
+  command was added compatibly too. P11.5 added, compatibly, the skill library: the
+  `SetSkillsRepo`, `PutSkill` (`SkillFile`), `DeleteSkill`, `ImportSkill`, `PullSkills` and
+  `SetSkillEnabled` commands, and the `SkillsStatus` (`LibrarySkill`, `ProviderReload`,
+  `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages.
 
 ## Shape, and how it maps to UniFFI
 
@@ -86,6 +89,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
 | Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
+| Skills    | `Machine::skills` (the library as that daemon has it: `repo`, `head`, `last_pull`, `pull_error`, each skill's `name`, `description`, whether `enabled` there and the `providers` it reaches, and per provider when a running session sees a change: `live`, `next_turn` or `next_session`), `Machine::session_skills` (per live session, the library and project skills its agent may use, each with its `source`) | owners: `send`: `SetSkillsRepo`, `PutSkill`, `DeleteSkill`, `ImportSkill`, `PullSkills`, `SetSkillEnabled` (per machine); members are refused with `forbidden`. A write commits and pushes through the one daemon it is sent to |
 | Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from the session's machine while that is connected, else lets the destination read its vault |
 
 ## Reference
@@ -136,7 +140,10 @@ everything stops once the last clone is dropped.
   `fingerprint`, `connection`, `quality`, `role`,
   `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
   `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
-  `None` for a daemon and while not connected).
+  `None` for a daemon and while not connected), `skills` (`Option<SkillsStatus>`: the skill
+  library as the daemon has it; `None` until it sends it and while not connected),
+  `session_skills` (`HashMap<SessionId, Vec<SessionSkill>>`: the skills each live session's
+  agent may use; empty while not connected).
 - `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
   was established; `None` while not connected), `reconnects: u32` (connections established
   after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
@@ -243,6 +250,12 @@ sharer may do; members still get no terminals) and the addresses that daemon adv
 not the ones the sharer reached it on. The new device gets its own key on every machine,
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
+
+## Changes in version 10
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Machine::skills: Option<SkillsStatus>`, `Machine::session_skills: HashMap<SessionId, Vec<SessionSkill>>` | Apps show the skill library, its sync state on each machine, and the skills each session has. New fields break code that builds a `Machine`. |
 
 ## Changes in version 9
 

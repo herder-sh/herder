@@ -1065,6 +1065,62 @@ async fn compose_down_is_for_owners_only() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_owners_change_the_skill_library() {
+    let daemon = Daemon::start().await;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    let commands = || {
+        [
+            CommandBody::SetSkillsRepo {
+                url: "https://github.com/you/herder-skills".into(),
+            },
+            CommandBody::PutSkill {
+                name: "deploy".into(),
+                files: vec![herder_protocol::SkillFile {
+                    path: "SKILL.md".into(),
+                    data: herder_protocol::Bytes(b"---".to_vec()),
+                    executable: false,
+                }],
+            },
+            CommandBody::DeleteSkill {
+                name: "deploy".into(),
+            },
+            CommandBody::ImportSkill {
+                git_url: "https://github.com/you/skills".into(),
+                path: None,
+            },
+            CommandBody::PullSkills,
+            CommandBody::SetSkillEnabled {
+                name: "deploy".into(),
+                enabled: false,
+            },
+        ]
+    };
+    for (n, body) in commands().into_iter().enumerate() {
+        let id = format!("m{n}");
+        let ServerMessage::CommandRejected { error, .. } = member.command(&id, body).await else {
+            panic!("expected a rejection");
+        };
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+
+    // Owners reach the backend.
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+    for (n, body) in commands().into_iter().enumerate() {
+        let id = format!("o{n}");
+        let ServerMessage::CommandRejected { error, .. } = owner.command(&id, body).await else {
+            panic!("expected the test backend's rejection");
+        };
+        assert_eq!(error.code, ErrorCode::Unsupported);
+    }
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 6);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn browsing_folders_is_for_owners_only_and_never_remembered() {
     let daemon = Daemon::start().await;
     let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;

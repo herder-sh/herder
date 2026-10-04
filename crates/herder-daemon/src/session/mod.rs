@@ -738,6 +738,18 @@ impl SessionManager {
                     "this daemon cannot back up to a vault",
                 ));
             }
+            // P11.6 gives the daemon its skill library.
+            CommandBody::SetSkillsRepo { .. }
+            | CommandBody::PutSkill { .. }
+            | CommandBody::DeleteSkill { .. }
+            | CommandBody::ImportSkill { .. }
+            | CommandBody::PullSkills
+            | CommandBody::SetSkillEnabled { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon has no skill library yet",
+                ));
+            }
             CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,

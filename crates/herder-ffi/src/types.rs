@@ -14,12 +14,13 @@ use herder_protocol::{
     CommandResult, Constraint, Container, ContainerState, DaemonSettings, DirectoryEntry,
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FailoverSettings,
     FleetHost, HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item,
-    ItemBody, ItemId, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState,
-    Pressure, Project, ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary,
-    PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route,
-    SessionHead, SessionId, SessionStatus, SessionUsage, TaskSettings, Terminal, TerminalId,
-    TerminalPurpose, Timestamp, TitleSettings, TitleSource, TurnError, TurnId, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode,
+    PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary,
+    ProviderReload, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
+    Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile,
+    SkillReload, SkillSource, SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultStatus,
+    VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -100,6 +101,10 @@ pub struct Machine {
     // need not name it.
     #[uniffi(default = None)]
     pub vault: Option<VaultStatus>,
+    #[uniffi(default = None)]
+    pub skills: Option<SkillsStatus>,
+    #[uniffi(default)]
+    pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
 }
 
 #[uniffi::remote(Enum)]
@@ -624,6 +629,25 @@ pub enum CommandBody {
     RevokeVaultHost {
         host_id: HostId,
     },
+    SetSkillsRepo {
+        url: String,
+    },
+    PutSkill {
+        name: String,
+        files: Vec<SkillFile>,
+    },
+    DeleteSkill {
+        name: String,
+    },
+    ImportSkill {
+        git_url: String,
+        path: Option<String>,
+    },
+    PullSkills,
+    SetSkillEnabled {
+        name: String,
+        enabled: bool,
+    },
     SetAccountSettings {
         account_id: AccountId,
         label: String,
@@ -801,6 +825,60 @@ pub struct VaultStatus {
     pub events: u64,
     pub storage_bytes: u64,
     pub hosts: Vec<HostReplication>,
+}
+
+// Skills
+
+#[uniffi::remote(Record)]
+pub struct SkillFile {
+    pub path: String,
+    pub data: Bytes,
+    pub executable: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct SkillsStatus {
+    pub repo: Option<String>,
+    pub head: Option<String>,
+    pub last_pull: Option<Timestamp>,
+    pub pull_error: Option<String>,
+    pub skills: Vec<LibrarySkill>,
+    pub reload: Vec<ProviderReload>,
+}
+
+#[uniffi::remote(Record)]
+pub struct LibrarySkill {
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub providers: Vec<Provider>,
+}
+
+#[uniffi::remote(Record)]
+pub struct ProviderReload {
+    pub provider: Provider,
+    pub reload: SkillReload,
+}
+
+#[uniffi::remote(Enum)]
+pub enum SkillReload {
+    Live,
+    NextTurn,
+    NextSession,
+}
+
+#[uniffi::remote(Record)]
+pub struct SessionSkill {
+    pub name: String,
+    pub description: String,
+    pub source: SkillSource,
+    pub path: Option<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum SkillSource {
+    Library,
+    Project,
 }
 
 #[uniffi::remote(Record)]

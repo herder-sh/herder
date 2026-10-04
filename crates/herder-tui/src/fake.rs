@@ -46,6 +46,8 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         resources: None,
         session_usage: Default::default(),
         vault: None,
+        skills: None,
+        session_skills: Default::default(),
     }
 }
 

@@ -308,6 +308,40 @@ fn client_fixtures() -> Vec<ClientMessage> {
             }),
         }),
         command(CommandBody::RestartDaemon),
+        command(CommandBody::SetSkillsRepo {
+            url: "git@github.com:you/herder-skills.git".into(),
+        }),
+        command(CommandBody::PutSkill {
+            name: "release-notes".into(),
+            files: vec![
+                SkillFile {
+                    path: "SKILL.md".into(),
+                    data: Bytes(b"---\nname: release-notes\n---\n".to_vec()),
+                    executable: false,
+                },
+                SkillFile {
+                    path: "scripts/collect.sh".into(),
+                    data: Bytes(b"#!/bin/sh\n".to_vec()),
+                    executable: true,
+                },
+            ],
+        }),
+        command(CommandBody::DeleteSkill {
+            name: "release-notes".into(),
+        }),
+        command(CommandBody::ImportSkill {
+            git_url: "https://github.com/anthropics/skills".into(),
+            path: Some("skills/pdf".into()),
+        }),
+        command(CommandBody::ImportSkill {
+            git_url: "https://github.com/you/one-skill".into(),
+            path: None,
+        }),
+        command(CommandBody::PullSkills),
+        command(CommandBody::SetSkillEnabled {
+            name: "release-notes".into(),
+            enabled: false,
+        }),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
         }),
@@ -778,6 +812,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
     messages.extend(resource_fixtures());
     messages.extend(project_fixtures());
     messages.extend(fleet_fixtures());
+    messages.extend(skill_fixtures());
     for status in [
         SessionStatus::Idle,
         SessionStatus::Running,
@@ -964,6 +999,76 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                 },
             ],
         }),
+    ]
+}
+
+/// Skill library states, from none set to one with a failed pull, and session skills of
+/// every source.
+fn skill_fixtures() -> Vec<ServerMessage> {
+    vec![
+        ServerMessage::SkillsStatus(SkillsStatus {
+            repo: None,
+            head: None,
+            last_pull: None,
+            pull_error: None,
+            skills: Vec::new(),
+            reload: Vec::new(),
+        }),
+        ServerMessage::SkillsStatus(SkillsStatus {
+            repo: Some("https://github.com/you/herder-skills".into()),
+            head: Some("4f2c1e9a".into()),
+            last_pull: Some(at()),
+            pull_error: Some("could not resolve host: github.com".into()),
+            skills: vec![
+                LibrarySkill {
+                    name: "release-notes".into(),
+                    description: "Writes release notes from merged PRs.".into(),
+                    enabled: true,
+                    providers: vec![Provider::Claude, Provider::Codex],
+                },
+                LibrarySkill {
+                    name: "triage".into(),
+                    description: "Labels new issues.".into(),
+                    enabled: false,
+                    providers: Vec::new(),
+                },
+            ],
+            reload: vec![
+                ProviderReload {
+                    provider: Provider::Claude,
+                    reload: SkillReload::Live,
+                },
+                ProviderReload {
+                    provider: Provider::Cursor,
+                    reload: SkillReload::NextTurn,
+                },
+                ProviderReload {
+                    provider: Provider::Codex,
+                    reload: SkillReload::NextSession,
+                },
+            ],
+        }),
+        ServerMessage::SessionSkills {
+            session_id: SessionId::new("01J9SESSION"),
+            skills: vec![
+                SessionSkill {
+                    name: "deploy".into(),
+                    description: "Deploys the web app.".into(),
+                    source: SkillSource::Project,
+                    path: Some("web/.claude/skills/deploy".into()),
+                },
+                SessionSkill {
+                    name: "release-notes".into(),
+                    description: "Writes release notes from merged PRs.".into(),
+                    source: SkillSource::Library,
+                    path: None,
+                },
+            ],
+        },
+        ServerMessage::SessionSkills {
+            session_id: SessionId::new("01J9SESSION"),
+            skills: Vec::new(),
+        },
     ]
 }
 
@@ -1583,6 +1688,101 @@ fn fork_and_vault_status_wire_shape() {
             lag_ms: None,
         }]
     );
+}
+
+#[test]
+fn skills_wire_shape() {
+    let put = serde_json::to_value(command(CommandBody::PutSkill {
+        name: "deploy".into(),
+        files: vec![SkillFile {
+            path: "SKILL.md".into(),
+            data: Bytes(b"hi".to_vec()),
+            executable: false,
+        }],
+    }))
+    .unwrap();
+    assert_eq!(
+        put["body"],
+        json!({"type": "put_skill", "name": "deploy", "files": [
+            {"path": "SKILL.md", "data": "aGk=", "executable": false},
+        ]})
+    );
+    let import: ClientMessage = serde_json::from_value(json!({
+        "type": "command", "id": "c", "body": {"type": "import_skill", "git_url": "u"},
+    }))
+    .unwrap();
+    assert_eq!(
+        import,
+        ClientMessage::Command(Command {
+            id: CommandId::new("c"),
+            body: CommandBody::ImportSkill {
+                git_url: "u".into(),
+                path: None,
+            },
+        })
+    );
+    let file: SkillFile = serde_json::from_value(json!({"path": "a.md", "data": ""})).unwrap();
+    assert!(!file.executable);
+    assert_eq!(
+        serde_json::to_value(command(CommandBody::PullSkills)).unwrap()["body"],
+        json!({"type": "pull_skills"})
+    );
+
+    let status: ServerMessage = serde_json::from_value(json!({
+        "type": "skills_status", "skills": [], "reload": [],
+    }))
+    .unwrap();
+    let ServerMessage::SkillsStatus(status) = status else {
+        panic!("expected a skills status");
+    };
+    assert_eq!(
+        (status.repo, status.head, status.last_pull),
+        (None, None, None)
+    );
+    let skills: ServerMessage = serde_json::from_value(json!({
+        "type": "session_skills", "session_id": "s", "skills": [
+            {"name": "deploy", "description": "d", "source": "library"},
+        ],
+    }))
+    .unwrap();
+    assert_eq!(
+        skills,
+        ServerMessage::SessionSkills {
+            session_id: SessionId::new("s"),
+            skills: vec![SessionSkill {
+                name: "deploy".into(),
+                description: "d".into(),
+                source: SkillSource::Library,
+                path: None,
+            }],
+        }
+    );
+}
+
+#[test]
+fn skill_names_follow_the_agent_skills_format() {
+    for name in [
+        "pdf",
+        "release-notes",
+        "a1-b2",
+        &"a".repeat(MAX_SKILL_NAME_CHARS),
+    ] {
+        assert!(is_valid_skill_name(name), "{name}");
+    }
+    for name in [
+        "",
+        "Release",
+        "-pdf",
+        "pdf-",
+        "re--lease",
+        "a_b",
+        "a/b",
+        "..",
+        "ünï",
+        &"a".repeat(MAX_SKILL_NAME_CHARS + 1),
+    ] {
+        assert!(!is_valid_skill_name(name), "{name}");
+    }
 }
 
 #[test]

@@ -20,6 +20,7 @@ pub mod replication;
 mod resources;
 mod server;
 mod settings;
+mod skills;
 mod types;
 
 pub use attachment::{
@@ -52,6 +53,10 @@ pub use server::{
 pub use settings::{
     BackupSettings, DaemonSettings, LogFormat, LogSettings, ProjectDiscovery, ProviderBinary,
     ResourceSettings, TaskSettings, TitleSettings,
+};
+pub use skills::{
+    LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload, SessionSkill, SkillFile,
+    SkillReload, SkillSource, SkillsStatus, is_valid_skill_name,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 
