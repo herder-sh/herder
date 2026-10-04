@@ -58,12 +58,19 @@ struct NativeAgent: Hashable, Identifiable {
             let streamingResult = streaming.contains(last)
             launched = !isError && !streamingResult && (requested || Self.isLaunch(output))
             background = requested || launched
-            result = launched ? nil : output
-            endedAt = launched ? nil : times["\(last.turnId)/\(last.id)"]
-            // A launch is known to run only while the turn that launched it does; after that
-            // nothing herder records says whether it still runs.
-            outcome = streamingResult ? .running : isError ? .failed
-                : launched ? (runningTurn == item.turnId ? .running : .unknown) : .ok
+            if launched, let done = Self.completion(of: item, after: last, in: items),
+               case .toolResult(_, let output, let isError) = done.body {
+                result = output
+                endedAt = times["\(done.turnId)/\(done.id)"]
+                outcome = streaming.contains(done) ? .running : isError ? .failed : .ok
+            } else {
+                result = launched ? nil : output
+                endedAt = launched ? nil : times["\(last.turnId)/\(last.id)"]
+                // Without its completion, a launch is known to run only while the turn that
+                // launched it does.
+                outcome = streamingResult ? .running : isError ? .failed
+                    : launched ? (runningTurn == item.turnId ? .running : .unknown) : .ok
+            }
         } else {
             launched = false
             background = requested
@@ -71,6 +78,21 @@ struct NativeAgent: Hashable, Identifiable {
             endedAt = nil
             outcome = runningTurn == item.turnId ? .running : .unknown
         }
+    }
+
+    /// A background agent's real result: the provider reports it after the launch, usually in
+    /// a turn of its own (Claude starts one for it), as a later result for the same call. The
+    /// search stops where a later call reuses the id, as a restarted CLI's may.
+    static func completion(of call: Item, after launch: Item, in items: [Item]) -> Item? {
+        guard let start = items.firstIndex(of: launch) else { return nil }
+        for later in items[items.index(after: start)...] {
+            if later.id == call.id { return nil }
+            if later.parentCallId == call.parentCallId,
+               case .toolResult(let callId, _, _) = later.body, callId == call.id {
+                return later
+            }
+        }
+        return nil
     }
 
     static func find(_ id: ID, in model: SessionModel) -> NativeAgent? {
