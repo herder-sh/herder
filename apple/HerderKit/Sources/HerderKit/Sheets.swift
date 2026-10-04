@@ -649,7 +649,8 @@ struct SettingRow<Control: View>: View {
     }
 }
 
-/// A machine: its name on this device, its connection, accounts and identity; forget it.
+/// A machine: its name on this device, its turn limit, connection, accounts and identity;
+/// forget it.
 struct MachineSettingsSheet: View {
     let fleet: Fleet
     let hostId: HostId
@@ -674,6 +675,10 @@ struct MachineSettingsSheet: View {
                         .frame(width: 120)
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || name == machine.name)
                     }
+                }
+                if let resources = machine.resources, machine.hosts.isEmpty {
+                    TurnLimitField(fleet: fleet, hostId: hostId, load: TurnLoad(resources),
+                                   canChange: machine.role == .owner && machine.connection == .connected)
                 }
                 Field(label: "Connection", hint: "Since the app opened. Round trips are pings every 15 seconds.") {
                     let log = fleet.connectionLog[hostId] ?? []

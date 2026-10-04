@@ -27,9 +27,13 @@
 //! load or pressure binds; a child spawned while only the turn limit binds waits for a slot
 //! like any other turn.
 //!
+//! [`Admission::set_max_turns`] changes the turn limit while the daemon runs: a higher one
+//! admits waiting turns at once, a lower one stops no running turn, only new ones from
+//! starting until the host is back under it.
+//!
 //! [`Admission::run`] publishes
 //! [`ServerMessage::HostResources`](herder_protocol::ServerMessage::HostResources) through the
-//! [`Hub`] each [`RECHECK_INTERVAL`] when it changed.
+//! [`Hub`] each [`RECHECK_INTERVAL`] when it changed, and at once when the turn limit does.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use herder_protocol::{Constraint, HostResources, Pressure, SessionId};
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -159,15 +163,17 @@ pub struct Admission {
 }
 
 struct Shared {
-    budget: Budget,
     host: Box<dyn ReadHost>,
+    /// Wakes [`Admission::run`] to publish a new turn limit at once.
+    limit_changed: Notify,
     /// Whether a failed reading was logged already; later ones are not.
     read_failed: AtomicBool,
     state: Mutex<State>,
 }
 
-#[derive(Default)]
 struct State {
+    /// What turns are admitted within; only the turn limit changes.
+    budget: Budget,
     /// Turns holding a permit and not parked: the turns counted against the limit.
     running: u32,
     /// Each session holding a permit, with how many of its tool calls park it now.
@@ -231,17 +237,35 @@ impl Admission {
     pub fn new(budget: Budget, host: Box<dyn ReadHost>) -> Self {
         Self {
             shared: Arc::new(Shared {
-                budget,
                 host,
+                limit_changed: Notify::new(),
                 read_failed: AtomicBool::new(false),
-                state: Mutex::default(),
+                state: Mutex::new(State {
+                    budget,
+                    running: 0,
+                    holders: HashMap::new(),
+                    waiting: VecDeque::new(),
+                    published: None,
+                }),
             }),
         }
     }
 
     /// The budget turns are admitted within.
     pub fn budget(&self) -> Budget {
-        self.shared.budget
+        self.shared.lock().budget
+    }
+
+    /// Admits at most `max_turns` turns at once from now on. Waiting turns the new limit has
+    /// room for start at once; running turns keep running when it is lower. [`Admission::run`]
+    /// publishes the change without waiting for its next tick.
+    pub fn set_max_turns(&self, max_turns: u32) {
+        let shared = &self.shared;
+        let mut state = shared.lock();
+        state.budget.max_turns = max_turns;
+        shared.admit(&mut state);
+        drop(state);
+        shared.limit_changed.notify_one();
     }
 
     /// Admits `session`'s next turn now when the host has room and no turn waits; otherwise
@@ -253,7 +277,7 @@ impl Admission {
         shared.admit(&mut state);
         let reading = shared.read();
         if state.waiting.is_empty()
-            && shared
+            && state
                 .budget
                 .constraint(state.running, reading.as_ref())
                 .is_none()
@@ -290,14 +314,13 @@ impl Admission {
     /// What about the host itself, its memory, load or pressure, keeps it from starting another
     /// turn now, whatever the turn limit says.
     pub fn host_constraint(&self) -> Option<Constraint> {
-        self.shared
-            .budget
-            .constraint(0, self.shared.read().as_ref())
+        let budget = self.budget();
+        budget.constraint(0, self.shared.read().as_ref())
     }
 
     /// Why the host starts no more turns for `constraint`, for an agent or a log.
     pub fn explain(&self, constraint: Constraint) -> String {
-        let budget = &self.shared.budget;
+        let budget = self.budget();
         match constraint {
             Constraint::MaxTurns => format!(
                 "it already runs {} agent turns, its limit",
@@ -336,6 +359,7 @@ impl Admission {
             tokio::select! {
                 () = shutdown.cancelled() => return,
                 _ = tick.tick() => self.publish(hub),
+                () = self.shared.limit_changed.notified() => self.publish(hub),
             }
         }
     }
@@ -362,7 +386,7 @@ impl Shared {
                 state.waiting.pop_front();
                 continue;
             }
-            if self
+            if state
                 .budget
                 .constraint(state.running, self.read().as_ref())
                 .is_some()
@@ -391,16 +415,16 @@ impl Shared {
     fn resources(&self, state: &State, reading: Option<&Reading>) -> HostResources {
         let waiting = state.waiting.iter().filter(|(_, w)| !w.is_closed()).count();
         HostResources {
-            cpu_cores: self.budget.cores,
+            cpu_cores: state.budget.cores,
             cpu_percent: reading.map_or(0.0, |r| r.cpu_percent),
             load_1m: reading.map_or(0.0, |r| r.load_1m),
             memory_total_bytes: reading.map_or(0, |r| r.memory_total),
             memory_available_bytes: reading.map_or(0, |r| r.memory_available),
             pressure: reading.and_then(|r| r.pressure.clone()),
             running_turns: state.running,
-            max_turns: self.budget.max_turns,
+            max_turns: state.budget.max_turns,
             waiting_turns: u32::try_from(waiting).unwrap_or(u32::MAX),
-            constraint: self.budget.constraint(state.running, reading),
+            constraint: state.budget.constraint(state.running, reading),
         }
     }
 

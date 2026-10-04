@@ -188,6 +188,7 @@ struct Lists {
             hostId: machine.hostId, name: machine.name, connection: machine.connection, role: machine.role,
             cpu: machine.resources?.cpuPercent, memory: memory,
             running: own.filter { $0.model.state == .running }.count,
+            turns: machine.hosts.isEmpty ? machine.resources.map(TurnLoad.init) : nil,
             sessions: machine.sessions.count,
             accounts: machine.accounts.map { account in
                 AccountSummary(

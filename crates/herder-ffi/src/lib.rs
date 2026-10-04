@@ -90,6 +90,12 @@ pub fn client_api_version() -> u32 {
     client_core::CLIENT_API_VERSION
 }
 
+/// Most turns a host may be set to run at once, `herder_protocol::MAX_TURNS_LIMIT`.
+#[uniffi::export]
+pub fn max_turns_limit() -> u32 {
+    herder_protocol::MAX_TURNS_LIMIT
+}
+
 /// The media types a prompt's image may have, `herder_protocol::IMAGE_MEDIA_TYPES`.
 #[uniffi::export]
 pub fn image_media_types() -> Vec<String> {

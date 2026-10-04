@@ -246,6 +246,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             label: "Personal".into(),
             config_dir: Some("~/.claude-personal".into()),
         }),
+        command(CommandBody::SetResourceLimits { max_turns: 6 }),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
         }),

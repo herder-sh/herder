@@ -160,8 +160,10 @@ impl ResourcesConfig {
             "resources.nice must be -20 to 19"
         );
         anyhow::ensure!(
-            self.max_turns != Some(0),
-            "resources.max_turns must be at least 1"
+            self.max_turns
+                .is_none_or(|turns| (1..=herder_protocol::MAX_TURNS_LIMIT).contains(&turns)),
+            "resources.max_turns must be 1 to {}",
+            herder_protocol::MAX_TURNS_LIMIT
         );
         anyhow::ensure!(
             (1..=100).contains(&self.max_memory_pressure),

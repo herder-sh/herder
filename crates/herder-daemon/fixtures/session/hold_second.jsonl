@@ -1,0 +1,6 @@
+# The second session's turn, admitted once the turn limit is raised, which runs until it is
+# interrupted.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Wait your turn."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"expect": {"type": "interrupt"}}
+{"emit": {"type": "turn_interrupted", "turn_id": "turn-2"}}

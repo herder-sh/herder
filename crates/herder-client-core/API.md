@@ -29,7 +29,8 @@ says what exists, why, and how it maps to foreign languages.
   compatibly, the `ForkSession` command with its `SessionForked` result, and a
   vault's `VaultStatus` message (`VaultStatus`, `HostReplication`). P0.20 added, compatibly,
   `SessionHead.queue` (`QueuedPrompt`, `PromptId`) and the `RemoveQueued`, `MoveQueued` and
-  `SendQueuedNow` commands.
+  `SendQueuedNow` commands. The `SetResourceLimits` command, with `MAX_TURNS_LIMIT`, was
+  added compatibly too.
 
 ## Shape, and how it maps to UniFFI
 
@@ -316,3 +317,12 @@ The daemon persists configuration and broadcasts the refreshed account list. Lab
 must be non-empty. Directory changes require all sessions on the daemon archived;
 provider and account id cannot be changed. No provider credentials are exposed.
 The wire change is additive (protocol 4); the native record shape changes (client API 6).
+
+### Turn limit
+
+`Machine::resources` carries the host's `max_turns`, with its `running_turns` and
+`waiting_turns`. `send(host, SetResourceLimits { max_turns })` changes the limit live; only
+owners may do this. It must be 1 to `herder_protocol::MAX_TURNS_LIMIT`, else `bad_request`.
+Raising it starts waiting turns at once; lowering it stops no running turn. The daemon keeps
+the limit in its config and sends every client the new `resources`. The wire change is
+additive (protocol 4) and this API is unchanged.

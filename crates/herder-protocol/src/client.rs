@@ -313,6 +313,15 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_dir: Option<String>,
     },
+    /// Change how many turns the host runs at once, live; owners only. Raising it starts
+    /// waiting turns at once; lowering it stops no running turn, only new ones from starting.
+    /// The daemon keeps it as `max_turns` in the `[resources]` table of its config and sends
+    /// every client the new `host_resources`. Refused with `bad_request` outside 1 to
+    /// [`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT), and with `unsupported` on a vault.
+    SetResourceLimits {
+        /// Most turns running at once.
+        max_turns: u32,
+    },
     /// List a folder on the host, to pick a repository; owners only. Answered with
     /// `directory`. It changes nothing, so a resend is answered afresh.
     ListDirectory {
