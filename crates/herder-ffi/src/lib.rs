@@ -60,6 +60,12 @@ pub enum HerderError {
         /// The daemon's error; `info.code` says why.
         info: ErrorInfo,
     },
+    /// No address of the machine answered.
+    #[error("no address answered: {detail}")]
+    Unreachable {
+        /// Why each address did not answer.
+        detail: String,
+    },
     /// Something on this device failed: the profile file, a device key, or the runtime.
     #[error("{detail}")]
     Local {
@@ -78,6 +84,7 @@ impl From<client_core::Error> for HerderError {
             client_core::Error::Pairing { message } => Self::Pairing { detail: message },
             client_core::Error::UnknownMachine { host_id } => Self::UnknownMachine { host_id },
             client_core::Error::Rejected { info } => Self::Rejected { info },
+            client_core::Error::Unreachable { message } => Self::Unreachable { detail: message },
             client_core::Error::Local { message } => Self::Local { detail: message },
             client_core::Error::Closed => Self::Closed,
         }
@@ -252,6 +259,13 @@ impl Client {
         addresses: Vec<String>,
     ) -> Result<(), HerderError> {
         Ok(self.inner.set_addresses(host_id, addresses)?)
+    }
+
+    /// Drops a machine's connection and connects again at once, racing its addresses in
+    /// order: the address the new connection uses.
+    pub async fn reconnect(&self, host_id: HostId) -> Result<String, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move { client.reconnect(host_id).await }).await
     }
 
     /// Unpairs a machine on this device.

@@ -110,6 +110,9 @@ enum Op {
     Wake,
     /// The machine's addresses changed: reconnect now, or move to one that comes first.
     Readdress,
+    /// Drop the connection and race the addresses again now; report the address that
+    /// answered, or why none did.
+    Reconnect(oneshot::Sender<Result<String, String>>),
 }
 
 /// A machine's supervisor: the state its task maintains, and the handle the client drives it
@@ -379,6 +382,21 @@ impl Supervisor {
         self.lock().addresses = addresses;
         self.notify();
         let _ = self.ops.send(Op::Readdress);
+    }
+
+    /// Drops the connection, if up, and races the addresses again at once: the address the
+    /// new connection uses, or [`Error::Unreachable`] when none answered.
+    pub(crate) async fn reconnect(&self) -> Result<String, Error> {
+        let (reply, done) = oneshot::channel();
+        self.ops
+            .send(Op::Reconnect(reply))
+            .map_err(|_| Error::Closed)?;
+        tokio::select! {
+            () = self.stop.cancelled() => Err(Error::Closed),
+            done = done => done
+                .map_err(|_| Error::Closed)?
+                .map_err(|message| Error::Unreachable { message }),
+        }
     }
 
     /// Shows the machine as `name` from now on.
@@ -961,12 +979,17 @@ enum Ended {
     Lost(String),
     /// A wake found it dead; reconnect without a backoff.
     Replaced(String),
+    /// The client asked for a new connection; reconnect without a backoff and report how
+    /// that went.
+    Reconnect(oneshot::Sender<Result<String, String>>),
 }
 
 async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::UnboundedReceiver<Op>) {
     let mut pending: Vec<Pending> = Vec::new();
     // Syncs waiting for their answer, by token, sent again on each new connection.
     let mut syncs: HashMap<String, oneshot::Sender<()>> = HashMap::new();
+    // Reconnects asked for, answered once the next attempt connects or fails.
+    let mut reconnects: Vec<oneshot::Sender<Result<String, String>>> = Vec::new();
     let mut attempt = 0;
     let mut suspended = false;
     let saved = &supervisor.saved;
@@ -983,16 +1006,20 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
             () = supervisor.stop.cancelled() => return,
             connected = connect(&addresses, &saved.fingerprint, &device, hello) => connected,
         };
+        let failed = connected.is_err();
         let (error, now) = match connected {
             Ok((ws, hello, address)) => {
                 attempt = 0;
                 {
                     let mut state = supervisor.lock();
                     state.role = Some(hello.role);
-                    state.address = Some(address);
+                    state.address = Some(address.clone());
                     state.dirty = true;
                 }
                 supervisor.set_connection(ConnectionState::Connected);
+                for reply in reconnects.drain(..) {
+                    let _ = reply.send(Ok(address.clone()));
+                }
                 let ended = serve(
                     &supervisor,
                     ws,
@@ -1007,12 +1034,23 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                     Ended::Stopped => return,
                     Ended::Lost(error) => (error, false),
                     Ended::Replaced(error) => (error, true),
+                    Ended::Reconnect(reply) => {
+                        reconnects.push(reply);
+                        ("reconnecting, as asked".to_owned(), true)
+                    }
                 }
             }
             Err(error) => (error, false),
         };
         debug!(machine = %saved.name, "disconnected: {error}");
-        supervisor.set_connection(ConnectionState::Disconnected { error });
+        supervisor.set_connection(ConnectionState::Disconnected {
+            error: error.clone(),
+        });
+        if failed {
+            for reply in reconnects.drain(..) {
+                let _ = reply.send(Err(error.clone()));
+            }
+        }
         if now {
             continue;
         }
@@ -1030,6 +1068,11 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                         break;
                     }
                     Some(Op::Readdress) => {
+                        attempt = 0;
+                        break;
+                    }
+                    Some(Op::Reconnect(reply)) => {
+                        reconnects.push(reply);
                         attempt = 0;
                         break;
                     }
@@ -1235,6 +1278,7 @@ async fn serve(
                         better = supervisor.better();
                         continue;
                     }
+                    Some(Op::Reconnect(reply)) => return Ended::Reconnect(reply),
                 };
                 if let Err(error) = write(&mut sink, encode(&message)).await {
                     return Ended::Lost(error);

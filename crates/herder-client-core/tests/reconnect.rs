@@ -1,7 +1,7 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
-//! account login, resource figures, the sync barrier, renaming and forgetting a machine, and the
-//! app lifecycle: suspension, wake probes and the offline cache.
+//! account login, resource figures, the sync barrier, renaming and forgetting a machine, a
+//! reconnect through a chosen address, and the app lifecycle: suspension, wake probes and the offline cache.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -615,6 +615,75 @@ async fn addresses_race_in_order_and_the_first_that_answers_wins() {
         [live, "box.local:7447".to_owned()]
     );
     drop(dead);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconnect_dials_the_first_address_and_falls_back_when_it_is_dead() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
+    client.synced(host.clone()).await.unwrap();
+    let live = daemon.addr.to_string();
+
+    // The connection in use is replaced, even on the same address.
+    assert_eq!(client.reconnect(host.clone()).await, Ok(live.clone()));
+    assert_eq!(client.machines()[0].quality.reconnects, 1);
+
+    // An address put first is dialled first and takes over the connection.
+    let relay = Relay::start(daemon.addr).await;
+    let via_relay = relay.addr.to_string();
+    client
+        .set_addresses(host.clone(), vec![via_relay.clone(), live.clone()])
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(via_relay.clone()));
+    assert_eq!(
+        client.machines()[0].address.as_deref(),
+        Some(via_relay.as_str())
+    );
+    client.synced(host.clone()).await.unwrap();
+
+    // A dead first address falls back to the next.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dead = closed.local_addr().unwrap().to_string();
+    drop(closed);
+    client
+        .set_addresses(host.clone(), vec![dead.clone(), live.clone()])
+        .unwrap();
+    assert_eq!(client.reconnect(host.clone()).await, Ok(live.clone()));
+    client.synced(host.clone()).await.unwrap();
+
+    // With no address answering, it says why, and the machine is disconnected.
+    client
+        .set_addresses(host.clone(), vec![dead.clone()])
+        .unwrap();
+    match client.reconnect(host.clone()).await {
+        Err(Error::Unreachable { message }) => assert!(message.contains(&dead), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        client.machines()[0].connection,
+        ConnectionState::Disconnected { .. }
+    ));
+    assert_eq!(
+        client.reconnect(HostId::new("nope")).await,
+        Err(Error::UnknownMachine {
+            host_id: HostId::new("nope")
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

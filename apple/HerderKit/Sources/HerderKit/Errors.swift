@@ -7,6 +7,7 @@ extension HerderError {
         switch self {
         case .InvalidLink(let detail), .Local(let detail): detail
         case .Pairing(let detail): "Pairing failed: \(detail)"
+        case .Unreachable(let detail): "No address answered: \(detail)"
         case .UnknownMachine(let hostId): "No paired machine \(hostId)."
         case .Rejected(let info): info.message
         case .Closed: "herder stopped."

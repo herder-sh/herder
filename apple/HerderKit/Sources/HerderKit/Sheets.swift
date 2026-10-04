@@ -662,6 +662,10 @@ struct MachineSettingsSheet: View {
     @State private var addingAccount = false
     @State private var confirmingForget = false
     @State private var error: String?
+    /// The address a Connect is switching to, until it answers or fails.
+    @State private var connecting: String?
+    /// The address the last Connect failed on, and why.
+    @State private var connectFailure: AddressStatus.Failure?
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == hostId }
@@ -712,7 +716,7 @@ struct MachineSettingsSheet: View {
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
                 Field(label: "Addresses",
-                      hint: "Tried first to last: each gets a head start over the ones below it, so the first that answers wins. The port defaults to 7447.") {
+                      hint: "Tried first to last: each gets a head start over the ones below it, so the first that answers wins. Connect moves an address to the top and reconnects through it now. The port defaults to 7447.") {
                     addresses(machine)
                 }
                 Field(label: "Machine") {
@@ -791,30 +795,19 @@ struct MachineSettingsSheet: View {
         }
     }
 
-    /// The machine's addresses in order, each movable and removable, and a field to add one.
+    /// The machine's addresses in order, each movable, removable and one to connect through now, and
+    /// a field to add one.
     private func addresses(_ machine: Machine) -> some View {
         let addresses = machine.addresses
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(addresses.enumerated()), id: \.element) { index, address in
-                HStack(spacing: 10) {
-                    Text("\(index + 1)").monospacedDigit().foregroundStyle(Theme.tertiary)
-                    Text(address).font(Theme.monoSmall).foregroundStyle(Theme.text).textSelection(.enabled)
-                    if address == machine.address {
-                        Text("In use").font(.caption.weight(.semibold)).foregroundStyle(Theme.success)
-                    }
-                    Spacer()
-                    Button("Move Up", systemImage: "chevron.up") { move(addresses, from: index, to: index - 1) }
-                        .disabled(index == 0)
-                    Button("Move Down", systemImage: "chevron.down") { move(addresses, from: index, to: index + 1) }
-                        .disabled(index == addresses.count - 1)
-                    Button("Remove", systemImage: "minus.circle") {
-                        perform { try fleet.setAddresses(hostId, to: addresses.filter { $0 != address }) }
-                    }
-                    .disabled(addresses.count == 1)
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .font(.subheadline)
+                AddressRow(index: index, address: address, count: addresses.count,
+                           status: AddressStatus(address: address, inUse: machine.address,
+                                                 connecting: connecting, failure: connectFailure),
+                           busy: connecting != nil,
+                           connect: { connect(through: address) },
+                           move: { move(addresses, from: index, to: $0) },
+                           remove: { perform { try fleet.setAddresses(hostId, to: addresses.filter { $0 != address }) } })
             }
             HStack(spacing: 10) {
                 InputBox(placeholder: "Host or IP, e.g. box.tailnet.ts.net", text: $newAddress, mono: true)
@@ -830,6 +823,19 @@ struct MachineSettingsSheet: View {
         }
         .padding(12)
         .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+    }
+
+    private func connect(through address: String) {
+        connecting = address
+        connectFailure = nil
+        Task {
+            do {
+                try await fleet.connect(hostId, through: address)
+            } catch {
+                connectFailure = .init(address: address, message: describe(error))
+            }
+            connecting = nil
+        }
     }
 
     private func move(_ addresses: [String], from: Int, to: Int) {
@@ -856,6 +862,103 @@ struct MachineSettingsSheet: View {
 
     static func duration(_ seconds: TimeInterval) -> String {
         Duration.seconds(max(0, seconds)).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated, maximumUnitCount: 2))
+    }
+}
+
+/// An address of a machine, numbered in its order: "In use", a Connect under way or the
+/// button that starts one, the buttons that move and remove it, and why a Connect failed.
+struct AddressRow: View {
+    let index: Int
+    let address: String
+    let count: Int
+    let status: AddressStatus
+    /// A Connect is under way, through any address.
+    let busy: Bool
+    let connect: () -> Void
+    let move: (_ to: Int) -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Text("\(index + 1)").monospacedDigit().foregroundStyle(Theme.tertiary)
+                Text(address).font(Theme.monoSmall).foregroundStyle(Theme.text).textSelection(.enabled)
+                statusView
+                Spacer()
+                Button("Move Up", systemImage: "chevron.up") { move(index - 1) }
+                    .disabled(index == 0)
+                Button("Move Down", systemImage: "chevron.down") { move(index + 1) }
+                    .disabled(index == count - 1)
+                Button("Remove", systemImage: "minus.circle", action: remove)
+                    .disabled(count == 1)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .font(.subheadline)
+            if case .failed(let message) = status {
+                Text(message).font(.caption).foregroundStyle(Theme.failure)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 17)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch status {
+        case .inUse:
+            Text("In use").font(.caption.weight(.semibold)).foregroundStyle(Theme.success)
+        case .connecting:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Connecting…").font(.caption).foregroundStyle(Theme.tertiary)
+            }
+        case .available, .failed:
+            Button(action: connect) {
+                Text("Connect")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Theme.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Theme.raised, in: .capsule)
+                    .overlay(Capsule().strokeBorder(Theme.stroke))
+            }
+            .buttonStyle(.plain)
+            .help("Move to the top and reconnect through this address now")
+            .disabled(busy)
+        }
+    }
+}
+
+/// What an address in a machine's settings shows beside it.
+enum AddressStatus: Equatable {
+    /// The connection uses it.
+    case inUse
+    /// A Connect through it is under way.
+    case connecting
+    /// The last Connect through it failed, with why; it can be tried again.
+    case failed(String)
+    /// Not in use; Connect switches the connection to it.
+    case available
+
+    /// An address a Connect failed on, and why.
+    struct Failure: Equatable {
+        let address: String
+        let message: String
+    }
+
+    /// `address`'s status, given the address the connection uses, the one a Connect is
+    /// switching to, and the last Connect's failure.
+    init(address: String, inUse: String?, connecting: String?, failure: Failure?) {
+        if address == connecting {
+            self = .connecting
+        } else if address == inUse {
+            self = .inUse
+        } else if let failure, failure.address == address {
+            self = .failed(failure.message)
+        } else {
+            self = .available
+        }
     }
 }
 
