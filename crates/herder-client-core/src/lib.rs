@@ -15,8 +15,13 @@
 //! A machine is a daemon this device paired with, keyed by the daemon's [`HostId`]. The
 //! profile, `<config_dir>/machines.json`, holds each machine's addresses, the pinned SHA-256
 //! of its certificate, and the device key this device presents to it (one key per machine).
-//! [`Client::pair`] adds one from a `herder://pair` link, [`Client::rename`] changes the name
-//! it is shown by on this device, and [`Client::forget`] removes it.
+//! [`Client::pair`] adds every machine a `herder://pair` link names, [`Client::rename`]
+//! changes the name it is shown by on this device, and [`Client::forget`] removes it.
+//!
+//! [`Client::share`] makes one link that pairs another device with every connected machine:
+//! each daemon mints a one-time code for this device's user and role there, so the new device
+//! gets its own key and is revocable on its own, and never more than this device may do.
+//! It is a one-time share: machines paired later are not passed on.
 //!
 //! # Connections
 //!
@@ -97,7 +102,9 @@ mod terminal;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
+use futures_util::future::join_all;
 use herder_protocol::{
     Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
     Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
@@ -108,7 +115,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use auth::DeviceKey;
-pub use pairing::PairingUri;
+pub use pairing::{PairingLink, PairingUri};
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
 pub use terminal::{TerminalEvent, TerminalStream};
@@ -116,7 +123,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 6;
+pub const CLIENT_API_VERSION: u32 = 7;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,6 +218,49 @@ pub struct Machine {
     /// What a vault holds and how far each host's replication got, as last sent; `None` for a
     /// daemon, and while not connected.
     pub vault: Option<VaultStatus>,
+}
+
+/// What pairing with one machine of a link came to; see [`Client::pair`].
+// UniFFI passes records by value and cannot carry a `Box`; a link names a handful of machines,
+// so the size of a result does not matter.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq)]
+pub enum PairResult {
+    /// Paired, saved and connecting.
+    Paired {
+        /// The machine.
+        machine: Machine,
+    },
+    /// Not paired; nothing was saved for it.
+    Failed {
+        /// The addresses the link names for it.
+        addresses: Vec<String>,
+        /// Why: no address answered, the certificate did not match, or the daemon refused
+        /// the code.
+        error: String,
+    },
+}
+
+/// A link that pairs another device with this device's machines; see [`Client::share`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedLink {
+    /// The link, one machine per code; format it with `to_string` for the QR code.
+    pub link: PairingLink,
+    /// The machines it pairs with, in the link's order.
+    pub shared: Vec<HostId>,
+    /// The machines left out, with why.
+    pub skipped: Vec<SkippedMachine>,
+    /// When the first of its codes stops working.
+    pub expires_at: Timestamp,
+}
+
+/// A machine [`Client::share`] left out of the link.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkippedMachine {
+    /// The machine.
+    pub host_id: HostId,
+    /// Why: not connected, or its daemon refused or did not answer in time.
+    pub error: String,
 }
 
 /// Where a machine's connection stands.
@@ -327,14 +377,29 @@ impl Client {
         self.lock().iter().map(|machine| machine.view()).collect()
     }
 
-    /// Pairs with the daemon a `herder://pair` link names, saves it, and starts its supervisor.
+    /// Pairs with every machine a `herder://pair` link names, saves each that paired, and
+    /// starts its supervisor; one result per machine, in the link's order. Fails only for a
+    /// link that is not one.
     ///
     /// Pairing a machine already paired replaces it, with a new device key.
-    pub async fn pair(&self, link: String) -> Result<Machine, Error> {
-        let uri: PairingUri = link.parse()?;
-        let device = DeviceKey::generate().map_err(|err| Error::Local {
-            message: format!("{err:#}"),
-        })?;
+    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, Error> {
+        let link: PairingLink = link.parse()?;
+        let proved = join_all(link.machines.into_iter().map(|uri| self.prove(uri))).await;
+        Ok(proved
+            .into_iter()
+            .map(|proved| match proved.and_then(|saved| self.add(saved)) {
+                Ok(machine) => PairResult::Paired { machine },
+                Err((addresses, error)) => PairResult::Failed { addresses, error },
+            })
+            .collect())
+    }
+
+    /// Pairs a new device key with the machine `uri` names: the machine as it will be saved,
+    /// or its addresses and why it did not pair.
+    async fn prove(&self, uri: PairingUri) -> Result<SavedMachine, (Vec<String>, String)> {
+        let addresses = uri.hosts.clone();
+        let device =
+            DeviceKey::generate().map_err(|err| (addresses.clone(), format!("{err:#}")))?;
         let mut saved = SavedMachine {
             host_id: HostId::new(""),
             name: String::new(),
@@ -350,12 +415,19 @@ impl Client {
         };
         let (ws, hello) = supervisor::connect(&saved, &device, hello)
             .await
-            .map_err(|message| Error::Pairing { message })?;
+            .map_err(|message| (addresses, message))?;
         // The supervisor opens its own connection; this one only proved the code.
         drop(ws);
         saved.host_id = hello.host_id;
         saved.name = hello.host_name;
+        Ok(saved)
+    }
 
+    /// Saves a freshly paired machine, replacing it if paired before, and starts its
+    /// supervisor.
+    fn add(&self, mut saved: SavedMachine) -> Result<Machine, (Vec<String>, String)> {
+        let addresses = saved.addresses.clone();
+        let failed = |err: Error| (addresses.clone(), err.to_string());
         let mut machines = self.lock();
         let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
         let index = all.iter().position(|m| m.host_id == saved.host_id);
@@ -367,14 +439,15 @@ impl Client {
             Some(index) => all[index] = saved.clone(),
             None => all.push(saved.clone()),
         }
-        profile::save(&self.inner.config_dir, &all)?;
+        profile::save(&self.inner.config_dir, &all).map_err(failed)?;
         let supervisor = Supervisor::start(
             saved,
             self.inner.config_dir.clone(),
             self.inner.client.clone(),
             Arc::clone(&self.inner.changed),
             self.inner.stop.child_token(),
-        )?;
+        )
+        .map_err(failed)?;
         match index {
             Some(index) => std::mem::replace(&mut machines[index], Arc::clone(&supervisor)).stop(),
             None => machines.push(Arc::clone(&supervisor)),
@@ -382,6 +455,75 @@ impl Client {
         drop(machines);
         self.inner.changed.send_modify(|version| *version += 1);
         Ok(supervisor.view())
+    }
+
+    /// Makes a link that pairs another device with every connected machine, as this
+    /// device's user with its role on each. Each machine is asked for a one-time code
+    /// (`pair_device`); one not connected, or that refuses or does not answer within 10 s, is
+    /// skipped. Fails with [`Error::Pairing`] when no machine gave a code.
+    pub async fn share(&self) -> Result<SharedLink, Error> {
+        let machines = self.lock().clone();
+        let asked = machines.iter().map(|machine| async move {
+            let host_id = machine.saved.host_id.clone();
+            if machine.view().connection != ConnectionState::Connected {
+                return (host_id, Err("not connected".to_owned()));
+            }
+            let command = Command {
+                id: new_command_id(),
+                body: CommandBody::PairDevice,
+            };
+            let answer = match tokio::time::timeout(SHARE_TIMEOUT, machine.send(command)).await {
+                Err(_) => Err("did not answer in time".to_owned()),
+                Ok(Err(err)) => Err(err.to_string()),
+                Ok(Ok(Err(info))) => Err(info.message),
+                Ok(Ok(Ok(CommandResult::DevicePairing {
+                    code,
+                    fingerprint,
+                    addresses,
+                    expires_at,
+                }))) => Ok((
+                    PairingUri {
+                        hosts: addresses,
+                        fingerprint,
+                        code,
+                    },
+                    expires_at,
+                )),
+                Ok(Ok(Ok(_))) => Err("the daemon sent an unexpected answer".to_owned()),
+            };
+            (host_id, answer)
+        });
+        let (mut uris, mut shared, mut skipped) = (Vec::new(), Vec::new(), Vec::new());
+        let mut expires_at: Option<Timestamp> = None;
+        for (host_id, answer) in join_all(asked).await {
+            match answer {
+                Ok((uri, expires)) => {
+                    uris.push(uri);
+                    shared.push(host_id);
+                    expires_at = Some(expires_at.map_or(expires, |at| at.min(expires)));
+                }
+                Err(error) => skipped.push(SkippedMachine { host_id, error }),
+            }
+        }
+        let Some(expires_at) = expires_at else {
+            let reasons: Vec<String> = skipped
+                .iter()
+                .map(|s| format!("{}: {}", s.host_id, s.error))
+                .collect();
+            return Err(Error::Pairing {
+                message: if reasons.is_empty() {
+                    "no machine is paired to share".to_owned()
+                } else {
+                    format!("no machine gave a code ({})", reasons.join("; "))
+                },
+            });
+        };
+        Ok(SharedLink {
+            link: PairingLink { machines: uris },
+            shared,
+            skipped,
+            expires_at,
+        })
     }
 
     /// Shows a machine as `name` on this device from now on, and saves that.
@@ -594,6 +736,9 @@ impl Changes {
         }
     }
 }
+
+/// How long [`Client::share`] waits for each machine's code.
+const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fresh command id.
 pub(crate) fn new_command_id() -> CommandId {

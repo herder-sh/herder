@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use gtk::glib;
 use herder_adapters::AdapterCommand;
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::{Client, PairingUri};
+use herder_client_core::{Client, PairResult, PairingUri};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
@@ -150,10 +150,14 @@ impl App {
                 "herder-gtk-test".to_owned(),
             )
             .expect("the profile opens");
-            let host_id = runtime
+            let host_id = match runtime
                 .block_on(client.pair(link))
                 .expect("pairing")
-                .host_id;
+                .as_slice()
+            {
+                [PairResult::Paired { machine }] => machine.host_id.clone(),
+                other => panic!("expected one paired machine: {other:?}"),
+            };
             runtime
                 .block_on(client.send(
                     host_id.clone(),

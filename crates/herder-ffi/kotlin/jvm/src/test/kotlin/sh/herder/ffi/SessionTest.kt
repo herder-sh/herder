@@ -34,7 +34,7 @@ class SessionTest {
         assertEquals(link, pairingUriToString(parsePairingUri(link)))
         val config = Files.createTempDirectory("herder-kotlin")
         Client.open(config.toString(), "herder-kotlin-test/0").use { client ->
-            val machine = client.pair(link)
+            val machine = (client.pair(link).single() as PairResult.Paired).machine
             assertEquals("fake-host", machine.name)
             val host = machine.hostId
             client.synced(host)

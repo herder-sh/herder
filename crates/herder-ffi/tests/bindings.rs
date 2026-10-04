@@ -10,9 +10,10 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
+use herder_client_core::PairResult;
 use herder_ffi::{
     Client, HerderError, image_media_types, max_image_bytes, max_prompt_image_bytes,
-    pairing_uri_to_string, parse_pairing_uri,
+    pairing_link_to_string, pairing_uri_to_string, parse_pairing_link, parse_pairing_uri,
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
@@ -57,10 +58,19 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         "herder-ffi-test/0".into(),
     )
     .unwrap();
-    let machine = block_on(client.pair(daemon.link.clone())).unwrap();
+    let results = block_on(client.pair(daemon.link.clone())).unwrap();
+    let [PairResult::Paired { machine }] = &results[..] else {
+        panic!("expected one paired machine: {results:?}");
+    };
     assert_eq!(machine.name, "fake-host");
-    let host = machine.host_id;
+    let host = machine.host_id.clone();
     block_on(client.synced(host.clone())).unwrap();
+    // The paired device shares the machine on: one link, its code minted for this user.
+    let shared = block_on(client.share()).unwrap();
+    assert_eq!(shared.shared, std::slice::from_ref(&host));
+    assert!(shared.skipped.is_empty());
+    let text = pairing_link_to_string(shared.link.clone());
+    assert_eq!(parse_pairing_link(text).unwrap(), shared.link);
     // The connection's first ping goes out as soon as it is up; its round trip comes through.
     let changes = client.changes();
     while client.machines()[0].quality.last_rtt_ms.is_none() {

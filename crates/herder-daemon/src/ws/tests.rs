@@ -821,6 +821,69 @@ async fn a_code_pairs_one_device_only() {
     assert_eq!(daemon.auth.devices().len(), 2);
 }
 
+/// Asks for a `pair_device` code on `client`: the code, fingerprint and addresses.
+async fn share(client: &mut Client, id: &str) -> (String, String, Vec<String>) {
+    let ServerMessage::CommandAccepted {
+        result:
+            CommandResult::DevicePairing {
+                code,
+                fingerprint,
+                addresses,
+                ..
+            },
+        ..
+    } = client.command(id, CommandBody::PairDevice).await
+    else {
+        panic!("expected a device pairing");
+    };
+    (code, fingerprint, addresses)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_device_pairs_another_as_its_own_user_and_role() {
+    let daemon = Daemon::start().await;
+    let member = DeviceKey::generate().unwrap();
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let mut bob = daemon.client_on(&member, Some(&code)).await;
+    let bob_hello = bob.hello(Vec::new()).await;
+    let mut owner = daemon.client().await;
+    let owner_hello = owner.hello(Vec::new()).await;
+
+    for (client, sharer) in [(&mut owner, &owner_hello), (&mut bob, &bob_hello)] {
+        let (code, fingerprint, addresses) = share(client, "share").await;
+        assert_eq!(fingerprint, daemon.fingerprint);
+        // The daemon's own addresses: bound to one, it advertises that one.
+        assert_eq!(addresses, [daemon.addr.to_string()]);
+        let phone = DeviceKey::generate().unwrap();
+        let mut paired = daemon.client_on(&phone, Some(&code)).await;
+        let hello = paired.hello(Vec::new()).await;
+        assert_eq!((&hello.user_id, hello.role), (&sharer.user_id, sharer.role));
+        assert_ne!(hello.device_id, sharer.device_id);
+        if hello.role == Role::Member {
+            // A member's code pairs a member: still no terminals.
+            let open = CommandBody::OpenTerminal {
+                session_id: SessionId::new("s1"),
+                cols: 80,
+                rows: 24,
+            };
+            let ServerMessage::CommandRejected { error, .. } = paired.command("t", open).await
+            else {
+                panic!("expected a refusal");
+            };
+            assert_eq!(error.code, ErrorCode::Forbidden);
+        }
+        // The code works once.
+        let other = DeviceKey::generate().unwrap();
+        let error = refused(daemon.client_on(&other, Some(&code)).await).await;
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+    // A resend of the same command is answered with the same code; a new one mints afresh.
+    let (first, ..) = share(&mut owner, "again").await;
+    assert_eq!(share(&mut owner, "again").await.0, first);
+    assert_ne!(share(&mut owner, "fresh").await.0, first);
+    assert_eq!(daemon.auth.devices().len(), 4);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pinned_client_rejects_a_changed_certificate() {
     let daemon = Daemon::start().await;

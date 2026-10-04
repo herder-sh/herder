@@ -199,6 +199,17 @@ impl Auth {
         Self::insert_code(&mut state, user, role, DeviceRole::Client, ttl)
     }
 
+    /// Mints a one-time code that pairs a client device as the paired user `user_id`, with
+    /// their role, valid for `ttl`: what `pair_device` shares from a device already paired.
+    pub fn mint_for(&self, user_id: &UserId, ttl: Duration) -> Result<Pairing> {
+        let mut state = self.lock();
+        let Some(user) = state.users.users.iter().find(|u| &u.user_id == user_id) else {
+            bail!("no user {user_id} on this daemon");
+        };
+        let (name, role) = (user.name.clone(), user.role);
+        Self::insert_code(&mut state, &name, role, DeviceRole::Client, ttl)
+    }
+
     /// Mints a one-time code that pairs the vault host named `host` as a host-only device,
     /// valid for `ttl`. The device acts as the user `host`, a member when new.
     pub fn mint_host(&self, host: &str, ttl: Duration) -> Result<Pairing> {
@@ -727,6 +738,49 @@ mod tests {
         assert!(connect(&auth, "fp-a", DeviceRole::Host).is_ok());
         let roles: Vec<_> = auth.devices().iter().map(|(d, _)| d.role).collect();
         assert_eq!(roles, [DeviceRole::Client, DeviceRole::Host]);
+    }
+
+    #[test]
+    fn a_shared_code_pairs_as_the_sharer_with_their_role() {
+        let (_tmp, auth) = open();
+        let alice = pair(
+            &auth,
+            "fp-a",
+            &auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+        )
+        .unwrap();
+        let bob = pair(
+            &auth,
+            "fp-b",
+            &auth.mint("bob", None, PAIRING_TTL).unwrap().code,
+        )
+        .unwrap();
+        for (sharer, role, phone) in [
+            (&alice, Role::Owner, "fp-a2"),
+            (&bob, Role::Member, "fp-b2"),
+        ] {
+            let pairing = auth.mint_for(&sharer.user_id, PAIRING_TTL).unwrap();
+            assert_eq!(
+                (pairing.role, pairing.device_role),
+                (role, DeviceRole::Client)
+            );
+            let paired = pair(&auth, phone, &pairing.code).unwrap();
+            assert_eq!((&paired.user_id, paired.role), (&sharer.user_id, role));
+            assert_ne!(paired.device_id, sharer.device_id);
+            // Once only.
+            assert!(pair(&auth, "fp-x", &pairing.code).is_err());
+        }
+        // Each device keeps its own credential: revoking the new one leaves the sharer's.
+        let phone = connect(&auth, "fp-b2", DeviceRole::Client).unwrap();
+        assert!(auth.revoke(&phone.device_id).unwrap());
+        assert!(connect(&auth, "fp-b", DeviceRole::Client).is_ok());
+
+        let expired = auth.mint_for(&alice.user_id, Duration::ZERO).unwrap();
+        assert_eq!(
+            pair(&auth, "fp-y", &expired.code).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+        assert!(auth.mint_for(&UserId::new("nobody"), PAIRING_TTL).is_err());
     }
 
     #[test]

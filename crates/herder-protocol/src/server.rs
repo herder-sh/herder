@@ -411,6 +411,19 @@ pub enum CommandResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         volume: Option<VaultVolume>,
     },
+    /// A one-time code that pairs another device as the caller's user, answering
+    /// `pair_device`: everything a `herder://pair` link names for this daemon.
+    DevicePairing {
+        /// The code, for the new device's hello.
+        code: String,
+        /// SHA-256 of the daemon's TLS certificate, lowercase hex.
+        fingerprint: String,
+        /// Addresses the daemon advertises as `host:port`, most likely reachable first; not
+        /// necessarily the one the caller reached it on.
+        addresses: Vec<String>,
+        /// When the code stops working.
+        expires_at: Timestamp,
+    },
     /// A one-time code that pairs a host with this vault to replicate and only that,
     /// answering `pair_vault_host`.
     HostPairing {

@@ -11,7 +11,8 @@
 //! - [`HerderError`], client-core's `Error` under a name and with field names that do not
 //!   clash with Swift's `Error` or Kotlin's `Throwable.message`.
 //! - [`parse_pairing_uri`] and [`pairing_uri_to_string`], `PairingUri`'s `FromStr` and
-//!   `Display`, which UniFFI cannot export as trait impls on a record.
+//!   `Display`, and [`parse_pairing_link`] and [`pairing_link_to_string`], `PairingLink`'s,
+//!   which UniFFI cannot export as trait impls on a record.
 //! - [`image_media_types`], [`max_image_bytes`] and [`max_prompt_image_bytes`], the protocol's
 //!   limits on a prompt's images, which UniFFI cannot export as constants.
 
@@ -21,7 +22,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use herder_client_core as client_core;
-use herder_client_core::{Machine, NewAccount, PairingUri, SessionUpdate, TerminalEvent};
+use herder_client_core::{
+    Machine, NewAccount, PairResult, PairingLink, PairingUri, SessionUpdate, SharedLink,
+    TerminalEvent,
+};
 use herder_protocol::{CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId};
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -120,6 +124,18 @@ pub fn pairing_uri_to_string(uri: PairingUri) -> String {
     uri.to_string()
 }
 
+/// Parses a `herder://pair` link of one or more machines, to confirm it before pairing.
+#[uniffi::export]
+pub fn parse_pairing_link(link: String) -> Result<PairingLink, HerderError> {
+    Ok(link.parse::<PairingLink>()?)
+}
+
+/// Formats a link of one or more machines as `herder://pair?…`, for a QR code.
+#[uniffi::export]
+pub fn pairing_link_to_string(link: PairingLink) -> String {
+    link.to_string()
+}
+
 /// Runs `call` on the client's runtime and waits for it; `None` once the runtime is gone.
 /// Dropping the returned future aborts the call.
 async fn on<T: Send + 'static>(
@@ -204,10 +220,18 @@ impl Client {
         })
     }
 
-    /// Pairs with the daemon a `herder://pair` link names and saves it.
-    pub async fn pair(&self, link: String) -> Result<Machine, HerderError> {
+    /// Pairs with every machine a `herder://pair` link names and saves each that paired;
+    /// one result per machine, in the link's order.
+    pub async fn pair(&self, link: String) -> Result<Vec<PairResult>, HerderError> {
         let client = self.inner.clone();
         call(&self.handle, async move { client.pair(link).await }).await
+    }
+
+    /// Makes a link that pairs another device with every connected machine, as this
+    /// device's user with its role on each; machines that gave no code are skipped.
+    pub async fn share(&self) -> Result<SharedLink, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move { client.share().await }).await
     }
 
     /// Shows a machine as `name` on this device.

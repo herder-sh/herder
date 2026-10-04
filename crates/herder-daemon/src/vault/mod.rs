@@ -154,6 +154,10 @@ impl Server {
     /// Accepts hosts and clients on `listener`, and prunes archived sessions, until
     /// `shutdown`, which also closes every connection.
     pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
+        match listener.local_addr() {
+            Ok(listen) => self.shared.clients.listening_on(listen),
+            Err(err) => warn!("cannot tell the address the vault listens on: {err}"),
+        }
         // Every host is offline until it connects.
         self.shared.fleet.refresh_hosts().await;
         tokio::spawn(retention::run(

@@ -679,7 +679,8 @@ impl SessionManager {
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
-            | CommandBody::TerminalInput { .. } => {
+            | CommandBody::TerminalInput { .. }
+            | CommandBody::PairDevice => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "the session manager does not handle this command yet",

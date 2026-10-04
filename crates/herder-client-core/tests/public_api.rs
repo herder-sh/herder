@@ -69,6 +69,7 @@ fn the_objects_and_their_futures_are_send() {
              changes: Changes| {
         let host = HostId::new("h");
         future(client.pair(String::new()));
+        future(client.share());
         future(client.synced(host.clone()));
         future(client.send(
             host.clone(),

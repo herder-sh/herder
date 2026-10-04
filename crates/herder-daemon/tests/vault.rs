@@ -12,7 +12,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::PairingUri;
 use herder_client_core::auth::client_config;
-use herder_client_core::{Client, Error, Machine, SessionSubscription};
+use herder_client_core::{Client, Error, Machine, PairResult, SessionSubscription};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
@@ -22,10 +22,10 @@ use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, ClientHello, ClientMessage, Command, CommandBody,
-    CommandId, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage, Item, ItemBody,
-    ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode, Provider, REPLICATION_VERSION,
-    ReplicationErrorCode, ServerMessage, SessionId, SessionStatus, SessionSummary, Timestamp,
-    TurnId, UserId, VaultMessage,
+    CommandId, CommandResult, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
+    Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode, Provider,
+    REPLICATION_VERSION, ReplicationErrorCode, ServerMessage, SessionId, SessionStatus,
+    SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -400,6 +400,14 @@ fn assert_gap_free(vault_dir: &Path) {
     }
 }
 
+/// The machine a link of one machine paired with.
+fn one_machine(results: Vec<PairResult>) -> Machine {
+    match <[PairResult; 1]>::try_from(results) {
+        Ok([PairResult::Paired { machine }]) => machine,
+        other => panic!("expected one paired machine: {other:?}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sessions_appear_in_the_vault_and_follow_live() {
     let tmp = tempfile::tempdir().unwrap();
@@ -563,7 +571,11 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         "test".into(),
     )
     .unwrap();
-    let paired = client.pair(vault.pairing_link("alice")).await.unwrap();
+    let paired = client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
     let vault_id = paired.host_id;
     assert_eq!(vault_id.as_str(), "vault");
     let machine = machine_when(&client, |m| m.sessions.len() == 2).await;
@@ -625,6 +637,19 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         client.send(vault_id.clone(), archive).await,
         Err(Error::Rejected { info: error }) if error.code == ErrorCode::ReadOnly
     ));
+    // A client of the vault shares it on, with the vault's own address.
+    let Ok(CommandResult::DevicePairing {
+        addresses,
+        fingerprint,
+        ..
+    }) = client.send(vault_id.clone(), CommandBody::PairDevice).await
+    else {
+        panic!("expected a device pairing");
+    };
+    assert_eq!(
+        (addresses, fingerprint),
+        (vec![vault.addr.to_string()], vault.fingerprint.clone())
+    );
     let missing = refusal(&client, &vault_id, "nope").await;
     assert_eq!(missing.code, ErrorCode::NotFound);
 
@@ -670,7 +695,11 @@ async fn a_client_of_the_vault_sees_what_it_holds_of_each_host() {
         "test".into(),
     )
     .unwrap();
-    client.pair(vault.pairing_link("alice")).await.unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
     let machine = machine_when(&client, |m| m.vault.as_ref().is_some_and(|v| v.events == 8)).await;
     let status = machine.vault.unwrap();
     assert_eq!((status.sessions, status.events), (2, 8));
@@ -720,6 +749,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
     let vault_id = client
         .pair(vault.pairing_link("alice"))
         .await
+        .map(one_machine)
         .unwrap()
         .host_id;
 
@@ -903,7 +933,11 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
         "test".into(),
     )
     .unwrap();
-    client.pair(vault.pairing_link("alice")).await.unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
     let machine = machine_when(&client, |m| m.sessions.len() == 3).await;
     assert_eq!(machine.hosts.len(), 1);
     vault.runtime.kill().await;
@@ -958,6 +992,7 @@ async fn images_are_not_backed_up_unless_the_host_says_so_and_never_fail_it() {
     let vault_id = client
         .pair(vault.pairing_link("alice"))
         .await
+        .map(one_machine)
         .unwrap()
         .host_id;
     let fetch = CommandBody::GetAttachment {
@@ -1061,7 +1096,11 @@ async fn a_hosts_images_stay_within_its_cap_and_the_hosts_list_shows_usage() {
         "test".into(),
     )
     .unwrap();
-    client.pair(vault.pairing_link("alice")).await.unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
     let machine = machine_when(&client, |m| {
         m.hosts
             .first()
@@ -1095,7 +1134,11 @@ async fn a_forgotten_host_leaves_nothing_on_the_vault() {
         "test".into(),
     )
     .unwrap();
-    client.pair(vault.pairing_link("alice")).await.unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
     machine_when(&client, |m| m.sessions.len() == 2).await;
 
     // Never while it is online.

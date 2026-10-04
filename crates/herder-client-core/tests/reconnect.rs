@@ -13,8 +13,8 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::PairingUri;
 use herder_client_core::{
-    Client, ConnectionState, Error, NewAccount, SessionSubscription, SessionUpdate, TerminalEvent,
-    TerminalStream,
+    Client, ConnectionState, Error, Machine, NewAccount, PairResult, PairingLink,
+    SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
@@ -87,6 +87,18 @@ impl Daemon {
     /// Starts a daemon on `dir`, listening on `port` (0 for any), whose sessions run `script`;
     /// `turns` numbers turn ids across restarts, as the scripts expect.
     async fn start(dir: &Path, port: u16, script: &str, turns: Arc<AtomicU64>) -> Self {
+        Self::start_as("host-1", dir, port, script, turns).await
+    }
+
+    /// [`Daemon::start`] for the host `host_id`.
+    async fn start_as(
+        host_id: &str,
+        dir: &Path,
+        port: u16,
+        script: &str,
+        turns: Arc<AtomicU64>,
+    ) -> Self {
+        let host_id = HostId::new(host_id);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -129,8 +141,8 @@ impl Daemon {
             let addr = listener.local_addr().unwrap();
             let fingerprint = tls.fingerprint().to_owned();
             let host = Host {
-                id: HostId::new("host-1"),
-                name: "test-host".into(),
+                name: format!("test-{host_id}"),
+                id: host_id,
             };
             let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
             // The login is fake; the account it adds is a real provider's, as the config holds.
@@ -191,6 +203,16 @@ impl Drop for Daemon {
         if let Some(runtime) = self.runtime.take() {
             runtime.shutdown_background();
         }
+    }
+}
+
+/// Pairs `client` with the one machine `link` names: the machine, or why it did not pair.
+async fn pair_one(client: &Client, link: String) -> Result<Machine, String> {
+    let mut results = client.pair(link).await.map_err(|err| err.to_string())?;
+    assert_eq!(results.len(), 1, "{results:?}");
+    match results.remove(0) {
+        PairResult::Paired { machine } => Ok(machine),
+        PairResult::Failed { error, .. } => Err(error),
     }
 }
 
@@ -297,10 +319,10 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
     let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
 
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let machine = client.pair(daemon.pairing_link()).await.unwrap();
+    let machine = pair_one(&client, daemon.pairing_link()).await.unwrap();
     let host = machine.host_id;
     assert_eq!(host, HostId::new("host-1"));
-    assert_eq!(machine.name, "test-host");
+    assert_eq!(machine.name, "test-host-1");
     wait_connection(&client, connected).await;
     assert_eq!(
         client.machines()[0].role,
@@ -410,7 +432,10 @@ async fn synced_waits_for_the_lists_and_the_replay() {
     )
     .await;
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
     let created = client
         .send(
             host.clone(),
@@ -475,11 +500,14 @@ async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
     )
     .await;
     let client = Client::open(config.display().to_string(), "herder-test/0".into()).unwrap();
-    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
     client.rename(host.clone(), "build box".into()).unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     // Pairing again keeps the name.
-    client.pair(daemon.pairing_link()).await.unwrap();
+    pair_one(&client, daemon.pairing_link()).await.unwrap();
     assert_eq!(client.machines()[0].name, "build box");
     drop(client);
 
@@ -526,23 +554,16 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
         code: "AAAAA-AAAAA".into(),
         ..link.clone()
     };
-    let err = client.pair(wrong_code.to_string()).await.unwrap_err();
-    assert!(
-        matches!(&err, Error::Pairing { message } if message.contains("pairing code")),
-        "{err}"
-    );
+    let err = pair_one(&client, wrong_code.to_string()).await.unwrap_err();
+    assert!(err.contains("pairing code"), "{err}");
     let wrong_fingerprint = PairingUri {
         fingerprint: "00".repeat(32),
         ..link.clone()
     };
-    let err = client
-        .pair(wrong_fingerprint.to_string())
+    let err = pair_one(&client, wrong_fingerprint.to_string())
         .await
         .unwrap_err();
-    assert!(
-        matches!(&err, Error::Pairing { message } if message.contains("fingerprint")),
-        "{err}"
-    );
+    assert!(err.contains("fingerprint"), "{err}");
     assert!(matches!(
         client.pair("https://example.com".into()).await,
         Err(Error::InvalidLink { .. })
@@ -551,7 +572,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
     assert!(!config.join("machines.json").exists());
 
     // The real code still works, and a command the daemon refuses comes back as rejected.
-    let host = client.pair(link.to_string()).await.unwrap().host_id;
+    let host = pair_one(&client, link.to_string()).await.unwrap().host_id;
     let refused = client
         .send(
             host.clone(),
@@ -679,8 +700,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = client
-        .pair(daemon.pairing_link_via("alice", relay.addr))
+    let host = pair_one(&client, daemon.pairing_link_via("alice", relay.addr))
         .await
         .unwrap()
         .host_id;
@@ -721,7 +741,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    other.pair(daemon.pairing_link()).await.unwrap();
+    pair_one(&other, daemon.pairing_link()).await.unwrap();
     let watcher = other
         .attach_terminal(host.clone(), terminal_id.clone())
         .await
@@ -738,8 +758,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
         "herder-test/0".into(),
     )
     .unwrap();
-    member
-        .pair(daemon.pairing_link_via("bob", daemon.addr))
+    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
         .await
         .unwrap();
     wait_connection(&member, connected).await;
@@ -814,7 +833,10 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
     let config_dir = tmp.path().join("codex-2");
     let new_account = |account_id: &str| NewAccount {
         account_id: AccountId::new(account_id),
@@ -829,8 +851,7 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
         "herder-test/0".into(),
     )
     .unwrap();
-    member
-        .pair(daemon.pairing_link_via("bob", daemon.addr))
+    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
         .await
         .unwrap();
     let refused = member
@@ -967,7 +988,7 @@ async fn host_and_session_resources_stay_current_while_connected() {
         "herder-test/0".into(),
     )
     .unwrap();
-    client.pair(daemon.pairing_link()).await.unwrap();
+    pair_one(&client, daemon.pairing_link()).await.unwrap();
     wait_machine(&client, |m| m.resources == Some(host_resources(3))).await;
 
     // Later figures replace them.
@@ -1021,7 +1042,7 @@ async fn connection_quality_reports_round_trips_and_reconnects() {
         "herder-test/0".into(),
     )
     .unwrap();
-    client.pair(daemon.pairing_link()).await.unwrap();
+    pair_one(&client, daemon.pairing_link()).await.unwrap();
     wait_machine(&client, |m| m.quality.last_rtt_ms.is_some()).await;
     let quality = client.machines()[0].quality.clone();
     assert!(connected(&client.machines()[0].connection));
@@ -1109,8 +1130,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = phone
-        .pair(daemon.pairing_link_via("alice", relay.addr))
+    let host = pair_one(&phone, daemon.pairing_link_via("alice", relay.addr))
         .await
         .unwrap()
         .host_id;
@@ -1138,7 +1158,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         "herder-test/0".into(),
     )
     .unwrap();
-    desktop.pair(daemon.pairing_link()).await.unwrap();
+    pair_one(&desktop, daemon.pairing_link()).await.unwrap();
     let watched = desktop
         .subscribe_session(host.clone(), session_id.clone())
         .unwrap();
@@ -1194,8 +1214,7 @@ async fn wake_keeps_a_healthy_connection_and_replaces_a_dead_one() {
         "herder-test/0".into(),
     )
     .unwrap();
-    let host = client
-        .pair(daemon.pairing_link_via("alice", relay.addr))
+    let host = pair_one(&client, daemon.pairing_link_via("alice", relay.addr))
         .await
         .unwrap()
         .host_id;
@@ -1236,7 +1255,10 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
     let turns = Arc::new(AtomicU64::new(0));
     let daemon = Daemon::start(&data, 0, "mid_turn.jsonl", Arc::clone(&turns)).await;
     let client = Client::open(config.clone(), "herder-test/0".into()).unwrap();
-    let host = client.pair(daemon.pairing_link()).await.unwrap().host_id;
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
     let session_id = create_session(&client, &host, repo).await;
     let sub = client
         .subscribe_session(host.clone(), session_id.clone())
@@ -1316,4 +1338,135 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
         .read_until(&sub, |reopened| !reopened.events.is_empty())
         .await;
     assert_eq!(reopened.events, view.events);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shared_link_pairs_another_device_with_every_connected_machine() {
+    let tmp = tempfile::tempdir().unwrap();
+    let start = |host: &'static str| {
+        let dir = tmp.path().join(host);
+        async move { Daemon::start_as(host, &dir, 0, "mid_turn.jsonl", Arc::default()).await }
+    };
+    let (first, second, gone) = (
+        start("host-1").await,
+        start("host-2").await,
+        start("host-3").await,
+    );
+    // On the second machine the sharer is a member: its owner paired first.
+    second.auth.mint("carol", None, PAIRING_TTL).unwrap();
+    let carol = Client::open(
+        tmp.path().join("carol").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    pair_one(&carol, second.pairing_link_via("carol", second.addr))
+        .await
+        .unwrap();
+
+    let mac = Client::open(
+        tmp.path().join("mac").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    pair_one(&mac, first.pairing_link()).await.unwrap();
+    pair_one(&mac, second.pairing_link_via("bob", second.addr))
+        .await
+        .unwrap();
+    pair_one(&mac, gone.pairing_link()).await.unwrap();
+    gone.kill().await;
+    wait_host(&mac, "host-1", true).await;
+    wait_host(&mac, "host-2", true).await;
+    wait_host(&mac, "host-3", false).await;
+
+    let share = mac.share().await.unwrap();
+    assert_eq!(share.shared, [HostId::new("host-1"), HostId::new("host-2")]);
+    assert_eq!(share.skipped.len(), 1, "{:?}", share.skipped);
+    assert_eq!(share.skipped[0].host_id, HostId::new("host-3"));
+    assert_eq!(share.link.machines.len(), 2);
+    // Each machine's own address and certificate.
+    assert_eq!(share.link.machines[0].hosts, [first.addr.to_string()]);
+    assert_eq!(share.link.machines[0].fingerprint, first.fingerprint);
+    assert_eq!(share.link.machines[1].hosts, [second.addr.to_string()]);
+    let text = share.link.to_string();
+    assert_eq!(text.parse::<PairingLink>().unwrap(), share.link);
+
+    let phone = Client::open(
+        tmp.path().join("phone").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let results = phone.pair(text.clone()).await.unwrap();
+    let paired: Vec<_> = results
+        .iter()
+        .map(|result| match result {
+            PairResult::Paired { machine } => machine.host_id.clone(),
+            PairResult::Failed { error, .. } => panic!("not paired: {error}"),
+        })
+        .collect();
+    assert_eq!(paired, [HostId::new("host-1"), HostId::new("host-2")]);
+    wait_host(&phone, "host-1", true).await;
+    wait_host(&phone, "host-2", true).await;
+    // The sharer's user and role on each, under a key of the phone's own.
+    let roles: Vec<_> = phone.machines().iter().map(|m| m.role).collect();
+    assert_eq!(roles, [Some(Role::Owner), Some(Role::Member)]);
+    for (daemon, user) in [(&first, "alice"), (&second, "bob")] {
+        let devices = daemon.auth.devices();
+        let users: Vec<_> = devices.iter().map(|(_, u)| u.name.as_str()).collect();
+        assert_eq!(
+            users.iter().filter(|name| **name == user).count(),
+            2,
+            "{users:?}"
+        );
+        let keys: std::collections::HashSet<_> =
+            devices.iter().map(|(d, _)| d.fingerprint.clone()).collect();
+        assert_eq!(keys.len(), devices.len());
+    }
+
+    // The codes work once: pairing again reports each machine's failure and keeps both.
+    let again = Client::open(
+        tmp.path().join("again").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let results = again.pair(text).await.unwrap();
+    assert_eq!(results.len(), 2);
+    for result in results {
+        let PairResult::Failed { error, .. } = result else {
+            panic!("a used code paired");
+        };
+        assert!(error.contains("pairing code"), "{error}");
+    }
+    assert!(again.machines().is_empty());
+    assert_eq!(phone.machines().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sharing_with_no_connected_machine_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    assert!(matches!(
+        client.share().await,
+        Err(Error::Pairing { message }) if message.contains("no machine")
+    ));
+}
+
+/// Waits until the machine `host` of `client` is connected, or not when `up` is false.
+async fn wait_host(client: &Client, host: &str, up: bool) {
+    let host = HostId::new(host);
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while !client.machines().iter().any(|m| {
+            m.host_id == host
+                && (m.connection == ConnectionState::Connected) == up
+                && m.connection != ConnectionState::Connecting
+        }) {
+            assert!(changes.next().await);
+        }
+    })
+    .await
+    .expect("the machine did not get there in time");
 }

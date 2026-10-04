@@ -21,6 +21,7 @@ import sh.herder.ffi.Client
 import sh.herder.ffi.CommandBody
 import sh.herder.ffi.CommandResult
 import sh.herder.ffi.HerderException
+import sh.herder.ffi.PairResult
 
 class MainActivity : ComponentActivity() {
     private val incomingLink = MutableStateFlow("")
@@ -54,7 +55,9 @@ class MainActivity : ComponentActivity() {
                         } else {
                             try {
                                 client.pair(link)
-                                null
+                                    .filterIsInstance<PairResult.Failed>()
+                                    .firstOrNull()
+                                    ?.let { "pairing failed: ${it.error}" }
                             } catch (error: HerderException) {
                                 error.reason()
                             }

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
-use herder_client_core::Client;
 use herder_client_core::PairingUri;
+use herder_client_core::{Client, PairResult};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
@@ -151,7 +151,11 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
     .unwrap();
     for (id, name, repo) in &machines {
         let link = daemon(&tmp.path().join(name), id, name, &shutdown).await;
-        client.pair(link).await.unwrap();
+        let paired = client.pair(link).await.unwrap();
+        assert!(
+            matches!(&paired[..], [PairResult::Paired { .. }]),
+            "{paired:?}"
+        );
         let command = CommandBody::CreateSession {
             repo: Some(repo.clone()),
             project_id: None,
