@@ -1,5 +1,17 @@
 //! Daemon configuration, loaded from a TOML file.
 //!
+//! # Listening
+//!
+//! `listen` is the address the daemon accepts clients on, or a list of them; every address is
+//! bound, and pairing links name each one other devices can reach:
+//!
+//! ```toml
+//! listen = "0.0.0.0:7447"                               # every interface; the default
+//! listen = ["127.0.0.1:7447", "100.124.135.114:7447"] # loopback and a Tailscale address only
+//! ```
+//!
+//! A list may not be empty or name an address twice.
+//!
 //! # Accounts
 //!
 //! Each `[[accounts]]` entry is one provider login on this machine:
@@ -158,8 +170,8 @@ pub const DEFAULT_PORT: u16 = 7447;
 pub struct Config {
     /// The config file: the one read, or where one is created when an account is added.
     pub path: PathBuf,
-    /// Address the daemon listens on.
-    pub listen: SocketAddr,
+    /// Addresses the daemon listens on, as configured: at least one, none twice.
+    pub listen: Vec<SocketAddr>,
     /// Directory holding everything the daemon persists.
     pub data_dir: PathBuf,
     /// Logging settings.
@@ -291,7 +303,7 @@ pub enum LogFormat {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ConfigFile {
-    listen: SocketAddr,
+    listen: Listen,
     data_dir: Option<PathBuf>,
     log: LogConfig,
     accounts: Vec<AccountFile>,
@@ -309,7 +321,10 @@ struct ConfigFile {
 impl Default for ConfigFile {
     fn default() -> Self {
         Self {
-            listen: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DEFAULT_PORT)),
+            listen: Listen::One(SocketAddr::V4(SocketAddrV4::new(
+                Ipv4Addr::UNSPECIFIED,
+                DEFAULT_PORT,
+            ))),
             data_dir: None,
             log: LogConfig::default(),
             accounts: Vec::new(),
@@ -324,6 +339,31 @@ impl Default for ConfigFile {
             vault: None,
         }
     }
+}
+
+/// `listen` as written: one address or a list.
+#[derive(Debug, Deserialize)]
+#[serde(
+    untagged,
+    expecting = "an address such as \"0.0.0.0:7447\", or a list of them"
+)]
+enum Listen {
+    One(SocketAddr),
+    Many(Vec<SocketAddr>),
+}
+
+/// The addresses `listen` names: at least one, none twice.
+fn resolve_listen(listen: Listen) -> Result<Vec<SocketAddr>> {
+    let addresses = match listen {
+        Listen::One(address) => vec![address],
+        Listen::Many(addresses) => addresses,
+    };
+    ensure!(!addresses.is_empty(), "`listen` names no address");
+    let mut seen = HashSet::new();
+    for address in &addresses {
+        ensure!(seen.insert(address), "`listen` names {address} twice");
+    }
+    Ok(addresses)
 }
 
 /// The `[titles]` table as written.
@@ -417,6 +457,7 @@ impl Config {
             Some(dir) => dir,
             None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
         };
+        let listen = resolve_listen(file.listen)?;
         file.resources.validate()?;
         let accounts = resolve_accounts(file.accounts, &env)?;
         let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
@@ -424,7 +465,7 @@ impl Config {
         let (vault, retention) = resolve_vault(file.mode, file.vault)?;
         Ok(Self {
             path,
-            listen: file.listen,
+            listen,
             data_dir,
             log: file.log,
             accounts,
@@ -1237,7 +1278,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let home = home.path().to_str().unwrap();
         let config = Config::load_with_env(None, env(&[("HOME", home)])).unwrap();
-        assert_eq!(config.listen, "0.0.0.0:7447".parse().unwrap());
+        assert_eq!(config.listen, ["0.0.0.0:7447".parse().unwrap()]);
         assert_eq!(config.data_dir, Path::new(home).join(".local/share/herder"));
         assert_eq!(config.log, LogConfig::default());
         assert_eq!(config.log.format, LogFormat::Pretty);
@@ -1263,8 +1304,40 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert_eq!(config.listen, "127.0.0.1:9000".parse().unwrap());
+        assert_eq!(config.listen, ["127.0.0.1:9000".parse().unwrap()]);
         assert_eq!(config.data_dir, Path::new("/srv/data/herder"));
+    }
+
+    #[test]
+    fn listen_takes_a_list_of_addresses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write(
+            tmp.path(),
+            "listen = [\"127.0.0.1:7447\", \"100.124.135.114:7447\", \"[::1]:7447\"]\n",
+        );
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        let expected: Vec<SocketAddr> = ["127.0.0.1:7447", "100.124.135.114:7447", "[::1]:7447"]
+            .iter()
+            .map(|addr| addr.parse().unwrap())
+            .collect();
+        assert_eq!(config.listen, expected);
+    }
+
+    #[test]
+    fn listen_rejects_an_empty_list_duplicates_and_non_addresses() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (text, error) in [
+            ("listen = []\n", "`listen` names no address"),
+            (
+                "listen = [\"127.0.0.1:7447\", \"127.0.0.1:7447\"]\n",
+                "`listen` names 127.0.0.1:7447 twice",
+            ),
+            ("listen = \"localhost\"\n", "or a list of them"),
+        ] {
+            let path = write(tmp.path(), text);
+            let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+            assert!(format!("{err:#}").contains(error), "{text}: {err:#}");
+        }
     }
 
     #[test]
@@ -1308,7 +1381,7 @@ mod tests {
             config,
             Config {
                 path: path.clone(),
-                listen: "[::1]:8000".parse().unwrap(),
+                listen: vec!["[::1]:8000".parse().unwrap()],
                 data_dir: PathBuf::from("/var/lib/herder"),
                 log: LogConfig {
                     level: "debug".to_owned(),
@@ -2049,7 +2122,7 @@ mod tests {
         let config = Config::load_with_env(Some(&path), env()).unwrap();
         assert_eq!(config.accounts[&AccountId::new("work")], account);
         assert_eq!(config.accounts.len(), 2);
-        assert_eq!(config.listen, "127.0.0.1:9000".parse().unwrap());
+        assert_eq!(config.listen, ["127.0.0.1:9000".parse().unwrap()]);
         assert_eq!(config.binaries[&Provider::Codex], PathBuf::from("codex"));
     }
 

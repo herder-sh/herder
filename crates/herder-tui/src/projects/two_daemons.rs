@@ -122,7 +122,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
         logins,
         host,
     );
-    tokio::spawn(server.run(listener, shutdown.clone()));
+    tokio::spawn(server.run(vec![listener], shutdown.clone()));
     let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
     PairingUri {
         hosts: vec![addr.to_string()],

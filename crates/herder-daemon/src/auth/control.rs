@@ -138,8 +138,8 @@ pub struct DeviceInfo {
 pub struct Daemon {
     /// SHA-256 of its TLS certificate.
     pub fingerprint: String,
-    /// The address its WebSocket server is bound to.
-    pub listen: SocketAddr,
+    /// The addresses its WebSocket server is bound to, as configured.
+    pub listen: Vec<SocketAddr>,
     /// Where forks go on; `None` on the vault, which runs no sessions.
     pub sessions: Option<SessionManager>,
     /// What it holds, when it is a vault: the only daemon hosts pair with, and that forgets
@@ -285,7 +285,7 @@ fn paired(pairing: Pairing, daemon: &Daemon) -> Response {
         device_role: pairing.device_role,
         expires_at: pairing.expires_at,
         fingerprint: daemon.fingerprint.clone(),
-        addresses: addresses(daemon.listen),
+        addresses: addresses(&daemon.listen),
     })
 }
 
@@ -316,13 +316,45 @@ pub fn request(data_dir: &Path, request: &Request) -> Result<Response> {
 /// Name prefixes of container and VM bridges: other devices cannot reach their addresses.
 const LOCAL_BRIDGES: [&str; 7] = ["docker", "br-", "veth", "virbr", "podman", "cni", "lxcbr"];
 
-/// Where clients can reach a daemon bound to `listen`: that address itself, or for a wildcard
-/// bind the addresses of this machine's interfaces that are up, except container bridges and
-/// loopback; loopback only when there is nothing else.
-pub(crate) fn addresses(listen: SocketAddr) -> Vec<String> {
-    if !listen.ip().is_unspecified() {
-        return vec![listen.to_string()];
+/// Where clients can reach a daemon bound to every one of `listen`, in that order and none
+/// twice: each specific address itself, and for a wildcard bind the addresses of this machine's
+/// interfaces that are up, except container bridges. Loopback addresses are left out unless
+/// there is nothing else.
+pub(crate) fn addresses(listen: &[SocketAddr]) -> Vec<String> {
+    let mut found: Vec<SocketAddr> = Vec::new();
+    for &bound in listen {
+        let reachable = if bound.ip().is_unspecified() {
+            interface_addresses(bound)
+        } else {
+            vec![bound]
+        };
+        for address in reachable {
+            if !found.contains(&address) {
+                found.push(address);
+            }
+        }
     }
+    if found.iter().any(|address| !address.ip().is_loopback()) {
+        found.retain(|address| !address.ip().is_loopback());
+    } else if found.is_empty() {
+        // Only wildcard binds, on a machine with no interface but loopback up.
+        for bound in listen {
+            let loopback = match bound {
+                SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                SocketAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+            };
+            let address = SocketAddr::new(loopback, bound.port());
+            if !found.contains(&address) {
+                found.push(address);
+            }
+        }
+    }
+    found.iter().map(SocketAddr::to_string).collect()
+}
+
+/// The addresses of this machine's interfaces a wildcard bind to `wildcard` accepts on, except
+/// loopback and container bridges; IPv4 first, in interface order.
+fn interface_addresses(wildcard: SocketAddr) -> Vec<SocketAddr> {
     let mut found: Vec<IpAddr> = Vec::new();
     for interface in getifaddrs().into_iter().flatten() {
         let name = &interface.interface_name;
@@ -340,7 +372,7 @@ pub(crate) fn addresses(listen: SocketAddr) -> Vec<String> {
         } else if let Some(v6) = address.as_sockaddr_in6() {
             // A wildcard IPv4 bind does not accept IPv6, and link-local addresses need a
             // scope a pairing link cannot carry.
-            if listen.is_ipv4() || v6.ip().is_unicast_link_local() {
+            if wildcard.is_ipv4() || v6.ip().is_unicast_link_local() {
                 continue;
             }
             IpAddr::V6(v6.ip())
@@ -351,17 +383,11 @@ pub(crate) fn addresses(listen: SocketAddr) -> Vec<String> {
             found.push(ip);
         }
     }
-    if found.is_empty() {
-        found.push(match listen {
-            SocketAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
-            SocketAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
-        });
-    }
     // Stable, so IPv4 first in interface order.
     found.sort_by_key(IpAddr::is_ipv6);
     found
         .into_iter()
-        .map(|ip| SocketAddr::new(ip, listen.port()).to_string())
+        .map(|ip| SocketAddr::new(ip, wildcard.port()))
         .collect()
 }
 
@@ -371,13 +397,65 @@ mod tests {
 
     #[test]
     fn a_specific_bind_is_its_own_address() {
-        let listen = "127.0.0.1:7447".parse().unwrap();
-        assert_eq!(addresses(listen), ["127.0.0.1:7447"]);
+        let listen = ["127.0.0.1:7447".parse().unwrap()];
+        assert_eq!(addresses(&listen), ["127.0.0.1:7447"]);
+    }
+
+    #[test]
+    fn a_list_gives_its_addresses_in_order_without_loopback() {
+        let listen: Vec<SocketAddr> = [
+            "127.0.0.1:7447",
+            "100.124.135.114:7447",
+            "[fd7a:115c:a1e0::1]:7447",
+            "192.168.1.5:7000",
+        ]
+        .iter()
+        .map(|addr| addr.parse().unwrap())
+        .collect();
+        assert_eq!(
+            addresses(&listen),
+            [
+                "100.124.135.114:7447",
+                "[fd7a:115c:a1e0::1]:7447",
+                "192.168.1.5:7000"
+            ]
+        );
+    }
+
+    #[test]
+    fn loopback_only_lists_keep_every_address() {
+        let listen: Vec<SocketAddr> = ["127.0.0.1:7447", "[::1]:7447"]
+            .iter()
+            .map(|addr| addr.parse().unwrap())
+            .collect();
+        assert_eq!(addresses(&listen), ["127.0.0.1:7447", "[::1]:7447"]);
+    }
+
+    #[test]
+    fn a_wildcard_in_a_list_expands_once_after_the_addresses_before_it() {
+        let wildcard = addresses(&["0.0.0.0:7447".parse().unwrap()]);
+        let first: SocketAddr = wildcard[0].parse().unwrap();
+        let listen = [
+            "10.99.0.1:7447".parse().unwrap(),
+            "0.0.0.0:7447".parse().unwrap(),
+            first,
+        ];
+        let found = addresses(&listen);
+        assert_eq!(found[0], "10.99.0.1:7447");
+        if first.ip().is_loopback() {
+            // No interface up but loopback: the specific address is all there is.
+            assert_eq!(found, ["10.99.0.1:7447"]);
+        } else {
+            let expected: Vec<String> = std::iter::once("10.99.0.1:7447".to_owned())
+                .chain(wildcard.into_iter().filter(|addr| addr != "10.99.0.1:7447"))
+                .collect();
+            assert_eq!(found, expected);
+        }
     }
 
     #[test]
     fn a_wildcard_bind_lists_interface_addresses() {
-        let found = addresses("0.0.0.0:7447".parse().unwrap());
+        let found = addresses(&["0.0.0.0:7447".parse().unwrap()]);
         assert!(!found.is_empty());
         let found: Vec<SocketAddr> = found.iter().map(|addr| addr.parse().unwrap()).collect();
         assert!(
@@ -395,7 +473,7 @@ mod tests {
         let listener = bind(tmp.path()).unwrap();
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
-            listen: "127.0.0.1:7447".parse().unwrap(),
+            listen: vec!["127.0.0.1:7447".parse().unwrap()],
             sessions: None,
             vault: None,
         };
@@ -456,7 +534,7 @@ mod tests {
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let daemon = Daemon {
             fingerprint: "ab".repeat(32),
-            listen: "127.0.0.1:7447".parse().unwrap(),
+            listen: vec!["127.0.0.1:7447".parse().unwrap()],
             sessions: None,
             vault: Some(vault_admin(tmp.path(), &auth)),
         };
@@ -514,7 +592,7 @@ mod tests {
         let auth = Arc::new(Auth::open(tmp.path()).unwrap());
         let mut daemon = Daemon {
             fingerprint: "ab".repeat(32),
-            listen: "127.0.0.1:7447".parse().unwrap(),
+            listen: vec!["127.0.0.1:7447".parse().unwrap()],
             sessions: None,
             vault: None,
         };

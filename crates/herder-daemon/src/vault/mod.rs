@@ -53,6 +53,7 @@ pub use store::{HostRecord, Kept, Outcome, VaultStore};
 use crate::auth::{self, Auth};
 use crate::config::Retention;
 use crate::hub::Hub;
+use crate::listen;
 use crate::login::Logins;
 use crate::terminal::{self, Terminals};
 use crate::ws::{self, Host, Tls};
@@ -151,12 +152,12 @@ impl Server {
         }
     }
 
-    /// Accepts hosts and clients on `listener`, and prunes archived sessions, until
-    /// `shutdown`, which also closes every connection.
-    pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
-        match listener.local_addr() {
+    /// Accepts hosts and clients on every one of `listeners`, and prunes archived sessions,
+    /// until `shutdown`, which also closes every connection.
+    pub async fn run(self, listeners: Vec<TcpListener>, shutdown: CancellationToken) {
+        match listen::local_addrs(&listeners) {
             Ok(listen) => self.shared.clients.listening_on(listen),
-            Err(err) => warn!("cannot tell the address the vault listens on: {err}"),
+            Err(err) => warn!("cannot tell the addresses the vault listens on: {err}"),
         }
         // Every host is offline until it connects.
         self.shared.fleet.refresh_hosts().await;
@@ -174,10 +175,11 @@ impl Server {
             let shutdown = shutdown.clone();
             async move { hub.run_flusher(shutdown).await }
         });
+        let mut acceptor = listen::Acceptor::default();
         loop {
             let accepted = tokio::select! {
                 () = shutdown.cancelled() => break,
-                accepted = listener.accept() => accepted,
+                accepted = acceptor.accept(&listeners) => accepted,
             };
             match accepted {
                 Ok((stream, peer)) => {
@@ -215,9 +217,8 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
             "devices that replicated as hosts made host-only"
         );
     }
-    let listener = TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("listening on {}", config.listen))?;
+    let listeners = listen::bind(&config.listen).await?;
+    let listen = listen::local_addrs(&listeners)?;
     let fingerprint = tls.fingerprint().to_owned();
     let server = Server::new(
         tls,
@@ -233,7 +234,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         Arc::clone(&auth),
         auth::control::Daemon {
             fingerprint: fingerprint.clone(),
-            listen: listener.local_addr()?,
+            listen: listen.clone(),
             sessions: None,
             vault: Some(server.admin()),
         },
@@ -241,12 +242,12 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     ));
     info!(
         data_dir = %data_dir.root().display(),
-        listen = %listener.local_addr()?,
+        listen = ?listen,
         tls_fingerprint = fingerprint,
         archive_retention_days = config.retention.archive_days,
         "herder vault started"
     );
-    server.run(listener, shutdown).await;
+    server.run(listeners, shutdown).await;
     info!("herder vault stopped");
     Ok(())
 }
@@ -279,7 +280,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = Config {
             path: tmp.path().join("daemon.toml"),
-            listen: "127.0.0.1:0".parse().unwrap(),
+            listen: vec!["127.0.0.1:0".parse().unwrap()],
             data_dir: tmp.path().join("data"),
             log: Default::default(),
             accounts: Default::default(),

@@ -140,7 +140,7 @@ impl FakeDaemon {
             vault: None,
         })?;
         let server = Server::new(tls, auth, hub, sessions, terminals, logins, host);
-        let server = tokio::spawn(server.run(listener, shutdown.clone()));
+        let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             link: link.to_string(),
             repo,

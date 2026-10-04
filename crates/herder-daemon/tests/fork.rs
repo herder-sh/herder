@@ -96,7 +96,7 @@ impl Vault {
                     LIVENESS_TIMEOUT,
                     Retention::default(),
                 );
-                tokio::spawn(server.run(listener, CancellationToken::new()));
+                tokio::spawn(server.run(vec![listener], CancellationToken::new()));
                 (addr, fingerprint, auth)
             })
             .await;

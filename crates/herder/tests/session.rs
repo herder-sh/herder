@@ -87,7 +87,7 @@ async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching
     };
     let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
     let server = Server::new(tls, auth, hub, sessions, terminals, Logins::default(), host);
-    tokio::spawn(server.run(listener, shutdown));
+    tokio::spawn(server.run(vec![listener], shutdown));
     link
 }
 

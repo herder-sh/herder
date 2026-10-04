@@ -35,6 +35,7 @@ use crate::auth::control::addresses;
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::hub::Outbox;
+use crate::listen;
 use crate::login::{Logins, NewAccount};
 use crate::session::SessionManager;
 use crate::terminal::{LoginHooks, Terminals};
@@ -150,8 +151,8 @@ struct Shared<B> {
     host: Host,
     /// The host's link to its vault, which answers the vault link commands; a vault has none.
     link: OnceLock<Arc<Link>>,
-    /// The address the server listens on, set once it does; `pair_device` advertises it.
-    listen: OnceLock<SocketAddr>,
+    /// The addresses the server listens on, set once it does; `pair_device` advertises them.
+    listen: OnceLock<Vec<SocketAddr>>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -262,7 +263,7 @@ impl<B: Backend> Shared<B> {
         Ok(CommandResult::DevicePairing {
             code: pairing.code,
             fingerprint: self.tls.fingerprint().to_owned(),
-            addresses: addresses(*listen),
+            addresses: addresses(listen),
             expires_at: pairing.expires_at,
         })
     }
@@ -304,9 +305,9 @@ impl<B: Backend> Server<B> {
             .map_err(|_| anyhow::anyhow!("the vault is linked already"))
     }
 
-    /// Takes `listen` for the address clients reach the server on; [`Server::run`] does it
+    /// Takes `listen` for the addresses clients reach the server on; [`Server::run`] does it
     /// itself, the vault, which accepts connections for the server, before it serves one.
-    pub(crate) fn listening_on(&self, listen: SocketAddr) {
+    pub(crate) fn listening_on(&self, listen: Vec<SocketAddr>) {
         let _ = self.shared.listen.set(listen);
     }
 
@@ -325,21 +326,23 @@ impl<B: Backend> Server<B> {
         conn::serve(ws, device, Some(first), peer, shared, cancel).await;
     }
 
-    /// Accepts connections on `listener` until `shutdown`, which also closes every connection.
-    pub async fn run(self, listener: TcpListener, shutdown: CancellationToken) {
-        match listener.local_addr() {
+    /// Accepts connections on every one of `listeners` until `shutdown`, which also closes
+    /// every connection.
+    pub async fn run(self, listeners: Vec<TcpListener>, shutdown: CancellationToken) {
+        match listen::local_addrs(&listeners) {
             Ok(listen) => self.listening_on(listen),
-            Err(err) => warn!("cannot tell the address the server listens on: {err}"),
+            Err(err) => warn!("cannot tell the addresses the server listens on: {err}"),
         }
         let hub = Arc::clone(&self.shared.hub);
         let flusher = tokio::spawn({
             let shutdown = shutdown.clone();
             async move { hub.run_flusher(shutdown).await }
         });
+        let mut acceptor = listen::Acceptor::default();
         loop {
             let accepted = tokio::select! {
                 () = shutdown.cancelled() => break,
-                accepted = listener.accept() => accepted,
+                accepted = acceptor.accept(&listeners) => accepted,
             };
             match accepted {
                 Ok((stream, peer)) => {
