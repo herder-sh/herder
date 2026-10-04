@@ -13,6 +13,8 @@ public final class Fleet {
     private(set) var sessions: [SessionKey: SessionModel] = [:] { didSet { refreshLists() } }
     /// Provenance returned by forks made on this device during this app run.
     var forkOrigins: [SessionKey: ForkOrigin] = [:]
+    /// Sessions being handed off, to the machine they go to; see `handOff`.
+    var handoffs: [SessionKey: HostId] = [:]
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
     /// Sessions whose archive the machine is working on.
@@ -531,6 +533,8 @@ struct Toast: Identifiable, Equatable {
     let id = UUID()
     let text: String
     var undo: SessionKey?
+    /// Says what went wrong, rather than what finished.
+    var failed = false
 }
 
 struct ConnectionChange: Hashable {

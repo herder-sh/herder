@@ -235,6 +235,7 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     let missing_fork = CommandBody::ForkSession {
         session_id: SessionId::new("not-on-this-host"),
         account_id: None,
+        relay: None,
     };
     // Even without a vault the running daemon supports local forks. A missing source is
     // not found, rather than forks being unsupported.

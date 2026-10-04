@@ -8,10 +8,6 @@ struct SessionView: View {
     let key: SessionKey
     /// Opens another session (a child); `nil` pushes it.
     var open: ((SessionKey) -> Void)?
-    @State private var forking = false
-    /// The machine the fork sheet opens on, when picked from a menu.
-    @State private var forkTarget: HostId?
-    @State private var completedFork: SessionKey?
     @State private var pushedFork: SessionKey?
     @State private var switching = false
     @State private var showsTerminal = false
@@ -106,13 +102,6 @@ struct SessionView: View {
         }
         .onAppear { fleet.watch(key) }
         .onDisappear { fleet.unwatch(key) }
-        .sheet(isPresented: $forking, onDismiss: {
-            guard let key = completedFork else { return }
-            completedFork = nil
-            if let open { open(key) } else { pushedFork = key }
-        }) {
-            ForkSessionSheet(fleet: fleet, key: key, preselect: forkTarget) { completedFork = $0 }
-        }
         .navigationDestination(isPresented: Binding(
             get: { pushedFork != nil }, set: { if !$0 { pushedFork = nil } }
         )) {
@@ -265,9 +254,11 @@ struct SessionView: View {
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
             } else {
-                Composer(fleet: fleet, key: key, model: model, sent: { sent += 1 }) { host in
-                    forkTarget = host
-                    forking = true
+                Composer(fleet: fleet, key: key, model: model, sent: { sent += 1 }) { host, account in
+                    Task {
+                        guard let fork = await fleet.handOff(key, to: host, account: account) else { return }
+                        if let open { open(fork) } else { pushedFork = fork }
+                    }
                 }
             }
         }
@@ -365,8 +356,8 @@ private struct Composer: View {
     let model: SessionModel
     /// Called on every send.
     let sent: () -> Void
-    /// Opens the fork sheet, on a machine when one was picked.
-    let fork: (HostId?) -> Void
+    /// Hands the session off to a machine, on an account or the machine's default.
+    let handOff: (HostId, AccountId?) -> Void
     @State private var text = ""
     @State private var images: [Herder.Image] = []
 
@@ -404,8 +395,9 @@ private struct Composer: View {
                 send: send,
                 stop: { Task { await fleet.interrupt(key) } }
             ) {
-                FooterMenu(section: machineSection, text: machine?.name ?? "Machine",
-                           help: "Where it runs; pick another machine to fork onto it")
+                FooterMenu(section: machineSection, text: handoffText ?? machine?.name ?? "Machine",
+                           help: "Where it runs; pick another machine to hand it off there",
+                           busy: handoffText != nil)
                 FooterMenu(section: accountSection(accounts), text: account?.label ?? model.accountId ?? "")
                 Spacer()
                 if let branch = model.branch {
@@ -430,16 +422,16 @@ private struct Composer: View {
         }
     }
 
-    /// The machines; picking another opens the fork sheet on it.
+    /// The machines; picking another hands the session off to it.
     private var machineSection: SettingsSection {
-        SettingsSection(
-            kind: .machine,
-            options: SettingsOption.machines(fleet.machines, current: key.hostId) { machine in
-                forkable ? ForkSessionModel.ineligible(machine, source: key, provider: model.provider) : "Cannot fork"
-            },
-            hint: "Another forks onto it",
-            action: .init(title: "Fork Session…", symbol: "arrow.triangle.branch", enabled: forkable) { fork(nil) }
-        ) { fork($0) }
+        fleet.machineSection(for: key, provider: model.provider, forkable: forkable, handOff: handOff)
+    }
+
+    /// "Handing off to …" while the session is being handed off.
+    private var handoffText: String? {
+        guard let target = fleet.handoffs[key] else { return nil }
+        if target == key.hostId { return "Forking…" }
+        return "Handing off to \(fleet.machines.first { $0.hostId == target }?.name ?? target)…"
     }
 
     /// A child session stays with its parent; a session forks once it has loaded.

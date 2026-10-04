@@ -157,6 +157,16 @@ impl Client {
 }
 
 impl Client {
+    pub async fn fork_session(
+        &self,
+        source: HostId,
+        session_id: SessionId,
+        destination: HostId,
+        account_id: Option<AccountId>,
+    ) -> Result<CommandResult, Error> {}
+}
+
+impl Client {
     pub async fn open_terminal(
         &self,
         host_id: HostId,

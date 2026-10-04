@@ -1,7 +1,12 @@
 //! Forks: a session's history copied into a new session that goes on here.
 //!
-//! The session to fork is found on this host, else in the vault this host replicates to
-//! ([`crate::vault::fork`]), wherever it runs and whether its host is up or gone. The original
+//! The session to fork is found on this host, else in the history a client relayed from its
+//! host ([`SessionManager::upload_history`]), else in the vault this host replicates to
+//! ([`crate::vault::fork`]), wherever it runs and whether its host is up or gone. A relayed
+//! history is taken as it is, without asking the vault: hosts do not talk to each other, but
+//! the client is connected to both, reads the session from its host and uploads it here, in
+//! parts that each fit a WebSocket message. Only owners may upload one, and its events are
+//! imported as history, as a vault copy's are. The original
 //! is left as it is. The fork gets a new id; its journal is the original's with that id, minus
 //! the pull requests and other branches the original tracked, so it owns only its own branch.
 //! Its `session_created` names this host's clone of the repository, its new worktree and its
@@ -14,12 +19,14 @@
 //! images its prompts carried are kept for it under their ids, so `get_attachment` answers as
 //! for the original.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use herder_protocol::{
-    AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, ItemBody,
-    ProjectId, Provider, SessionId, SessionStatus, UserId,
+    AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, HistoryPart, HostId, Image,
+    ItemBody, ProjectId, Provider, Relay, SessionId, SessionStatus, UserId,
 };
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -79,7 +86,69 @@ pub struct Source {
     pub host_id: HostId,
 }
 
+/// How long an upload waits for its fork after its last part.
+const UPLOAD_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Histories being uploaded for a fork, by the user uploading and the session.
+#[derive(Default)]
+pub(super) struct Uploads(Mutex<HashMap<(UserId, SessionId), Upload>>);
+
+struct Upload {
+    events: Vec<Event>,
+    images: Vec<(AttachmentId, Image)>,
+    touched: Instant,
+}
+
+impl Uploads {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(UserId, SessionId), Upload>> {
+        // Every update is a single insert, push or removal, so a poisoned map is consistent.
+        let mut uploads = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        uploads.retain(|_, upload| upload.touched.elapsed() < UPLOAD_TTL);
+        uploads
+    }
+}
+
 impl SessionManager {
+    /// Adds `part` to the history `by` uploads of `session_id` for a relayed fork. Events
+    /// starting at seq 1 start the upload over; anything else must follow them.
+    pub async fn upload_history(
+        &self,
+        by: UserId,
+        session_id: SessionId,
+        part: HistoryPart,
+    ) -> Result<(), ErrorInfo> {
+        let mut uploads = self.inner.uploads.lock();
+        let key = (by, session_id);
+        if let HistoryPart::Events { events } = &part
+            && events.first().is_some_and(|event| event.seq == 1)
+        {
+            uploads.remove(&key);
+            uploads.insert(
+                key.clone(),
+                Upload {
+                    events: Vec::new(),
+                    images: Vec::new(),
+                    touched: Instant::now(),
+                },
+            );
+        }
+        let Some(upload) = uploads.get_mut(&key) else {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!("upload the history of {} from its first event", key.1),
+            ));
+        };
+        upload.touched = Instant::now();
+        match part {
+            HistoryPart::Events { events } => upload.events.extend(events),
+            HistoryPart::Image {
+                attachment_id,
+                image,
+            } => upload.images.push((attachment_id, image)),
+        }
+        Ok(())
+    }
+
     /// Lets `fork_session` and `herder fork` fork sessions of this host, and of other hosts
     /// through `forks.vault`. Replaces the source when the vault link changes. Without it,
     /// forks are refused.
@@ -94,7 +163,13 @@ impl SessionManager {
 
     /// Forks `request.session_id` onto this host, `by` the user who asked; `None` when nobody
     /// has paired with this host yet, as when `herder fork` recovers a session onto a new one.
-    pub async fn fork(&self, request: Request, by: Option<UserId>) -> Result<Forked, ErrorInfo> {
+    /// With `relay`, a session not on this host is the history `by` uploaded from that host.
+    pub async fn fork(
+        &self,
+        request: Request,
+        relay: Option<Relay>,
+        by: Option<UserId>,
+    ) -> Result<Forked, ErrorInfo> {
         let forks = self
             .inner
             .forks
@@ -117,6 +192,8 @@ impl SessionManager {
             .is_some();
         let source = if local {
             self.local_source(session_id, &forks.host).await?
+        } else if let Some(relay) = relay {
+            self.relayed_source(session_id, relay, by.as_ref(), &forks.host)?
         } else if let Some(vault) = &forks.vault {
             vault.source(session_id).await?
         } else {
@@ -128,6 +205,51 @@ impl SessionManager {
             ));
         };
         self.fork_source(source, request.account_id, by).await
+    }
+
+    /// The history `by` uploaded of `session_id`, from `relay.host_id`, to fork. It is checked
+    /// as a vault copy is, by [`Self::fork_source`].
+    fn relayed_source(
+        &self,
+        session_id: &SessionId,
+        relay: Relay,
+        by: Option<&UserId>,
+        host: &HostId,
+    ) -> Result<Source, ErrorInfo> {
+        if relay.host_id == *host {
+            return Err(error(
+                ErrorCode::NotFound,
+                format!("session {session_id} is not on this host"),
+            ));
+        }
+        let upload = by.and_then(|by| {
+            self.inner
+                .uploads
+                .lock()
+                .remove(&(by.clone(), session_id.clone()))
+        });
+        let Some(upload) = upload else {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!("no history of {session_id} was uploaded to fork"),
+            ));
+        };
+        if upload
+            .events
+            .first()
+            .is_some_and(|event| event.session_id != *session_id)
+        {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!("the uploaded history is not of {session_id}"),
+            ));
+        }
+        Ok(Source {
+            events: upload.events,
+            images: upload.images,
+            project_id: Some(relay.project_id),
+            host_id: relay.host_id,
+        })
     }
 
     /// A session of this host, to fork.

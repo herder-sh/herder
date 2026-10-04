@@ -398,6 +398,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::OpenTerminal { session_id, .. } => Some(session_id),
         CommandBody::CreateSession { .. }
         | CommandBody::ForkSession { .. }
+        | CommandBody::UploadHistory { .. }
         | CommandBody::ListDirectory { .. }
         | CommandBody::AddProject { .. }
         | CommandBody::SetProjectSettings { .. }

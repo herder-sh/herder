@@ -507,7 +507,11 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             "backing up to a vault is for the daemon's owners only",
         ));
     }
-    if matches!(command, CommandBody::ForkSession { .. }) && identity.role != Role::Owner {
+    if matches!(
+        command,
+        CommandBody::ForkSession { .. } | CommandBody::UploadHistory { .. }
+    ) && identity.role != Role::Owner
+    {
         return Err(forbidden(
             "forking sessions onto this host is for the daemon's owners only",
         ));

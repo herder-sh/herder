@@ -99,6 +99,7 @@
 mod address;
 pub mod auth;
 mod cache;
+mod fork;
 mod offline;
 mod pairing;
 mod profile;
@@ -686,6 +687,29 @@ impl Client {
             .send(command)
             .await?
             .map_err(|info| Error::Rejected { info })
+    }
+
+    /// Forks `session_id`, a session `source` lists, onto `destination`, on `account_id` or
+    /// else the account the destination picks, and returns the daemon's `session_forked`;
+    /// the caller must be an owner of `destination`. Where the destination finds the history:
+    ///
+    /// - a session of `destination` itself forks from its own journal;
+    /// - else, while the machine the session runs on is connected, this client reads the
+    ///   session's journal and images there and relays them to `destination`
+    ///   (`upload_history`), even when `destination` has a vault;
+    /// - else `destination` reads it from its vault, failing with `not_found` when it has none.
+    ///
+    /// A machine that is a vault relays the sessions it lists, for the hosts they run on.
+    pub async fn fork_session(
+        &self,
+        source: HostId,
+        session_id: SessionId,
+        destination: HostId,
+        account_id: Option<AccountId>,
+    ) -> Result<CommandResult, Error> {
+        let destination = self.machine(&destination)?;
+        let from = self.machine(&source).ok();
+        fork::fork(from, source, destination, session_id, account_id).await
     }
 
     /// Opens a shell of `cols` by `rows` in a session's worktree and streams it, however long

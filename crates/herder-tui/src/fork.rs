@@ -215,6 +215,7 @@ impl App {
                     command: CommandBody::ForkSession {
                         session_id: dialog.session.session_id.clone(),
                         account_id: None,
+                        relay: None,
                     },
                     origin: Origin::Fork(host_id),
                 }];
@@ -306,6 +307,7 @@ mod tests {
                 command: CommandBody::ForkSession {
                     session_id: SessionId::new("s1"),
                     account_id: None,
+                    relay: None,
                 },
                 origin: Origin::Fork(HostId::new("devbox")),
             }]

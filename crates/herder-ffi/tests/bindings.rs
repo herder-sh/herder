@@ -164,6 +164,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         CommandBody::ForkSession {
             session_id: herder_protocol::SessionId::new("gone"),
             account_id: None,
+            relay: None,
         },
     ))
     .unwrap_err();

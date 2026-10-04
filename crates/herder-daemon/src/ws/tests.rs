@@ -1121,12 +1121,22 @@ async fn forking_a_session_is_for_owners_only() {
     let fork = || CommandBody::ForkSession {
         session_id: SessionId::new("s1"),
         account_id: None,
+        relay: None,
     };
     let ServerMessage::CommandRejected { error, .. } = member.command("c1", fork()).await else {
         panic!("expected a rejection");
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
     assert!(error.message.contains("owners only"), "{}", error.message);
+    // Nor may a member upload a history to fork, which could put words in others' mouths.
+    let upload = CommandBody::UploadHistory {
+        session_id: SessionId::new("s1"),
+        part: herder_protocol::HistoryPart::Events { events: Vec::new() },
+    };
+    let ServerMessage::CommandRejected { error, .. } = member.command("c3", upload).await else {
+        panic!("expected a rejection");
+    };
+    assert_eq!(error.code, ErrorCode::Forbidden);
     assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
 
     let mut owner = daemon.client().await;

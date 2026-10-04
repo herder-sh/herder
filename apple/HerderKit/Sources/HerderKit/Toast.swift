@@ -23,7 +23,8 @@ struct ToastView: View {
         Group {
             if let toast = fleet.toast {
                 HStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+                    Image(systemName: toast.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(toast.failed ? Theme.failure : Theme.success)
                     Text(toast.text).foregroundStyle(Theme.text).lineLimit(1)
                     if let key = toast.undo {
                         Button("Undo") { Task { await fleet.unarchive(key) } }
