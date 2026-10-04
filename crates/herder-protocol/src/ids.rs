@@ -57,4 +57,6 @@ id! {
     CommandId,
     /// Identifies an image a prompt carried, within its session; a ULID string, opaque.
     AttachmentId,
+    /// Identifies a prompt waiting in its session's queue; a ULID string, opaque.
+    PromptId,
 }

@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -132,6 +132,12 @@ CREATE TABLE agent_message_receipts (
     text TEXT NOT NULL,
     PRIMARY KEY (recipient, sender, message_id)
 ) STRICT;
+";
+
+/// Each queued prompt's id, by which clients edit the queue; prompts queued before get one now.
+const V11: &str = "
+ALTER TABLE queued_prompts ADD COLUMN prompt_id TEXT NOT NULL DEFAULT '';
+UPDATE queued_prompts SET prompt_id = lower(hex(randomblob(16)));
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

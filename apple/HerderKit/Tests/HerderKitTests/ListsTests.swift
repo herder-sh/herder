@@ -13,7 +13,7 @@ func machine(
         role: .owner,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, task: nil,
-                        title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0)
+                        title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0, queue: [])
         },
         hosts: hosts, projects: projects, accounts: [], failover: FailoverSettings(pin: false), terminals: [],
         resources: nil, sessionUsage: [:], vault: nil)

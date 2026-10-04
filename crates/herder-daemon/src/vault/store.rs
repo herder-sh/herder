@@ -374,6 +374,7 @@ impl VaultStore {
                     project_id: Some(summary.project_id.clone()),
                     account_id: account.as_ref()?.account_id.clone(),
                     children_need_you: need_you(&summary.session_id),
+                    queue: Vec::new(),
                 })
             })
             .collect())

@@ -954,6 +954,7 @@ mod tests {
                 project_id: None,
                 account_id: herder_protocol::AccountId::new("claude"),
                 children_need_you: 0,
+                queue: Vec::new(),
             }]
         };
         let first = Arc::new(Outbox::default());

@@ -76,6 +76,7 @@ impl Backend for TestBackend {
                 project_id: None,
                 account_id: session.account_id,
                 children_need_you: 0,
+                queue: Vec::new(),
             })
             .collect())
     }
@@ -101,7 +102,10 @@ impl Backend for TestBackend {
     ) -> Result<CommandResult, ErrorInfo> {
         self.commands.fetch_add(1, Ordering::SeqCst);
         match command {
-            CommandBody::SendPrompt { .. } => Ok(CommandResult::Applied),
+            CommandBody::SendPrompt { .. }
+            | CommandBody::RemoveQueued { .. }
+            | CommandBody::MoveQueued { .. }
+            | CommandBody::SendQueuedNow { .. } => Ok(CommandResult::Applied),
             CommandBody::ListDirectory { path } => Ok(CommandResult::Directory {
                 path,
                 entries: Vec::new(),
@@ -945,6 +949,29 @@ async fn terminals_are_for_owners_only() {
         member.recv().await,
         ServerMessage::CommandAccepted { .. }
     ));
+    // And edit their queues, as whoever may prompt a session may.
+    let prompt_id = herder_protocol::PromptId::new("p1");
+    let edits = [
+        CommandBody::RemoveQueued {
+            session_id: session.clone(),
+            prompt_id: prompt_id.clone(),
+        },
+        CommandBody::MoveQueued {
+            session_id: session.clone(),
+            prompt_id: prompt_id.clone(),
+            before: None,
+        },
+        CommandBody::SendQueuedNow {
+            session_id: session.clone(),
+            prompt_id,
+        },
+    ];
+    for (n, edit) in edits.into_iter().enumerate() {
+        assert!(matches!(
+            member.command(&format!("q{n}"), edit).await,
+            ServerMessage::CommandAccepted { .. }
+        ));
+    }
 
     // The owner opens one; the member never hears of it.
     let mut owner = daemon.client().await;
@@ -969,7 +996,7 @@ async fn terminals_are_for_owners_only() {
         member.command("c4", prompt).await,
         ServerMessage::CommandAccepted { .. }
     ));
-    assert_eq!(daemon.commands.load(Ordering::SeqCst), 2);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 5);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

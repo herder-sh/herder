@@ -178,6 +178,24 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::Interrupt {
             session_id: session_id(),
         }),
+        command(CommandBody::RemoveQueued {
+            session_id: session_id(),
+            prompt_id: PromptId::new("01J9PROMPT"),
+        }),
+        command(CommandBody::MoveQueued {
+            session_id: session_id(),
+            prompt_id: PromptId::new("01J9PROMPT"),
+            before: Some(PromptId::new("01J9OTHER")),
+        }),
+        command(CommandBody::MoveQueued {
+            session_id: session_id(),
+            prompt_id: PromptId::new("01J9PROMPT"),
+            before: None,
+        }),
+        command(CommandBody::SendQueuedNow {
+            session_id: session_id(),
+            prompt_id: PromptId::new("01J9PROMPT"),
+        }),
         command(CommandBody::SetModel {
             session_id: session_id(),
             model: "sonnet".into(),
@@ -306,6 +324,27 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
                     account_id: account_id(),
                     children_need_you: 1,
+                    queue: vec![
+                        QueuedPrompt {
+                            prompt_id: PromptId::new("01J9PROMPT"),
+                            text: "Then update the docs".into(),
+                            images: 1,
+                            by: Some(UserId::new("01J9OWNER")),
+                            agent_message: None,
+                        },
+                        QueuedPrompt {
+                            prompt_id: PromptId::new("01J9OTHER"),
+                            text: "Review my change".into(),
+                            images: 0,
+                            by: None,
+                            agent_message: Some(AgentMessage {
+                                sender_session_id: SessionId::new("01J9SENDER"),
+                                message_id: "review-1".into(),
+                                hop_count: 1,
+                                permission_ceiling: PermissionMode::Ask,
+                            }),
+                        },
+                    ],
                 },
                 SessionHead {
                     session_id: SessionId::new("01J9CHILD"),
@@ -318,6 +357,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     project_id: None,
                     account_id: account_id(),
                     children_need_you: 0,
+                    queue: Vec::new(),
                 },
             ],
         },
@@ -2087,4 +2127,70 @@ fn agent_provenance_is_optional_and_round_trips_with_the_item() {
     let json = serde_json::to_value(&prompt).unwrap();
     assert_eq!(json["agent_message"]["sender_session_id"], "sender");
     assert_eq!(serde_json::from_value::<Item>(json).unwrap(), prompt);
+}
+
+#[test]
+fn queue_edits_and_queues_have_their_wire_form() {
+    let session_id = SessionId::new("s1");
+    let prompt_id = PromptId::new("p1");
+    let wire = |body: CommandBody| serde_json::to_value(body).unwrap();
+    assert_eq!(
+        wire(CommandBody::RemoveQueued {
+            session_id: session_id.clone(),
+            prompt_id: prompt_id.clone(),
+        }),
+        json!({ "type": "remove_queued", "session_id": "s1", "prompt_id": "p1" })
+    );
+    assert_eq!(
+        wire(CommandBody::MoveQueued {
+            session_id: session_id.clone(),
+            prompt_id: prompt_id.clone(),
+            before: Some(PromptId::new("p0")),
+        }),
+        json!({ "type": "move_queued", "session_id": "s1", "prompt_id": "p1", "before": "p0" })
+    );
+    let to_end = json!({ "type": "move_queued", "session_id": "s1", "prompt_id": "p1" });
+    assert_eq!(
+        serde_json::from_value::<CommandBody>(to_end.clone()).unwrap(),
+        CommandBody::MoveQueued {
+            session_id: session_id.clone(),
+            prompt_id: prompt_id.clone(),
+            before: None,
+        }
+    );
+    assert_eq!(
+        wire(CommandBody::MoveQueued {
+            session_id: session_id.clone(),
+            prompt_id: prompt_id.clone(),
+            before: None,
+        }),
+        to_end
+    );
+    assert_eq!(
+        wire(CommandBody::SendQueuedNow {
+            session_id,
+            prompt_id,
+        }),
+        json!({ "type": "send_queued_now", "session_id": "s1", "prompt_id": "p1" })
+    );
+
+    // A head without a queue omits it, and one from before queues decodes with none.
+    let head = json!({
+        "session_id": "s1", "head_seq": 3, "status": "idle", "account_id": "main",
+        "children_need_you": 0,
+    });
+    let decoded: SessionHead = serde_json::from_value(head.clone()).unwrap();
+    assert!(decoded.queue.is_empty());
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), head);
+    let queued = QueuedPrompt {
+        prompt_id: PromptId::new("p1"),
+        text: "next".into(),
+        images: 0,
+        by: Some(UserId::new("u1")),
+        agent_message: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&queued).unwrap(),
+        json!({ "prompt_id": "p1", "text": "next", "images": 0, "by": "u1" })
+    );
 }

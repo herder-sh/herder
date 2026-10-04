@@ -4,9 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item, ItemId, Project,
-    ProjectId, Provider, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp,
-    UserId,
+    AccountId, AgentMessage, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item,
+    ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId, SessionStatus, SessionUsage,
+    TerminalId, Timestamp, UserId,
 };
 
 /// A daemon-to-client message.
@@ -16,7 +16,7 @@ pub enum ServerMessage {
     /// First message on every connection, answering the client's hello.
     Hello(ServerHello),
     /// Every session on this daemon; sent after hello and whenever a session is created or
-    /// its status, account, project or title changes.
+    /// its status, account, project, title or queue changes.
     Sessions {
         /// Sessions with their latest seq.
         sessions: Vec<SessionHead>,
@@ -276,6 +276,28 @@ pub struct SessionHead {
     pub account_id: AccountId,
     /// How many of this session's children are `needs_you`; 0 for a child.
     pub children_need_you: u32,
+    /// Prompts waiting for the running turn to end, in the order they will run; a prompt
+    /// leaves it as its turn starts. A vault lists none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queue: Vec<QueuedPrompt>,
+}
+
+/// A prompt waiting in a session's queue.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QueuedPrompt {
+    /// The prompt, for `remove_queued`, `move_queued` and `send_queued_now`.
+    pub prompt_id: PromptId,
+    /// Prompt text.
+    pub text: String,
+    /// How many images it carries.
+    pub images: u32,
+    /// User who sent it; absent when an agent did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<UserId>,
+    /// The session whose agent sent it, as on the `user_message` it becomes; absent for a
+    /// user's prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_message: Option<AgentMessage>,
 }
 
 /// A provider login on this host, used through its own config dir.

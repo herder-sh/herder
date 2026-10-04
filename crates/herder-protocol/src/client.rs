@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, HostId, Image,
-    PermissionMode, ProjectId, Provider, QuestionId, Seq, SessionId, TerminalId,
+    PermissionMode, ProjectId, PromptId, Provider, QuestionId, Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -171,6 +171,34 @@ pub enum CommandBody {
     Interrupt {
         /// Target session.
         session_id: SessionId,
+    },
+    /// Drop a prompt from the session's queue without running it. Refused with `conflict`
+    /// once it has started, and `not_found` for an unknown prompt.
+    RemoveQueued {
+        /// Target session.
+        session_id: SessionId,
+        /// The prompt, as the session's `queue` lists it.
+        prompt_id: PromptId,
+    },
+    /// Move a prompt within the session's queue. Refused as `remove_queued` is, for either
+    /// prompt.
+    MoveQueued {
+        /// Target session.
+        session_id: SessionId,
+        /// The prompt to move.
+        prompt_id: PromptId,
+        /// The queued prompt it is to run just before; absent moves it to the end.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<PromptId>,
+    },
+    /// Run a queued prompt next, ahead of the rest, which stay queued in order: interrupts the
+    /// running turn, or cancels a retry waiting for a usage limit to reset, as `interrupt`
+    /// does. Refused as `remove_queued` is.
+    SendQueuedNow {
+        /// Target session.
+        session_id: SessionId,
+        /// The prompt to run next.
+        prompt_id: PromptId,
     },
     /// Change the model within the current provider.
     SetModel {

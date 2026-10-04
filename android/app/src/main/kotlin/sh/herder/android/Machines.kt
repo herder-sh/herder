@@ -154,6 +154,7 @@ internal fun head(sessionId: String, projectId: String?) = SessionHead(
     projectId = projectId,
     accountId = "claude-main",
     childrenNeedYou = 0u,
+    queue = emptyList(),
 )
 
 /** An update of [sessionId] with [bodies], for previews and tests. */

@@ -18,7 +18,7 @@
       ]
     },
     {
-      "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account, project or title changes.",
+      "description": "Every session on this daemon; sent after hello and whenever a session is created or\nits status, account, project, title or queue changes.",
       "type": "object",
       "properties": {
         "sessions": {
@@ -2416,6 +2416,10 @@
       "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
       "type": "string"
     },
+    "PromptId": {
+      "description": "Identifies a prompt waiting in its session's queue; a ULID string, opaque.",
+      "type": "string"
+    },
     "Provider": {
       "description": "Vendor CLI that runs a session. Open set: accept names not listed in `examples`.",
       "type": "string",
@@ -2483,6 +2487,53 @@
     "QuestionId": {
       "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "QueuedPrompt": {
+      "description": "A prompt waiting in a session's queue.",
+      "type": "object",
+      "properties": {
+        "agent_message": {
+          "description": "The session whose agent sent it, as on the `user_message` it becomes; absent for a\nuser's prompt.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "by": {
+          "description": "User who sent it; absent when an agent did.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "images": {
+          "description": "How many images it carries.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "prompt_id": {
+          "description": "The prompt, for `remove_queued`, `move_queued` and `send_queued_now`.",
+          "$ref": "#/$defs/PromptId"
+        },
+        "text": {
+          "description": "Prompt text.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt_id",
+        "text",
+        "images"
+      ]
     },
     "ReviewStatus": {
       "description": "Review verdict on a pull request.",
@@ -2631,6 +2682,13 @@
               "type": "null"
             }
           ]
+        },
+        "queue": {
+          "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A vault lists none.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueuedPrompt"
+          }
         },
         "session_id": {
           "description": "The session.",

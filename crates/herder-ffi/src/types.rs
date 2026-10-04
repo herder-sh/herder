@@ -14,10 +14,10 @@ use herder_protocol::{
     Constraint, Container, ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
     EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId, HostReplication,
     HostResources, HostUsage, Image, Item, ItemBody, ItemId, LinkedVault, Mergeable,
-    PermissionMode, PrState, Pressure, Project, ProjectId, Provider, PullRequest, QuestionId,
-    ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus, SessionUsage, Terminal,
-    TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    PermissionMode, PrState, Pressure, Project, ProjectId, PromptId, Provider, PullRequest,
+    QuestionId, QueuedPrompt, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
+    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
+    UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -43,6 +43,7 @@ string_ids!(
     TerminalId,
     ProjectId,
     AttachmentId,
+    PromptId,
 );
 
 // A provider is its wire name; unknown names stay verbatim, as on the wire.
@@ -517,6 +518,19 @@ pub enum CommandBody {
     Interrupt {
         session_id: SessionId,
     },
+    RemoveQueued {
+        session_id: SessionId,
+        prompt_id: PromptId,
+    },
+    MoveQueued {
+        session_id: SessionId,
+        prompt_id: PromptId,
+        before: Option<PromptId>,
+    },
+    SendQueuedNow {
+        session_id: SessionId,
+        prompt_id: PromptId,
+    },
     SetModel {
         session_id: SessionId,
         model: String,
@@ -768,6 +782,16 @@ pub struct SessionHead {
     pub project_id: Option<ProjectId>,
     pub account_id: AccountId,
     pub children_need_you: u32,
+    pub queue: Vec<QueuedPrompt>,
+}
+
+#[uniffi::remote(Record)]
+pub struct QueuedPrompt {
+    pub prompt_id: PromptId,
+    pub text: String,
+    pub images: u32,
+    pub by: Option<UserId>,
+    pub agent_message: Option<AgentMessage>,
 }
 
 #[uniffi::remote(Record)]

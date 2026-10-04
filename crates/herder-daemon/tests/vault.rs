@@ -615,7 +615,29 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
         }
     );
 
-    // Mutating commands are refused, naming the owning host.
+    // Mutating commands are refused, naming the owning host; so are edits to its queue.
+    let session = SessionId::new("s1");
+    let prompt_id = herder_protocol::PromptId::new("p1");
+    for edit in [
+        CommandBody::RemoveQueued {
+            session_id: session.clone(),
+            prompt_id: prompt_id.clone(),
+        },
+        CommandBody::MoveQueued {
+            session_id: session.clone(),
+            prompt_id: prompt_id.clone(),
+            before: None,
+        },
+        CommandBody::SendQueuedNow {
+            session_id: session.clone(),
+            prompt_id: prompt_id.clone(),
+        },
+    ] {
+        match client.send(vault_id.clone(), edit).await {
+            Err(Error::Rejected { info }) => assert_eq!(info.code, ErrorCode::ReadOnly),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
     let error = refusal(&client, &vault_id, "s1").await;
     assert_eq!(error.code, ErrorCode::ReadOnly);
     assert!(error.message.contains("read-only"), "{}", error.message);

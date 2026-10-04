@@ -605,6 +605,19 @@ impl SessionManager {
                 return self.project_icon(&project_id).await;
             }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
+            CommandBody::RemoveQueued {
+                session_id,
+                prompt_id,
+            } => (session_id, Request::RemoveQueued { prompt_id }),
+            CommandBody::MoveQueued {
+                session_id,
+                prompt_id,
+                before,
+            } => (session_id, Request::MoveQueued { prompt_id, before }),
+            CommandBody::SendQueuedNow {
+                session_id,
+                prompt_id,
+            } => (session_id, Request::SendQueuedNow { prompt_id }),
             CommandBody::SetModel { session_id, model } => {
                 (session_id, Request::SetModel { model })
             }

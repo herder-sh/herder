@@ -1,7 +1,7 @@
 //! One task per live session: owns the adapter session, applies commands in order, journals
 //! what the agent does.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Image, Item,
-    ItemBody, ItemId, PermissionMode, QuestionId, Route, SessionId, SessionStatus, Timestamp,
-    TurnError, TurnId, UserId,
+    ItemBody, ItemId, PermissionMode, PromptId, QuestionId, Route, SessionId, SessionStatus,
+    Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -64,6 +64,19 @@ pub(super) enum Request {
         queued: Option<oneshot::Sender<bool>>,
     },
     Interrupt,
+    /// Drops a prompt from the queue without running it.
+    RemoveQueued {
+        prompt_id: PromptId,
+    },
+    /// Moves a queued prompt just before another, or to the end.
+    MoveQueued {
+        prompt_id: PromptId,
+        before: Option<PromptId>,
+    },
+    /// Runs a queued prompt next, interrupting the running turn.
+    SendQueuedNow {
+        prompt_id: PromptId,
+    },
     SetModel {
         model: String,
     },
@@ -128,6 +141,7 @@ pub(super) enum PrimaryAct {
 /// A prompt waiting for its turn, or the running turn's.
 #[derive(Clone, PartialEq)]
 struct Prompt {
+    prompt_id: PromptId,
     agent_message: Option<herder_protocol::AgentMessage>,
     by: Option<UserId>,
     text: String,
@@ -176,6 +190,9 @@ pub(super) struct Actor {
     prompt: Option<Prompt>,
     /// Prompts waiting for the running turn to end, oldest first.
     queue: VecDeque<Prompt>,
+    /// Prompts that left the queue to start a turn since the actor started: editing one is a
+    /// conflict, not an unknown prompt.
+    started: HashSet<PromptId>,
     /// The latest assistant message of the running turn: a child's report when it ends.
     last_reply: Option<String>,
     /// Approval requests of the running turn not yet answered, oldest first.
@@ -222,6 +239,7 @@ impl Actor {
             waiting: None,
             prompt: None,
             queue: VecDeque::new(),
+            started: HashSet::new(),
             last_reply: None,
             approvals: Vec::new(),
             questions: HashMap::new(),
@@ -248,6 +266,7 @@ impl Actor {
                 self.queue = saved
                     .iter()
                     .map(|prompt| Prompt {
+                        prompt_id: prompt.prompt_id.clone(),
                         agent_message: prompt.agent_message.clone(),
                         by: prompt.by.clone(),
                         text: prompt.text.clone(),
@@ -286,6 +305,7 @@ impl Actor {
             .queue
             .iter()
             .map(|prompt| QueuedPrompt {
+                prompt_id: prompt.prompt_id.clone(),
                 agent_message: prompt.agent_message.clone(),
                 by: prompt.by.clone(),
                 text: prompt.text.clone(),
@@ -515,6 +535,7 @@ impl Actor {
                 }
                 let queued = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
+                    prompt_id: new_prompt_id(),
                     agent_message: Some(message),
                     by: None,
                     text,
@@ -541,6 +562,7 @@ impl Actor {
                 self.cancel_retry(false).await;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
+                    prompt_id: new_prompt_id(),
                     agent_message: None,
                     by,
                     text,
@@ -560,6 +582,37 @@ impl Actor {
                 }
                 _ => return Err(error(ErrorCode::Conflict, "no turn is running")),
             },
+            Request::RemoveQueued { prompt_id } => {
+                let index = self.queued(&prompt_id)?;
+                self.queue.remove(index);
+            }
+            Request::MoveQueued { prompt_id, before } => {
+                let index = self.queued(&prompt_id)?;
+                if let Some(before) = &before {
+                    self.queued(before)?;
+                }
+                if before.as_ref() != Some(&prompt_id)
+                    && let Some(prompt) = self.queue.remove(index)
+                {
+                    let at = match &before {
+                        Some(before) => self.queued(before)?,
+                        None => self.queue.len(),
+                    };
+                    self.queue.insert(at, prompt);
+                }
+            }
+            Request::SendQueuedNow { prompt_id } => {
+                self.queued(&prompt_id)?;
+                // A retry waiting for a usage limit to reset gives way, as on an interrupt.
+                self.cancel_retry(false).await;
+                let index = self.queued(&prompt_id)?;
+                if let Some(prompt) = self.queue.remove(index) {
+                    self.queue.push_front(prompt);
+                }
+                if let (Some(_), Some(adapter)) = (&self.turn, &self.adapter) {
+                    let _ = adapter.commands.send(AdapterCommand::Interrupt);
+                }
+            }
             Request::SetModel { model } => {
                 if model != self.session.model {
                     let command = AdapterCommand::SetModel {
@@ -1084,6 +1137,20 @@ impl Actor {
         Ok(())
     }
 
+    /// Where the queued prompt `prompt_id` is in the queue; refused once it started, as
+    /// a prompt queued again to retry its turn has.
+    fn queued(&self, prompt_id: &PromptId) -> Result<usize, ErrorInfo> {
+        match self.queue.iter().position(|p| p.prompt_id == *prompt_id) {
+            Some(index) if !self.queue[index].retry => Ok(index),
+            Some(_) => Err(started(prompt_id)),
+            None if self.started.contains(prompt_id) => Err(started(prompt_id)),
+            None => Err(error(
+                ErrorCode::NotFound,
+                format!("prompt {prompt_id} is not queued"),
+            )),
+        }
+    }
+
     /// Checks a prompt's `images` and keeps them; refused when the session's adapter cannot
     /// take images.
     async fn keep(&self, images: Vec<Image>) -> Result<Vec<Attachment>, ErrorInfo> {
@@ -1357,12 +1424,14 @@ impl Actor {
             let Some(prompt) = self.queue.pop_front() else {
                 return;
             };
+            self.started.insert(prompt.prompt_id.clone());
             let original = prompt.clone();
             // Agent queue removal happens atomically with its durable transcript item.
             if prompt.agent_message.is_none() {
                 self.save_queue().await;
             }
             let Prompt {
+                prompt_id,
                 agent_message,
                 by,
                 text,
@@ -1466,6 +1535,7 @@ impl Actor {
             }
             self.turn = Some(turn_id);
             self.prompt = Some(Prompt {
+                prompt_id,
                 agent_message,
                 by,
                 text,
@@ -2470,4 +2540,16 @@ fn fatal(message: String) -> TurnError {
         class: ErrorClass::Fatal,
         message,
     }
+}
+
+/// A new id for a queued prompt.
+fn new_prompt_id() -> PromptId {
+    PromptId::new(ulid::Ulid::new().to_string())
+}
+
+fn started(prompt_id: &PromptId) -> ErrorInfo {
+    error(
+        ErrorCode::Conflict,
+        format!("prompt {prompt_id} has started and is no longer queued"),
+    )
 }

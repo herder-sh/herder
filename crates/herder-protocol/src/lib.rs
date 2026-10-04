@@ -33,7 +33,7 @@ pub use event::{
     ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
-    AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, QuestionId,
+    AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, PromptId, QuestionId,
     SessionId, TerminalId, TurnId, UserId,
 };
 pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, ProjectId};
@@ -45,8 +45,8 @@ pub use replication::{
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
 pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
-    HostReplication, HostUsage, LinkedVault, Role, ServerHello, ServerMessage, SessionHead,
-    Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
+    HostReplication, HostUsage, LinkedVault, QueuedPrompt, Role, ServerHello, ServerMessage,
+    SessionHead, Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 

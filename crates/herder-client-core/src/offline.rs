@@ -118,6 +118,7 @@ mod tests {
                 project_id: None,
                 account_id: AccountId::new("a"),
                 children_need_you: 0,
+                queue: Vec::new(),
             }],
             logs: vec![vec![Event {
                 session_id,

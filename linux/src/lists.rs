@@ -473,6 +473,7 @@ pub mod tests {
             project_id: project.map(ProjectId::new),
             account_id: AccountId::new("claude-main"),
             children_need_you: 0,
+            queue: Vec::new(),
         }
     }
 
