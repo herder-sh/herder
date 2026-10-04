@@ -250,6 +250,16 @@ extension PrState {
     }
 }
 
+/// How a session's PRs show from its header: a 520 point popover where there is room for one,
+/// else a sheet, as a phone is narrower than the popover.
+enum PRListPresentation: Equatable {
+    case popover, sheet
+
+    init(compact: Bool) {
+        self = compact ? .sheet : .popover
+    }
+}
+
 /// A session's PRs and its descendants' from its header, grouped by session: Open or All,
 /// each group's merged and closed folded away, a search once there are many, in a capped
 /// scroll built lazily, so it holds a hundred PRs.
@@ -257,6 +267,7 @@ struct PRStrip: View {
     let fleet: Fleet
     let key: SessionKey
     let rollup: PRRollup
+    let presentation: PRListPresentation
     /// Opens a descendant's session.
     let open: (SessionKey) -> Void
     /// `nil` until the user picks: Open while any is open, else All.
@@ -268,29 +279,38 @@ struct PRStrip: View {
     @State private var typed = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            controls.padding(.horizontal, 12).padding(.vertical, 10)
-            Rectangle().fill(Theme.stroke).frame(height: 1)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) { groups }
-                    .padding(8)
+        Group {
+            switch presentation {
+            case .popover:
+                VStack(alignment: .leading, spacing: 0) {
+                    controls.padding(.horizontal, 12).padding(.vertical, 10)
+                    Rectangle().fill(Theme.stroke).frame(height: 1)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) { groups }
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 460)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Rectangle().fill(Theme.stroke).frame(height: 1)
+                    HStack { actions }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+                .frame(width: 520)
+                .background(Theme.surface)
+                .preferredColorScheme(.dark)
+            case .sheet:
+                SheetScaffold(title: "Pull Requests", subtitle: rollup.groups.count > 1
+                              ? "This session's and its agents'." : "Linked to this session.") {
+                    controls
+                    LazyVStack(alignment: .leading, spacing: 10) { groups }
+                        .padding(.horizontal, -10)
+                } footer: {
+                    actions
+                }
+                .presentationDetents([.medium, .large])
             }
-            .frame(maxHeight: 460)
-            .fixedSize(horizontal: false, vertical: true)
-            Rectangle().fill(Theme.stroke).frame(height: 1)
-            HStack {
-                Spacer()
-                Button("Link PR…", systemImage: "link") { linking = true }
-                    .buttonStyle(.plain)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Theme.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
         }
-        .frame(width: 520)
-        .background(Theme.surface)
-        .preferredColorScheme(.dark)
         .alert("Link a pull request", isPresented: $linking) {
             TextField("123, #123 or a link", text: $typed)
             Button("Link") {
@@ -301,6 +321,16 @@ struct PRStrip: View {
         } message: {
             Text("Its number, or its link.")
         }
+    }
+
+    private var actions: some View {
+        Group {
+            Spacer()
+            Button("Link PR…", systemImage: "link") { linking = true }
+        }
+        .buttonStyle(.plain)
+        .font(.caption.weight(.medium))
+        .foregroundStyle(Theme.secondary)
     }
 
     private var filter: Binding<Bool> {
@@ -365,7 +395,7 @@ struct PRStrip: View {
                             .foregroundStyle(Theme.tertiary)
                             .padding(.horizontal, 10)
                             .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                            .contentShape(.rect)
+                            .hitTarget()
                         }
                         .buttonStyle(.plain)
                     }
@@ -392,7 +422,7 @@ struct PRStrip: View {
         .font(.caption.weight(.semibold))
         .padding(.horizontal, 10)
         .frame(minHeight: 26)
-        .contentShape(.rect)
+        .hitTarget()
         if group.depth == 0 {
             label
         } else {
@@ -430,7 +460,7 @@ struct PRLine: View {
             .padding(.horizontal, 10)
             .frame(minHeight: 32)
             .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: Theme.corner - 2))
-            .contentShape(.rect)
+            .hitTarget()
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

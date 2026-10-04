@@ -177,11 +177,13 @@ struct SessionView: View {
                              tint: rollup.urgent?.color ?? Theme.secondary) {
                     showsPRs.toggle()
                 }
+                // On compact width the popover adapts to a sheet, which PRStrip then frames.
                 .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
-                    PRStrip(fleet: fleet, key: key, rollup: rollup) { child in
+                    PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
                         showsPRs = false
                         if let open { open(child) } else { path?.wrappedValue.append(child) }
                     }
+                    .presentationCompactAdaptation(.sheet)
                 }
             }
             if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
