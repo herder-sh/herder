@@ -192,7 +192,9 @@ struct Pane<Content: View, Actions: View>: View {
                     }
                 }
                 Spacer()
-                actions
+                // The actions take their room before the title, so a label never wraps.
+                HStack(spacing: 8) { actions }
+                    .layoutPriority(1)
             }
             .padding(.horizontal, 20)
             .padding(.top, 22)
@@ -246,7 +248,7 @@ struct Switcher {
     }
 }
 
-/// A labelled header button in herder's style.
+/// A labelled header button in herder's style; just its icon where the label does not fit.
 struct PaneButton: View {
     let title: String
     let symbol: String
@@ -254,15 +256,23 @@ struct PaneButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Theme.onPrimary)
-                .padding(.horizontal, 12)
-                .frame(height: 30)
-                .background(Theme.primary, in: .rect(cornerRadius: 8))
-                .contentShape(.rect)
+            ViewThatFits(in: .horizontal) {
+                Label(title, systemImage: symbol)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .fixedSize()
+                Image(systemName: symbol)
+                    .frame(width: 30)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Theme.onPrimary)
+            .frame(height: 30)
+            .background(Theme.primary, in: .rect(cornerRadius: 8))
+            .hitTarget()
         }
         .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
     }
 }
 
@@ -484,7 +494,7 @@ struct IconButton: View {
                 .foregroundStyle(Theme.secondary)
                 .frame(width: 30, height: 30)
                 .background(Theme.raised, in: .rect(cornerRadius: 8))
-                .contentShape(.rect)
+                .hitTarget()
         }
         .buttonStyle(.plain)
         .help(help)

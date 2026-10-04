@@ -128,7 +128,18 @@ struct SessionView: View {
 
     // MARK: Header
 
+    /// The header, with the buttons' labels where they fit beside 160 points of title, else
+    /// the buttons as icons, so a label never truncates.
     private func header(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
+        ViewThatFits(in: .horizontal) {
+            headerRow(model, summary, labels: true)
+            headerRow(model, summary, labels: false)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+    }
+
+    private func headerRow(_ model: SessionModel?, _ summary: SessionSummary?, labels: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
@@ -157,7 +168,7 @@ struct SessionView: View {
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
-            Spacer()
+            .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
             if let model, !model.prs.isEmpty {
                 HeaderButton(symbol: "arrow.triangle.pull", title: model.prs.count == 1 ? "#\(model.prs[0].number)" : "\(model.prs.count) PRs",
@@ -173,8 +184,9 @@ struct SessionView: View {
             }
             if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
                 HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
-                             title: compact ? nil : showsTerminal ? "Chat" : "Terminal",
+                             title: labels ? showsTerminal ? "Chat" : "Terminal" : nil,
                              selected: showsTerminal) { showsTerminal.toggle() }
+                    .accessibilityLabel(showsTerminal ? "Chat" : "Terminal")
                     .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
@@ -219,8 +231,6 @@ struct SessionView: View {
             // The buttons keep their size; the title, status and branch take what is left.
             .fixedSize()
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
     }
 
     // MARK: Controls
@@ -660,7 +670,7 @@ struct HeaderLabel: View {
         .padding(.horizontal, title == nil ? 0 : 11)
         .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
         .background(selected ? Theme.primary : Theme.bubble, in: .rect(cornerRadius: 9))
-        .contentShape(.rect)
+        .hitTarget()
     }
 }
 

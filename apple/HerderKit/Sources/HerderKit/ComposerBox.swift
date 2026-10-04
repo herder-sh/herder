@@ -71,51 +71,10 @@ struct ComposerBox<Footer: View>: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .accessibilityIdentifier("composer")
                 #endif
-                HStack(spacing: 4) {
-                    ModelPicker(groups: models, current: current, sections: settings, choose: choose)
-                    Divider().frame(height: 16).overlay(Theme.stroke)
-                    Menu {
-                        ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { option in
-                            Button { setMode(option) } label: {
-                                if option == mode { Label(option.label, systemImage: "checkmark") } else { Text(option.label) }
-                            }
-                        }
-                    } label: {
-                        MenuLabel(symbol: mode == .fullAccess ? "lock.open" : "lock", text: mode?.label ?? "Permissions")
-                    }
-                    .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                    Spacer()
-                    if let problem = imageError ?? dictation.error {
-                        Text(problem).font(.caption).foregroundStyle(Theme.failure).lineLimit(2)
-                    }
-                    Button(action: toggleDictation) {
-                        SwiftUI.Image(systemName: dictation.listening ? "mic.fill" : "mic")
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(dictation.listening ? Theme.accent : Theme.secondary)
-                            .frame(width: 30, height: 30)
-                            .background(dictation.listening ? Theme.accent.opacity(0.18) : .clear, in: .circle)
-                            .contentShape(.rect)
-                            .symbolEffect(.pulse, isActive: dictation.listening)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .help(dictation.listening ? "Stop dictating (⇧⌘D)" : "Dictate, on this device (⇧⌘D)")
-                    #if os(macOS)
-                    Button(action: attach) {
-                        SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
-                            .foregroundStyle(Theme.secondary).frame(width: 30, height: 30).contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Attach images (or paste or drop them)")
-                    #endif
-                    if running && trimmed.isEmpty && images.isEmpty {
-                        CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
-                    } else {
-                        CircleButton(symbol: "arrow.up", help: "Send", action: submit)
-                            .disabled(trimmed.isEmpty && images.isEmpty)
-                            .opacity(trimmed.isEmpty && images.isEmpty ? 0.35 : 1)
-                            .keyboardShortcut(.return, modifiers: .command)
-                    }
+                // The permission menu drops its label before the row runs wider than the box.
+                ViewThatFits(in: .horizontal) {
+                    toolbar(labels: true)
+                    toolbar(labels: false)
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 10)
@@ -144,6 +103,45 @@ struct ComposerBox<Footer: View>: View {
             // A chip deleted from the text takes its image or paste with it.
             PromptText.prune(.image, items: &images, text: &text)
             PromptText.prune(.paste, items: &pastes, text: &text)
+        }
+    }
+
+    /// The model and permission menus, dictation, attach and send, inside the box's bottom edge.
+    private func toolbar(labels: Bool) -> some View {
+        HStack(spacing: 4) {
+            ModelPicker(groups: models, current: current, sections: settings, choose: choose)
+            Divider().frame(height: 16).overlay(Theme.stroke)
+            Menu {
+                ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { option in
+                    Button { setMode(option) } label: {
+                        if option == mode { Label(option.label, systemImage: "checkmark") } else { Text(option.label) }
+                    }
+                }
+            } label: {
+                MenuLabel(symbol: mode == .fullAccess ? "lock.open" : "lock", text: mode?.label ?? "Permissions", showsText: labels)
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+            Spacer()
+            if let problem = imageError ?? dictation.error {
+                Text(problem).font(.caption).foregroundStyle(Theme.failure).lineLimit(2)
+            }
+            DictationButton(listening: dictation.listening, action: toggleDictation)
+            #if os(macOS)
+            Button(action: attach) {
+                SwiftUI.Image(systemName: "paperclip").font(.callout.weight(.semibold))
+                    .foregroundStyle(Theme.secondary).frame(width: 30, height: 30).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Attach images (or paste or drop them)")
+            #endif
+            if running && trimmed.isEmpty && images.isEmpty {
+                CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
+            } else {
+                CircleButton(symbol: "arrow.up", help: "Send", action: submit)
+                    .disabled(trimmed.isEmpty && images.isEmpty)
+                    .opacity(trimmed.isEmpty && images.isEmpty ? 0.35 : 1)
+                    .keyboardShortcut(.return, modifiers: .command)
+            }
         }
     }
 
@@ -225,18 +223,43 @@ struct ComposerBox<Footer: View>: View {
 struct MenuLabel: View {
     let symbol: String
     let text: String
+    /// Off where the row has no room for the text; it stays the accessibility label.
+    var showsText = true
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbol).imageScale(.small)
-            Text(text).lineLimit(1)
+            if showsText { Text(text).lineLimit(1) }
             Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
         }
         .font(.subheadline.weight(.medium))
         .foregroundStyle(Theme.secondary)
         .padding(.horizontal, 8)
         .frame(height: 32)
-        .contentShape(.rect)
+        .hitTarget()
+        .accessibilityLabel(text)
+    }
+}
+
+/// The composer's microphone: dictates on this device, pulsing while it listens.
+struct DictationButton: View {
+    let listening: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            SwiftUI.Image(systemName: listening ? "mic.fill" : "mic")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(listening ? Theme.accent : Theme.secondary)
+                .frame(width: 30, height: 30)
+                .background(listening ? Theme.accent.opacity(0.18) : .clear, in: .circle)
+                .symbolEffect(.pulse, isActive: listening)
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("d", modifiers: [.command, .shift])
+        .help(listening ? "Stop dictating (⇧⌘D)" : "Dictate, on this device (⇧⌘D)")
+        .accessibilityLabel(listening ? "Stop dictating" : "Dictate")
     }
 }
 
@@ -255,7 +278,7 @@ struct FooterItem<Items: View>: View {
                 Text(text).lineLimit(1)
                 Image(systemName: "chevron.down").font(.caption2)
             }
-            .contentShape(.rect)
+            .hitTarget()
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
     }
@@ -274,7 +297,7 @@ struct CircleButton: View {
                 .foregroundStyle(Theme.onPrimary)
                 .frame(width: 34, height: 34)
                 .background(Theme.primary, in: .circle)
-                .contentShape(.circle)
+                .hitTarget()
         }
         .buttonStyle(.plain)
         .help(help)
