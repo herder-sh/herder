@@ -64,6 +64,10 @@ struct SessionModel {
     var turnStartedAt: Date?
     /// Every event, worded, oldest first.
     var timeline: [TimelineEntry] = []
+    /// The events that matter, oldest first, with a turn's tool calls folded into one.
+    var moments: [Moment] = []
+    /// Where each turn's folded tool calls sit in `moments`.
+    private var toolMoments: [TurnId: Int] = [:]
     var stats = SessionStats()
     /// How each ended turn ended, for the reports a child sends its parent.
     var turnEnds: [TurnId: TurnEnd] = [:]
@@ -81,6 +85,7 @@ struct SessionModel {
     mutating func apply(_ event: Event) {
         record(event)
         let at = Timestamp.date(event.at) ?? updatedAt ?? .now
+        note(event, at: at)
         count(event, at: at)
         timeline.append(TimelineEntry(seq: event.seq, at: at, text: Self.describe(event.body), by: event.by))
         updatedAt = at
@@ -168,11 +173,6 @@ struct SessionModel {
         func notice(_ text: String, _ tone: Notice.Tone = .info, detail: String? = nil) {
             log.append(.notice(Notice(id: event.seq, text: text, tone: tone, detail: detail)))
         }
-        func handoff(_ kind: Handoff.Kind, from: HostId? = nil, to: Handoff.Side) {
-            log.append(.handoff(Handoff(
-                id: event.seq, kind: kind,
-                from: Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: from), to: to)))
-        }
         func asked(_ what: String, _ text: String, _ routedTo: Route, _ reason: EscalationReason?) {
             switch (routedTo, reason) {
             case (.primary, _): notice("\(what) for the primary session: \(text)")
@@ -209,26 +209,13 @@ struct SessionModel {
             }
             notice(answeredBy == .user ? what : "\(what) by the primary session")
         case .questionAnswered(let id, let answer, let answeredBy):
-            let text: String = switch answer {
-            case .text(let text): text
-            case .choice(let index):
-                questions.first { $0.id == id }.flatMap { pending -> String? in
-                    guard case .question(_, let choices) = pending.kind, Int(index) < choices.count else { return nil }
-                    return choices[Int(index)]
-                } ?? "choice \(index + 1)"
-            }
+            let text = answerText(id, answer)
             notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
         case .childSpawned(let child, let task): log.append(.child(sessionId: child, task: task))
         case .childReported(let child, let turnId, let summary):
             log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
-        case .modelSwitched(let model): handoff(.model, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
-        case .accountSwitched(let accountId):
-            handoff(.account, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
-        case .providerSwitched(let provider, let accountId, let model):
-            handoff(.provider, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
-        case .sessionForked(_, let fromHost):
-            handoff(.machine, from: fromHost,
-                    to: Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: key.hostId))
+        case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
+            if let handoff = handoff(event) { log.append(.handoff(handoff)) }
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
@@ -238,16 +225,128 @@ struct SessionModel {
         }
     }
 
+    /// What a switch or a fork moved the session from and to; before `apply` changes the state.
+    private func handoff(_ event: Event) -> Handoff? {
+        let side: (Handoff.Kind, Handoff.Side)
+        var from: HostId?
+        switch event.body {
+        case .modelSwitched(let model): side = (.model, Handoff.Side(provider: provider, model: model, accountId: accountId))
+        case .accountSwitched(let accountId):
+            side = (.account, Handoff.Side(provider: provider, model: model, accountId: accountId))
+        case .providerSwitched(let provider, let accountId, let model):
+            side = (.provider, Handoff.Side(provider: provider, model: model, accountId: accountId))
+        case .sessionForked(_, let fromHost):
+            from = fromHost
+            side = (.machine, Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: key.hostId))
+        default: return nil
+        }
+        return Handoff(id: event.seq, kind: side.0,
+                       from: Handoff.Side(provider: provider, model: model, accountId: accountId, hostId: from), to: side.1)
+    }
+
+    /// An answer in words: the choice it picked, while the question is still pending.
+    private func answerText(_ id: QuestionId, _ answer: Answer) -> String {
+        switch answer {
+        case .text(let text): text
+        case .choice(let index):
+            questions.first { $0.id == id }.flatMap { pending -> String? in
+                guard case .question(_, let choices) = pending.kind, Int(index) < choices.count else { return nil }
+                return choices[Int(index)]
+            } ?? "choice \(index + 1)"
+        }
+    }
+
+    /// Adds the events that matter to `moments`, before `apply` changes the state: a turn's tool
+    /// calls fold into one moment, and status changes, replies and tool results are left out.
+    private mutating func note(_ event: Event, at: Date) {
+        func add(_ kind: Moment.Kind, turn: TurnId? = self.turn) {
+            moments.append(Moment(id: event.seq, at: at, turn: turn, kind: kind))
+        }
+        switch event.body {
+        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _): add(.created(branch: branch))
+        case .branchCheckedOut(let branch): add(.setting("Checked out \(branch)"))
+        case .permissionModeChanged(let mode): add(.setting("Permissions set to \(mode.label.lowercased())"))
+        case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
+            let duration = turn == turnId ? turnStartedAt.map { at.timeIntervalSince($0) } : nil
+            let kind: Moment.Kind = switch event.body {
+            case .turnFailed(_, let error): .turnEnded(.failed, duration: duration, error: TurnFailure.summary(error))
+            case .turnInterrupted: .turnEnded(.interrupted, duration: duration, error: nil)
+            default: .turnEnded(.completed, duration: duration, error: nil)
+            }
+            add(kind, turn: turnId)
+        case .itemAdded(let item) where item.parentCallId == nil:
+            switch item.body {
+            case .userMessage(let text, _): add(.prompt(text, from: item.agentMessage?.senderSessionId), turn: item.turnId)
+            case .toolCall(let name, _):
+                if let index = toolMoments[item.turnId], case .tools(var counts) = moments[index].kind {
+                    counts[name, default: 0] += 1
+                    moments[index].kind = .tools(counts)
+                } else {
+                    toolMoments[item.turnId] = moments.count
+                    add(.tools([name: 1]), turn: item.turnId)
+                }
+            default: break
+            }
+        case .approvalRequested(_, let turnId, _, let summary, _, _): add(.approval(summary), turn: turnId)
+        case .approvalResolved(_, let decision, let answeredBy): add(.decided(decision, byUser: answeredBy == .user))
+        case .questionAsked(_, let turnId, let text, _, _, _): add(.question(text), turn: turnId)
+        case .questionAnswered(let id, let answer, let answeredBy):
+            add(.answered(answerText(id, answer), byUser: answeredBy == .user))
+        case .childSpawned(let child, let task): add(.spawned(child, task: task))
+        case .childReported(let child, let turnId, let summary): add(.reported(child, summary: summary), turn: turnId)
+        case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
+            if let handoff = handoff(event) { add(.handoff(handoff)) }
+        case .prLinked(let pr): add(.pr(pr, change: "linked"))
+        case .prUpdated(let pr):
+            // CI and review churn stays out; a merge, a close or a reopen is worth a line.
+            if prs.first(where: { $0.number == pr.number })?.state != pr.state {
+                add(.pr(pr, change: pr.state.word.lowercased()))
+            }
+        case .prUnlinked(let number): add(.prUnlinked(number))
+        case .titleChanged(let title, _): add(.titled(title))
+        case .sessionStatusChanged, .turnStarted, .itemAdded, .approvalEscalated, .questionEscalated, .unknown:
+            break
+        }
+    }
+
+    /// The moments in runs that share a turn, oldest first: what a turn did, between what
+    /// happened outside turns.
+    var momentGroups: [MomentGroup] {
+        let turns = Dictionary(stats.turnLog.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        var groups: [MomentGroup] = []
+        for moment in moments {
+            if let last = groups.last, last.turnId == moment.turn {
+                groups[groups.count - 1].moments.append(moment)
+            } else {
+                groups.append(MomentGroup(turnId: moment.turn, turn: moment.turn.flatMap { turns[$0] }, moments: [moment]))
+            }
+        }
+        return groups
+    }
+
     /// Keeps the session's statistics.
     private mutating func count(_ event: Event, at: Date) {
         switch event.body {
         case .sessionCreated: stats.createdAt = at
-        case .turnStarted: stats.turns += 1
+        case .turnStarted(let turnId):
+            stats.turns += 1
+            stats.turnLog.append(TurnRecord(id: turnId, number: stats.turns, started: at, provider: provider, model: model))
         case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
             if turn == turnId, let started = turnStartedAt { stats.busy += at.timeIntervalSince(started) }
-            if case .turnCompleted = event.body { stats.completed += 1 }
-            if case .turnInterrupted = event.body { stats.interrupted += 1 }
-            if case .turnFailed = event.body { stats.failed += 1 }
+            let end: TurnEnd = switch event.body {
+            case .turnCompleted: .completed
+            case .turnInterrupted: .interrupted
+            default: .failed
+            }
+            switch end {
+            case .completed: stats.completed += 1
+            case .interrupted: stats.interrupted += 1
+            case .failed: stats.failed += 1
+            }
+            if let index = stats.turnLog.lastIndex(where: { $0.id == turnId }), stats.turnLog[index].end == nil {
+                stats.turnLog[index].ended = at
+                stats.turnLog[index].end = end
+            }
         case .itemAdded(let item) where item.parentCallId == nil:
             switch item.body {
             case .userMessage: stats.prompts += 1
@@ -257,7 +356,11 @@ struct SessionModel {
             }
         case .approvalRequested: stats.approvals += 1
         case .approvalResolved(_, let decision, _):
-            if decision == .allow { stats.allowed += 1 } else { stats.denied += 1 }
+            switch decision {
+            case .allow: stats.allowed += 1
+            case .deny: stats.denied += 1
+            case .expired: stats.expired += 1
+            }
         case .questionAsked: stats.questions += 1
         case .modelSwitched, .accountSwitched, .providerSwitched: stats.switches += 1
         default: break
@@ -615,6 +718,101 @@ struct SessionStats: Hashable {
     var approvals = 0
     var allowed = 0
     var denied = 0
+    var expired = 0
     var questions = 0
     var switches = 0
+    /// Every turn, oldest first.
+    var turnLog: [TurnRecord] = []
+
+    /// The tools by use, most used first.
+    var toolRanking: [(name: String, count: Int)] { Self.rank(tools) }
+
+    /// Counts by name, highest first, then by name.
+    static func rank(_ counts: [String: Int]) -> [(name: String, count: Int)] {
+        counts.map { (name: $0.key, count: $0.value) }.sorted { ($0.count, $1.name) > ($1.count, $0.name) }
+    }
+
+    /// Time in ended turns by the model they ran on, most time first.
+    var modelUse: [ModelUse] {
+        var uses: [ModelUse] = []
+        for record in turnLog {
+            guard let duration = record.duration else { continue }
+            if let index = uses.firstIndex(where: { $0.provider == record.provider && $0.model == record.model }) {
+                uses[index].time += duration
+                uses[index].turns += 1
+            } else {
+                uses.append(ModelUse(provider: record.provider, model: record.model, time: duration, turns: 1))
+            }
+        }
+        return uses.sorted { $0.time > $1.time }
+    }
+}
+
+/// A turn: when it ran, how it ended, and on what model.
+struct TurnRecord: Hashable, Identifiable {
+    let id: TurnId
+    /// Its place in the session, from 1.
+    let number: Int
+    let started: Date
+    var ended: Date?
+    var end: TurnEnd?
+    let provider: Provider?
+    let model: String?
+
+    var duration: TimeInterval? { ended.map { $0.timeIntervalSince(started) } }
+}
+
+/// The time a session's turns ran on one model.
+struct ModelUse: Hashable {
+    let provider: Provider?
+    let model: String?
+    var time: TimeInterval
+    var turns: Int
+}
+
+/// An event worth a line in the inspector's timeline.
+struct Moment: Hashable, Identifiable {
+    enum Kind: Hashable {
+        case created(branch: String)
+        /// A prompt, from an agent when it names the session that sent it.
+        case prompt(String, from: SessionId?)
+        /// A turn's tool calls by tool.
+        case tools([String: Int])
+        case turnEnded(TurnEnd, duration: TimeInterval?, error: String?)
+        case handoff(Handoff)
+        case pr(PullRequest, change: String)
+        case prUnlinked(UInt64)
+        case approval(String)
+        case decided(ApprovalOutcome, byUser: Bool)
+        case question(String)
+        case answered(String, byUser: Bool)
+        case spawned(SessionId, task: String)
+        case reported(SessionId, summary: String)
+        case titled(String)
+        case setting(String)
+    }
+
+    let id: UInt64
+    let at: Date
+    /// The turn it happened in, if any.
+    let turn: TurnId?
+    var kind: Kind
+
+    /// A turn's tool calls in a line: "12 tools · Bash ×8, Edit ×3, +1 more".
+    static func toolLine(_ counts: [String: Int], shown: Int = 3) -> String {
+        let total = counts.values.reduce(0, +)
+        let ranked = SessionStats.rank(counts)
+        var names = ranked.prefix(shown).map { $0.count > 1 ? "\($0.name) ×\($0.count)" : $0.name }
+        if ranked.count > shown { names.append("+\(ranked.count - shown) more") }
+        return "\(total) \(total == 1 ? "tool" : "tools") · " + names.joined(separator: ", ")
+    }
+}
+
+/// A run of moments in one turn, or outside any.
+struct MomentGroup: Hashable, Identifiable {
+    var id: UInt64 { moments.first?.id ?? 0 }
+    let turnId: TurnId?
+    /// The turn, when its start is known.
+    let turn: TurnRecord?
+    var moments: [Moment]
 }
