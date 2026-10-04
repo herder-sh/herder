@@ -251,9 +251,9 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
-    /// Add an account: run the provider's own login in a fresh config dir, in a login terminal
+    /// Add an account: run the provider's own login in its config dir, in a login terminal
     /// this connection is attached to; owners only. The account joins the account list once
-    /// the login exits successfully.
+    /// the provider reports the dir logged in, which may already be so.
     AddAccount {
         /// Id of the new account; unique on this daemon.
         account_id: AccountId,
@@ -263,7 +263,8 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         /// Absolute config dir on the host, or one starting with `~/`; the daemon picks one
-        /// in the home directory when absent. It must not hold a login yet.
+        /// in the home directory when absent. It may hold a login already, but not be another
+        /// account's.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_dir: Option<String>,
         /// Width in columns.

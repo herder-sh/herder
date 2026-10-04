@@ -241,3 +241,37 @@ fn scrollback_keeps_only_the_latest_bytes() {
     assert_eq!(scrollback.len(), SCROLLBACK);
     assert!(scrollback.iter().rev().take(5).eq(b"liata".iter()));
 }
+
+#[tokio::test]
+async fn a_login_is_hung_up_once_it_has_logged_in() {
+    let f = fixture();
+    let outbox = Arc::new(Outbox::default());
+    let (ended, exit) = std::sync::mpsc::channel();
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "sleep 60"]);
+    let terminal_id = f
+        .terminals
+        .open_login(
+            AccountId::new("claude-2"),
+            command,
+            80,
+            24,
+            &outbox,
+            LoginHooks {
+                done: Box::new(|| true),
+                on_exit: Box::new(move |exit_code| {
+                    let _ = ended.send(exit_code);
+                    String::new()
+                }),
+            },
+        )
+        .unwrap();
+    assert_eq!(f.next_list().await.len(), 1);
+    let (closed, exit_code) = tokio::time::timeout(TIMEOUT, f.next_closed())
+        .await
+        .unwrap();
+    assert_eq!(closed, terminal_id);
+    // Hung up, not exited: the account is added by its status check, not the exit code.
+    assert_eq!(exit_code, None);
+    assert_eq!(exit.recv_timeout(TIMEOUT).unwrap(), None);
+}

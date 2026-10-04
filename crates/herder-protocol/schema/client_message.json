@@ -753,7 +753,7 @@
           ]
         },
         {
-          "description": "Add an account: run the provider's own login in a fresh config dir, in a login terminal\nthis connection is attached to; owners only. The account joins the account list once\nthe login exits successfully.",
+          "description": "Add an account: run the provider's own login in its config dir, in a login terminal\nthis connection is attached to; owners only. The account joins the account list once\nthe provider reports the dir logged in, which may already be so.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -768,7 +768,7 @@
               "minimum": 0
             },
             "config_dir": {
-              "description": "Absolute config dir on the host, or one starting with `~/`; the daemon picks one\nin the home directory when absent. It must not hold a login yet.",
+              "description": "Absolute config dir on the host, or one starting with `~/`; the daemon picks one\nin the home directory when absent. It may hold a login already, but not be another\naccount's.",
               "type": [
                 "string",
                 "null"

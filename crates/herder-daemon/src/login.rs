@@ -1,7 +1,8 @@
 //! Logins: adding an account by running its provider's own login in a login terminal.
 //!
-//! Each login runs in a fresh config dir, handed to the provider's CLI through its config dir
-//! variables, on a pseudo-terminal relayed to the owner who asked ([`crate::terminal`]). The
+//! Each login runs in the account's config dir, a new one herder creates, or one the owner names:
+//! empty, or already holding a login, but no other account's. The dir is handed to the
+//! provider's CLI through its config dir variables, on a pseudo-terminal relayed to the owner who asked ([`crate::terminal`]). The
 //! owner completes the provider's own flow there, a device code or a URL to open and a code to
 //! paste back, so it works from another machine; nothing relies on a callback to localhost.
 //! herder never reads what the login writes.
@@ -15,11 +16,13 @@
 //!   its device flow; a provider whose login waits for a browser callback to localhost only
 //!   works on the daemon's own machine.
 //!
-//! A login that exits with 0 is not taken at its word: quitting `claude` before logging in exits
-//! with 0 too. herder then asks the provider's own CLI whether the config dir is logged in,
-//! with a check that changes nothing ([`LoginStatus`]): `claude auth status --json`, `codex
-//! login status`, `agent status --format json`, `opencode auth list`. Only when it says so is
-//! the account added: it is appended to the daemon's config file
+//! herder never takes a login's exit at its word: quitting `claude` before logging in exits with
+//! 0 too, and `claude` keeps running once logged in. It asks the provider's own CLI whether the
+//! config dir is logged in, with a check that changes nothing ([`LoginStatus`]): `claude auth
+//! status --json`, `codex login status`, `agent status --format json`, `opencode auth list`;
+//! every few seconds while the login runs, hanging the login up as soon as it says so, so a dir
+//! logged in already is added within seconds, and once more when the login ends, however it
+//! ends. Only when it says so is the account added: it is appended to the daemon's config file
 //! ([`crate::config::append_account`]), which stays the one list of accounts, then offered to
 //! sessions and announced to clients. A login that
 //! fails, or that the check finds logged out, adds nothing, and removes the config dir if
@@ -271,7 +274,21 @@ impl Logins {
         let default = format!("~/.{}-{account_id}", provider.as_str());
         let dir = resolve_path(Path::new(config_dir.unwrap_or(&default)), &env)
             .map_err(|err| error(ErrorCode::BadRequest, format!("config dir: {err:#}")))?;
-        let created = fresh_dir(&dir)?;
+        if let Some(other) = accounts.iter().find(|a| {
+            a.config_dir.as_deref().is_some_and(|other| {
+                resolve_path(Path::new(other), &env).is_ok_and(|other| other == dir)
+            })
+        }) {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!(
+                    "{} is the config dir of account {}",
+                    dir.display(),
+                    other.account_id
+                ),
+            ));
+        }
+        let created = make_dir(&dir)?;
         let mut command = CommandBuilder::new(&program.program);
         command.args(&program.args);
         command.cwd(&dir);
@@ -297,9 +314,17 @@ impl Logins {
 }
 
 impl Pending {
-    /// Adds the account if its login exited with 0 and the provider reports the config dir
-    /// logged in; returns the outcome, as a line for the login terminal. Runs the status check,
-    /// so it blocks.
+    /// Whether the provider reports the config dir logged in, so the login can be hung up. Runs
+    /// the status check, so it blocks.
+    pub(crate) fn check(&self) -> impl Fn() -> bool + Send + 'static {
+        let program = self.program.clone();
+        let dir = self.account.config_dir.clone().unwrap_or_default();
+        move || logged_in(&program, &dir) == Ok(true)
+    }
+
+    /// Adds the account if the provider reports the config dir logged in, however the login
+    /// ended; returns the outcome, as a line for the login terminal. Runs the status check, so
+    /// it blocks.
     pub(crate) fn finish(self, exit_code: Option<i32>) -> String {
         let Pending {
             inner,
@@ -309,18 +334,19 @@ impl Pending {
             created,
         } = self;
         let dir = account.config_dir.clone().unwrap_or_default();
-        let failure = match exit_code {
-            Some(0) => match logged_in(&program, &dir) {
-                Ok(true) => None,
-                Ok(false) => Some(format!(
-                    "the login exited, but {} reports no login in {}",
-                    account.provider.as_str(),
-                    dir.display()
-                )),
-                Err(err) => Some(format!("the login exited, but {err}")),
-            },
-            Some(code) => Some(format!("the login exited with {code}")),
-            None => Some("the login exited with a signal".to_owned()),
+        let exited = match exit_code {
+            Some(0) => "the login exited".to_owned(),
+            Some(code) => format!("the login exited with {code}"),
+            None => "the login ended".to_owned(),
+        };
+        let failure = match logged_in(&program, &dir) {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "{exited}, but {} reports no login in {}",
+                account.provider.as_str(),
+                dir.display()
+            )),
+            Err(err) => Some(format!("{exited}, but {err}")),
         };
         if let Some(failure) = failure {
             if created && let Err(err) = std::fs::remove_dir_all(&dir) {
@@ -395,20 +421,11 @@ fn line(text: &str) -> String {
     format!("\r\nherder: {text}\r\n")
 }
 
-/// Creates `dir`, owner-only, unless it is an empty directory already: a login never lands
-/// on top of another. Returns whether it created it.
-fn fresh_dir(dir: &Path) -> Result<bool, ErrorInfo> {
-    match std::fs::read_dir(dir).map(|mut entries| entries.next().is_none()) {
-        Ok(true) => return Ok(false),
-        Ok(false) => {
-            return Err(error(
-                ErrorCode::Conflict,
-                format!(
-                    "{} is not empty; an account needs a fresh config dir",
-                    dir.display()
-                ),
-            ));
-        }
+/// Creates `dir`, owner-only, unless it is a directory already, empty or holding a login.
+/// Returns whether it created it.
+fn make_dir(dir: &Path) -> Result<bool, ErrorInfo> {
+    match std::fs::read_dir(dir) {
+        Ok(_) => return Ok(false),
         Err(err) if err.kind() == ErrorKind::NotFound => {}
         Err(err) => {
             return Err(error(
@@ -597,16 +614,34 @@ mod tests {
         assert_eq!(login.command.get_cwd(), Some(&dir.as_os_str().to_owned()));
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o700);
-        // An empty dir is still fresh.
+        // An empty dir is taken, and so is one a login was made in already.
         f.start("cursor-3", Provider::Cursor, Some("~/.cursor-cursor-2"))
             .unwrap();
+        let kept = f.home.path().join("kept");
+        std::fs::create_dir(&kept).unwrap();
+        std::fs::write(kept.join("logged-in"), "").unwrap();
+        let login = f.start("codex-4", Provider::Codex, Some("~/kept")).unwrap();
+        assert!(login.pending.check()());
+        assert_eq!(
+            login.pending.finish(None),
+            "\r\nherder: added account codex-4\r\n"
+        );
+        assert!(kept.join("logged-in").exists());
     }
 
     #[tokio::test]
     async fn a_login_never_reuses_an_id_or_a_config_dir_in_use() {
         let f = fixture().await;
-        std::fs::create_dir(f.home.path().join("used")).unwrap();
-        std::fs::write(f.home.path().join("used/auth.json"), "").unwrap();
+        let used = f.home.path().join("used");
+        std::fs::create_dir(&used).unwrap();
+        f.sessions.add_account(
+            AccountId::new("used"),
+            AccountConfig {
+                provider: Provider::Codex,
+                label: "Used".into(),
+                config_dir: Some(used),
+            },
+        );
         let cases = [
             ("codex", Provider::Codex, None, ErrorCode::Conflict),
             ("busy", Provider::Codex, None, ErrorCode::Conflict),
@@ -677,9 +712,10 @@ mod tests {
         std::fs::write(dir.join("partial"), "").unwrap();
         let line = login.pending.finish(Some(1));
         assert!(
-            line.contains("exited with 1; account codex-2 was not added"),
+            line.contains("exited with 1, but codex reports no login"),
             "{line}"
         );
+        assert!(line.contains("account codex-2 was not added"), "{line}");
         assert!(!dir.exists());
         assert_eq!(f.sessions.accounts().len(), 1);
         assert!(!f.home.path().join("daemon.toml").exists());
@@ -722,6 +758,18 @@ mod tests {
         std::fs::write(f.home.path().join(".claude-claude-3/logged-in"), "").unwrap();
         let line = login.pending.finish(Some(0));
         assert_eq!(line, "\r\nherder: added account claude-3\r\n");
+    }
+
+    #[tokio::test]
+    async fn a_login_hung_up_once_logged_in_adds_the_account() {
+        let f = fixture().await;
+        let login = f.start("claude-2", Provider::Claude, None).unwrap();
+        assert!(!login.pending.check()());
+        std::fs::write(f.home.path().join(".claude-claude-2/logged-in"), "").unwrap();
+        assert!(login.pending.check()());
+        // `claude` keeps running once logged in; hung up, it ends with a signal.
+        let line = login.pending.finish(None);
+        assert_eq!(line, "\r\nherder: added account claude-2\r\n");
     }
 
     #[tokio::test]

@@ -51,6 +51,18 @@ pub fn login_shell() -> PathBuf {
 /// output for the terminal.
 pub(crate) type OnExit = Box<dyn FnOnce(Option<i32>) -> String + Send>;
 
+/// What a login terminal does besides relaying the login.
+pub(crate) struct LoginHooks {
+    /// Whether the login has logged in; polled every [`LOGIN_POLL`] while it runs.
+    pub done: Box<dyn Fn() -> bool + Send>,
+    /// Gets the login's exit code once it exits, and returns a last line of output, shown
+    /// before the terminal closes.
+    pub on_exit: OnExit,
+}
+
+/// How often a running login is checked for having logged in.
+const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Every open terminal on this daemon. Cheap to clone.
 #[derive(Clone)]
 pub struct Terminals {
@@ -118,9 +130,9 @@ impl Terminals {
     }
 
     /// Opens a terminal of `cols` by `rows` running `command`, the login of `account_id`, and
-    /// attaches `outbox`. The new terminal list is queued before any of its output. Once the
-    /// login exits, `on_exit` gets its exit code and returns a last line of output, shown
-    /// before the terminal closes.
+    /// attaches `outbox`. The new terminal list is queued before any of its output. Once
+    /// `hooks.done` says the login has logged in, it is hung up; once it exits, `hooks.on_exit`
+    /// runs.
     pub(crate) fn open_login(
         &self,
         account_id: AccountId,
@@ -128,10 +140,32 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
-        on_exit: OnExit,
+        hooks: LoginHooks,
     ) -> Result<TerminalId, ErrorInfo> {
+        let LoginHooks { done, on_exit } = hooks;
         let purpose = TerminalPurpose::Login { account_id };
-        self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))
+        let terminal_id = self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))?;
+        let inner = Arc::clone(&self.inner);
+        let id = terminal_id.clone();
+        let watching = std::thread::Builder::new()
+            .name(format!("login-{terminal_id}"))
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(LOGIN_POLL);
+                    let Some(term) = inner.lock().get(&id).cloned() else {
+                        return;
+                    };
+                    if done() {
+                        info!(terminal_id = %id, "logged in; hanging up the login");
+                        term.hang_up();
+                        return;
+                    }
+                }
+            });
+        if let Err(err) = watching {
+            warn!(%terminal_id, "cannot watch the login; it adds its account once it exits: {err}");
+        }
+        Ok(terminal_id)
     }
 
     fn spawn(
