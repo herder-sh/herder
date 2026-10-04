@@ -51,6 +51,15 @@ pub fn login_shell() -> PathBuf {
 /// output for the terminal.
 pub(crate) type OnExit = Box<dyn FnOnce(Option<i32>) -> String + Send>;
 
+/// What a login terminal does besides relaying the login.
+pub(crate) struct LoginHooks {
+    /// Whether the login has logged in; polled every [`LOGIN_POLL`] while it runs.
+    pub done: Box<dyn Fn() -> bool + Send>,
+    /// Gets the login's exit code once it exits, and returns a last line of output, shown
+    /// before the terminal closes.
+    pub on_exit: OnExit,
+}
+
 /// How often a running login is checked for having logged in.
 const LOGIN_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -121,10 +130,9 @@ impl Terminals {
     }
 
     /// Opens a terminal of `cols` by `rows` running `command`, the login of `account_id`, and
-    /// attaches `outbox`. The new terminal list is queued before any of its output. Every
-    /// [`LOGIN_POLL`] while the login runs, `done` says whether it has logged in, and once it
-    /// has, the login is hung up. Once the login exits, `on_exit` gets its exit code and returns
-    /// a last line of output, shown before the terminal closes.
+    /// attaches `outbox`. The new terminal list is queued before any of its output. Once
+    /// `hooks.done` says the login has logged in, it is hung up; once it exits, `hooks.on_exit`
+    /// runs.
     pub(crate) fn open_login(
         &self,
         account_id: AccountId,
@@ -132,9 +140,9 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
-        done: Box<dyn Fn() -> bool + Send>,
-        on_exit: OnExit,
+        hooks: LoginHooks,
     ) -> Result<TerminalId, ErrorInfo> {
+        let LoginHooks { done, on_exit } = hooks;
         let purpose = TerminalPurpose::Login { account_id };
         let terminal_id = self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))?;
         let inner = Arc::clone(&self.inner);

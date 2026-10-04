@@ -257,11 +257,13 @@ async fn a_login_is_hung_up_once_it_has_logged_in() {
             80,
             24,
             &outbox,
-            Box::new(|| true),
-            Box::new(move |exit_code| {
-                let _ = ended.send(exit_code);
-                String::new()
-            }),
+            LoginHooks {
+                done: Box::new(|| true),
+                on_exit: Box::new(move |exit_code| {
+                    let _ = ended.send(exit_code);
+                    String::new()
+                }),
+            },
         )
         .unwrap();
     assert_eq!(f.next_list().await.len(), 1);

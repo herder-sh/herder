@@ -36,7 +36,7 @@ use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::login::{Logins, NewAccount};
 use crate::session::SessionManager;
-use crate::terminal::Terminals;
+use crate::terminal::{LoginHooks, Terminals};
 use crate::vault::Link;
 use commands::Commands;
 
@@ -196,16 +196,12 @@ impl<B: Backend> Shared<B> {
                 };
                 let login = self.logins.start(&account, &logging_in)?;
                 let pending = login.pending;
-                let done = Box::new(pending.check());
-                let terminal_id = terminals.open_login(
-                    account_id,
-                    login.command,
-                    cols,
-                    rows,
-                    outbox,
-                    done,
-                    Box::new(move |exit_code| pending.finish(exit_code)),
-                )?;
+                let hooks = LoginHooks {
+                    done: Box::new(pending.check()),
+                    on_exit: Box::new(move |exit_code| pending.finish(exit_code)),
+                };
+                let terminal_id =
+                    terminals.open_login(account_id, login.command, cols, rows, outbox, hooks)?;
                 return Ok(CommandResult::TerminalOpened { terminal_id });
             }
             CommandBody::SetAccountSettings {
