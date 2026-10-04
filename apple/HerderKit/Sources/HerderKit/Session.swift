@@ -229,7 +229,12 @@ struct SessionModel {
         case .childReported(let child, let turnId, let summary):
             log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
         case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
-            if let handoff = handoff(event) { log.append(.handoff(handoff)) }
+            guard let handoff = handoff(event) else { break }
+            if case .handoff(let fork)? = log.last, let merged = fork.joined(handoff) {
+                log[log.count - 1] = .handoff(merged)
+            } else {
+                log.append(.handoff(handoff))
+            }
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
@@ -313,7 +318,12 @@ struct SessionModel {
         case .childSpawned(let child, let task): add(.spawned(child, task: task))
         case .childReported(let child, let turnId, let summary): add(.reported(child, summary: summary), turn: turnId)
         case .modelSwitched, .accountSwitched, .providerSwitched, .sessionForked:
-            if let handoff = handoff(event) { add(.handoff(handoff)) }
+            guard let handoff = handoff(event) else { break }
+            if let last = moments.last, case .handoff(let fork) = last.kind, let merged = fork.joined(handoff) {
+                moments[moments.count - 1].kind = .handoff(merged)
+            } else {
+                add(.handoff(handoff))
+            }
         case .prLinked(let pr): add(.pr(pr, change: "linked"))
         case .prUpdated(let pr):
             // CI and review churn stays out; a merge, a close or a reopen is worth a line.
@@ -682,6 +692,14 @@ struct Handoff: Hashable {
     let kind: Kind
     let from: Side
     let to: Side
+
+    /// A move between machines with the switch that came right after it, as a fork moves to an
+    /// account of its new machine: one handoff, from where the session ran to where it runs now.
+    func joined(_ next: Handoff) -> Handoff? {
+        guard kind == .machine, next.kind != .machine else { return nil }
+        return Handoff(id: id, kind: kind, from: from, to: Side(
+            provider: next.to.provider, model: next.to.model, accountId: next.to.accountId, hostId: to.hostId))
+    }
 }
 
 extension PermissionMode {

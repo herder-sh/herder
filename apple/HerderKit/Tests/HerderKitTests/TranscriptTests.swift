@@ -145,9 +145,14 @@ struct TranscriptTests {
         let handoffs = Transcript.blocks(model).compactMap { block -> Handoff? in
             if case .handoff(let handoff) = block { handoff } else { nil }
         }
-        #expect(handoffs.map(\.kind) == [.machine, .account])
+        // The fork's move to an account of its new machine is part of the same handoff.
+        #expect(handoffs.map(\.kind) == [.machine])
         #expect(handoffs[0].from == Handoff.Side(provider: "claude", model: "opus", accountId: "main", hostId: "host-a"))
-        #expect(handoffs[0].to == Handoff.Side(provider: "claude", model: "opus", accountId: "main", hostId: "host-b"))
+        #expect(handoffs[0].to == Handoff.Side(provider: "claude", model: "opus", accountId: "work", hostId: "host-b"))
+        let moments = model.moments.compactMap { moment -> Handoff? in
+            if case .handoff(let handoff) = moment.kind { handoff } else { nil }
+        }
+        #expect(moments == handoffs)
     }
 
     @Test func aSentPromptShowsUntilTheQueueOrTheSessionTakesIt() {

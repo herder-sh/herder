@@ -145,8 +145,8 @@ struct HandoffDivider: View {
     }
 }
 
-/// A side of a handoff: a move between machines names the machines; an account switch, the
-/// accounts; the others, the models.
+/// A side of a handoff: a move between machines names the machines, and the accounts when it
+/// changed them; an account switch, the accounts; the others, the models.
 struct HandoffSide: View {
     let handoff: Handoff
     let side: Handoff.Side
@@ -158,6 +158,10 @@ struct HandoffSide: View {
             if handoff.kind == .machine {
                 Image(systemName: "desktopcomputer")
                 Text(machineName(side.hostId))
+                if handoff.from.accountId != handoff.to.accountId {
+                    Text("·")
+                    Text(account(side.accountId))
+                }
             } else if handoff.kind == .account {
                 Image(systemName: "person.crop.circle")
                 Text(account(side.accountId))
