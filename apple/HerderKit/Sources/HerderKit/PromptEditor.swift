@@ -61,11 +61,21 @@ struct PromptEditor: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         guard let view = context.coordinator.view, let width = proposal.width, width > 0 else { return nil }
         let line = Self.font.boundingRectForFont.height
-        view.frame.size.width = width
-        guard let layout = view.textLayoutManager else { return nil }
-        layout.ensureLayout(for: layout.documentRange)
-        let used = layout.usageBoundsForTextContainer.height
+        let used = Self.height(of: view.attributedString(), width: width)
         return CGSize(width: width, height: min(max(used, line * 2), line * 12).rounded(.up))
+    }
+
+    /// The height `text` takes at `width`, laid out on its own: resizing the view itself while
+    /// SwiftUI measures it moves whatever is anchored to it, like a chip's popover, mid-update.
+    static func height(of text: NSAttributedString, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(attributedString: text)
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        let layout = NSLayoutManager()
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        return layout.usedRect(for: container).height
     }
 
     static let font = NSFont.preferredFont(forTextStyle: .body)
