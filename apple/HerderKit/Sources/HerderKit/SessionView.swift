@@ -71,6 +71,8 @@ struct SessionView: View {
                 .onAppear { if let top = scroll.land() { proxy.scrollTo(top, anchor: .top) } }
             }
             .defaultScrollAnchor(.bottom)
+            .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("transcript")
             .modifier(FollowsGrowth(key: key, scroll: $scroll))
             .id(key)
             .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
