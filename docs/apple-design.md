@@ -180,6 +180,16 @@ From the top: a child's `ChildBanner` ("Agent of ‹parent›", Back), then the 
 - **Right, one row of `HeaderButton`s:** PRs (when linked), Terminal / Chat (owners only, ⌘\`),
   Inspector (ⓘ, ⌥⌘I), list toggle (Mac, ⌘\), and the ⋯ menu (Interrupt, Switch Account or
   Model…, Link Pull Request…, Archive).
+- **The PRs button rolls up the session's tree** (`PRRollup`, `PRStrip`): its own PRs and every
+  descendant's (children, grandchildren), a PR linked to two of them counted once. It is one
+  chip, never one per PR: a single PR shows its number ("#181"), more show the count and how
+  many are open ("16 PRs · 3 open"), tinted by the most urgent state (open, draft, merged,
+  closed). Where the header drops its labels it shortens to open of all ("3/16"). Its list must hold a hundred PRs: an Open / All filter (Open while any is open),
+  grouped by session (this one first, then each descendant by title, nested), each group open,
+  draft, merged, closed, with merged and closed folded behind "n merged"; a search (number,
+  title, branch) once there are more than 10; one-line rows (`PRLine`: number, title truncated,
+  state, CI) in a capped, lazily built scroll. A descendant's group title opens that session.
+  The Pull Requests section (§4.3) stays per session.
 - **On a phone** the header must fit 375 pt: the title takes the remaining width and wraps to
   two lines; the status line and branch truncate rather than wrap; the buttons drop their labels
   to icon-only before anything truncates (no "Ter…"); a child's left edge carries a 3 pt
@@ -254,7 +264,7 @@ Screenshots: `mac-session.png`, `mac-session-approval.png`, `mac-session-running
 |---|---|---|---|
 | Inspector (events, stats) | 300 pt side pane right of the chat, toggled from the header | sheet, medium and large detents | `SessionInspector` |
 | Terminal | replaces the transcript | replaces the transcript | `TerminalPane` |
-| Session PRs | popover under the header button | sheet | `PRStrip` |
+| Session PRs (with descendants', §5.1) | popover under the header button, 520 pt, scroll capped at 460 pt | sheet | `PRStrip` |
 | Model, account, machine | popover (340 pt) | popover (fits 375 pt) | `ModelPicker`, `FooterMenu` |
 | Permission mode, ⋯ | menu | menu | SwiftUI `Menu` |
 | New Session | sheet | sheet, full width | `ProjectPicker` |
@@ -344,6 +354,7 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `ProjectIcon`, `ProviderLogo` | `Design/` | a project's tile; a provider's mark |
 | `Pane`, `PaneButton`, `IconButton`, `Sidebar` | `DesktopShell.swift` | the regular-width frame |
 | `HeaderButton`, `HeaderLabel` | `SessionView.swift` | the session header's buttons |
+| `PRLine` | `PullRequests.swift` | one PR on one line in the session's PR list (§5.1) |
 
 ---
 
@@ -362,6 +373,7 @@ iPhone layout fixes land in P7.21.
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |
 | Session (idle, approval, running) | `mac-session.png`, `mac-session-approval.png`, `mac-session-running.png` | `ios-session.png`, `ios-session-keyboard.png`, `ios-session-approval.png`, `ios-session-running.png` |
 | Session menu | — | `ios-session-menu.png` |
+| Session PRs with descendants' (1, 5, 60) | [`p7-28/mac-1.png`](screenshots/p7-28/mac-1.png), [`p7-28/mac-5.png`](screenshots/p7-28/mac-5.png), [`p7-28/mac-60.png`](screenshots/p7-28/mac-60.png), [`p7-28/mac-60-all.png`](screenshots/p7-28/mac-60-all.png), [`p7-28/mac-60-search.png`](screenshots/p7-28/mac-60-search.png) | [`p7-28/ios-1.png`](screenshots/p7-28/ios-1.png), [`p7-28/ios-5.png`](screenshots/p7-28/ios-5.png), [`p7-28/ios-60.png`](screenshots/p7-28/ios-60.png), [`p7-28/ios-60-all.png`](screenshots/p7-28/ios-60-all.png) |
 | Inspector | `mac-session-inspector.png` | `ios-session-inspector.png` |
 | Terminal | `mac-session-terminal.png` | — |
 | New session | `mac-new-session.png` | `ios-new-session.png`, `ios-new-session-path.png` |
