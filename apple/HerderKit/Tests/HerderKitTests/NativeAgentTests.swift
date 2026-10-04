@@ -251,4 +251,36 @@ struct NativeAgentTests {
         #expect(agent?.status == "Stopped without a result")
         #expect(NativeAgent.summary(agent.map { [$0] } ?? []) == "1 stopped")
     }
+
+    @Test func listsShowRunningAndJustFinishedAgentsUnderTheirSessionWhileItWorks() {
+        var script = Script("01A")
+        var model = script.model([
+            created(task: "Review"), .sessionStatusChanged(status: .running, retryAt: nil),
+            .turnStarted(turnId: "t0"),
+            nestedItem("old", .toolCall(name: "Agent", input: #"{"description":"Earlier review"}"#), turn: "t0"),
+            nestedItem("old-result", .toolResult(callId: "old", output: "Done before", isError: false), turn: "t0"),
+            .turnCompleted(turnId: "t0"), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: agentInput), turn: "t1"),
+            nestedItem("b", .toolCall(name: "Task", input: #"{"description":"Review colors"}"#), turn: "t1"),
+            nestedItem("c", .toolCall(name: "Agent", input: #"{"description":"Background scan"}"#), turn: "t1"),
+            nestedItem("read", .toolCall(name: "Read", input: #"{"file_path":"a.rs"}"#), turn: "t1"),
+            nestedItem("nested", .toolCall(name: "Agent", input: #"{"description":"Nested"}"#), turn: "t1", parent: "a"),
+            nestedItem("a-result", .toolResult(callId: "a", output: "Permissions pass", isError: false), turn: "t1"),
+            nestedItem("c-launch", .toolResult(callId: "c", output: launchMetadata, isError: false), turn: "t1"),
+        ])
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [script.key: model])
+        let agents = lists.home.first?.agents ?? []
+        #expect(agents.map(\.title) == ["Review accounts", "Review colors", "Background scan"])
+        #expect(agents.map(\.outcome) == [.ok, .running, .running])
+        #expect(agents.map(\.badge.text) == ["Completed", "Running", "Background"])
+        #expect(lists.projects.first?.live.first?.agents == agents)
+
+        // The turn ends; the session keeps running for the background agent alone.
+        model.apply(script.event(nestedItem("b-result", .toolResult(callId: "b", output: "Contrast fine", isError: false))))
+        model.apply(script.event(.turnCompleted(turnId: "t1")))
+        #expect(NativeAgent.listed(in: model).map(\.title) == ["Review accounts", "Review colors", "Background scan"])
+
+        model.apply(script.event(.sessionStatusChanged(status: .idle, retryAt: nil)))
+        #expect(NativeAgent.listed(in: model).isEmpty)
+    }
 }
