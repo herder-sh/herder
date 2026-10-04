@@ -97,7 +97,26 @@ struct TranscriptTests {
         let notices = Transcript.blocks(model).compactMap { block -> String? in
             if case .notice(let notice) = block { notice.text } else { nil }
         }
-        #expect(notices == ["Question: Which?", "Answered: Blue", "Model switched to haiku", "Turn failed: boom"])
+        #expect(notices == ["Question: Which?", "Answered: Blue", "Turn failed: boom"])
+    }
+
+    @Test func switchesBecomeHandoffsFromWhatTheSessionRanOn() {
+        var script = Script()
+        var model = script.model([created()])
+        model.apply(SessionUpdate(events: [
+            script.event(.modelSwitched(model: "haiku"), by: "tomas"),
+            script.event(.accountSwitched(accountId: "work"), by: "tomas"),
+            // The daemon's own switch: a failover.
+            script.event(.providerSwitched(provider: "codex", accountId: "gpt", model: "gpt-6.1-sol")),
+        ], streaming: []))
+        let handoffs = Transcript.blocks(model).compactMap { block -> Handoff? in
+            if case .handoff(let handoff) = block { handoff } else { nil }
+        }
+        let claude = { (model: String, account: AccountId) in Handoff.Side(provider: "claude", model: model, accountId: account) }
+        #expect(handoffs.map(\.kind) == [.model, .account, .provider])
+        #expect(handoffs.map(\.from) == [claude("opus", "main"), claude("haiku", "main"), claude("haiku", "work")])
+        #expect(handoffs.map(\.to) == [claude("haiku", "main"), claude("haiku", "work"), Handoff.Side(provider: "codex", model: "gpt-6.1-sol", accountId: "gpt")])
+        #expect(handoffs.map(\.failover) == [false, false, true])
     }
 
     @Test func aSentPromptShowsWhereItIsUntilTheSessionTakesIt() {

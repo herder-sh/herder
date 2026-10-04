@@ -31,6 +31,7 @@ enum TranscriptBlock: Hashable, Identifiable {
     case children(id: String, [ChildRef])
     case agents(id: String, [NativeAgent])
     case notice(Notice)
+    case handoff(Handoff)
 
     var id: String {
         switch self {
@@ -39,6 +40,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .agents(let id, _): id
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
+        case .handoff(let handoff): "handoff-\(handoff.id)"
         }
     }
 
@@ -145,6 +147,10 @@ enum Transcript {
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
                 blocks.append(.notice(notice))
+            case .handoff(let handoff):
+                guard parent == nil else { continue }
+                flushCalls(); flushChildren(); flushAgents()
+                blocks.append(.handoff(handoff))
             case .child(let sessionId, let task):
                 guard parent == nil else { continue }
                 flushCalls(); flushAgents()
