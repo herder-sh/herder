@@ -1,4 +1,5 @@
 import Foundation
+import Herder
 import SwiftUI
 import Testing
 #if os(macOS)
@@ -70,6 +71,24 @@ struct PromptEditorTests {
         #expect(coordinator.textView(view, doCommandBy: #selector(NSResponder.insertNewline(_:))))
         #expect(box.submitted == 1)
         #expect(box.text == "send me")
+    }
+
+    /// A pasted image's chip goes in before the binding holds the image; once it does, the chip
+    /// draws again, with its thumbnail and size.
+    @Test func aChipDrawsAgainOnceItsImageArrives() throws {
+        let (view, coordinator, box) = editor("")
+        coordinator.insert("[Image #1] ", in: view)
+        let before = try #require(view.attributedString().attribute(.attachment, at: 0, effectiveRange: nil) as? ChipAttachment)
+        // A 1×1 PNG.
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="))
+        let image = Herder.Image(mediaType: "image/png", data: png)
+        coordinator.parent = PromptEditor(
+            text: Binding(get: { box.text }, set: { box.text = $0 }), focused: .constant(true),
+            images: [image], pastes: [], addImages: { _ in "" }, addPaste: { _ in "" }, submit: {})
+        coordinator.refresh(view)
+        let after = try #require(view.attributedString().attribute(.attachment, at: 0, effectiveRange: nil) as? ChipAttachment)
+        #expect(after !== before)
+        #expect(coordinator.chip(after.token).detail != "Zero KB")
     }
 
     @Test func textAddedAtTheEndKeepsTheCaretAtTheEnd() {

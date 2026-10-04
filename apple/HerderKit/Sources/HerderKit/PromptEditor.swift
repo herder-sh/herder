@@ -50,9 +50,7 @@ struct PromptEditor: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
         guard let view = coordinator.view else { return }
-        if coordinator.text(of: view) != text {
-            coordinator.show(text, in: view)
-        }
+        coordinator.refresh(view)
         if focused, view.window?.firstResponder !== view {
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         }
@@ -88,6 +86,15 @@ struct PromptEditor: NSViewRepresentable {
         weak var view: ChipTextView?
         /// While `show` replaces the text: the binding already holds it.
         private var showing = false
+        /// The images and pastes the chips were last drawn with.
+        private var drawn: Content?
+
+        struct Content: Equatable {
+            let images: [Data]
+            let pastes: [String]
+        }
+
+        private var content: Content { Content(images: parent.images.map(\.data), pastes: parent.pastes) }
 
         init(_ parent: PromptEditor) { self.parent = parent }
 
@@ -112,6 +119,14 @@ struct PromptEditor: NSViewRepresentable {
             return out
         }
 
+        /// Shows the binding's text again if it, or what its chips stand for, changed. A chip goes
+        /// in before the binding holds its image or paste, so it draws again once it does.
+        func refresh(_ view: NSTextView) {
+            if text(of: view) != parent.text || drawn != content {
+                show(parent.text, in: view)
+            }
+        }
+
         /// Shows `text`, its markers as chips, keeping the caret where it was, or at the end if it
         /// was there (as when dictation adds to the text).
         func show(_ text: String, in view: NSTextView) {
@@ -127,6 +142,7 @@ struct PromptEditor: NSViewRepresentable {
                 rest = range.upperBound
             }
             shown.append(NSAttributedString(string: String(text[rest...]), attributes: PromptEditor.attributes))
+            drawn = content
             let caret = view.selectedRange()
             let wasAtEnd = caret.location == 0 || caret.location >= (view.string as NSString).length
             showing = true
