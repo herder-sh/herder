@@ -218,7 +218,7 @@ async fn fork(request: fork::Request, auth: &Auth, daemon: &Daemon) -> Response 
             message: "the vault runs no sessions; fork on a host".to_owned(),
         };
     };
-    match sessions.fork(request, auth.owner()).await {
+    match sessions.fork(request, None, auth.owner()).await {
         Ok(forked) => Response::Forked(forked),
         Err(error) => Response::Error {
             message: error.message,

@@ -30,7 +30,8 @@ says what exists, why, and how it maps to foreign languages.
   vault's `VaultStatus` message (`VaultStatus`, `HostReplication`). P0.20 added, compatibly,
   `SessionHead.queue` (`QueuedPrompt`, `PromptId`) and the `RemoveQueued`, `MoveQueued` and
   `SendQueuedNow` commands. The `SetResourceLimits` command, with `MAX_TURNS_LIMIT`, was
-  added compatibly too.
+  added compatibly too. Handing a session off between machines added, compatibly, the
+  `UploadHistory` command (`HistoryPart`) and `ForkSession`'s `relay` (`Relay`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -82,7 +83,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
 | Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal); `send`: `SwitchAccount`, `SwitchProvider` |
-| Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, `send` `ForkSession` to that host's machine (owners only) → `CommandResult::SessionForked`; the new session joins that machine's list, the original is left as it is |
+| Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from the session's machine while that is connected, else lets the destination read its vault |
 
 ## Reference
 
@@ -251,6 +252,7 @@ paired later are not passed on.
 
 | Before | Now | Why |
 | ------ | --- | --- |
+| — | `Client::fork_session` | Hand a session off to another machine without a vault: the client relays its history from the machine it runs on. |
 | — | `Client::set_addresses` | Users add addresses (a Tailscale name, a port-forward) and choose which route comes first. |
 | — | `Machine::address: Option<String>` | Apps show which route the connection uses. A new field breaks code that builds a `Machine`. |
 

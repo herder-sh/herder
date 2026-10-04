@@ -97,7 +97,7 @@ struct SettingsMenuTests {
         let section = SettingsSection(
             kind: .machine,
             options: [SettingsOption(id: "a", title: "A", current: true), SettingsOption(id: "b", title: "B")],
-            action: .init(title: "Fork Session…", symbol: "arrow.triangle.branch") { ran += 1 }
+            action: .init(title: "Fork Session", symbol: "arrow.triangle.branch") { ran += 1 }
         ) { chosen.append($0) }
         section.perform(.option(.machine, "a"))
         section.perform(.option(.machine, "b"))

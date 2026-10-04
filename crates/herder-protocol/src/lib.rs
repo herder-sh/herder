@@ -26,7 +26,7 @@ pub use attachment::{
     MAX_PROMPT_IMAGE_BYTES,
 };
 pub use bytes::Bytes;
-pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor};
+pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};
 pub use event::{
     AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalOutcome, CiStatus, ErrorClass,
     EscalationReason, Event, EventBody, Item, ItemBody, Mergeable, PrState, PullRequest,

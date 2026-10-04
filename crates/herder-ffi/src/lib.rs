@@ -26,7 +26,9 @@ use herder_client_core::{
     Machine, NewAccount, PairResult, PairingLink, PairingUri, SessionUpdate, SharedLink,
     TerminalEvent,
 };
-use herder_protocol::{CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId};
+use herder_protocol::{
+    AccountId, CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId,
+};
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
 
@@ -315,6 +317,25 @@ impl Client {
             &self.handle,
             async move { client.send(host_id, command).await },
         )
+        .await
+    }
+
+    /// Forks a session `source` lists onto `destination`: from its own journal there, else
+    /// relayed from the session's machine while it is connected, else from the destination's
+    /// vault; owners of `destination` only. Answers `session_forked`.
+    pub async fn fork_session(
+        &self,
+        source: HostId,
+        session_id: SessionId,
+        destination: HostId,
+        account_id: Option<AccountId>,
+    ) -> Result<CommandResult, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client
+                .fork_session(source, session_id, destination, account_id)
+                .await
+        })
         .await
     }
 

@@ -131,6 +131,38 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::ForkSession {
             session_id: session_id(),
             account_id: Some(AccountId::new("01J9ACCOUNT")),
+            relay: None,
+        }),
+        command(CommandBody::ForkSession {
+            session_id: session_id(),
+            account_id: None,
+            relay: Some(Relay {
+                host_id: HostId::new("trash-can-01"),
+                project_id: ProjectId::new("github.com/herder-sh/herder"),
+            }),
+        }),
+        command(CommandBody::UploadHistory {
+            session_id: session_id(),
+            part: HistoryPart::Events {
+                // Every event the daemon sends: a relayed history may hold any of them.
+                events: server_fixtures()
+                    .into_iter()
+                    .filter_map(|message| match message {
+                        ServerMessage::Event(event) => Some(event),
+                        _ => None,
+                    })
+                    .collect(),
+            },
+        }),
+        command(CommandBody::UploadHistory {
+            session_id: session_id(),
+            part: HistoryPart::Image {
+                attachment_id: AttachmentId::new("01J9ATTACHMENT"),
+                image: Image {
+                    media_type: "image/png".into(),
+                    data: Bytes(b"\x89PNG".to_vec()),
+                },
+            },
         }),
         command(CommandBody::AddProject {
             path: "/home/dev/herder".into(),
@@ -1439,11 +1471,34 @@ fn fork_and_vault_status_wire_shape() {
     let fork = serde_json::to_value(command(CommandBody::ForkSession {
         session_id: SessionId::new("s"),
         account_id: None,
+        relay: None,
     }))
     .unwrap();
     assert_eq!(
         fork["body"],
         json!({"type": "fork_session", "session_id": "s"})
+    );
+    let relayed = serde_json::to_value(command(CommandBody::ForkSession {
+        session_id: SessionId::new("s"),
+        account_id: None,
+        relay: Some(Relay {
+            host_id: HostId::new("h"),
+            project_id: ProjectId::new("p"),
+        }),
+    }))
+    .unwrap();
+    assert_eq!(
+        relayed["body"],
+        json!({"type": "fork_session", "session_id": "s", "relay": {"host_id": "h", "project_id": "p"}})
+    );
+    let upload = serde_json::to_value(command(CommandBody::UploadHistory {
+        session_id: SessionId::new("s"),
+        part: HistoryPart::Events { events: Vec::new() },
+    }))
+    .unwrap();
+    assert_eq!(
+        upload["body"],
+        json!({"type": "upload_history", "session_id": "s", "part": {"type": "events", "events": []}})
     );
     let status: ServerMessage = serde_json::from_value(json!({
         "type": "vault_status",

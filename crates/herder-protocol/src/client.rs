@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, HostId, Image,
-    PermissionMode, ProjectId, PromptId, Provider, QuestionId, Seq, SessionId, TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, Event, HostId,
+    Image, PermissionMode, ProjectId, PromptId, Provider, QuestionId, Seq, SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -63,6 +63,33 @@ pub struct Command {
     pub id: CommandId,
     /// What to do.
     pub body: CommandBody,
+}
+
+/// Where a relayed history comes from: the host the client read it from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Relay {
+    /// The host the session runs on.
+    pub host_id: HostId,
+    /// The session's project, as that host lists it; the fork works in this host's clone.
+    pub project_id: ProjectId,
+}
+
+/// A part of a relayed history; see `upload_history`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HistoryPart {
+    /// Events of the session's journal, in seq order, following the parts before.
+    Events {
+        /// The events.
+        events: Vec<Event>,
+    },
+    /// An image a prompt of the session carried, as `get_attachment` answers for it.
+    Image {
+        /// The image, as the prompt's `user_message` names it.
+        attachment_id: AttachmentId,
+        /// Its bytes.
+        image: Image,
+    },
 }
 
 /// What a command asks for.
@@ -135,17 +162,33 @@ pub enum CommandBody {
     },
     /// Fork a session onto this daemon's host: copy its history into a new session that goes
     /// on here, in a new worktree on a new branch restored from the session's latest
-    /// checkpoint; owners only. The session is looked up on this daemon, else in the vault it
-    /// replicates to, whether its own host is up or gone; the original is left as it is.
+    /// checkpoint; owners only. With `relay`, the history is the one the caller uploaded with
+    /// `upload_history`; without, the session is looked up on this daemon, else in the vault
+    /// it replicates to, whether its own host is up or gone. The original is left as it is.
     /// Answered with `session_forked`; the fork's journal marks it with the event
     /// `session_forked`, `by` the forking user. A task's child cannot be forked.
     ForkSession {
-        /// The session to fork, as this daemon or its vault lists it.
+        /// The session to fork, as this daemon, its vault or the relayed history has it.
         session_id: SessionId,
         /// Account the fork runs on; when absent, the session's account if this host has it,
         /// else its project's default account, else this host's first account of its provider.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<AccountId>,
+        /// Where the history the caller uploaded comes from; absent to look the session up
+        /// here or in the vault.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<Relay>,
+    },
+    /// Upload part of the history of another host's session, which the client read from that
+    /// host, for a `fork_session` with `relay` to fork; owners only. Parts add up per user
+    /// and session until that fork takes them; events starting at seq 1 start the upload over.
+    /// Parts not forked within ten minutes of the last one are dropped. Each part stays well
+    /// under a WebSocket message's size limit: a batch of events, or one image.
+    UploadHistory {
+        /// The session the history is of.
+        session_id: SessionId,
+        /// The part.
+        part: HistoryPart,
     },
     /// Start a turn with a prompt.
     SendPrompt {

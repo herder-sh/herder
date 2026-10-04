@@ -87,6 +87,36 @@
       "description": "Identifies a provider account on a host; the name its owner gave it, opaque to receivers.",
       "type": "string"
     },
+    "AgentMessage": {
+      "description": "Durable provenance for a message sent by another session on this host.",
+      "type": "object",
+      "properties": {
+        "hop_count": {
+          "description": "Trusted relay depth; a human-origin turn starts at zero.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "message_id": {
+          "description": "Caller-chosen stable delivery key, scoped to sender and destination.",
+          "type": "string"
+        },
+        "permission_ceiling": {
+          "description": "Maximum permissions this message may exercise, retained while queued.",
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "sender_session_id": {
+          "description": "Session authenticated by the caller's MCP token, never supplied by its prompt.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "sender_session_id",
+        "message_id",
+        "hop_count",
+        "permission_ceiling"
+      ]
+    },
     "Answer": {
       "description": "An answer to a question.",
       "oneOf": [
@@ -130,6 +160,42 @@
         }
       ]
     },
+    "Answerer": {
+      "description": "Who answered an approval request or question.",
+      "oneOf": [
+        {
+          "description": "A user, named by the event's `by`.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "user"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The primary session of the asking child's task.",
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "description": "The primary session.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "primary"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ]
+        }
+      ]
+    },
     "ApprovalDecision": {
       "description": "An answer to an approval request.",
       "oneOf": [
@@ -149,6 +215,51 @@
       "description": "Identifies an approval request within a session; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "ApprovalOutcome": {
+      "description": "How an approval request was resolved.",
+      "oneOf": [
+        {
+          "description": "The tool call ran once.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "The tool call was refused.",
+          "type": "string",
+          "const": "deny"
+        },
+        {
+          "description": "Nobody answered before its turn ended or the daemon restarted; the agent no longer waits\nfor it, and asks again in a later turn if it still needs to.",
+          "type": "string",
+          "const": "expired"
+        }
+      ]
+    },
+    "Attachment": {
+      "description": "An image a prompt carried, kept on the session's host.",
+      "type": "object",
+      "properties": {
+        "attachment_id": {
+          "description": "Fetches the bytes with `get_attachment`.",
+          "$ref": "#/$defs/AttachmentId"
+        },
+        "media_type": {
+          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "type": "string"
+        },
+        "size": {
+          "description": "Size of the image in bytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "attachment_id",
+        "media_type",
+        "size"
+      ]
+    },
     "AttachmentId": {
       "description": "Identifies an image a prompt carried, within its session; a ULID string, opaque.",
       "type": "string"
@@ -157,6 +268,31 @@
       "description": "Raw bytes, encoded as a standard padded base64 string.",
       "type": "string",
       "contentEncoding": "base64"
+    },
+    "CiStatus": {
+      "description": "Combined status of a pull request's checks.",
+      "oneOf": [
+        {
+          "description": "No checks reported.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Checks still running.",
+          "type": "string",
+          "const": "pending"
+        },
+        {
+          "description": "Every check passed.",
+          "type": "string",
+          "const": "passing"
+        },
+        {
+          "description": "At least one check failed.",
+          "type": "string",
+          "const": "failing"
+        }
+      ]
     },
     "ClientHello": {
       "description": "Opening message of a client connection.",
@@ -391,7 +527,7 @@
           ]
         },
         {
-          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. The session is looked up on this daemon, else in the vault it\nreplicates to, whether its own host is up or gone; the original is left as it is.\nAnswered with `session_forked`; the fork's journal marks it with the event\n`session_forked`, `by` the forking user. A task's child cannot be forked.",
+          "description": "Fork a session onto this daemon's host: copy its history into a new session that goes\non here, in a new worktree on a new branch restored from the session's latest\ncheckpoint; owners only. With `relay`, the history is the one the caller uploaded with\n`upload_history`; without, the session is looked up on this daemon, else in the vault\nit replicates to, whether its own host is up or gone. The original is left as it is.\nAnswered with `session_forked`; the fork's journal marks it with the event\n`session_forked`, `by` the forking user. A task's child cannot be forked.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -405,8 +541,19 @@
                 }
               ]
             },
+            "relay": {
+              "description": "Where the history the caller uploaded comes from; absent to look the session up\nhere or in the vault.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Relay"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "session_id": {
-              "description": "The session to fork, as this daemon or its vault lists it.",
+              "description": "The session to fork, as this daemon, its vault or the relayed history has it.",
               "$ref": "#/$defs/SessionId"
             },
             "type": {
@@ -417,6 +564,29 @@
           "required": [
             "type",
             "session_id"
+          ]
+        },
+        {
+          "description": "Upload part of the history of another host's session, which the client read from that\nhost, for a `fork_session` with `relay` to fork; owners only. Parts add up per user\nand session until that fork takes them; events starting at seq 1 start the upload over.\nParts not forked within ten minutes of the last one are dropped. Each part stays well\nunder a WebSocket message's size limit: a batch of events, or one image.",
+          "type": "object",
+          "properties": {
+            "part": {
+              "description": "The part.",
+              "$ref": "#/$defs/HistoryPart"
+            },
+            "session_id": {
+              "description": "The session the history is of.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "upload_history"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "part"
           ]
         },
         {
@@ -1279,6 +1449,822 @@
         "after_seq"
       ]
     },
+    "ErrorClass": {
+      "description": "Kind of turn failure.",
+      "oneOf": [
+        {
+          "description": "The account hit a usage limit; the only class that may trigger failover.",
+          "type": "string",
+          "const": "limit_reached"
+        },
+        {
+          "description": "The account's provider login is missing or expired.",
+          "type": "string",
+          "const": "auth"
+        },
+        {
+          "description": "A temporary failure; retrying may succeed.",
+          "type": "string",
+          "const": "transient"
+        },
+        {
+          "description": "A permanent failure; retrying will not help.",
+          "type": "string",
+          "const": "fatal"
+        }
+      ]
+    },
+    "EscalationReason": {
+      "description": "Why a child's approval request or question goes to the user instead of its primary session.",
+      "oneOf": [
+        {
+          "description": "The primary session marked it as the user's decision.",
+          "type": "string",
+          "const": "marked_by_primary"
+        },
+        {
+          "description": "It exceeds what the primary session may decide.",
+          "type": "string",
+          "const": "exceeds_authority"
+        },
+        {
+          "description": "The primary session did not answer in time.",
+          "type": "string",
+          "const": "timeout"
+        }
+      ]
+    },
+    "Event": {
+      "description": "One journal record: `seq` orders it within its session, `by` names the user who caused it.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "When the daemon recorded the event.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "body": {
+          "description": "What happened.",
+          "$ref": "#/$defs/EventBody"
+        },
+        "by": {
+          "description": "User whose command caused the event; absent when the agent or the daemon caused it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UserId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seq": {
+          "description": "Position in the session's journal, gap-free from 1.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "session_id": {
+          "description": "Session whose journal holds this event.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "seq",
+        "at",
+        "body"
+      ]
+    },
+    "EventBody": {
+      "description": "What a durable event records.\n\nA task is a primary session that spawns child sessions. Each child is a full session with\nits own journal; the primary's journal records `child_spawned` and `child_reported`. A\nchild's approvals and questions are journaled in the child's own journal, whoever answers\nthem.",
+      "oneOf": [
+        {
+          "description": "The session exists: one repo, one worktree and branch, on this host.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Starting account.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "branch": {
+              "description": "Branch the session owns.",
+              "type": "string"
+            },
+            "failover_pin": {
+              "description": "Whether the session stays on its account when it hits a limit; absent for the\ndaemon's `[failover] pin`.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "max_children": {
+              "description": "Most live children this session may have as a task's primary; absent for the\ndaemon's limit.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "model": {
+              "description": "Starting model, in the provider's own naming.",
+              "type": "string"
+            },
+            "parent": {
+              "description": "Primary session of the task this session is a child of; absent for a top-level session.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "permission_mode": {
+              "description": "Starting permission mode.",
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "provider": {
+              "description": "Provider of the starting account.",
+              "$ref": "#/$defs/Provider"
+            },
+            "repo": {
+              "description": "Absolute path of the repository on the host.",
+              "type": "string"
+            },
+            "task": {
+              "description": "Short label of the session's task, shown in the task tree.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_created"
+            },
+            "worktree": {
+              "description": "Absolute path of the session's worktree on the host.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repo",
+            "worktree",
+            "branch",
+            "provider",
+            "account_id",
+            "model",
+            "permission_mode"
+          ]
+        },
+        {
+          "description": "The session's worktree had a branch checked out that the session had not had before.\nThe session owns it from then on, including after its worktree is removed. The branch\nin `session_created` is the session's first and gets no event of its own.",
+          "type": "object",
+          "properties": {
+            "branch": {
+              "description": "The branch, as a short name such as `herder/1a2b3c4d`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "branch_checked_out"
+            }
+          },
+          "required": [
+            "type",
+            "branch"
+          ]
+        },
+        {
+          "description": "The session's status changed.",
+          "type": "object",
+          "properties": {
+            "retry_at": {
+              "description": "When a usage-limited turn is retried. Present only while waiting_for_capacity\nmeans waiting for an account's limit reset rather than host admission.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "status": {
+              "description": "New status.",
+              "$ref": "#/$defs/SessionStatus"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_status_changed"
+            }
+          },
+          "required": [
+            "type",
+            "status"
+          ]
+        },
+        {
+          "description": "The agent started working on a prompt.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "description": "The new turn.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn_started"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id"
+          ]
+        },
+        {
+          "description": "The turn finished normally.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "description": "The finished turn.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn_completed"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id"
+          ]
+        },
+        {
+          "description": "The turn was stopped by an interrupt command.",
+          "type": "object",
+          "properties": {
+            "turn_id": {
+              "description": "The stopped turn.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn_interrupted"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id"
+          ]
+        },
+        {
+          "description": "The turn ended with an error.",
+          "type": "object",
+          "properties": {
+            "error": {
+              "description": "Why it failed.",
+              "$ref": "#/$defs/TurnError"
+            },
+            "turn_id": {
+              "description": "The failed turn.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "turn_failed"
+            }
+          },
+          "required": [
+            "type",
+            "turn_id",
+            "error"
+          ]
+        },
+        {
+          "description": "A complete item joined the transcript.",
+          "type": "object",
+          "properties": {
+            "item": {
+              "description": "The item, in its final form.",
+              "$ref": "#/$defs/Item"
+            },
+            "type": {
+              "type": "string",
+              "const": "item_added"
+            }
+          },
+          "required": [
+            "type",
+            "item"
+          ]
+        },
+        {
+          "description": "The agent is blocked until someone allows or denies a tool call.",
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "description": "The request, answered by this id.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "reason": {
+              "description": "Why a child's request went straight to the user; absent when it follows the default route.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EscalationReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "routed_to": {
+              "description": "Who is asked first; a user can always answer, whatever the route.",
+              "$ref": "#/$defs/Route",
+              "default": "user"
+            },
+            "summary": {
+              "description": "One-line description of what the agent wants to do.",
+              "type": "string"
+            },
+            "tool_call_id": {
+              "description": "Tool call item awaiting permission.",
+              "$ref": "#/$defs/ItemId"
+            },
+            "turn_id": {
+              "description": "Turn that is blocked.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "approval_requested"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "turn_id",
+            "tool_call_id",
+            "summary"
+          ]
+        },
+        {
+          "description": "A request routed to the primary session now waits for the user.",
+          "type": "object",
+          "properties": {
+            "approval_id": {
+              "description": "The escalated request.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "note": {
+              "description": "What the primary session told the user about it, as Markdown; absent when it said nothing.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "description": "Why it was escalated.",
+              "$ref": "#/$defs/EscalationReason"
+            },
+            "type": {
+              "type": "string",
+              "const": "approval_escalated"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "reason"
+          ]
+        },
+        {
+          "description": "A user or the primary session answered an approval request, or the daemon closed it\nas `expired`.",
+          "type": "object",
+          "properties": {
+            "answered_by": {
+              "description": "Who answered; `by` names the user when it is a user. An `expired` request has no `by`\nand is `user`.",
+              "$ref": "#/$defs/Answerer",
+              "default": {
+                "type": "user"
+              }
+            },
+            "approval_id": {
+              "description": "The resolved request.",
+              "$ref": "#/$defs/ApprovalId"
+            },
+            "decision": {
+              "description": "How it was resolved.",
+              "$ref": "#/$defs/ApprovalOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "approval_resolved"
+            }
+          },
+          "required": [
+            "type",
+            "approval_id",
+            "decision"
+          ]
+        },
+        {
+          "description": "The agent is blocked until someone answers a question; cleared when its turn ends.",
+          "type": "object",
+          "properties": {
+            "choices": {
+              "description": "Answers to pick from; empty for a free-text answer.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "question_id": {
+              "description": "The question, answered by this id.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "reason": {
+              "description": "Why a child's question went straight to the user; absent when it follows the default route.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EscalationReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "routed_to": {
+              "description": "Who is asked first; a user can always answer, whatever the route.",
+              "$ref": "#/$defs/Route"
+            },
+            "text": {
+              "description": "The question, as Markdown.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "Turn that is blocked.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_asked"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "turn_id",
+            "text",
+            "choices",
+            "routed_to"
+          ]
+        },
+        {
+          "description": "A question routed to the primary session now waits for the user.",
+          "type": "object",
+          "properties": {
+            "note": {
+              "description": "What the primary session told the user about it, as Markdown; absent when it said nothing.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "question_id": {
+              "description": "The escalated question.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "reason": {
+              "description": "Why it was escalated.",
+              "$ref": "#/$defs/EscalationReason"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_escalated"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "reason"
+          ]
+        },
+        {
+          "description": "A user or the primary session answered a question.",
+          "type": "object",
+          "properties": {
+            "answer": {
+              "description": "The answer.",
+              "$ref": "#/$defs/Answer"
+            },
+            "answered_by": {
+              "description": "Who answered; `by` names the user when it is a user.",
+              "$ref": "#/$defs/Answerer"
+            },
+            "question_id": {
+              "description": "The answered question.",
+              "$ref": "#/$defs/QuestionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "question_answered"
+            }
+          },
+          "required": [
+            "type",
+            "question_id",
+            "answer",
+            "answered_by"
+          ]
+        },
+        {
+          "description": "This session spawned a child session for part of its task.",
+          "type": "object",
+          "properties": {
+            "child_session_id": {
+              "description": "The child, whose `session_created` names this session as its parent.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "task": {
+              "description": "Short label of the child's task.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "child_spawned"
+            }
+          },
+          "required": [
+            "type",
+            "child_session_id",
+            "task"
+          ]
+        },
+        {
+          "description": "A child session finished a turn and reported back.",
+          "type": "object",
+          "properties": {
+            "child_session_id": {
+              "description": "The child.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "summary": {
+              "description": "The child's final assistant message of that turn, or a short status when it failed.",
+              "type": "string"
+            },
+            "turn_id": {
+              "description": "The child's turn that ended.",
+              "$ref": "#/$defs/TurnId"
+            },
+            "type": {
+              "type": "string",
+              "const": "child_reported"
+            }
+          },
+          "required": [
+            "type",
+            "child_session_id",
+            "turn_id",
+            "summary"
+          ]
+        },
+        {
+          "description": "The model changed within the same provider.",
+          "type": "object",
+          "properties": {
+            "model": {
+              "description": "New model, in the provider's own naming.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "model_switched"
+            }
+          },
+          "required": [
+            "type",
+            "model"
+          ]
+        },
+        {
+          "description": "The account changed within the same provider; `by` is absent when the daemon rotated\nthe session off an account that hit its limit.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "New account.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "type": {
+              "type": "string",
+              "const": "account_switched"
+            }
+          },
+          "required": [
+            "type",
+            "account_id"
+          ]
+        },
+        {
+          "description": "The session moved to another provider by transcript replay, at a user's request; a\nfailover never changes the provider.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "New account, of that provider.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "model": {
+              "description": "New model, in that provider's own naming.",
+              "type": "string"
+            },
+            "provider": {
+              "description": "New provider.",
+              "$ref": "#/$defs/Provider"
+            },
+            "type": {
+              "type": "string",
+              "const": "provider_switched"
+            }
+          },
+          "required": [
+            "type",
+            "provider",
+            "account_id",
+            "model"
+          ]
+        },
+        {
+          "description": "The permission mode changed.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "description": "New permission mode.",
+              "$ref": "#/$defs/PermissionMode"
+            },
+            "type": {
+              "type": "string",
+              "const": "permission_mode_changed"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ]
+        },
+        {
+          "description": "A pull request is now tracked for the session; `by` is absent when auto-detected.",
+          "type": "object",
+          "properties": {
+            "pr": {
+              "description": "The pull request as first seen.",
+              "$ref": "#/$defs/PullRequest"
+            },
+            "type": {
+              "type": "string",
+              "const": "pr_linked"
+            }
+          },
+          "required": [
+            "type",
+            "pr"
+          ]
+        },
+        {
+          "description": "A tracked pull request changed; carries its full new state.",
+          "type": "object",
+          "properties": {
+            "pr": {
+              "description": "The pull request as now seen.",
+              "$ref": "#/$defs/PullRequest"
+            },
+            "type": {
+              "type": "string",
+              "const": "pr_updated"
+            }
+          },
+          "required": [
+            "type",
+            "pr"
+          ]
+        },
+        {
+          "description": "A pull request is no longer tracked for the session.",
+          "type": "object",
+          "properties": {
+            "number": {
+              "description": "Number of the pull request in the session's repository.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "pr_unlinked"
+            }
+          },
+          "required": [
+            "type",
+            "number"
+          ]
+        },
+        {
+          "description": "The session's title changed; `by` names the user for a `user` or `ai_requested` title.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "Who chose it.",
+              "$ref": "#/$defs/TitleSource"
+            },
+            "title": {
+              "description": "New title, as [`crate::clean_title`] returns it.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "title_changed"
+            }
+          },
+          "required": [
+            "type",
+            "title",
+            "source"
+          ]
+        },
+        {
+          "description": "The session was forked here, `by` the user who forked it: the history before this event\nis that of the session it was forked from.",
+          "type": "object",
+          "properties": {
+            "from_host": {
+              "description": "The host that session ran on.",
+              "$ref": "#/$defs/HostId"
+            },
+            "from_session": {
+              "description": "The session it was forked from.",
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_forked"
+            }
+          },
+          "required": [
+            "type",
+            "from_session",
+            "from_host"
+          ]
+        }
+      ]
+    },
+    "HistoryPart": {
+      "description": "A part of a relayed history; see `upload_history`.",
+      "oneOf": [
+        {
+          "description": "Events of the session's journal, in seq order, following the parts before.",
+          "type": "object",
+          "properties": {
+            "events": {
+              "description": "The events.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Event"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "events"
+            }
+          },
+          "required": [
+            "type",
+            "events"
+          ]
+        },
+        {
+          "description": "An image a prompt of the session carried, as `get_attachment` answers for it.",
+          "type": "object",
+          "properties": {
+            "attachment_id": {
+              "description": "The image, as the prompt's `user_message` names it.",
+              "$ref": "#/$defs/AttachmentId"
+            },
+            "image": {
+              "description": "Its bytes.",
+              "$ref": "#/$defs/Image"
+            },
+            "type": {
+              "type": "string",
+              "const": "image"
+            }
+          },
+          "required": [
+            "type",
+            "attachment_id",
+            "image"
+          ]
+        }
+      ]
+    },
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
@@ -1299,6 +2285,191 @@
       "required": [
         "media_type",
         "data"
+      ]
+    },
+    "Item": {
+      "description": "One entry of the transcript.",
+      "type": "object",
+      "properties": {
+        "agent_message": {
+          "description": "Authenticated agent sender of a prompt. Only the daemon sets this; absent for humans.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentMessage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "body": {
+          "description": "The item's content.",
+          "$ref": "#/$defs/ItemBody"
+        },
+        "id": {
+          "description": "The item.",
+          "$ref": "#/$defs/ItemId"
+        },
+        "parent_call_id": {
+          "description": "Spawning tool call for provider-native sub-agent content, in the same turn.\nNone identifies the main conversation. This ancestry survives journal replay.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_id": {
+          "description": "Turn the item belongs to.",
+          "$ref": "#/$defs/TurnId"
+        }
+      },
+      "required": [
+        "id",
+        "turn_id",
+        "body"
+      ]
+    },
+    "ItemBody": {
+      "description": "Content of a transcript item.",
+      "oneOf": [
+        {
+          "description": "A prompt from a user; the author is the event's `by`.",
+          "type": "object",
+          "properties": {
+            "attachments": {
+              "description": "Images sent with the prompt, in order; `get_attachment` fetches their bytes.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Attachment"
+              }
+            },
+            "text": {
+              "description": "Prompt text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "user_message"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Text the agent wrote to the user.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Message text, as Markdown.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "assistant_message"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The agent's visible reasoning, when the provider exposes it.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "description": "Reasoning text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "The agent invoked a tool.",
+          "type": "object",
+          "properties": {
+            "input": {
+              "description": "Tool arguments, as the provider sent them."
+            },
+            "name": {
+              "description": "Tool name, in the provider's own naming.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "type",
+            "name",
+            "input"
+          ]
+        },
+        {
+          "description": "A tool finished.",
+          "type": "object",
+          "properties": {
+            "call_id": {
+              "description": "Tool call item this result answers.",
+              "$ref": "#/$defs/ItemId"
+            },
+            "is_error": {
+              "description": "Whether the tool reported failure.",
+              "type": "boolean"
+            },
+            "output": {
+              "description": "Tool output text.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_result"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "output",
+            "is_error"
+          ]
+        }
+      ]
+    },
+    "ItemId": {
+      "description": "Identifies an item within a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "Mergeable": {
+      "description": "Whether a pull request can merge cleanly.",
+      "oneOf": [
+        {
+          "description": "Merges cleanly.",
+          "type": "string",
+          "const": "clean"
+        },
+        {
+          "description": "Has conflicts with its base.",
+          "type": "string",
+          "const": "conflicting"
+        },
+        {
+          "description": "GitHub has not computed it yet.",
+          "type": "string",
+          "const": "unknown"
+        }
       ]
     },
     "PermissionMode": {
@@ -1326,6 +2497,31 @@
         }
       ]
     },
+    "PrState": {
+      "description": "Lifecycle state of a pull request.",
+      "oneOf": [
+        {
+          "description": "Draft, not ready for review.",
+          "type": "string",
+          "const": "draft"
+        },
+        {
+          "description": "Open for review.",
+          "type": "string",
+          "const": "open"
+        },
+        {
+          "description": "Merged.",
+          "type": "string",
+          "const": "merged"
+        },
+        {
+          "description": "Closed without merging.",
+          "type": "string",
+          "const": "closed"
+        }
+      ]
+    },
     "ProjectId": {
       "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
       "type": "string"
@@ -1346,16 +2542,212 @@
         "gemini"
       ]
     },
+    "PullRequest": {
+      "description": "A GitHub pull request tracked for a session.",
+      "type": "object",
+      "properties": {
+        "ci": {
+          "description": "Combined status of required checks.",
+          "$ref": "#/$defs/CiStatus"
+        },
+        "head_branch": {
+          "description": "Branch the pull request merges from, as a short name; absent from events journaled\nbefore herder recorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mergeable": {
+          "description": "Whether it can merge cleanly.",
+          "$ref": "#/$defs/Mergeable"
+        },
+        "number": {
+          "description": "Number in the session's repository.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "review": {
+          "description": "Review verdict.",
+          "$ref": "#/$defs/ReviewStatus"
+        },
+        "state": {
+          "description": "Lifecycle state.",
+          "$ref": "#/$defs/PrState"
+        },
+        "title": {
+          "description": "Title.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Web URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "number",
+        "url",
+        "title",
+        "state",
+        "ci",
+        "review",
+        "mergeable"
+      ]
+    },
     "QuestionId": {
       "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "Relay": {
+      "description": "Where a relayed history comes from: the host the client read it from.",
+      "type": "object",
+      "properties": {
+        "host_id": {
+          "description": "The host the session runs on.",
+          "$ref": "#/$defs/HostId"
+        },
+        "project_id": {
+          "description": "The session's project, as that host lists it; the fork works in this host's clone.",
+          "$ref": "#/$defs/ProjectId"
+        }
+      },
+      "required": [
+        "host_id",
+        "project_id"
+      ]
+    },
+    "ReviewStatus": {
+      "description": "Review verdict on a pull request.",
+      "oneOf": [
+        {
+          "description": "No review required or given.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "Waiting for a required review.",
+          "type": "string",
+          "const": "required"
+        },
+        {
+          "description": "Approved.",
+          "type": "string",
+          "const": "approved"
+        },
+        {
+          "description": "A reviewer requested changes.",
+          "type": "string",
+          "const": "changes_requested"
+        }
+      ]
+    },
+    "Route": {
+      "description": "Who an approval request or question is put to first.",
+      "oneOf": [
+        {
+          "description": "The primary session of the asking child's task.",
+          "type": "string",
+          "const": "primary"
+        },
+        {
+          "description": "A user.",
+          "type": "string",
+          "const": "user"
+        }
+      ]
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "SessionStatus": {
+      "description": "Where a session stands, as shown in lists.",
+      "oneOf": [
+        {
+          "description": "Waiting for a prompt.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
+          "type": "string",
+          "const": "running"
+        },
+        {
+          "description": "A prompt waits for host capacity or its reported usage reset (retry_at); the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+          "type": "string",
+          "const": "waiting_for_capacity"
+        },
+        {
+          "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
+          "type": "string",
+          "const": "needs_you"
+        },
+        {
+          "description": "Cannot continue without intervention.",
+          "type": "string",
+          "const": "error"
+        },
+        {
+          "description": "Put away by a user; read-only.",
+          "type": "string",
+          "const": "archived"
+        },
+        {
+          "description": "Handed off to another host; read-only here.",
+          "type": "string",
+          "const": "moved"
+        }
+      ]
+    },
     "TerminalId": {
       "description": "Identifies a terminal on a host; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "TitleSource": {
+      "description": "Who chose a session's title.",
+      "oneOf": [
+        {
+          "description": "The daemon's automatic titler, unasked; it replaces only an earlier `auto` title.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "Generated from the conversation so far at a user's `retitle_session`, which `by` names.\nIt replaces any earlier title, a `user` one too; the automatic titler leaves it alone.",
+          "type": "string",
+          "const": "ai_requested"
+        },
+        {
+          "description": "Typed by a user in `rename_session`; the automatic titler leaves it alone.",
+          "type": "string",
+          "const": "user"
+        }
+      ]
+    },
+    "TurnError": {
+      "description": "Why a turn failed.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "description": "What kind of failure, which decides what can be done about it.",
+          "$ref": "#/$defs/ErrorClass"
+        },
+        "message": {
+          "description": "Human-readable detail from the provider or daemon.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "message"
+      ]
+    },
+    "TurnId": {
+      "description": "Identifies a turn within a session; a ULID string, opaque to receivers.",
+      "type": "string"
+    },
+    "UserId": {
+      "description": "Identifies a named user of a daemon; a ULID string, opaque to receivers.",
       "type": "string"
     }
   }

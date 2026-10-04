@@ -390,6 +390,8 @@ struct Inner {
     titling: Mutex<()>,
     /// Where forks find sessions, updated when the vault link changes ([`SessionManager::fork_from`]).
     forks: std::sync::RwLock<Option<Arc<fork::Forks>>>,
+    /// Histories clients relay for forks, until the fork takes them.
+    uploads: fork::Uploads,
     shutdown: CancellationToken,
 }
 
@@ -501,6 +503,7 @@ impl SessionManager {
                 titler: OnceLock::new(),
                 titling: Mutex::new(()),
                 forks: std::sync::RwLock::new(None),
+                uploads: fork::Uploads::default(),
                 shutdown,
             }),
         })
@@ -575,15 +578,20 @@ impl SessionManager {
                     .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
             }
             CommandBody::AddProject { path } => return self.add_project(&path).await,
+            CommandBody::UploadHistory { session_id, part } => {
+                self.upload_history(by, session_id, part).await?;
+                return Ok(CommandResult::Applied);
+            }
             CommandBody::ForkSession {
                 session_id,
                 account_id,
+                relay,
             } => {
                 let request = fork::Request {
                     session_id,
                     account_id,
                 };
-                let forked = self.fork(request, Some(by)).await?;
+                let forked = self.fork(request, relay, Some(by)).await?;
                 return Ok(CommandResult::SessionForked {
                     session_id: forked.session_id,
                     account_id: forked.account_id,

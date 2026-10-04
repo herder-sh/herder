@@ -54,6 +54,8 @@ struct SettingsOption: Hashable, Identifiable {
     var current = false
     /// Why it cannot be picked, if it cannot.
     var unavailable: String?
+    /// What to pick within it instead, as a machine's accounts; it opens them when picked.
+    var children: [SettingsOption] = []
 
     /// Accounts on a machine, each with its provider and busiest usage window.
     static func accounts(_ accounts: [Account], current: AccountId?) -> [SettingsOption] {
@@ -89,19 +91,40 @@ struct SettingsSection: Identifiable {
     let options: [SettingsOption]
     /// What picking another option does, when that is more than a switch.
     var hint: String?
-    /// A last row that is not an option, as "Fork Session…" under the machines.
+    /// A last row that is not an option, as "Fork Session" under the machines.
     var action: Action?
+    /// Picks an option's child: the option, then the child.
+    var chooseChild: ((SettingsOption.ID, SettingsOption.ID) -> Void)?
     let choose: (SettingsOption.ID) -> Void
     var id: Kind { kind }
 
-    /// Picks an entry of the section: another option, or its action; the current option
-    /// changes nothing.
+    /// Picks an entry of the section: another option, one of an option's children, or its
+    /// action; the current option, and one with children, change nothing.
     func perform(_ entry: ModelMenu.Entry) {
         switch entry {
-        case .option(_, let id) where options.first(where: { $0.id == id })?.current == false: choose(id)
+        case .option(_, let id):
+            if let option = options.first(where: { $0.id == id }), !option.current, option.children.isEmpty {
+                choose(id)
+            }
+        case .child(_, let parent, let id): chooseChild?(parent, id)
         case .action: action?.run()
         default: break
         }
+    }
+
+    /// Whether `entry` opens an option's children rather than picking it.
+    func opens(_ entry: ModelMenu.Entry) -> Bool {
+        guard case .option(_, let id) = entry else { return false }
+        return options.first { $0.id == id }?.children.isEmpty == false
+    }
+
+    /// The entries the arrow keys move through: the options that can be picked, the children
+    /// of the `expanded` one, and the action.
+    func entries(expanded: SettingsOption.ID?) -> [ModelMenu.Entry] {
+        options.filter { $0.unavailable == nil }.flatMap { option in
+            [ModelMenu.Entry.option(kind, option.id)]
+                + (option.id == expanded ? option.children.map { .child(kind, option.id, $0.id) } : [])
+        } + (action?.enabled == true ? [.action(kind)] : [])
     }
 
     struct Action {
@@ -125,6 +148,8 @@ struct ModelMenu: View {
     /// Typing a model by name rather than filtering.
     @State private var custom = false
     @State private var highlighted: Entry?
+    /// The option whose children show.
+    @State private var expanded: SettingsOption.ID?
     @FocusState private var focus: Focus?
 
     private enum Focus { case field, list }
@@ -133,7 +158,7 @@ struct ModelMenu: View {
         /// The settings section it is in, if any.
         var section: SettingsSection.Kind? {
             switch self {
-            case .option(let kind, _), .action(let kind): kind
+            case .option(let kind, _), .child(let kind, _, _), .action(let kind): kind
             default: nil
             }
         }
@@ -141,6 +166,8 @@ struct ModelMenu: View {
         case model(ModelCatalog.Choice)
         case other
         case option(SettingsSection.Kind, SettingsOption.ID)
+        /// A child of an option: the option, then the child.
+        case child(SettingsSection.Kind, SettingsOption.ID, SettingsOption.ID)
         case action(SettingsSection.Kind)
     }
 
@@ -153,10 +180,7 @@ struct ModelMenu: View {
     private var entries: [Entry] {
         filtered.flatMap { group in group.models.map { Entry.model(.init(provider: group.provider, model: $0.id)) } }
             + (custom ? [] : [.other])
-            + shownSections.flatMap { section in
-                section.options.filter { $0.unavailable == nil }.map { Entry.option(section.kind, $0.id) }
-                    + (section.action?.enabled == true ? [.action(section.kind)] : [])
-            }
+            + shownSections.flatMap { $0.entries(expanded: expanded) }
     }
     private var showsField: Bool { custom || groups.map(\.models.count).reduce(0, +) >= Self.filterFrom }
     private var typed: String { query.trimmingCharacters(in: .whitespaces) }
@@ -212,7 +236,7 @@ struct ModelMenu: View {
         ScrollViewReader { proxy in
             ScrollView {
                 ModelMenuRows(groups: filtered, current: current, sections: shownSections, query: typed,
-                              highlighted: $highlighted, pick: activate)
+                              highlighted: $highlighted, expanded: $expanded, pick: activate)
             }
             .frame(maxHeight: 520)
             .fixedSize(horizontal: false, vertical: true)
@@ -257,6 +281,10 @@ struct ModelMenu: View {
         } else if case .model(let choice) = entry {
             choose(choice)
         } else if let entry, let section = sections.first(where: { $0.kind == entry.section }) {
+            if section.opens(entry), case .option(_, let id) = entry {
+                expanded = expanded == id ? nil : id
+                return
+            }
             dismiss()
             section.perform(entry)
         }
@@ -271,6 +299,7 @@ struct ModelMenuRows: View {
     var sections: [SettingsSection] = []
     let query: String
     @Binding var highlighted: ModelMenu.Entry?
+    @Binding var expanded: SettingsOption.ID?
     let pick: (ModelMenu.Entry) -> Void
 
     var body: some View {
@@ -310,7 +339,7 @@ struct ModelMenuRows: View {
             }
             ForEach(sections) { section in
                 MenuDivider()
-                SettingsSectionRows(section: section, highlighted: $highlighted, pick: pick)
+                SettingsSectionRows(section: section, highlighted: $highlighted, expanded: $expanded, pick: pick)
             }
         }
         .padding(6)
@@ -318,10 +347,12 @@ struct ModelMenuRows: View {
 }
 
 /// A settings section's rows under its heading: the option's icon and name, its detail (an
-/// account's usage with a meter), the current one checked.
+/// account's usage with a meter), the current one checked. An option with children has a
+/// chevron and shows them indented under it while expanded.
 struct SettingsSectionRows: View {
     let section: SettingsSection
     @Binding var highlighted: ModelMenu.Entry?
+    @Binding var expanded: SettingsOption.ID?
     let pick: (ModelMenu.Entry) -> Void
 
     var body: some View {
@@ -343,10 +374,36 @@ struct SettingsSectionRows: View {
                 if let detail = option.detail {
                     Text(detail).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
                 }
-                Checkmark(shown: option.current)
+                if option.children.isEmpty {
+                    Checkmark(shown: option.current)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.tertiary)
+                        .rotationEffect(.degrees(expanded == option.id ? 90 : 0))
+                        .frame(width: 14)
+                }
             }
             .disabled(option.unavailable != nil)
             .opacity(option.unavailable == nil ? 1 : 0.5)
+            if expanded == option.id {
+                ForEach(option.children) { child in
+                    MenuRow(entry: .child(section.kind, option.id, child.id), highlighted: $highlighted, pick: pick) {
+                        if let provider = child.provider {
+                            ProviderMark(provider: provider, size: 13).frame(width: 16)
+                        }
+                        Text(child.title).foregroundStyle(Theme.text).lineLimit(1)
+                        Spacer(minLength: 8)
+                        if let usage = child.usage {
+                            UsageMeter(percent: usage)
+                        }
+                        if let detail = child.detail {
+                            Text(detail).font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                        }
+                    }
+                    .padding(.leading, 24)
+                }
+            }
         }
         if let action = section.action {
             MenuRow(entry: .action(section.kind), highlighted: $highlighted, pick: pick) {
@@ -435,18 +492,24 @@ struct UsageMeter: View {
 }
 
 /// A footer item under the composer: an icon, the current option and a chevron, opening the
-/// section's rows in a popover.
+/// section's rows in a popover; a spinner for the icon while `busy`.
 struct FooterMenu: View {
     let section: SettingsSection
     let text: String
     var help: String?
+    var busy = false
     @State private var open = false
     @State private var highlighted: ModelMenu.Entry?
+    @State private var expanded: SettingsOption.ID?
 
     var body: some View {
         Button { open.toggle() } label: {
             HStack(spacing: 5) {
-                Image(systemName: section.kind.symbol)
+                if busy {
+                    ProgressView().controlSize(.mini).tint(Theme.secondary)
+                } else {
+                    Image(systemName: section.kind.symbol)
+                }
                 Text(text).lineLimit(1)
                 Image(systemName: "chevron.down").font(.caption2)
             }
@@ -459,7 +522,11 @@ struct FooterMenu: View {
         .help(help ?? section.kind.rawValue)
         .popover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 1) {
-                SettingsSectionRows(section: section, highlighted: $highlighted) { entry in
+                SettingsSectionRows(section: section, highlighted: $highlighted, expanded: $expanded) { entry in
+                    if section.opens(entry), case .option(_, let id) = entry {
+                        expanded = expanded == id ? nil : id
+                        return
+                    }
                     open = false
                     section.perform(entry)
                 }

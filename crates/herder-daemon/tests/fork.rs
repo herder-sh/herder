@@ -19,9 +19,9 @@ use herder_daemon::vault::fork::FromVault;
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
-    AccountId, Bytes, CommandBody, CommandResult, ErrorCode, Event, EventBody, HostId, Image,
-    ItemBody, PermissionMode, Project, ProjectId, Provider, SessionId, SessionStatus, TurnId,
-    UserId,
+    AccountId, Bytes, CommandBody, CommandResult, ErrorCode, Event, EventBody, HistoryPart, HostId,
+    Image, ItemBody, PermissionMode, Project, ProjectId, Provider, Relay, SessionId, SessionStatus,
+    TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::net::TcpListener;
@@ -349,6 +349,7 @@ impl HostDaemon {
             .handle(CommandBody::ForkSession {
                 session_id: session_id.clone(),
                 account_id: None,
+                relay: None,
             })
             .await
             .unwrap();
@@ -563,6 +564,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         .handle(CommandBody::ForkSession {
             session_id: session_id.clone(),
             account_id: None,
+            relay: None,
         })
         .await
         .unwrap_err();
@@ -578,6 +580,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         .handle(CommandBody::ForkSession {
             session_id: session_id.clone(),
             account_id: None,
+            relay: None,
         })
         .await
         .unwrap();
@@ -727,8 +730,200 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         .handle(CommandBody::ForkSession {
             session_id: SessionId::new("nope"),
             account_id: None,
+            relay: None,
         })
         .await
         .unwrap_err();
     assert_eq!(missing.code, ErrorCode::NotFound, "{missing:?}");
+}
+
+/// A vault nothing answers at: a host configured with it forks only what it holds or is
+/// relayed.
+fn dead_vault() -> VaultConfig {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    VaultConfig::new(address, "00".repeat(32), None)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    clones(tmp.path(), &[&a_dir, &b_dir]);
+    let a = HostDaemon::start(&a_dir, "host-a", "a-account", "fork_a.jsonl", dead_vault()).await;
+    let created = a
+        .handle(CommandBody::CreateSession {
+            repo: None,
+            project_id: Some(project()),
+            branch: None,
+            account_id: Some(AccountId::new("a-account")),
+            provider: None,
+            model: None,
+            permission_mode: Some(PermissionMode::Ask),
+            max_children: None,
+            failover_pin: None,
+        })
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a created session, got {created:?}");
+    };
+    let a_worktree = a.sessions.worktree(&session_id).await.unwrap();
+    std::fs::write(a_worktree.join("notes.txt"), "half done\n").unwrap();
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\nscreenshot".to_vec()),
+    };
+    a.prompt_with(&session_id, "First.", vec![image.clone()])
+        .await
+        .unwrap();
+    let a_journal = a
+        .journal_until(&session_id, |body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    retry_at: None,
+                    status: SessionStatus::Idle
+                }
+            )
+        })
+        .await;
+    let checkpoint = format!("refs/herder/{session_id}/turn-1");
+    let origin = tmp.path().join("origin.git");
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while !git(&origin, &["for-each-ref", "--format=%(refname)"]).contains(&checkpoint) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the checkpoint never reached origin"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let attachment_id = a_journal
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { attachments, .. } => {
+                    attachments.first().map(|a| a.attachment_id.clone())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+
+    // Host B has a vault, which does not answer: a relayed history needs none.
+    let b = HostDaemon::start(&b_dir, "host-b", "b-account", "fork_b.jsonl", dead_vault()).await;
+    let relay = || {
+        Some(Relay {
+            host_id: HostId::new("host-a"),
+            project_id: project(),
+        })
+    };
+    let fork_relayed = |relay| CommandBody::ForkSession {
+        session_id: session_id.clone(),
+        account_id: None,
+        relay,
+    };
+    let upload = |events: Vec<Event>| CommandBody::UploadHistory {
+        session_id: session_id.clone(),
+        part: HistoryPart::Events { events },
+    };
+
+    // Nothing uploaded: nothing to fork.
+    let refused = b.handle(fork_relayed(relay())).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+    // An upload starts at the first event.
+    let refused = b.handle(upload(a_journal[1..].to_vec())).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::BadRequest, "{refused:?}");
+    // A history with a gap, one with another session's event, and a task child's are refused,
+    // and each fork takes its upload, so the next starts afresh.
+    let mut gap = a_journal.clone();
+    gap.remove(2);
+    let mut mixed = a_journal.clone();
+    mixed[3].session_id = SessionId::new("other");
+    let mut child = a_journal.clone();
+    if let EventBody::SessionCreated { parent, .. } = &mut child[0].body {
+        *parent = Some(SessionId::new("primary"));
+    }
+    for (history, code) in [
+        (gap, ErrorCode::BadRequest),
+        (mixed, ErrorCode::BadRequest),
+        (child, ErrorCode::Unsupported),
+    ] {
+        b.handle(upload(history)).await.unwrap();
+        let refused = b.handle(fork_relayed(relay())).await.unwrap_err();
+        assert_eq!(refused.code, code, "{refused:?}");
+        let again = b.handle(fork_relayed(relay())).await.unwrap_err();
+        assert!(again.message.contains("no history"), "{again:?}");
+    }
+    // A history claiming to be of B itself is not taken.
+    b.handle(upload(a_journal.clone())).await.unwrap();
+    let refused = b
+        .handle(fork_relayed(Some(Relay {
+            host_id: HostId::new("host-b"),
+            project_id: project(),
+        })))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::NotFound, "{refused:?}");
+    // Without the relay, B looks in its vault, which does not answer.
+    b.handle(upload(a_journal.clone())).await.unwrap();
+    let refused = b.handle(fork_relayed(None)).await.unwrap_err();
+    assert!(refused.message.contains("vault"), "{refused:?}");
+
+    // The whole history, in two parts and the image, forks onto B.
+    let (first, rest) = a_journal.split_at(2);
+    b.handle(upload(first.to_vec())).await.unwrap();
+    b.handle(upload(rest.to_vec())).await.unwrap();
+    b.handle(CommandBody::UploadHistory {
+        session_id: session_id.clone(),
+        part: HistoryPart::Image {
+            attachment_id,
+            image: image.clone(),
+        },
+    })
+    .await
+    .unwrap();
+    let forked = b.handle(fork_relayed(relay())).await.unwrap();
+    let CommandResult::SessionForked {
+        session_id: fork,
+        account_id,
+        forked_from,
+        from_host_id,
+    } = forked
+    else {
+        panic!("expected a fork, got {forked:?}");
+    };
+    assert_eq!(
+        (account_id.as_str(), &forked_from, from_host_id.as_str()),
+        ("b-account", &session_id, "host-a")
+    );
+    let b_worktree = b.sessions.worktree(&fork).await.unwrap();
+    assert!(b_worktree.starts_with(&b_dir));
+    assert_eq!(
+        std::fs::read_to_string(b_worktree.join("notes.txt")).unwrap(),
+        "half done\n"
+    );
+    // The history is imported as it was, under the fork's id, then marked as forked by the
+    // user who forked it.
+    let b_journal = b.journal(&fork).await;
+    for (b_event, a_event) in b_journal.iter().zip(&a_journal).skip(1) {
+        assert_eq!(
+            (b_event.seq, &b_event.by, &b_event.body),
+            (a_event.seq, &a_event.by, &a_event.body)
+        );
+    }
+    let tail = &b_journal[a_journal.len()..];
+    assert!(
+        matches!(&tail[0].body, EventBody::SessionForked { from_session, from_host }
+            if *from_session == session_id && from_host.as_str() == "host-a"),
+        "{:?}",
+        tail[0].body
+    );
+    assert_eq!(tail[0].by, Some(alice()));
+    assert_eq!(b.images(&fork, &b_journal).await, [image]);
+    // The upload was taken.
+    let again = b.handle(fork_relayed(relay())).await.unwrap_err();
+    assert!(again.message.contains("no history"), "{again:?}");
 }

@@ -12,12 +12,12 @@ use herder_protocol::{
     Account, AccountId, AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalId,
     ApprovalOutcome, Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult,
     Constraint, Container, ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
-    EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId, HostReplication,
-    HostResources, HostUsage, Image, Item, ItemBody, ItemId, LinkedVault, Mergeable,
-    PermissionMode, PrState, Pressure, Project, ProjectId, PromptId, Provider, PullRequest,
-    QuestionId, QueuedPrompt, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
-    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
-    UsageWindow, UserId, VaultStatus, VaultVolume,
+    EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HistoryPart, HostId,
+    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LinkedVault,
+    Mergeable, PermissionMode, PrState, Pressure, Project, ProjectId, PromptId, Provider,
+    PullRequest, QuestionId, QueuedPrompt, Relay, ReviewStatus, Role, Route, SessionHead,
+    SessionId, SessionStatus, SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -507,6 +507,11 @@ pub enum CommandBody {
     ForkSession {
         session_id: SessionId,
         account_id: Option<AccountId>,
+        relay: Option<Relay>,
+    },
+    UploadHistory {
+        session_id: SessionId,
+        part: HistoryPart,
     },
     SendPrompt {
         session_id: SessionId,
@@ -646,6 +651,23 @@ pub enum CommandBody {
 pub struct Image {
     pub media_type: String,
     pub data: Bytes,
+}
+
+#[uniffi::remote(Record)]
+pub struct Relay {
+    pub host_id: HostId,
+    pub project_id: ProjectId,
+}
+
+#[uniffi::remote(Enum)]
+pub enum HistoryPart {
+    Events {
+        events: Vec<Event>,
+    },
+    Image {
+        attachment_id: AttachmentId,
+        image: Image,
+    },
 }
 
 #[uniffi::remote(Enum)]
