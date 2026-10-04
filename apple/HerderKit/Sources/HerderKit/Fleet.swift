@@ -214,7 +214,7 @@ public final class Fleet {
                        about: key)
             return
         }
-        let outgoing = Outgoing(text: text, images: images.map(\.data))
+        let outgoing = Outgoing(text: text, images: images)
         sessions[key]?.outbox.append(outgoing)
         await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images), about: key)
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {

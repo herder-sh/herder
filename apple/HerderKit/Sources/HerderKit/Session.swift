@@ -707,7 +707,7 @@ struct Outgoing: Hashable, Identifiable {
     let id = UUID()
     let text: String
     /// The images sent with it, shown until the session takes it.
-    var images: [Data] = []
+    var images: [Herder.Image] = []
     var state: State = .sending
 }
 
