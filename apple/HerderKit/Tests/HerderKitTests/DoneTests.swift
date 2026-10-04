@@ -67,7 +67,7 @@ struct DoneTests {
         let lists = Lists(machines: machines, sessions: sessions, done: [finished.key])
         #expect(lists.projects.first?.state == .done)
         #expect(lists.projects.first?.live.first { $0.key == finished.key }?.state == .done)
-        #expect(lists.recent.first { $0.key == finished.key }?.state == .done)
+        #expect(lists.home.first { $0.key == finished.key }?.state == .done)
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))

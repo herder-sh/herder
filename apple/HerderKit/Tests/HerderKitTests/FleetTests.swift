@@ -77,7 +77,7 @@ struct FleetTests {
         let sessionId = key.sessionId
 
         #expect(await eventually {
-            fleet.lists.recent.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
+            fleet.lists.home.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
         })
         #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
 
