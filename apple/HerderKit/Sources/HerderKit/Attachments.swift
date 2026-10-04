@@ -100,7 +100,8 @@ enum ImageAttachment {
 extension NSItemProvider {
     @MainActor func loadData(type: UTType) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
-            _ = loadDataRepresentation(for: type) { data, error in
+            // The provider answers on a queue of its own, not the main actor's.
+            _ = loadDataRepresentation(for: type) { @Sendable data, error in
                 if let data { continuation.resume(returning: data) } else {
                     continuation.resume(throwing: error ?? CocoaError(.fileReadUnknown))
                 }
