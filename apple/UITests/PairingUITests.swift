@@ -1,9 +1,11 @@
 import XCTest
 
-/// Drives the app against the fake daemon whose pairing link is in `HERDER_PAIR_LINK` (pass it
-/// to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`).
+/// Drives the app against the fake daemons whose shared pairing link is in `HERDER_PAIR_LINK`
+/// (`fake_daemon --share` prints it; pass it to `xcodebuild test` as
+/// `TEST_RUNNER_HERDER_PAIR_LINK`).
 final class PairingUITests: XCTestCase {
-    func testPairingWithALinkShowsTheMachineConnected() throws {
+    @MainActor
+    func testPairingWithASharedLinkPairsEveryMachine() throws {
         let link = try XCTUnwrap(
             ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
         let app = XCUIApplication()
@@ -14,10 +16,15 @@ final class PairingUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText(link)
+        XCTAssertTrue(app.staticTexts["3 · CHECK THEY ARE YOUR 2 MACHINES"].waitForExistence(timeout: 5))
         app.buttons["Pair"].tap()
 
-        XCTAssertTrue(app.staticTexts["1 machine connected"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["Machines"].tap()
-        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 5))
+        // Each machine's result.
+        XCTAssertTrue(app.staticTexts["fake-host-1"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["fake-host-2"].exists)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Paired").count, 2)
+        app.buttons["Done"].tap()
+
+        XCTAssertTrue(app.staticTexts["All 2 machines connected"].waitForExistence(timeout: 15))
     }
 }
