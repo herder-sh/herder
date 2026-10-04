@@ -24,17 +24,30 @@ struct ComposerBox<Footer: View>: View {
     let stop: () -> Void
     @ViewBuilder var footer: Footer
     @FocusState private var focused: Bool
+    /// Long pastes, shown as chips and sent in place of their markers.
+    @State private var pastes: [String] = []
     @State private var imageError: String?
     @State private var dictation = Dictation()
     /// The text before dictation started; what is heard follows it.
     @State private var dictatedAfter = ""
     #if os(macOS)
-    @State private var pasteMonitor: Any?
+    @State private var editing = false
     #endif
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
+                #if os(macOS)
+                PromptEditor(
+                    text: $text, focused: $editing, images: images, pastes: pastes,
+                    addImages: add, addPaste: addPaste, submit: submit)
+                    .overlay(alignment: .topLeading) {
+                        if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
+                #else
                 if !images.isEmpty { AttachmentStrip(images: images, remove: remove) }
                 TextField(placeholder, text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -53,6 +66,7 @@ struct ComposerBox<Footer: View>: View {
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .accessibilityIdentifier("composer")
+                #endif
                 HStack(spacing: 4) {
                     ModelPicker(groups: models, current: current, choose: choose)
                     Divider().frame(height: 16).overlay(Theme.stroke)
@@ -103,11 +117,11 @@ struct ComposerBox<Footer: View>: View {
                 .padding(.bottom, 10)
             }
             .background(Theme.surface, in: .rect(cornerRadius: 22))
-            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(focused ? Theme.secondary.opacity(0.5) : Theme.stroke))
+            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(isFocused ? Theme.secondary.opacity(0.5) : Theme.stroke))
             .contentShape(.rect)
-            .onTapGesture { focused = true }
+            .onTapGesture { focus() }
             .onDrop(of: [.image], isTargeted: nil) { providers in
-                Task { add(await ImageAttachment.load(providers)) }
+                Task { text += add(await ImageAttachment.load(providers)) }
                 return true
             }
             HStack(spacing: 14) { footer }
@@ -120,10 +134,27 @@ struct ComposerBox<Footer: View>: View {
                             in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
                 .padding(.horizontal, 18)
         }
-        .onAppear { focused = true }
+        .onAppear { focus() }
+        .onChange(of: text) {
+            // A chip deleted from the text takes its image or paste with it.
+            PromptText.prune(.image, items: &images, text: &text)
+            PromptText.prune(.paste, items: &pastes, text: &text)
+        }
+    }
+
+    private var isFocused: Bool {
         #if os(macOS)
-        .onChange(of: focused) { watchPaste(focused) }
-        .onDisappear { watchPaste(false) }
+        editing
+        #else
+        focused
+        #endif
+    }
+
+    private func focus() {
+        #if os(macOS)
+        editing = true
+        #else
+        focused = true
         #endif
     }
 
@@ -131,6 +162,8 @@ struct ComposerBox<Footer: View>: View {
 
     private func submit() {
         dictation.stop()
+        text = PromptText.expand(text, pastes: pastes)
+        pastes = []
         send()
     }
 
@@ -140,52 +173,39 @@ struct ComposerBox<Footer: View>: View {
             return
         }
         dictatedAfter = text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") ? text : text + " "
-        focused = true
+        focus()
         Task { await dictation.start { heard in text = dictatedAfter + heard } }
     }
 
-    /// Removes an image and its marker, renumbering the markers after it.
     private func remove(_ index: Int) {
-        images.remove(at: index)
-        text = text.replacingOccurrences(of: "[Image #\(index + 1)] ", with: "")
-            .replacingOccurrences(of: "[Image #\(index + 1)]", with: "")
-        for number in (index + 2)...(images.count + 1) where number > index + 1 {
-            text = text.replacingOccurrences(of: "[Image #\(number)]", with: "[Image #\(number - 1)]")
-        }
+        PromptText.remove(.image, at: index, items: &images, text: &text)
     }
 
-    /// Adds images and a `[Image #N]` marker for each to the text, numbered in the order they
-    /// go to the agent, so the prompt can refer to them.
-    private func add(_ added: [Herder.Image]) {
-        for image in added {
+    /// Adds images; returns a `[Image #N]` marker for each, numbered in the order they go to
+    /// the agent, so the prompt can refer to them.
+    private func add(_ added: [Herder.Image]) -> String {
+        added.map { image in
             images.append(image)
-            let marker = "[Image #\(images.count)]"
-            text += text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") ? marker + " " : " " + marker + " "
+            return PromptText.marker(.image, images.count)
         }
+        .map { marker in text.isEmpty || text.hasSuffix(" ") || text.hasSuffix("\n") ? marker + " " : " " + marker + " " }
+        .joined()
+    }
+
+    /// Keeps a long paste; returns its `[Pasted text #N]` marker.
+    private func addPaste(_ pasted: String) -> String {
+        pastes.append(pasted)
+        return PromptText.marker(.paste, pastes.count) + " "
     }
 
     #if os(macOS)
-    /// While the box has focus, ⌘V with an image on the clipboard attaches it; text pastes as usual.
-    private func watchPaste(_ on: Bool) {
-        if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
-        pasteMonitor = nil
-        guard on else { return }
-        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" else { return event }
-            let pasted = ImageAttachment.fromPasteboard()
-            guard !pasted.isEmpty else { return event }
-            add(pasted)
-            return nil
-        }
-    }
-
     private func attach() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
         guard panel.runModal() == .OK else { return }
         do {
-            add(try panel.urls.map { url in
+            text += add(try panel.urls.map { url in
                 try ImageAttachment.make(try Data(contentsOf: url), type: UTType(filenameExtension: url.pathExtension))
             })
             imageError = nil
