@@ -4,15 +4,20 @@
 //! # What changes in the repository
 //!
 //! Worktrees share the repository's hooks dir, so herder never writes there. Instead each
-//! session worktree gets its own hooks dir, `<data_dir>/hooks/<session>`, through per-worktree
-//! config:
+//! session gets its own hooks dir, `<data_dir>/hooks/<session>`, which git uses through:
 //!
-//! - `extensions.worktreeConfig = true` in the repository's config, when it is not on yet,
-//!   with `herder.worktreeConfig = true` recording that herder turned it on. Both are removed
+//! - `core.hooksPath = <data_dir>/hooks/<session>` in the session worktree's
+//!   `config.worktree`, which goes away with the worktree. This needs
+//!   `extensions.worktreeConfig = true` in the repository's config; when it is not on yet,
+//!   herder turns it on and records that with `herder.worktreeConfig = true`. Both are removed
 //!   again when the last session worktree is archived and no worktree has a `config.worktree`
 //!   left.
-//! - `core.hooksPath = <data_dir>/hooks/<session>` in the session worktree's
-//!   `config.worktree`, which goes away with the worktree.
+//! - the same `core.hooksPath` in the environment of the session's CLI, as
+//!   `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` (see [`add_to_env`]).
+//!   Everything the agent runs inherits it, so its git commands use the session's hooks in
+//!   whichever worktree they run: also in worktrees the agent adds itself, which git creates
+//!   without the session worktree's config. Claude Code's `Agent` tool, for one, adds them
+//!   under the main worktree's `.claude/worktrees/`.
 //!
 //! A repository whose shared config sets `core.worktree` is left alone: turning the extension
 //! on would change how git reads it. Its sessions get no hooks.
@@ -20,8 +25,10 @@
 //! # The hooks
 //!
 //! Every client-side hook in a session's hooks dir first runs the repository's own hook of
-//! that name, from the hooks dir the worktree used before (its `core.hooksPath`, else
-//! `.git/hooks`), and fails when it fails. Three also report to herder:
+//! that name, from the hooks dir it would use without herder's (the `core.hooksPath` of any
+//! scope but the worktree's and the environment's, else the repository's `hooks` dir), and
+//! fails when it fails. In the session's repository, three also report to herder; in any other
+//! repository the agent works in, they only run its own hooks:
 //!
 //! - `pre-push` sends the pushed branches to the daemon over the Unix socket
 //!   `<data_dir>/hooks.sock`. It never fails a push: an unreachable daemon is a warning.
@@ -29,9 +36,9 @@
 //!   message, unless it is empty. `prepare-commit-msg` runs even under `--no-verify`;
 //!   `commit-msg` catches a message written in the editor.
 //!
-//! The scripts are rewritten every time the daemon starts, picking up the current binary and
-//! hooks dir.
+//! The scripts are rewritten every time the daemon starts, picking up the current binary.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -120,11 +127,15 @@ pub(crate) async fn install(
         git(worktree, ["config", "extensions.worktreeConfig", "true"]).await?;
         git(worktree, ["config", "herder.worktreeConfig", "true"]).await?;
     }
-    let own = own_hooks_dir(worktree).await?;
+    let common = git(
+        worktree,
+        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .await?;
     let dir = hooks_dir.join(session_id.as_str());
     let scripts = HOOKS
         .iter()
-        .map(|name| (*name, script(name, &own, herder, socket, session_id)))
+        .map(|name| (*name, script(name, &common, herder, socket, session_id)))
         .collect::<Vec<_>>();
     let written = dir.clone();
     tokio::task::spawn_blocking(move || write_scripts(&written, &scripts))
@@ -214,39 +225,6 @@ fn worktree_configs_left(common: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// The hooks dir the worktree would use without herder's: the last `core.hooksPath` from any
-/// scope but the worktree's, else the repository's `hooks` dir. A relative path stays relative:
-/// git runs hooks from the worktree's top level, where it resolves as git would resolve it.
-async fn own_hooks_dir(worktree: &Path) -> Result<String> {
-    let scoped = git(
-        worktree,
-        [
-            "config",
-            "--type=path",
-            "--show-scope",
-            "--get-all",
-            "core.hooksPath",
-        ],
-    )
-    .await
-    .unwrap_or_default();
-    let configured = scoped
-        .lines()
-        .filter_map(|line| line.split_once('\t'))
-        .filter(|(scope, _)| *scope != "worktree")
-        .map(|(_, path)| path.to_owned())
-        .next_back();
-    if let Some(path) = configured {
-        return Ok(path);
-    }
-    let common = git(
-        worktree,
-        ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-    )
-    .await?;
-    Ok(format!("{common}/hooks"))
-}
-
 fn write_scripts(dir: &Path, scripts: &[(&str, String)]) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     for (name, script) in scripts {
@@ -260,14 +238,27 @@ fn write_scripts(dir: &Path, scripts: &[(&str, String)]) -> Result<()> {
     Ok(())
 }
 
-/// The script of hook `name`: run the repository's own hook, then report what herder needs.
-fn script(name: &str, own: &str, herder: &Path, socket: &Path, session_id: &SessionId) -> String {
-    let own = quote(&format!("{own}/{name}"));
+/// The script of hook `name` for `session_id`, whose repository's common dir is `common`: run
+/// the repository's own hook, then, in the session's repository, report what herder needs.
+fn script(
+    name: &str,
+    common: &str,
+    herder: &Path,
+    socket: &Path,
+    session_id: &SessionId,
+) -> String {
+    let common = quote(common);
     let herder = quote(&herder.to_string_lossy());
     let session = quote(session_id.as_str());
+    // A relative `core.hooksPath` stays relative: git runs hooks from the worktree's top level,
+    // where it resolves as git would resolve it.
     let header = format!(
         "#!/bin/sh\n# Installed by herder for session {session_id}. Runs this repository's own\n\
-         # {name} hook, then reports to the herder daemon.\nown={own}\n"
+         # {name} hook, then, in the session's repository, reports to the herder daemon.\n\
+         own=$(git config --type=path --show-scope --get-all core.hooksPath 2>/dev/null |\n\
+         \x20 grep -v -e '^worktree' -e '^command' | tail -n 1 | cut -f 2-)\n\
+         own=\"${{own:-$(git rev-parse --path-format=absolute --git-common-dir)/hooks}}/{name}\"\n\
+         session_repo() {{ [ \"$(git rev-parse --path-format=absolute --git-common-dir)\" = {common} ]; }}\n"
     );
     match name {
         "pre-push" => {
@@ -277,16 +268,45 @@ fn script(name: &str, own: &str, herder: &Path, socket: &Path, session_id: &Sess
                  if [ -x \"$own\" ]; then\n\
                  \x20 if [ -n \"$input\" ]; then printf '%s\\n' \"$input\"; fi | \"$own\" \"$@\" || exit $?\n\
                  fi\n\
+                 session_repo || exit 0\n\
                  if [ -n \"$input\" ]; then printf '%s\\n' \"$input\"; fi |\n\
                  \x20 {herder} hook pre-push --socket {socket} --session {session} \"$@\" || true\n"
             )
         }
         "prepare-commit-msg" | "commit-msg" => format!(
             "{header}if [ -x \"$own\" ]; then \"$own\" \"$@\" || exit $?; fi\n\
+             session_repo || exit 0\n\
              {herder} hook {name} --session {session} \"$1\" || true\n"
         ),
         _ => format!("{header}if [ -x \"$own\" ]; then exec \"$own\" \"$@\"; fi\n"),
     }
+}
+
+/// Adds `core.hooksPath = <hooks_dir>/<session>` to `env`, the environment of the session's
+/// CLI, after any config entries it carries already. Leaves `env` alone when the session has
+/// no hooks, so the repository's own hooks keep running.
+pub(crate) fn add_to_env(
+    env: &mut BTreeMap<String, String>,
+    hooks_dir: &Path,
+    session_id: &SessionId,
+) {
+    let dir = hooks_dir.join(session_id.as_str());
+    if !dir.is_dir() {
+        return;
+    }
+    let count: usize = env
+        .get("GIT_CONFIG_COUNT")
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0);
+    env.insert(
+        format!("GIT_CONFIG_KEY_{count}"),
+        "core.hooksPath".to_owned(),
+    );
+    env.insert(
+        format!("GIT_CONFIG_VALUE_{count}"),
+        dir.to_string_lossy().into_owned(),
+    );
+    env.insert("GIT_CONFIG_COUNT".to_owned(), (count + 1).to_string());
 }
 
 /// Single-quotes `value` for `sh`.
@@ -426,6 +446,31 @@ mod tests {
         assert_eq!(trailer_sessions(message).collect::<Vec<_>>(), ["01ABC"]);
         assert_eq!(trailer_sessions("herder-session:  01X  ").count(), 1);
         assert_eq!(trailer_sessions("Herder-Session:").count(), 0);
+    }
+
+    #[test]
+    fn the_hooks_path_goes_after_the_config_already_in_the_environment() {
+        let hooks = tempfile::tempdir().unwrap();
+        let session = SessionId::new("01ABC");
+        let mut env = BTreeMap::from([
+            ("GIT_CONFIG_COUNT".to_owned(), "1".to_owned()),
+            ("GIT_CONFIG_KEY_0".to_owned(), "user.name".to_owned()),
+            ("GIT_CONFIG_VALUE_0".to_owned(), "me".to_owned()),
+        ]);
+        let unchanged = env.clone();
+        // No hooks installed: the repository's own hooks must keep running.
+        add_to_env(&mut env, hooks.path(), &session);
+        assert_eq!(env, unchanged);
+
+        fs::create_dir(hooks.path().join("01ABC")).unwrap();
+        add_to_env(&mut env, hooks.path(), &session);
+        assert_eq!(env["GIT_CONFIG_COUNT"], "2");
+        assert_eq!(env["GIT_CONFIG_KEY_0"], "user.name");
+        assert_eq!(env["GIT_CONFIG_KEY_1"], "core.hooksPath");
+        assert_eq!(
+            Path::new(&env["GIT_CONFIG_VALUE_1"]),
+            hooks.path().join("01ABC")
+        );
     }
 
     #[test]

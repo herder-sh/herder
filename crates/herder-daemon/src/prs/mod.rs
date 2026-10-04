@@ -13,8 +13,11 @@
 //!
 //! or when one of its commits carries the session's `Herder-Session` trailer, which the
 //! worktree's commit hooks add; this catches a branch renamed on GitHub, or pushed under a
-//! name herder never saw. A closed or merged pull request found by branch only counts when it
-//! was opened after the session was created, so a reused branch name does not pull in history.
+//! name herder never saw. The agent's git commands run the session's hooks in any worktree of
+//! the repository, so pushes and commits from worktrees the agent adds itself, such as those
+//! of Claude Code's `Agent` tool, count as the session's too. A closed or merged pull request
+//! found by branch only counts when it was opened after the session was created, so a reused
+//! branch name does not pull in history.
 //!
 //! Pull requests found this way are linked with `pr_linked` (no `by`). A user can link any pull
 //! request of the repository with `link_pr`, and unlink one with `unlink_pr`; an unlinked pull
@@ -40,7 +43,7 @@
 mod github;
 pub mod hooks;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -219,6 +222,16 @@ impl PrTracker {
         if let Err(err) = installed {
             warn!(%session_id, "cannot install git hooks: {err:#}");
         }
+    }
+
+    /// Points git at the session's hooks in `env`, the environment of the session's CLI, so the
+    /// agent's git commands run them in any worktree; see [`hooks`].
+    pub(crate) fn add_hooks_to_env(
+        &self,
+        env: &mut BTreeMap<String, String>,
+        session_id: &SessionId,
+    ) {
+        hooks::add_to_env(env, &self.hooks_dir(), session_id);
     }
 
     /// Removes the session's hooks, and the repository config they needed once no worktree

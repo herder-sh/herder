@@ -1784,6 +1784,9 @@ impl Actor {
             processes::SESSION_ENV.to_owned(),
             session.session_id.to_string(),
         );
+        if let Some(prs) = self.inner.prs.get() {
+            prs.add_hooks_to_env(&mut env, &session.session_id);
+        }
         if let Some(native_id) = self.carry_over(account.config_dir.as_deref(), &env).await {
             let request = self.start_request(&account, env.clone(), Vec::new(), Some(native_id))?;
             match adapter.start(request).await {
