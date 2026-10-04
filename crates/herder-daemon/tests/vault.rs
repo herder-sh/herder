@@ -121,7 +121,7 @@ impl Vault {
                     .send((addr, fingerprint, auth, server.admin()))
                     .ok()
                     .unwrap();
-                server.run(listener, CancellationToken::new()).await;
+                server.run(vec![listener], CancellationToken::new()).await;
             }
         });
         let (addr, fingerprint, auth, admin) = ready.await.unwrap();

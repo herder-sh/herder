@@ -12,6 +12,7 @@ metadata:
 data:
   daemon.toml: |
     mode = "vault"
+    # One address or a list, e.g. ["127.0.0.1:7447", "10.0.0.4:7447"]; every interface here.
     listen = "0.0.0.0:7447"
     # A subdirectory, so the vault creates it private to itself.
     data_dir = "/data/herder"

@@ -143,6 +143,8 @@ impl Backend for TestBackend {
 /// A running server, with the journal writer the session manager would own.
 struct Daemon {
     addr: SocketAddr,
+    /// A second address the server listens on, as a daemon given a list of them does.
+    other: SocketAddr,
     fingerprint: String,
     auth: Arc<Auth>,
     /// A device paired as the owner.
@@ -170,6 +172,8 @@ impl Daemon {
         let hub = Arc::new(Hub::default());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let other_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let other = other_listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();
         let host = Host {
             id: HostId::new("host"),
@@ -197,9 +201,10 @@ impl Daemon {
             Logins::default(),
             host,
         );
-        tokio::spawn(server.run(listener, shutdown.clone()));
+        tokio::spawn(server.run(vec![listener, other_listener], shutdown.clone()));
         Arc::new(Self {
             addr,
+            other,
             fingerprint,
             auth,
             owner,
@@ -844,6 +849,18 @@ async fn share(client: &mut Client, id: &str) -> (String, String, Vec<String>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_listen_address_serves_clients() {
+    let daemon = Daemon::start().await;
+    for addr in [daemon.other, daemon.addr] {
+        let mut client = Client::connect(addr, &daemon.fingerprint, &daemon.owner, None, None)
+            .await
+            .unwrap();
+        let hello = client.hello(Vec::new()).await;
+        assert_eq!(hello.role, Role::Owner);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paired_device_pairs_another_as_its_own_user_and_role() {
     let daemon = Daemon::start().await;
     let member = DeviceKey::generate().unwrap();
@@ -856,8 +873,11 @@ async fn a_paired_device_pairs_another_as_its_own_user_and_role() {
     for (client, sharer) in [(&mut owner, &owner_hello), (&mut bob, &bob_hello)] {
         let (code, fingerprint, addresses) = share(client, "share").await;
         assert_eq!(fingerprint, daemon.fingerprint);
-        // The daemon's own addresses: bound to one, it advertises that one.
-        assert_eq!(addresses, [daemon.addr.to_string()]);
+        // The daemon's own addresses: bound to two, it advertises both, in order.
+        assert_eq!(
+            addresses,
+            [daemon.addr.to_string(), daemon.other.to_string()]
+        );
         let phone = DeviceKey::generate().unwrap();
         let mut paired = daemon.client_on(&phone, Some(&code)).await;
         let hello = paired.hello(Vec::new()).await;

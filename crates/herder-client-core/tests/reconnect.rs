@@ -161,7 +161,7 @@ impl Daemon {
                 host,
             );
             started.send((addr, fingerprint, auth, hub)).ok().unwrap();
-            server.run(listener, shutdown).await;
+            server.run(vec![listener], shutdown).await;
         });
         let (addr, fingerprint, auth, hub) = ready.await.unwrap();
         Self {

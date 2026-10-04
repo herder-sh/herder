@@ -7,6 +7,7 @@ pub mod config;
 pub mod data_dir;
 pub mod handoff;
 pub mod hub;
+mod listen;
 pub mod logging;
 pub mod login;
 pub mod mcp;
@@ -24,7 +25,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use herder_protocol::HostId;
-use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -212,16 +212,15 @@ pub async fn serve(
         fresh: usage::FRESH,
     })?;
     sessions.resume().await?;
-    let listener = TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("listening on {}", config.listen))?;
+    let listeners = listen::bind(&config.listen).await?;
+    let listen = listen::local_addrs(&listeners)?;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
         Arc::clone(&auth),
         auth::control::Daemon {
             fingerprint: tls.fingerprint().to_owned(),
-            listen: listener.local_addr()?,
+            listen: listen.clone(),
             sessions: Some(sessions.clone()),
             vault: None,
         },
@@ -230,7 +229,7 @@ pub async fn serve(
     info!(
         host_id = %data_dir.host_id(),
         data_dir = %data_dir.root().display(),
-        listen = %listener.local_addr()?,
+        listen = ?listen,
         tls_fingerprint = tls.fingerprint(),
         "herder daemon started"
     );
@@ -241,7 +240,7 @@ pub async fn serve(
     );
     let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
     server.link_vault(link)?;
-    server.run(listener, shutdown).await;
+    server.run(listeners, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");
     Ok(())
@@ -275,7 +274,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = Config {
             path: tmp.path().join("daemon.toml"),
-            listen: "127.0.0.1:0".parse().unwrap(),
+            listen: vec!["127.0.0.1:0".parse().unwrap()],
             data_dir: tmp.path().join("data"),
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),
