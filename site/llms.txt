@@ -1,0 +1,19 @@
+# herder
+
+> herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your accounts and all your machines. A daemon on each Linux machine drives each vendor's own, unmodified CLI; you watch and steer every session from a terminal UI, a Mac app, or a phone over SSH. When an account hits its usage limit, herder moves the session to another account of the same provider. herder never reads, stores, copies or relays provider login tokens. Free and open source, Apache-2.0, pre-1.0.
+
+Install on Linux (x86_64 or arm64): `curl -fsSL https://herder.sh/install | sh`, then `herder service install` to run the daemon at boot. Bare `herder` opens the terminal UI.
+
+## Docs
+
+- [Full description for LLMs](https://herder.sh/llms-full.txt): what herder does, install, features, scripting and FAQ in one file
+- [README](https://github.com/herder-sh/herder/blob/main/README.md): install, using herder from a phone, building from source
+- [Scripting sessions](https://github.com/herder-sh/herder/blob/main/crates/herder/README.md): `herder session new`, `send`, `wait`, `status`, with `--json`
+- [Vault](https://github.com/herder-sh/herder/blob/main/deploy/README.md): running the herder vault on Kubernetes and pairing hosts with it
+- [Mac and iPhone app](https://github.com/herder-sh/herder/blob/main/apple/README.md): building and installing the Apple apps
+
+## Optional
+
+- [Releases](https://github.com/herder-sh/herder/releases): Linux binaries and the Mac app
+- [Source code](https://github.com/herder-sh/herder)
+- [Licence](https://github.com/herder-sh/herder/blob/main/LICENSE): Apache-2.0
