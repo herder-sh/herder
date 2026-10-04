@@ -38,6 +38,7 @@ use crate::hub::Outbox;
 use crate::listen;
 use crate::login::{Logins, NewAccount};
 use crate::session::SessionManager;
+use crate::settings::Settings;
 use crate::terminal::{LoginHooks, Terminals};
 use crate::vault::Link;
 use commands::Commands;
@@ -153,6 +154,8 @@ struct Shared<B> {
     link: OnceLock<Arc<Link>>,
     /// The addresses the server listens on, set once it does; `pair_device` advertises them.
     listen: OnceLock<Vec<SocketAddr>>,
+    /// The daemon's settings, which answer the settings commands, once set.
+    settings: OnceLock<Arc<Settings>>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -239,6 +242,18 @@ impl<B: Backend> Shared<B> {
                 return link.command(command).await;
             }
             CommandBody::PairDevice => return self.pair_device(identity),
+            command @ (CommandBody::GetSettings
+            | CommandBody::SetSettings { .. }
+            | CommandBody::SetResourceLimits { .. }
+            | CommandBody::RestartDaemon) => {
+                return match self.settings.get() {
+                    Some(settings) => settings.command(command).await,
+                    None => Err(ErrorInfo {
+                        code: ErrorCode::Unsupported,
+                        message: "this daemon's settings are not changed from a client".to_owned(),
+                    }),
+                };
+            }
             command => return self.backend.command(identity, command_id, command).await,
         }
         Ok(CommandResult::Applied)
@@ -293,8 +308,17 @@ impl<B: Backend> Server<B> {
                 host,
                 link: OnceLock::new(),
                 listen: OnceLock::new(),
+                settings: OnceLock::new(),
             }),
         }
+    }
+
+    /// Answers the settings commands with `settings`; once per server.
+    pub fn manage_settings(&self, settings: Arc<Settings>) -> anyhow::Result<()> {
+        self.shared
+            .settings
+            .set(settings)
+            .map_err(|_| anyhow::anyhow!("the settings are managed already"))
     }
 
     /// Answers the vault link commands with `link`; once per server.

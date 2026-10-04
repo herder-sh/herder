@@ -58,8 +58,12 @@
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
-//! are admitted within; see [`ResourcesConfig`] for its keys and defaults. An owner changing
-//! the turn limit from a client sets its `max_turns` ([`set_max_turns`]).
+//! are admitted within; see [`ResourcesConfig`] for its keys and defaults.
+//!
+//! # Settings from a client
+//!
+//! An owner changes every daemon-wide key from a client ([`set_settings`]): only the keys whose
+//! value changed are written, in place, keeping the rest of the file as written.
 //!
 //! Accounts added from a client ([`crate::login`]) are appended to this file as new
 //! `[[accounts]]` entries, which creates it when it does not exist yet; the rest of the file is
@@ -154,7 +158,10 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use herder_protocol::{AccountId, PermissionMode, ProjectId, Provider};
+use herder_protocol::{
+    AccountId, BackupSettings, DaemonSettings, LogSettings, PermissionMode, ProjectDiscovery,
+    ProjectId, Provider, ProviderBinary, ResourceSettings, TaskSettings, TitleSettings,
+};
 use serde::Deserialize;
 
 use crate::accounts;
@@ -453,33 +460,108 @@ impl Config {
                 (path, file)
             }
         };
-        let data_dir = match file.data_dir {
-            Some(dir) => dir,
-            None => xdg_dir(&env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
-        };
-        let listen = resolve_listen(file.listen)?;
-        file.resources.validate()?;
-        let accounts = resolve_accounts(file.accounts, &env)?;
-        let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
-        let titles = resolve_titles(file.titles, &accounts)?;
-        let (vault, retention) = resolve_vault(file.mode, file.vault)?;
-        Ok(Self {
-            path,
-            listen,
-            data_dir,
-            log: file.log,
-            accounts,
-            binaries: resolve_binaries(file.providers, &env)?,
-            tasks: file.tasks,
-            failover: file.failover,
-            titles,
-            resources: file.resources,
-            projects,
-            mode: file.mode,
-            vault,
-            retention,
-        })
+        resolve(path, file, &env)
     }
+
+    /// Loads the config file at `path`, or the defaults when there is none, as the daemon
+    /// would at its next start.
+    pub fn load_file(path: &Path) -> Result<Self> {
+        let file = read(path)?.unwrap_or_default();
+        resolve(path.to_owned(), file, &|key| std::env::var_os(key))
+    }
+
+    /// The daemon-wide settings, as clients see them.
+    pub fn settings(&self) -> DaemonSettings {
+        let path = |path: &PathBuf| path.display().to_string();
+        let mut binaries: Vec<_> = self
+            .binaries
+            .iter()
+            .map(|(provider, binary)| ProviderBinary {
+                provider: provider.clone(),
+                binary: path(binary),
+            })
+            .collect();
+        binaries.sort_by(|a, b| a.provider.as_str().cmp(b.provider.as_str()));
+        let resources = &self.resources;
+        let vault = self.vault.as_ref();
+        DaemonSettings {
+            listen: self.listen.iter().map(ToString::to_string).collect(),
+            log: LogSettings {
+                level: self.log.level.clone(),
+                format: match self.log.format {
+                    LogFormat::Pretty => herder_protocol::LogFormat::Pretty,
+                    LogFormat::Json => herder_protocol::LogFormat::Json,
+                },
+            },
+            binaries,
+            tasks: TaskSettings {
+                max_children: self.tasks.max_children,
+            },
+            failover: self.failover.settings(),
+            titles: TitleSettings {
+                enabled: self.titles.enabled,
+                provider: self.titles.provider.clone(),
+                model: self.titles.model.clone(),
+                account: self.titles.account.clone(),
+            },
+            resources: ResourceSettings {
+                memory_max_percent: resources.memory_max_percent,
+                memory_high_percent: resources.memory_high_percent,
+                cpu_weight: resources.cpu_weight,
+                child_cpu_weight: resources.child_cpu_weight,
+                nice: resources.nice,
+                max_turns: resources.max_turns,
+                min_memory_available_mib: resources.min_memory_available_mib,
+                max_memory_pressure: resources.max_memory_pressure,
+                max_load_percent: resources.max_load_percent,
+            },
+            projects: ProjectDiscovery {
+                roots: self.projects.roots.iter().map(path).collect(),
+                exclude: self.projects.exclude.iter().map(path).collect(),
+                setup_timeout_secs: self.projects.setup_timeout.as_secs(),
+            },
+            backup: BackupSettings {
+                attachments: vault.is_some_and(|vault| vault.attachments),
+                attachments_cap: vault
+                    .map_or(DEFAULT_ATTACHMENTS_CAP, |vault| vault.attachments_cap),
+                archive_retention_days: self.retention.archive_days,
+            },
+        }
+    }
+}
+
+/// Validates the file as written, read from `path`, and resolves the configuration it says.
+fn resolve(
+    path: PathBuf,
+    file: ConfigFile,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Config> {
+    let data_dir = match file.data_dir {
+        Some(dir) => dir,
+        None => xdg_dir(env, "XDG_DATA_HOME", ".local/share")?.join("herder"),
+    };
+    let listen = resolve_listen(file.listen)?;
+    file.resources.validate()?;
+    let accounts = resolve_accounts(file.accounts, env)?;
+    let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
+    let titles = resolve_titles(file.titles, &accounts)?;
+    let (vault, retention) = resolve_vault(file.mode, file.vault)?;
+    Ok(Config {
+        path,
+        listen,
+        data_dir,
+        log: file.log,
+        accounts,
+        binaries: resolve_binaries(file.providers, env)?,
+        tasks: file.tasks,
+        failover: file.failover,
+        titles,
+        resources: file.resources,
+        projects,
+        mode: file.mode,
+        vault,
+        retention,
+    })
 }
 
 /// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
@@ -976,24 +1058,232 @@ pub fn set_vault(path: &Path, vault: Option<&VaultConfig>) -> Result<()> {
     Ok(())
 }
 
-/// Sets `max_turns` in the `[resources]` table of the config file at `path`, adding the table
-/// or the key when missing and keeping a comment after the value; the rest of the file is
-/// kept as written, and only a file that still loads replaces it.
-pub fn set_max_turns(path: &Path, max_turns: u32) -> Result<()> {
-    edit_config(path, |doc, _| {
-        let table = doc
-            .entry("resources")
-            .or_insert(toml_edit::table())
-            .as_table_like_mut()
-            .with_context(|| format!("resources in {} is not a table", path.display()))?;
-        let mut value = toml_edit::Value::from(i64::from(max_turns));
-        if let Some(previous) = table.get("max_turns").and_then(toml_edit::Item::as_value) {
-            *value.decor_mut() = previous.decor().clone();
+/// Changes the config file at `path` from the settings `old` it holds to `new`: only the keys
+/// whose value changed are written, keeping a comment after each, so the file keeps every key
+/// it leaves at its default and the rest as written. A key set back to its default stays in
+/// the file; an optional one cleared is removed. Only a file that still loads replaces it.
+/// Returns the configuration the new file resolves to.
+pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> Result<Config> {
+    edit_file(path, |doc, _| {
+        let mut edit = Edit { doc, path };
+        if old.listen != new.listen {
+            // One address stays a plain string, as most files write it.
+            let listen = match new.listen.as_slice() {
+                [one] => one.as_str().into(),
+                many => toml_edit::Array::from_iter(many).into(),
+            };
+            edit.set(&[], "listen", Some(listen))?;
         }
-        table.insert("max_turns", toml_edit::Item::Value(value));
+        if old.log.level != new.log.level {
+            edit.set(&["log"], "level", Some(new.log.level.as_str().into()))?;
+        }
+        if old.log.format != new.log.format {
+            let format = match new.log.format {
+                herder_protocol::LogFormat::Pretty => "pretty",
+                herder_protocol::LogFormat::Json => "json",
+            };
+            edit.set(&["log"], "format", Some(format.into()))?;
+        }
+        for provider in old
+            .binaries
+            .iter()
+            .chain(&new.binaries)
+            .map(|b| &b.provider)
+        {
+            let binary = |settings: &DaemonSettings| {
+                settings
+                    .binaries
+                    .iter()
+                    .find(|binary| binary.provider == *provider)
+                    .map(|binary| binary.binary.clone())
+            };
+            let (was, is) = (binary(old), binary(new));
+            if was != is {
+                edit.set(
+                    &["providers", provider.as_str()],
+                    "binary",
+                    is.map(Into::into),
+                )?;
+            }
+        }
+        if old.tasks.max_children != new.tasks.max_children {
+            edit.set(
+                &["tasks"],
+                "max_children",
+                Some(int(new.tasks.max_children)?),
+            )?;
+        }
+        if old.failover.pin != new.failover.pin {
+            edit.set(&["failover"], "pin", Some(new.failover.pin.into()))?;
+        }
+        let (was, is) = (&old.titles, &new.titles);
+        if was.enabled != is.enabled {
+            edit.set(&["titles"], "enabled", Some(is.enabled.into()))?;
+        }
+        if was.provider != is.provider {
+            let provider = is.provider.as_ref().map(|p| p.as_str().into());
+            edit.set(&["titles"], "provider", provider)?;
+        }
+        if was.model != is.model {
+            edit.set(&["titles"], "model", is.model.as_deref().map(Into::into))?;
+        }
+        if was.account != is.account {
+            let account = is.account.as_ref().map(|id| id.as_str().into());
+            edit.set(&["titles"], "account", account)?;
+        }
+        let (was, is) = (&old.resources, &new.resources);
+        for (key, changed, value) in [
+            (
+                "memory_max_percent",
+                was.memory_max_percent != is.memory_max_percent,
+                int(is.memory_max_percent)?,
+            ),
+            (
+                "memory_high_percent",
+                was.memory_high_percent != is.memory_high_percent,
+                int(is.memory_high_percent)?,
+            ),
+            (
+                "cpu_weight",
+                was.cpu_weight != is.cpu_weight,
+                int(is.cpu_weight)?,
+            ),
+            (
+                "child_cpu_weight",
+                was.child_cpu_weight != is.child_cpu_weight,
+                int(is.child_cpu_weight)?,
+            ),
+            ("nice", was.nice != is.nice, int(is.nice)?),
+            (
+                "min_memory_available_mib",
+                was.min_memory_available_mib != is.min_memory_available_mib,
+                int(is.min_memory_available_mib)?,
+            ),
+            (
+                "max_memory_pressure",
+                was.max_memory_pressure != is.max_memory_pressure,
+                int(is.max_memory_pressure)?,
+            ),
+            (
+                "max_load_percent",
+                was.max_load_percent != is.max_load_percent,
+                int(is.max_load_percent)?,
+            ),
+        ] {
+            if changed {
+                edit.set(&["resources"], key, Some(value))?;
+            }
+        }
+        if was.max_turns != is.max_turns {
+            let max_turns = is.max_turns.map(int).transpose()?;
+            edit.set(&["resources"], "max_turns", max_turns)?;
+        }
+        let (was, is) = (&old.projects, &new.projects);
+        if was.roots != is.roots {
+            let roots = toml_edit::Array::from_iter(&is.roots);
+            edit.set(&["projects"], "roots", Some(roots.into()))?;
+        }
+        if was.exclude != is.exclude {
+            let exclude = toml_edit::Array::from_iter(&is.exclude);
+            edit.set(&["projects"], "exclude", Some(exclude.into()))?;
+        }
+        if was.setup_timeout_secs != is.setup_timeout_secs {
+            let secs = int(is.setup_timeout_secs)?;
+            edit.set(&["projects"], "setup_timeout_secs", Some(secs))?;
+        }
+        let (was, is) = (&old.backup, &new.backup);
+        if was.attachments != is.attachments {
+            edit.set(&["vault"], "attachments", Some(is.attachments.into()))?;
+        }
+        if was.attachments_cap != is.attachments_cap {
+            let cap = int(is.attachments_cap)?;
+            edit.set(&["vault"], "attachments_cap", Some(cap))?;
+        }
+        if was.archive_retention_days != is.archive_retention_days {
+            let days = int(is.archive_retention_days)?;
+            edit.set(&["vault"], "archive_retention_days", Some(days))?;
+        }
         Ok(())
-    })?;
-    Ok(())
+    })
+}
+
+/// `value` as a TOML integer.
+fn int<T: TryInto<i64>>(value: T) -> Result<toml_edit::Value> {
+    let value: i64 = value
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("a value is too large for the config file"))?;
+    Ok(value.into())
+}
+
+/// Edits keys of the config file at `path`, parsed as `doc`.
+struct Edit<'a> {
+    doc: &'a mut toml_edit::DocumentMut,
+    path: &'a Path,
+}
+
+impl Edit<'_> {
+    /// Sets `key` of the table at `tables` to `value`, keeping the comments around the value
+    /// it replaces, or removes it when `None`; adds missing tables, and removes a table the
+    /// removal leaves empty.
+    fn set(&mut self, tables: &[&str], key: &str, value: Option<toml_edit::Value>) -> Result<()> {
+        let path = self.path;
+        let mut table = self.doc.as_table_mut() as &mut dyn toml_edit::TableLike;
+        for (depth, name) in tables.iter().enumerate() {
+            if value.is_none() && !table.contains_key(name) {
+                return Ok(());
+            }
+            let mut new = toml_edit::Table::new();
+            // `[providers.claude]` needs no `[providers]` header of its own.
+            new.set_implicit(depth + 1 < tables.len());
+            table = table
+                .entry(name)
+                .or_insert(toml_edit::Item::Table(new))
+                .as_table_like_mut()
+                .with_context(|| {
+                    format!(
+                        "{} in {} is not a table",
+                        tables[..=depth].join("."),
+                        path.display()
+                    )
+                })?;
+        }
+        match value {
+            // Replaced in place, so comments on the line above the key stay too.
+            Some(mut value) => match table.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
+                Some(previous) => {
+                    *value.decor_mut() = previous.decor().clone();
+                    *previous = value;
+                }
+                None => {
+                    table.insert(key, toml_edit::Item::Value(value));
+                }
+            },
+            None => {
+                table.remove(key);
+                if table.is_empty()
+                    && let Some((last, parents)) = tables.split_last()
+                {
+                    self.remove_empty(parents, last);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the empty table `name` under `parents`.
+    fn remove_empty(&mut self, parents: &[&str], name: &str) {
+        let mut table = self.doc.as_table_mut() as &mut dyn toml_edit::TableLike;
+        for parent in parents {
+            match table
+                .get_mut(parent)
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                Some(next) => table = next,
+                None => return,
+            }
+        }
+        table.remove(name);
+    }
 }
 
 /// The `[[project]]` entry `entry` of `doc`, the config file at `path`, counted in file order,
@@ -1033,6 +1323,15 @@ fn edit_config(
     path: &Path,
     edit: impl FnOnce(&mut toml_edit::DocumentMut, &dyn Fn(&str) -> Option<OsString>) -> Result<()>,
 ) -> Result<ProjectsConfig> {
+    Ok(edit_file(path, edit)?.projects)
+}
+
+/// Edits the config file at `path` as [`edit_config`] does, returning the whole configuration
+/// the new file resolves to.
+fn edit_file(
+    path: &Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut, &dyn Fn(&str) -> Option<OsString>) -> Result<()>,
+) -> Result<Config> {
     let _write = CONFIG_WRITE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1051,11 +1350,10 @@ fn edit_config(
     let text = doc.to_string();
     let file: ConfigFile =
         toml::from_str(&text).with_context(|| format!("changing {}", path.display()))?;
-    let accounts = resolve_accounts(file.accounts, &env)?;
-    let projects = resolve_projects(file.projects, file.project, &accounts, &env)?;
+    let config = resolve(path.to_owned(), file, &env)?;
     write_atomically(path, text.as_bytes())
         .with_context(|| format!("writing config file {}", path.display()))?;
-    Ok(projects)
+    Ok(config)
 }
 
 /// Replaces `path` with `data` through a temporary file in its directory, which is created if
@@ -1585,26 +1883,94 @@ mod tests {
     }
 
     #[test]
-    fn the_turn_limit_is_set_in_place() {
+    fn a_missing_file_shows_the_default_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings = Config::load_file(&tmp.path().join("daemon.toml"))
+            .unwrap()
+            .settings();
+        assert_eq!(settings.listen, ["0.0.0.0:7447"]);
+        assert_eq!(settings.log.format, herder_protocol::LogFormat::Pretty);
+        assert_eq!(settings.tasks.max_children, 5);
+        assert!(settings.titles.enabled);
+        assert_eq!(settings.resources.max_turns, None);
+        assert_eq!(settings.resources.nice, 10);
+        assert_eq!(settings.projects.setup_timeout_secs, 600);
+        assert_eq!(settings.backup.attachments_cap, DEFAULT_ATTACHMENTS_CAP);
+        assert_eq!(settings.backup.archive_retention_days, 90);
+    }
+
+    #[test]
+    fn settings_write_only_the_keys_that_changed_in_place() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.toml");
-        set_max_turns(&path, 3).unwrap();
+        let kept = "# my daemon\nlisten = \"127.0.0.1:7777\" # loopback only\n\n\
+                    [resources]\nnice = 5\nmax_turns = 2 # two at most\n\n\
+                    [failover]\npin = true\n";
+        std::fs::write(&path, kept).unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+        let mut new = old.clone();
+        new.listen = vec!["127.0.0.1:7448".into()];
+        new.resources.max_turns = Some(6);
+        new.titles.model = Some("haiku".into());
+        new.binaries.push(ProviderBinary {
+            provider: Provider::Claude,
+            binary: "/opt/claude/bin/claude".into(),
+        });
+        let config = set_settings(&path, &old, &new).unwrap();
+        assert_eq!(config.settings(), new);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "[resources]\nmax_turns = 3\n"
+            "# my daemon\nlisten = \"127.0.0.1:7448\" # loopback only\n\n\
+             [resources]\nnice = 5\nmax_turns = 6 # two at most\n\n\
+             [failover]\npin = true\n\n\
+             [providers.claude]\nbinary = \"/opt/claude/bin/claude\"\n\n\
+             [titles]\nmodel = \"haiku\"\n"
         );
 
-        let kept = "# my daemon\nlisten = \"127.0.0.1:7777\"\n\n[resources]\n\
-                    nice = 5\nmax_turns = 2 # two at most\n\n[failover]\npin = true\n";
-        std::fs::write(&path, kept).unwrap();
-        set_max_turns(&path, 6).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            kept.replace("max_turns = 2", "max_turns = 6")
-        );
-        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
-        assert_eq!(config.resources.max_turns, Some(6));
-        assert_eq!(config.resources.nice, 5);
+        // Unchanged settings write nothing.
+        let text = std::fs::read_to_string(&path).unwrap();
+        set_settings(&path, &new, &new).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+
+    #[test]
+    fn a_cleared_setting_leaves_the_file_and_an_emptied_table_with_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(
+            &path,
+            "[resources]\nmax_turns = 2\n\n[providers.claude]\nbinary = \"/opt/claude\"\n",
+        )
+        .unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+        let mut new = old.clone();
+        new.resources.max_turns = None;
+        new.binaries.clear();
+        set_settings(&path, &old, &new).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[test]
+    fn settings_the_daemon_would_not_load_change_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "# mine\n").unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+        let mut cases = Vec::new();
+        let mut new = old.clone();
+        new.resources.nice = 30;
+        cases.push((new, "resources.nice"));
+        let mut new = old.clone();
+        new.titles.account = Some(AccountId::new("nobody"));
+        cases.push((new, "titles.account"));
+        let mut new = old.clone();
+        new.backup.archive_retention_days = 30;
+        cases.push((new, "archive_retention_days"));
+        for (new, key) in cases {
+            let err = set_settings(&path, &old, &new).unwrap_err();
+            assert!(format!("{err:#}").contains(key), "{key}: {err:#}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "# mine\n");
+        }
     }
 
     #[test]

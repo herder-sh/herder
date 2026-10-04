@@ -4,9 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, AgentMessage, Bytes, CommandId, DeviceId, Event, HostId, HostResources, Item,
-    ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId, SessionStatus, SessionUsage,
-    TerminalId, Timestamp, UserId,
+    AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, HostId,
+    HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId,
+    SessionStatus, SessionUsage, TerminalId, Timestamp, UserId,
 };
 
 /// A daemon-to-client message.
@@ -432,6 +432,17 @@ pub enum CommandResult {
         /// vault cannot tell.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         volume: Option<VaultVolume>,
+    },
+    /// The daemon's settings, answering `get_settings` and `set_settings`.
+    Settings {
+        /// The settings the config file holds.
+        settings: Box<DaemonSettings>,
+        /// Whether some of them are not in effect until the daemon restarts.
+        restart_required: bool,
+        /// Directory holding everything the daemon keeps; set where it starts, not here.
+        data_dir: String,
+        /// Whether the daemon is a vault; set where it starts, not here.
+        is_vault: bool,
     },
     /// A one-time code that pairs another device as the caller's user, answering
     /// `pair_device`: everything a `herder://pair` link names for this daemon.

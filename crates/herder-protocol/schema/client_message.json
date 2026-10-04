@@ -153,6 +153,33 @@
       "description": "Identifies an image a prompt carried, within its session; a ULID string, opaque.",
       "type": "string"
     },
+    "BackupSettings": {
+      "description": "The values of the `[vault]` table: a host's say what it backs up while linked to a vault,\na vault's what it keeps. A value that does not apply to the daemon cannot change.",
+      "type": "object",
+      "properties": {
+        "archive_retention_days": {
+          "description": "On a vault: days an archived session of an online host is kept after its latest event.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "attachments": {
+          "description": "On a host linked to a vault: whether prompt images are backed up too.",
+          "type": "boolean"
+        },
+        "attachments_cap": {
+          "description": "On a host linked to a vault: most bytes of its images the vault keeps.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "attachments",
+        "attachments_cap",
+        "archive_retention_days"
+      ]
+    },
     "Bytes": {
       "description": "Raw bytes, encoded as a standard padded base64 string.",
       "type": "string",
@@ -936,6 +963,50 @@
           ]
         },
         {
+          "description": "Read the daemon's settings as its config file holds them; owners only. Answered with\n`settings`. It changes nothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "get_settings"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Change the daemon's settings to `settings`; owners only. Only the values that differ\nfrom the config file's are written, in place, keeping the rest of the file as it is.\nAnswered with `settings`: a change to `resources.max_turns` applies at once, the rest\nonce the daemon restarts. Refused with `bad_request`, changing nothing, when a value is\nout of range, names an unknown account, or `listen` is not an address of this machine.",
+          "type": "object",
+          "properties": {
+            "settings": {
+              "description": "Every setting, as it is to be.",
+              "$ref": "#/$defs/DaemonSettings"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_settings"
+            }
+          },
+          "required": [
+            "type",
+            "settings"
+          ]
+        },
+        {
+          "description": "Stop the daemon cleanly and start it again, so its config file applies in full;\nowners only. Answered with `applied` before it stops; clients reconnect as after any\nrestart, and turns that were running resume as they do then.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "restart_daemon"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "List a folder on the host, to pick a repository; owners only. Answered with\n`directory`. It changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
@@ -1279,6 +1350,78 @@
         "after_seq"
       ]
     },
+    "DaemonSettings": {
+      "description": "Every daemon-wide setting of the daemon's config file, as values in effect when the file\nis loaded: a key the file leaves out shows its default. Accounts, projects and the vault\nlink are not here; they have their own commands.",
+      "type": "object",
+      "properties": {
+        "backup": {
+          "description": "What is backed up, and kept, on a vault.",
+          "$ref": "#/$defs/BackupSettings"
+        },
+        "binaries": {
+          "description": "The CLI run per provider, where it is not the provider's own name on `PATH`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderBinary"
+          }
+        },
+        "failover": {
+          "description": "How sessions fail over when their account hits a limit.",
+          "$ref": "#/$defs/FailoverSettings"
+        },
+        "listen": {
+          "description": "Addresses the daemon listens on, as `ip:port`, at least one and none twice; each an IP\nof this machine, or `0.0.0.0` or `[::]` for all of them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "log": {
+          "description": "Logging.",
+          "$ref": "#/$defs/LogSettings"
+        },
+        "projects": {
+          "description": "Where projects are discovered.",
+          "$ref": "#/$defs/ProjectDiscovery"
+        },
+        "resources": {
+          "description": "What every session's CLI may use, and the budget turns are admitted within.",
+          "$ref": "#/$defs/ResourceSettings"
+        },
+        "tasks": {
+          "description": "Limits on every task.",
+          "$ref": "#/$defs/TaskSettings"
+        },
+        "titles": {
+          "description": "How sessions are titled.",
+          "$ref": "#/$defs/TitleSettings"
+        }
+      },
+      "required": [
+        "listen",
+        "log",
+        "binaries",
+        "tasks",
+        "failover",
+        "titles",
+        "resources",
+        "projects",
+        "backup"
+      ]
+    },
+    "FailoverSettings": {
+      "description": "How a daemon's sessions fail over when their account hits a limit: they rotate to the\navailable account of their provider with the most room left, unless pinned.",
+      "type": "object",
+      "properties": {
+        "pin": {
+          "description": "Whether sessions stay on their account by default; a session created with\n`failover_pin` overrides it.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pin"
+      ]
+    },
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
@@ -1299,6 +1442,39 @@
       "required": [
         "media_type",
         "data"
+      ]
+    },
+    "LogFormat": {
+      "description": "How the daemon writes its log.",
+      "oneOf": [
+        {
+          "description": "Human-readable lines.",
+          "type": "string",
+          "const": "pretty"
+        },
+        {
+          "description": "One JSON object per line.",
+          "type": "string",
+          "const": "json"
+        }
+      ]
+    },
+    "LogSettings": {
+      "description": "The `[log]` table.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "Output format.",
+          "$ref": "#/$defs/LogFormat"
+        },
+        "level": {
+          "description": "A `tracing` env-filter directive, e.g. `info` or `herder_daemon=debug,info`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "format"
       ]
     },
     "PermissionMode": {
@@ -1326,6 +1502,37 @@
         }
       ]
     },
+    "ProjectDiscovery": {
+      "description": "The `[projects]` table.",
+      "type": "object",
+      "properties": {
+        "exclude": {
+          "description": "Repositories left out wherever they are found.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "roots": {
+          "description": "Directories scanned for repositories, absolute or starting with `~/`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "setup_timeout_secs": {
+          "description": "Seconds a project's setup command may run before it is killed.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "roots",
+        "exclude",
+        "setup_timeout_secs"
+      ]
+    },
     "ProjectId": {
       "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
       "type": "string"
@@ -1346,17 +1553,172 @@
         "gemini"
       ]
     },
+    "ProviderBinary": {
+      "description": "A `[providers.<name>]` table: the CLI to run for a provider.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "Path of its CLI on the host, absolute or starting with `~/`.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The provider.",
+          "$ref": "#/$defs/Provider"
+        }
+      },
+      "required": [
+        "provider",
+        "binary"
+      ]
+    },
     "QuestionId": {
       "description": "Identifies a question within a session; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "ResourceSettings": {
+      "description": "The `[resources]` table.",
+      "type": "object",
+      "properties": {
+        "child_cpu_weight": {
+          "description": "CPU weight of a child session, 1 to 10000.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "cpu_weight": {
+          "description": "CPU weight of a primary session, 1 to 10000.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "max_load_percent": {
+          "description": "One-minute load average, in percent of the cores, at which no new turn starts.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "max_memory_pressure": {
+          "description": "Memory pressure (PSI `some avg10`), in percent, at which no new turn starts, 1 to 100.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "max_turns": {
+          "description": "Most turns running at once, 1 to [`MAX_TURNS_LIMIT`](crate::MAX_TURNS_LIMIT); a\nquarter of the host's cores, at least 1, when absent.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "memory_high_percent": {
+          "description": "Where a session starts being throttled, in percent of its memory maximum, 1 to 100.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "memory_max_percent": {
+          "description": "Memory one session may use, in percent of the host's RAM, 1 to 100.",
+          "type": "integer",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0
+        },
+        "min_memory_available_mib": {
+          "description": "Least memory available, in MiB, for a new turn to start.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "nice": {
+          "description": "Niceness of every agent CLI, -20 to 19.",
+          "type": "integer",
+          "format": "int8",
+          "maximum": 127,
+          "minimum": -128
+        }
+      },
+      "required": [
+        "memory_max_percent",
+        "memory_high_percent",
+        "cpu_weight",
+        "child_cpu_weight",
+        "nice",
+        "min_memory_available_mib",
+        "max_memory_pressure",
+        "max_load_percent"
+      ]
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",
       "type": "string"
     },
+    "TaskSettings": {
+      "description": "The `[tasks]` table.",
+      "type": "object",
+      "properties": {
+        "max_children": {
+          "description": "Live (not archived) children a task's primary may have at once.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "max_children"
+      ]
+    },
     "TerminalId": {
       "description": "Identifies a terminal on a host; a ULID string, opaque to receivers.",
       "type": "string"
+    },
+    "TitleSettings": {
+      "description": "The `[titles]` table.",
+      "type": "object",
+      "properties": {
+        "account": {
+          "description": "Account the titling CLI runs on; when absent, the session's own, or else the provider's\navailable account with the most room left.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccountId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "description": "Whether sessions get generated titles at all.",
+          "type": "boolean"
+        },
+        "model": {
+          "description": "Model, in that provider's naming; the provider's quick model when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "Provider whose CLI titles, claude or codex; the session's account's when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Provider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "enabled"
+      ]
     }
   }
 }

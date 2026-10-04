@@ -4,8 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId, HostId, Image,
-    PermissionMode, ProjectId, PromptId, Provider, QuestionId, Seq, SessionId, TerminalId,
+    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId,
+    DaemonSettings, HostId, Image, PermissionMode, ProjectId, PromptId, Provider, QuestionId, Seq,
+    SessionId, TerminalId,
 };
 
 /// A client-to-daemon message.
@@ -322,6 +323,22 @@ pub enum CommandBody {
         /// Most turns running at once.
         max_turns: u32,
     },
+    /// Read the daemon's settings as its config file holds them; owners only. Answered with
+    /// `settings`. It changes nothing, so a resend is answered afresh.
+    GetSettings,
+    /// Change the daemon's settings to `settings`; owners only. Only the values that differ
+    /// from the config file's are written, in place, keeping the rest of the file as it is.
+    /// Answered with `settings`: a change to `resources.max_turns` applies at once, the rest
+    /// once the daemon restarts. Refused with `bad_request`, changing nothing, when a value is
+    /// out of range, names an unknown account, or `listen` is not an address of this machine.
+    SetSettings {
+        /// Every setting, as it is to be.
+        settings: Box<DaemonSettings>,
+    },
+    /// Stop the daemon cleanly and start it again, so its config file applies in full;
+    /// owners only. Answered with `applied` before it stops; clients reconnect as after any
+    /// restart, and turns that were running resume as they do then.
+    RestartDaemon,
     /// List a folder on the host, to pick a repository; owners only. Answered with
     /// `directory`. It changes nothing, so a resend is answered afresh.
     ListDirectory {

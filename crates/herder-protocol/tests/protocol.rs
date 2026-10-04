@@ -247,6 +247,20 @@ fn client_fixtures() -> Vec<ClientMessage> {
             config_dir: Some("~/.claude-personal".into()),
         }),
         command(CommandBody::SetResourceLimits { max_turns: 6 }),
+        command(CommandBody::GetSettings),
+        command(CommandBody::SetSettings {
+            settings: Box::new(settings()),
+        }),
+        command(CommandBody::SetSettings {
+            settings: Box::new(DaemonSettings {
+                log: LogSettings {
+                    level: "warn".into(),
+                    format: LogFormat::Json,
+                },
+                ..settings()
+            }),
+        }),
+        command(CommandBody::RestartDaemon),
         command(CommandBody::AttachTerminal {
             terminal_id: terminal_id(),
         }),
@@ -431,6 +445,37 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     total_bytes: 500_000_000_000,
                     used_bytes: 420_000_000_000,
                 }),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Settings {
+                settings: Box::new(settings()),
+                restart_required: true,
+                data_dir: "/home/u/.local/share/herder".into(),
+                is_vault: false,
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Settings {
+                settings: Box::new(DaemonSettings {
+                    log: LogSettings {
+                        level: "info".into(),
+                        format: LogFormat::Json,
+                    },
+                    binaries: Vec::new(),
+                    titles: TitleSettings {
+                        enabled: false,
+                        provider: None,
+                        model: None,
+                        account: None,
+                    },
+                    ..settings()
+                }),
+                restart_required: false,
+                data_dir: "/var/lib/herder".into(),
+                is_vault: true,
             },
         },
         ServerMessage::CommandAccepted {
@@ -2194,4 +2239,48 @@ fn queue_edits_and_queues_have_their_wire_form() {
         serde_json::to_value(&queued).unwrap(),
         json!({ "prompt_id": "p1", "text": "next", "images": 0, "by": "u1" })
     );
+}
+
+/// Every setting, set to something other than its default.
+fn settings() -> DaemonSettings {
+    DaemonSettings {
+        listen: vec!["127.0.0.1:7447".into(), "100.64.0.7:7447".into()],
+        log: LogSettings {
+            level: "herder_daemon=debug,info".into(),
+            format: LogFormat::Pretty,
+        },
+        binaries: vec![ProviderBinary {
+            provider: Provider::Claude,
+            binary: "~/.local/bin/claude".into(),
+        }],
+        tasks: TaskSettings { max_children: 8 },
+        failover: FailoverSettings { pin: true },
+        titles: TitleSettings {
+            enabled: true,
+            provider: Some(Provider::Claude),
+            model: Some("haiku".into()),
+            account: Some(AccountId::new("claude-main")),
+        },
+        resources: ResourceSettings {
+            memory_max_percent: 50,
+            memory_high_percent: 75,
+            cpu_weight: 200,
+            child_cpu_weight: 80,
+            nice: 5,
+            max_turns: Some(6),
+            min_memory_available_mib: 4096,
+            max_memory_pressure: 30,
+            max_load_percent: 150,
+        },
+        projects: ProjectDiscovery {
+            roots: vec!["~/Projects".into()],
+            exclude: vec!["~/Projects/old".into()],
+            setup_timeout_secs: 900,
+        },
+        backup: BackupSettings {
+            attachments: true,
+            attachments_cap: 2 << 30,
+            archive_retention_days: 30,
+        },
+    }
 }

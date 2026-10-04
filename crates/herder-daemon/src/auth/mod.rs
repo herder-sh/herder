@@ -452,8 +452,9 @@ impl Auth {
 }
 
 /// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// bringing down containers, browsing folders, changing projects or the turn limit, backing
-/// up to a vault, and forking sessions onto the host are for owners only.
+/// bringing down containers, browsing folders, changing projects, reading or changing the
+/// daemon's settings, restarting it, backing up to a vault, and forking sessions onto the
+/// host are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
@@ -477,10 +478,15 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             "changing accounts is for the daemon's owners only",
         ));
     }
-    if matches!(command, CommandBody::SetResourceLimits { .. }) && identity.role != Role::Owner {
-        return Err(forbidden(
-            "changing how many turns run at once is for the daemon's owners only",
-        ));
+    let settings = matches!(
+        command,
+        CommandBody::GetSettings
+            | CommandBody::SetSettings { .. }
+            | CommandBody::SetResourceLimits { .. }
+            | CommandBody::RestartDaemon
+    );
+    if settings && identity.role != Role::Owner {
+        return Err(forbidden("the daemon's settings are for its owners only"));
     }
     let host = matches!(
         command,
@@ -880,16 +886,30 @@ mod tests {
     }
 
     #[test]
-    fn only_owners_may_change_the_turn_limit() {
-        let (_tmp, auth) = open();
+    fn only_owners_may_read_or_change_the_settings_or_restart() {
+        let (tmp, auth) = open();
         let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
         let mut alice = pair(&auth, "fp-a", &code).unwrap();
-        let command = CommandBody::SetResourceLimits { max_turns: 4 };
-        assert!(authorize(&alice, &command).is_ok());
+        let settings = crate::Config::load_file(&tmp.path().join("none.toml"))
+            .unwrap()
+            .settings();
+        let commands = [
+            CommandBody::GetSettings,
+            CommandBody::SetSettings {
+                settings: Box::new(settings),
+            },
+            CommandBody::SetResourceLimits { max_turns: 4 },
+            CommandBody::RestartDaemon,
+        ];
+        for command in &commands {
+            assert!(authorize(&alice, command).is_ok());
+        }
         alice.role = Role::Member;
-        assert_eq!(
-            authorize(&alice, &command).unwrap_err().code,
-            ErrorCode::Forbidden
-        );
+        for command in &commands {
+            assert_eq!(
+                authorize(&alice, command).unwrap_err().code,
+                ErrorCode::Forbidden
+            );
+        }
     }
 }

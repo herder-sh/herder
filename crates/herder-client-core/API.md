@@ -30,7 +30,8 @@ says what exists, why, and how it maps to foreign languages.
   vault's `VaultStatus` message (`VaultStatus`, `HostReplication`). P0.20 added, compatibly,
   `SessionHead.queue` (`QueuedPrompt`, `PromptId`) and the `RemoveQueued`, `MoveQueued` and
   `SendQueuedNow` commands. The `SetResourceLimits` command, with `MAX_TURNS_LIMIT`, was
-  added compatibly too.
+  added compatibly too, and so were the `GetSettings`, `SetSettings` and `RestartDaemon`
+  commands with their `Settings` result (`DaemonSettings`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -366,3 +367,17 @@ owners may do this. It must be 1 to `herder_protocol::MAX_TURNS_LIMIT`, else `ba
 Raising it starts waiting turns at once; lowering it stops no running turn. The daemon keeps
 the limit in its config and sends every client the new `resources`. The wire change is
 additive (protocol 4) and this API is unchanged.
+
+### Daemon settings
+
+`send(host, GetSettings)` answers `Settings`: every daemon-wide setting of the daemon's config
+file as a `DaemonSettings` (listen address, log, provider binaries, task, failover, title,
+resource and project-discovery settings, and what a vault backs up or keeps), with the
+read-only `data_dir` and `is_vault`, and `restart_required` when the file holds settings not
+in effect yet. `send(host, SetSettings { settings })` writes the values that changed, in
+place, and answers the same way; a value the daemon cannot run with is refused with
+`bad_request`, changing nothing. The turn limit applies at once; the rest after
+`send(host, RestartDaemon)`, which answers `Applied` and restarts the daemon; clients
+reconnect as after any restart. Accounts, projects and the vault link keep their own commands.
+Only owners may do any of this. The wire change is additive (protocol 4) and this API is
+unchanged.

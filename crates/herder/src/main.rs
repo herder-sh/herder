@@ -151,7 +151,27 @@ fn daemon(config: Option<PathBuf>, vault: bool) -> anyhow::Result<()> {
         config.mode = herder_daemon::config::Mode::Vault;
     }
     herder_daemon::logging::init(&config.log)?;
-    herder_daemon::run(config)
+    match herder_daemon::run(config)? {
+        herder_daemon::Exit::Stopped => Ok(()),
+        herder_daemon::Exit::Restart => restart(),
+    }
+}
+
+/// Replaces this process with the herder binary run with the same arguments, so a restarted
+/// daemon keeps its process id, as a service manager expects, and reads its config afresh.
+fn restart() -> anyhow::Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let exe = std::env::current_exe()?;
+    // After an update replaced the binary, Linux reports the old path with ` (deleted)`.
+    let path = exe.to_string_lossy();
+    let exe = path
+        .strip_suffix(" (deleted)")
+        .map_or(exe.clone(), PathBuf::from);
+    let err = std::process::Command::new(&exe)
+        .args(std::env::args_os().skip(1))
+        .exec();
+    Err(anyhow::Error::new(err).context(format!("restarting {}", exe.display())))
 }
 
 #[cfg(test)]

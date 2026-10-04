@@ -140,6 +140,11 @@ impl Server {
         }
     }
 
+    /// Answers clients' settings commands with `settings`; once per server.
+    pub fn manage_settings(&self, settings: Arc<crate::settings::Settings>) -> Result<()> {
+        self.shared.clients.manage_settings(settings)
+    }
+
     /// The store, for reading what hosts replicated.
     pub fn store(&self) -> Arc<Mutex<VaultStore>> {
         Arc::clone(&self.shared.store)
@@ -228,6 +233,11 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         LIVENESS_TIMEOUT,
         config.retention,
     );
+    server.manage_settings(Arc::new(crate::settings::Settings::new(
+        config,
+        None,
+        shutdown.clone(),
+    )))?;
     let control = auth::control::bind(data_dir.root())?;
     tokio::spawn(auth::control::serve(
         control,
