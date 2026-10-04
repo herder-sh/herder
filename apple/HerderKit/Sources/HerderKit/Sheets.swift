@@ -261,34 +261,12 @@ struct ProjectPicker: View {
     var body: some View {
         VStack(spacing: 0) {
             if newProject || other {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("New project").font(.headline).foregroundStyle(Theme.text)
-                    Field(label: "Machine") {
-                        ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
-                    }
-                    Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
-                        VStack(spacing: 8) {
-                            InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
-                            FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
-                                .id(hostId)
-                                .frame(height: 220)
-                                // Another machine's path means nothing here: start at its home.
-                                .onChange(of: hostId) { repo = "" }
-                        }
-                    }
-                    if let addError {
-                        Text(addError).font(.footnote).foregroundStyle(Theme.failure)
-                    }
-                    HStack {
-                        Spacer()
-                        ActionButton(title: "Add Project", style: .primary) { await submitPath() }
-                            .frame(maxWidth: 160)
-                            .disabled(!pathReady)
-                            .opacity(pathReady ? 1 : 0.4)
-                            .keyboardShortcut(.defaultAction)
-                    }
-                }
-                .padding(20)
+                // Scrolls on iOS, so the keyboard does not push its heading off the sheet.
+                #if os(iOS)
+                ScrollView { pathForm }
+                #else
+                pathForm
+                #endif
             } else {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
@@ -316,17 +294,56 @@ struct ProjectPicker: View {
                     }
                     .padding(8)
                 }
+                #if os(macOS)
                 .frame(maxHeight: 360)
+                #endif
             }
         }
+        // A palette on the Mac; on iOS it fills the system sheet.
+        #if os(macOS)
         .frame(width: 520)
         .fixedSize(horizontal: false, vertical: true)
+        #else
+        .frame(maxHeight: .infinity, alignment: .top)
+        #endif
         .background(Theme.surface)
         .preferredColorScheme(.dark)
         .onAppear {
             hostId = machines.first?.hostId ?? ""
             searching = true
         }
+    }
+
+    /// A repository path on a machine, for a new project.
+    private var pathForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("New project").font(.headline).foregroundStyle(Theme.text)
+            Field(label: "Machine") {
+                ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
+            }
+            Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
+                VStack(spacing: 8) {
+                    InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                    FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
+                        .id(hostId)
+                        .frame(height: 220)
+                        // Another machine's path means nothing here: start at its home.
+                        .onChange(of: hostId) { repo = "" }
+                }
+            }
+            if let addError {
+                Text(addError).font(.footnote).foregroundStyle(Theme.failure)
+            }
+            HStack {
+                Spacer()
+                ActionButton(title: "Add Project", style: .primary) { await submitPath() }
+                    .frame(maxWidth: 160)
+                    .disabled(!pathReady)
+                    .opacity(pathReady ? 1 : 0.4)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
     }
 
     private func pick(_ projectId: String, _ candidates: [Machine]) {

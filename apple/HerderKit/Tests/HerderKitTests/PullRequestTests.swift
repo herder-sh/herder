@@ -30,6 +30,11 @@ struct PullRequestTests {
         #expect(all[0].sessions[0].prs.map(\.number) == [2, 1])
         #expect(lists.pullRequests(openOnly: true)[0].sessions[0].prs.map(\.number) == [2])
     }
+
+    @Test func aSessionsPRsAreASheetOnCompactWidthAsThePopoverIsWiderThanAPhone() {
+        #expect(PRListPresentation(compact: true) == .sheet)
+        #expect(PRListPresentation(compact: false) == .popover)
+    }
 }
 
 struct PRRollupTests {

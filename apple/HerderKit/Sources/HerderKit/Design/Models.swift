@@ -2,9 +2,10 @@ import Foundation
 import Herder
 
 /// A session's state as the user sees it: the TUI's statuses, with a pending approval or
-/// question folded into `needsYou`.
+/// question folded into `needsYou`, and an idle session this device has not opened since its
+/// turn finished `done` (`DoneSessions`).
 enum SessionState: Hashable {
-    case running, waiting, needsYou, idle, error, archived, moved
+    case running, waiting, needsYou, idle, done, error, archived, moved
 
     var label: String {
         switch self {
@@ -12,6 +13,7 @@ enum SessionState: Hashable {
         case .waiting: "Waiting for capacity"
         case .needsYou: "Needs you"
         case .idle: "Idle"
+        case .done: "Done"
         case .error: "Error"
         case .archived: "Archived"
         case .moved: "Moved"

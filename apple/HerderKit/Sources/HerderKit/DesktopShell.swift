@@ -51,7 +51,7 @@ struct DesktopShell: View {
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
-                     icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
+                     state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
                     ScrollView {
                         if let project {
@@ -158,6 +158,8 @@ private struct ListAndSession<List: View>: View {
 struct Pane<Content: View, Actions: View>: View {
     let title: String
     var subtitle = ""
+    /// A project's rolled-up state, before the subtitle.
+    var state: SessionState?
     /// A project's tile before the title.
     var icon: ProjectIcon?
     /// Makes the title a menu of the app's sections and projects.
@@ -187,8 +189,15 @@ struct Pane<Content: View, Actions: View>: View {
                     } else {
                         Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
                     }
-                    if !subtitle.isEmpty {
-                        Text(subtitle).font(.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
+                    if state != nil || !subtitle.isEmpty {
+                        HStack(spacing: 4) {
+                            if let state {
+                                StatusGlyph(state: state, size: 7, pulses: false)
+                                Text(subtitle.isEmpty ? state.label : "\(state.label) ·")
+                            }
+                            if !subtitle.isEmpty { Text(subtitle) }
+                        }
+                        .font(.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
                     }
                 }
                 Spacer()
@@ -341,7 +350,7 @@ struct Sidebar: View {
                         SidebarRow(
                             title: project.name, symbol: "shippingbox",
                             icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId)),
-                            badge: project.live.count,
+                            state: project.state,
                             selected: item == .project(project.id),
                             settings: project.projectId == nil ? nil : { sheet = .projectSettings(projectId: project.id) }
                         ) { select(.project(project.id)) }
@@ -397,7 +406,7 @@ private struct SidebarRail: View {
             rail("server.rack", "Machines", .machines, badge: 0)
             if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in
-                rail("shippingbox", project.name, .project(project.id), badge: 0,
+                rail("shippingbox", project.name, .project(project.id), badge: 0, state: project.state,
                      icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 22))
             }
             Spacer()
@@ -409,7 +418,12 @@ private struct SidebarRail: View {
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    private func rail(_ symbol: String, _ title: String, _ target: SidebarItem, badge: Int, icon: ProjectIcon? = nil) -> some View {
+    /// A section or project's button; a project shows its rolled-up state when anything is
+    /// going on in it.
+    private func rail(
+        _ symbol: String, _ title: String, _ target: SidebarItem, badge: Int, state: SessionState? = nil,
+        icon: ProjectIcon? = nil
+    ) -> some View {
         Button {
             if item != target { session = nil }
             item = target
@@ -422,6 +436,13 @@ private struct SidebarRail: View {
                 .background(item == target ? Theme.raised : .clear, in: .rect(cornerRadius: 8))
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 { Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -4, y: 4) }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if let state, state.priority > SessionState.idle.priority {
+                        StatusGlyph(state: state, size: 6, pulses: false)
+                            .background(Theme.surface, in: .circle)
+                            .offset(x: 2, y: 2)
+                    }
                 }
                 .contentShape(.rect)
         }
@@ -437,6 +458,8 @@ private struct SidebarRow: View {
     var icon: ProjectIcon?
     var badge = 0
     var attention = false
+    /// A project's rolled-up state, in the badge's place.
+    var state: SessionState?
     let selected: Bool
     /// Opens the row's settings, from a gear shown on hover and when selected.
     var settings: (() -> Void)?
@@ -460,6 +483,9 @@ private struct SidebarRow: View {
                     }
                     .buttonStyle(.plain)
                     .help("Project Settings")
+                } else if let state {
+                    StatusGlyph(state: state, size: 8, pulses: false)
+                        .help(state.label)
                 } else if badge > 0 {
                     Text("\(badge)")
                         .font(.caption.weight(.semibold).monospacedDigit())

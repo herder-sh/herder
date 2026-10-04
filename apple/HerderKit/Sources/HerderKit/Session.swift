@@ -493,7 +493,7 @@ struct SessionModel {
         case .archived: return "Archived"
         case .moved: return "Moved to another host"
         case .needsYou: return "Needs you"
-        case .idle: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
+        case .idle, .done: return lastMessage.map(firstLine) ?? (loaded ? "Idle" : "")
         }
     }
 
@@ -507,7 +507,7 @@ struct SessionModel {
         case .error: .failed
         case .archived: .archived
         case .moved: .moved
-        case .idle: failure != nil ? .failed : stats.completed > 0 ? .done : .idle
+        case .idle, .done: failure != nil ? .failed : stats.completed > 0 ? .done : .idle
         }
     }
 
