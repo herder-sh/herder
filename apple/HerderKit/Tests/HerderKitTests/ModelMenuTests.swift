@@ -59,6 +59,55 @@ struct ModelCatalogTests {
     }
 }
 
+struct SettingsMenuTests {
+    @Test func accountsAreTheProvidersWithTheirBusiestWindow() {
+        let accounts = [
+            Account(accountId: "main", provider: "claude", label: "Main", configDir: nil, usage: [
+                UsageWindow(window: "five_hour", usedPercent: 12.4, resetsAt: nil),
+                UsageWindow(window: "seven_day", usedPercent: 61.6, resetsAt: nil),
+            ]),
+            Account(accountId: "gpt", provider: "codex", label: "GPT", configDir: nil, usage: []),
+            Account(accountId: "work", provider: "claude", label: "Work", configDir: nil, usage: []),
+        ]
+        let options = SettingsOption.accounts(accounts, provider: "claude", current: "work")
+        #expect(options.map(\.id) == ["main", "work"])
+        #expect(options[0].detail == "Weekly 62%")
+        #expect(options[0].usage == 61.6)
+        #expect(options.map(\.current) == [false, true])
+        // No usage reported: no detail and no meter.
+        #expect(options[1].detail == nil && options[1].usage == nil)
+    }
+
+    @Test func machinesPutTheCurrentFirstAndSayWhyOthersCannotBePicked() {
+        let machines = [machine("a", name: "Studio", sessions: []), machine("b", name: "Laptop", sessions: []),
+                        machine("c", name: "Server", sessions: [])]
+        let options = SettingsOption.machines(machines, current: "b") { $0.hostId == "c" ? "Offline" : nil }
+        #expect(options.map(\.title) == ["Laptop", "Studio", "Server"])
+        #expect(options.map(\.current) == [true, false, false])
+        #expect(options.map(\.unavailable) == [nil, nil, "Offline"])
+        #expect(options[2].detail == "Offline")
+        // The current machine is never unavailable, whatever the rule says of it.
+        #expect(SettingsOption.machines(machines, current: "c") { _ in "Offline" }.first?.unavailable == nil)
+    }
+
+    @Test func pickingTheCurrentOptionChangesNothing() {
+        var chosen: [String] = []
+        var ran = 0
+        let section = SettingsSection(
+            kind: .machine,
+            options: [SettingsOption(id: "a", title: "A", current: true), SettingsOption(id: "b", title: "B")],
+            action: .init(title: "Fork Session…", symbol: "arrow.triangle.branch") { ran += 1 }
+        ) { chosen.append($0) }
+        section.perform(.option(.machine, "a"))
+        section.perform(.option(.machine, "b"))
+        section.perform(.action(.machine))
+        #expect(chosen == ["b"])
+        #expect(ran == 1)
+        #expect(ModelMenu.Entry.option(.account, "x").section == .account)
+        #expect(ModelMenu.Entry.other.section == nil)
+    }
+}
+
 @MainActor
 struct ProjectIconTests {
     @Test func theTintIsStableAndSpreadsAcrossThePalette() {

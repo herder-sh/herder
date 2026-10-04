@@ -80,6 +80,8 @@ final class ForkSessionModel {
 struct ForkSessionSheet: View {
     let fleet: Fleet
     let key: SessionKey
+    /// The machine to start on, if it can take the fork.
+    var preselect: HostId?
     let open: (SessionKey) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var model = ForkSessionModel()
@@ -141,7 +143,8 @@ struct ForkSessionSheet: View {
             let eligible = fleet.machines.filter {
                 ForkSessionModel.ineligible($0, source: key, provider: provider) == nil
             }
-            if let first = eligible.first(where: { $0.hostId == key.hostId }) ?? eligible.first {
+            if let first = eligible.first(where: { $0.hostId == preselect }) ?? eligible.first(where: { $0.hostId == key.hostId })
+                ?? eligible.first {
                 model.select(first, provider: provider)
             }
         }

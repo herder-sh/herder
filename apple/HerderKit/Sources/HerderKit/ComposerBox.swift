@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 import AppKit
 #endif
 
-/// The prompt box: the text on top, and inside its bottom edge the model and permission menus
+/// The prompt box: the text on top, and inside its bottom edge the settings and permission menus
 /// with the send (or stop) button; a footer bar under it says where the session runs.
 struct ComposerBox<Footer: View>: View {
     @Binding var text: String
@@ -19,6 +19,8 @@ struct ComposerBox<Footer: View>: View {
     let mode: PermissionMode?
     let running: Bool
     let choose: (ModelCatalog.Choice) -> Void
+    /// The settings the model menu offers after the models: account and machine.
+    var settings: [SettingsSection] = []
     let setMode: (PermissionMode) -> Void
     let send: () -> Void
     let stop: () -> Void
@@ -68,7 +70,7 @@ struct ComposerBox<Footer: View>: View {
                     .accessibilityIdentifier("composer")
                 #endif
                 HStack(spacing: 4) {
-                    ModelPicker(groups: models, current: current, choose: choose)
+                    ModelPicker(groups: models, current: current, sections: settings, choose: choose)
                     Divider().frame(height: 16).overlay(Theme.stroke)
                     Menu {
                         ForEach([PermissionMode.readOnly, .ask, .autoEdit, .fullAccess], id: \.self) { option in
