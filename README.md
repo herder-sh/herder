@@ -13,7 +13,7 @@ on a shared Rust client core.
 On Linux (x86_64 or arm64):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/herder-sh/herder/main/install.sh | sh
+curl -fsSL https://herder.sh/install | sh
 herder service install   # run the daemon now and at every boot (systemd user service)
 herder update            # replace herder with the latest release
 ```

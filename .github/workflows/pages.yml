@@ -1,0 +1,58 @@
+name: pages
+
+# Deploys site/ to GitHub Pages as herder.sh, with install.sh served at /install so that
+# `curl -fsSL https://herder.sh/install | sh` works. It also runs after each release, so the
+# Mac app download and the version in the hero point at the newest release.
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "install.sh", ".github/workflows/pages.yml"]
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p _site
+          cp -r site/. _site/
+          cp install.sh _site/install
+          # Point the Mac download and the version pill at the latest release. With no
+          # release, or no Mac asset in it, the links committed in index.html stay.
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName || true)
+          url=$(gh release view --repo "$GITHUB_REPOSITORY" --json assets \
+            -q '.assets[] | select(.name | test("^herder-app-.*-macos-arm64\\.zip$")) | .url' || true)
+          if [ -n "$tag" ] && [ -n "$url" ]; then
+            sed -i \
+              -e "s#id=\"mac-download\" href=\"[^\"]*\"#id=\"mac-download\" href=\"$url\"#" \
+              -e "s#<span data-version>[^<]*</span>#<span data-version>$tag</span>#" \
+              _site/index.html
+            grep -q "$url" _site/index.html
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
