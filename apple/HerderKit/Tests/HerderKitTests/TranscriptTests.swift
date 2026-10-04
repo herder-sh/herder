@@ -150,16 +150,19 @@ struct TranscriptTests {
         #expect(handoffs[0].to == Handoff.Side(provider: "claude", model: "opus", accountId: "main", hostId: "host-b"))
     }
 
-    @Test func aSentPromptShowsWhereItIsUntilTheSessionTakesIt() {
+    @Test func aSentPromptShowsUntilTheQueueOrTheSessionTakesIt() {
         var script = Script()
         var model = script.model([created(), .turnStarted(turnId: "t1")])
         let outgoing = Outgoing(text: "next", state: .delivered)
         model.outbox = [outgoing]
-        // Running: the turn's progress; the message waits in the tray above the composer.
+        // Running: the message shows until the machine's queue lists it; the tray has it then.
+        #expect(Transcript.blocks(model).last == .user(id: outgoing.id.uuidString, text: "next", outgoing: outgoing))
+        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: "sample", agentMessage: nil)])
+        #expect(model.outbox.isEmpty)
         #expect(Transcript.blocks(model).last == .working(since: model.turnStartedAt, waiting: false))
-        #expect(Transcript.queued(model) == [outgoing])
-        // Idle: the message, then the wait for the agent to take it.
+        // Idle: the message, then the wait for the agent to take it, until it does.
         model.apply(script.event(.turnCompleted(turnId: "t1")))
+        model.outbox = [outgoing]
         #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
         model.apply(script.event(item("u2", .userMessage(text: "next", attachments: []), turn: "t2")))
         #expect(model.outbox.isEmpty)
@@ -217,13 +220,17 @@ struct DefaultAccountTests {
         #expect(blocks.compactMap { if case .assistant(_, let text, _) = $0 { text } else { nil } } == ["First.", "Second."])
     }
 
-    @Test func messagesQueuedBehindTheTurnLeaveTheTranscriptForTheTray() {
-        var script = Script()
-        var model = script.model([created(), .turnStarted(turnId: "t1")])
-        model.outbox = [Outgoing(text: "next", images: [], state: .delivered), Outgoing(text: "typing", images: [], state: .sending)]
-        let users = Transcript.blocks(model).compactMap { if case .user(_, let text, _, _, _) = $0 { text } else { nil } }
-        #expect(users == ["typing"])
-        #expect(Transcript.queued(model).map(\.text) == ["next"])
+    @Test func onlyTheQueuedCopyOfADeliveredMessageSettlesIt() {
+        var model = SessionModel(key: SessionKey(hostId: "h", sessionId: "s"))
+        let typing = Outgoing(text: "next", images: [], state: .sending)
+        let failed = Outgoing(text: "next", images: [], state: .failed("refused"))
+        let delivered = Outgoing(text: "next", images: [], state: .delivered)
+        model.outbox = [typing, failed, delivered]
+        let agent = AgentMessage(senderSessionId: "other", messageId: "m1", hopCount: 1, permissionCeiling: .ask)
+        model.settle([QueuedPrompt(promptId: "p1", text: "next", images: 0, by: nil, agentMessage: agent)])
+        #expect(model.outbox == [typing, failed, delivered])
+        model.settle([QueuedPrompt(promptId: "p2", text: "next", images: 0, by: "sample", agentMessage: nil)])
+        #expect(model.outbox == [typing, failed])
     }
 }
 

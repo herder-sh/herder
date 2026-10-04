@@ -175,20 +175,14 @@ enum Transcript {
         if model.turn != nil && !streamingVisible {
             blocks.append(.working(since: model.turnStartedAt, waiting: false))
         }
-        // Messages waiting behind the running turn show above the composer, not here.
-        for outgoing in model.outbox where model.turn == nil || outgoing.state != .delivered {
+        // What the machine queued shows above the composer, from its queue, not here.
+        for outgoing in model.outbox {
             blocks.append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
         }
         if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {
             blocks.append(.working(since: nil, waiting: true))
         }
         return blocks
-    }
-
-    /// Messages the machine has taken that wait for the running turn to end.
-    static func queued(_ model: SessionModel) -> [Outgoing] {
-        guard model.turn != nil else { return [] }
-        return model.outbox.filter { $0.state == .delivered }
     }
 
     static func toolCall(id: ItemId, name: String, input: Json, running: Bool) -> ToolCall {
