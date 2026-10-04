@@ -117,8 +117,8 @@
 //! restart like every queued prompt: the session stays `waiting_for_capacity` and asks again
 //! once the manager resumes.
 //!
-//! An owner changes the turn limit live with `set_resource_limits`: [`Admission`] applies it
-//! at once and the daemon's config file keeps it.
+//! An owner changes the turn limit live from a client ([`crate::settings`]): [`Admission`]
+//! applies it at once and the daemon's config file keeps it.
 //!
 //! When the agent's CLI fails after the kernel's OOM killer killed a process in its scope
 //! ([`Scopes::oom_killed`]), the turn fails with an error that says so and the session is
@@ -371,10 +371,8 @@ struct Inner {
     usage: Usage,
     /// Asks the usage poller, once started, to refresh accounts not read lately.
     refresh_usage: Arc<Notify>,
-    /// What admits turns within the host's capacity, with the config file that keeps its turn
-    /// limit, once set.
+    /// What admits turns within the host's capacity, once set.
     admission: OnceLock<Arc<Admission>>,
-    resources_file: OnceLock<PathBuf>,
     /// How sessions fail over, once set; the default otherwise.
     failover: OnceLock<FailoverConfig>,
     /// Accounts that hit a limit, until they reset.
@@ -492,7 +490,6 @@ impl SessionManager {
                 usage: Usage::default(),
                 refresh_usage: Arc::new(Notify::new()),
                 admission: OnceLock::new(),
-                resources_file: OnceLock::new(),
                 docker: OnceLock::new(),
                 failover: OnceLock::new(),
                 limits: Limits::default(),
@@ -610,9 +607,6 @@ impl SessionManager {
             CommandBody::GetProjectIcon { project_id } => {
                 return self.project_icon(&project_id).await;
             }
-            CommandBody::SetResourceLimits { max_turns } => {
-                return self.set_max_turns(max_turns).await;
-            }
             CommandBody::Interrupt { session_id } => (session_id, Request::Interrupt),
             CommandBody::RemoveQueued {
                 session_id,
@@ -706,6 +700,16 @@ impl SessionManager {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "the session manager does not handle this command yet",
+                ));
+            }
+            // The daemon's settings answer these ([`crate::settings`]).
+            CommandBody::GetSettings
+            | CommandBody::SetSettings { .. }
+            | CommandBody::SetResourceLimits { .. }
+            | CommandBody::RestartDaemon => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon's settings are not changed from a client",
                 ));
             }
             // The daemon's vault link answers these ([`crate::vault::Link`]).
@@ -821,49 +825,13 @@ impl SessionManager {
             .map_err(|_| anyhow::anyhow!("containers are tracked already"))
     }
 
-    /// Starts every turn from now on only once `admission` admits it, keeping a turn limit
-    /// an owner sets in the `[resources]` table of `config_file`; once per manager. Without
-    /// it, turns start as soon as their session is free.
-    pub fn admit_turns(
-        &self,
-        admission: Arc<Admission>,
-        config_file: PathBuf,
-    ) -> anyhow::Result<()> {
+    /// Starts every turn from now on only once `admission` admits it; once per manager.
+    /// Without it, turns start as soon as their session is free.
+    pub fn admit_turns(&self, admission: Arc<Admission>) -> anyhow::Result<()> {
         self.inner
             .admission
             .set(admission)
-            .map_err(|_| anyhow::anyhow!("turns are admitted already"))?;
-        let _ = self.inner.resources_file.set(config_file);
-        Ok(())
-    }
-
-    /// Admits at most `max_turns` turns at once from now on, and keeps it in the config file:
-    /// written first, so a limit that cannot be kept is not applied either.
-    async fn set_max_turns(&self, max_turns: u32) -> Result<CommandResult, ErrorInfo> {
-        let limit = herder_protocol::MAX_TURNS_LIMIT;
-        if !(1..=limit).contains(&max_turns) {
-            return Err(error(
-                ErrorCode::BadRequest,
-                format!("turns at once must be 1 to {limit}"),
-            ));
-        }
-        let (Some(admission), Some(path)) = (
-            self.inner.admission.get(),
-            self.inner.resources_file.get().cloned(),
-        ) else {
-            return Err(error(
-                ErrorCode::Unsupported,
-                "this daemon admits turns without a limit",
-            ));
-        };
-        tokio::task::spawn_blocking(move || {
-            crate::config::set_max_turns(&path, max_turns).map_err(internal)
-        })
-        .await
-        .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
-        admission.set_max_turns(max_turns);
-        info!(max_turns, "the turn limit changed");
-        Ok(CommandResult::Applied)
+            .map_err(|_| anyhow::anyhow!("turns are admitted already"))
     }
 
     /// Titles sessions as `config` says, with the CLI `clis` names for each provider

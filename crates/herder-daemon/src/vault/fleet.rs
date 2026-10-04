@@ -411,6 +411,9 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::PairDevice
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }
+        | CommandBody::GetSettings
+        | CommandBody::SetSettings { .. }
+        | CommandBody::RestartDaemon
         | CommandBody::AddAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }

@@ -10,14 +10,15 @@ use herder_client_core::{
 };
 use herder_protocol::{
     Account, AccountId, AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalId,
-    ApprovalOutcome, Attachment, AttachmentId, Bytes, CiStatus, CommandBody, CommandResult,
-    Constraint, Container, ContainerState, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
-    EscalationReason, Event, EventBody, FailoverSettings, FleetHost, HostId, HostReplication,
-    HostResources, HostUsage, Image, Item, ItemBody, ItemId, LinkedVault, Mergeable,
-    PermissionMode, PrState, Pressure, Project, ProjectId, PromptId, Provider, PullRequest,
-    QuestionId, QueuedPrompt, ReviewStatus, Role, Route, SessionHead, SessionId, SessionStatus,
-    SessionUsage, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSource, TurnError, TurnId,
-    UsageWindow, UserId, VaultStatus, VaultVolume,
+    ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus, CommandBody,
+    CommandResult, Constraint, Container, ContainerState, DaemonSettings, DirectoryEntry,
+    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FailoverSettings,
+    FleetHost, HostId, HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId,
+    LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project,
+    ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary, PullRequest, QuestionId,
+    QueuedPrompt, ResourceSettings, ReviewStatus, Role, Route, SessionHead, SessionId,
+    SessionStatus, SessionUsage, TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSettings, TitleSource, TurnError, TurnId, UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -617,6 +618,11 @@ pub enum CommandBody {
     SetResourceLimits {
         max_turns: u32,
     },
+    GetSettings,
+    SetSettings {
+        settings: Box<DaemonSettings>,
+    },
+    RestartDaemon,
     AddAccount {
         account_id: AccountId,
         provider: Provider,
@@ -677,6 +683,12 @@ pub enum CommandResult {
         is_vault: bool,
         vault: Option<LinkedVault>,
         volume: Option<VaultVolume>,
+    },
+    Settings {
+        settings: Box<DaemonSettings>,
+        restart_required: bool,
+        data_dir: String,
+        is_vault: bool,
     },
     DevicePairing {
         code: String,
@@ -811,6 +823,77 @@ pub struct Account {
 #[uniffi::remote(Record)]
 pub struct FailoverSettings {
     pub pin: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct DaemonSettings {
+    pub listen: String,
+    pub log: LogSettings,
+    pub binaries: Vec<ProviderBinary>,
+    pub tasks: TaskSettings,
+    pub failover: FailoverSettings,
+    pub titles: TitleSettings,
+    pub resources: ResourceSettings,
+    pub projects: ProjectDiscovery,
+    pub backup: BackupSettings,
+}
+
+#[uniffi::remote(Record)]
+pub struct LogSettings {
+    pub level: String,
+    pub format: LogFormat,
+}
+
+#[uniffi::remote(Enum)]
+pub enum LogFormat {
+    Pretty,
+    Json,
+}
+
+#[uniffi::remote(Record)]
+pub struct ProviderBinary {
+    pub provider: Provider,
+    pub binary: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct TaskSettings {
+    pub max_children: u32,
+}
+
+#[uniffi::remote(Record)]
+pub struct TitleSettings {
+    pub enabled: bool,
+    pub provider: Option<Provider>,
+    pub model: Option<String>,
+    pub account: Option<AccountId>,
+}
+
+#[uniffi::remote(Record)]
+pub struct ResourceSettings {
+    pub memory_max_percent: u8,
+    pub memory_high_percent: u8,
+    pub cpu_weight: u16,
+    pub child_cpu_weight: u16,
+    pub nice: i8,
+    pub max_turns: Option<u32>,
+    pub min_memory_available_mib: u64,
+    pub max_memory_pressure: u8,
+    pub max_load_percent: u16,
+}
+
+#[uniffi::remote(Record)]
+pub struct ProjectDiscovery {
+    pub roots: Vec<String>,
+    pub exclude: Vec<String>,
+    pub setup_timeout_secs: u64,
+}
+
+#[uniffi::remote(Record)]
+pub struct BackupSettings {
+    pub attachments: bool,
+    pub attachments_cap: u64,
+    pub archive_retention_days: u32,
 }
 
 #[uniffi::remote(Record)]

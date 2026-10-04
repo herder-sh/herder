@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Account, AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
+    Cursor, DaemonSettings, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
     PROTOCOL_VERSION, PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
     SessionId, Terminal, TerminalPurpose, TurnId,
 };
@@ -31,6 +31,7 @@ use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::login::Logins;
 use crate::session::EventSink;
+use crate::settings::{self, Settings};
 use crate::terminal::Terminals;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -151,6 +152,8 @@ struct Daemon {
     store: Arc<Mutex<Store>>,
     commands: Arc<AtomicUsize>,
     shutdown: CancellationToken,
+    /// The daemon's config file, which the settings commands change.
+    config: PathBuf,
     _tmp: tempfile::TempDir,
 }
 
@@ -197,6 +200,14 @@ impl Daemon {
             Logins::default(),
             host,
         );
+        let config = tmp.path().join("daemon.toml");
+        std::fs::write(&config, CONFIG).unwrap();
+        let settings = Settings::new(
+            &crate::Config::load_file(&config).unwrap(),
+            None,
+            shutdown.clone(),
+        );
+        server.manage_settings(Arc::new(settings)).unwrap();
         tokio::spawn(server.run(listener, shutdown.clone()));
         Arc::new(Self {
             addr,
@@ -207,6 +218,7 @@ impl Daemon {
             store,
             commands,
             shutdown,
+            config,
             _tmp: tmp,
         })
     }
@@ -1257,4 +1269,102 @@ async fn revoking_a_device_disconnects_and_refuses_it() {
     );
     let error = refused(daemon.client_on(&device, None).await).await;
     assert_eq!(error.code, ErrorCode::Forbidden);
+}
+
+/// The config file every test daemon starts with.
+const CONFIG: &str = "# mine\nlisten = \"0.0.0.0:7447\" # everywhere\n";
+
+/// The settings a `settings` answer carries, and whether they need a restart.
+fn settings_answer(message: ServerMessage) -> (DaemonSettings, bool) {
+    match message {
+        ServerMessage::CommandAccepted {
+            result:
+                CommandResult::Settings {
+                    settings,
+                    restart_required,
+                    ..
+                },
+            ..
+        } => (*settings, restart_required),
+        other => panic!("not settings: {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_changes_the_settings_which_apply_on_restart() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let (settings, restart_required) =
+        settings_answer(client.command("c1", CommandBody::GetSettings).await);
+    assert!(!restart_required);
+    assert_eq!(settings.tasks.max_children, 5);
+
+    let mut changed = settings.clone();
+    changed.listen = "127.0.0.1:7999".into();
+    changed.tasks.max_children = 8;
+    let set = CommandBody::SetSettings {
+        settings: Box::new(changed.clone()),
+    };
+    let (settings, restart_required) = settings_answer(client.command("c2", set).await);
+    assert_eq!(settings, changed);
+    assert!(restart_required);
+    assert_eq!(
+        std::fs::read_to_string(&daemon.config).unwrap(),
+        CONFIG.replace("0.0.0.0:7447", "127.0.0.1:7999") + "\n[tasks]\nmax_children = 8\n"
+    );
+    // Still not in effect for whoever asks next.
+    let (_, restart_required) =
+        settings_answer(client.command("c3", CommandBody::GetSettings).await);
+    assert!(restart_required);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn settings_the_daemon_cannot_run_with_are_refused() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    let (settings, _) = settings_answer(client.command("c1", CommandBody::GetSettings).await);
+    let mut cases = Vec::new();
+    let mut new = settings.clone();
+    // TEST-NET-3: never an address of this machine.
+    new.listen = "203.0.113.9:7447".into();
+    cases.push(new);
+    let mut new = settings.clone();
+    new.listen = "everywhere".into();
+    cases.push(new);
+    let mut new = settings.clone();
+    new.resources.nice = 30;
+    cases.push(new);
+    let mut new = settings.clone();
+    new.backup.attachments = true;
+    cases.push(new);
+    for (n, new) in cases.into_iter().enumerate() {
+        let set = CommandBody::SetSettings {
+            settings: Box::new(new),
+        };
+        assert!(matches!(
+            client.command(&format!("c{}", n + 2), set).await,
+            ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::BadRequest
+        ));
+    }
+    assert_eq!(std::fs::read_to_string(&daemon.config).unwrap(), CONFIG);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_is_answered_before_the_daemon_stops() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    assert!(matches!(
+        client.command("c1", CommandBody::RestartDaemon).await,
+        ServerMessage::CommandAccepted {
+            result: CommandResult::Applied,
+            ..
+        }
+    ));
+    tokio::time::timeout(Duration::from_secs(5), daemon.shutdown.cancelled())
+        .await
+        .unwrap();
+    assert!(settings::restart_requested());
 }

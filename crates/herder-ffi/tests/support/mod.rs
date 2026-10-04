@@ -16,10 +16,11 @@ use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
+use herder_daemon::settings::Settings;
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
-use herder_daemon::{Hub, session};
+use herder_daemon::{Config, Hub, session};
 use herder_protocol::{AccountId, HostId, Provider, TurnId};
 use herder_store::Store;
 use tempfile::TempDir;
@@ -118,7 +119,18 @@ impl FakeDaemon {
             ..ResourcesConfig::default()
         };
         let admission = Arc::new(Admission::new(resources.budget(8), Box::new(Roomy)));
-        sessions.admit_turns(Arc::clone(&admission), dir.join("daemon.toml"))?;
+        sessions.admit_turns(Arc::clone(&admission))?;
+        // The config file holds the turn limit, so the app can change it and the settings.
+        let config_file = dir.join("daemon.toml");
+        std::fs::write(
+            &config_file,
+            format!("[resources]\nmax_turns = {MAX_TURNS}\n"),
+        )?;
+        let settings = Arc::new(Settings::new(
+            &Config::load_file(&config_file)?,
+            Some(Arc::clone(&admission)),
+            shutdown.clone(),
+        ));
         tokio::spawn({
             let (hub, shutdown) = (Arc::clone(&hub), shutdown.clone());
             async move { admission.run(&hub, shutdown).await }
@@ -140,6 +152,7 @@ impl FakeDaemon {
             vault: None,
         })?;
         let server = Server::new(tls, auth, hub, sessions, terminals, logins, host);
+        server.manage_settings(settings)?;
         let server = tokio::spawn(server.run(listener, shutdown.clone()));
         Ok(Self {
             link: link.to_string(),
