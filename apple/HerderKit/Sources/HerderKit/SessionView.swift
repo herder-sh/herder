@@ -179,11 +179,10 @@ struct SessionView: View {
                              tint: model.prs.sorted { $0.state.rank < $1.state.rank }.first?.state.color ?? Theme.secondary) {
                     showsPRs.toggle()
                 }
+                // On compact width the popover adapts to a sheet, which PRStrip then frames.
                 .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
-                    PRStrip(fleet: fleet, key: key, prs: model.prs)
-                        .frame(width: 520)
-                        .background(Theme.surface)
-                        .preferredColorScheme(.dark)
+                    PRStrip(fleet: fleet, key: key, prs: model.prs, presentation: PRListPresentation(compact: compact))
+                        .presentationCompactAdaptation(.sheet)
                 }
             }
             if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
