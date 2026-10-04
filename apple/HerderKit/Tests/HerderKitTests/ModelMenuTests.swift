@@ -60,7 +60,7 @@ struct ModelCatalogTests {
 }
 
 struct SettingsMenuTests {
-    @Test func accountsAreTheProvidersWithTheirBusiestWindow() {
+    @Test func accountsCarryTheirProviderAndBusiestWindow() {
         let accounts = [
             Account(accountId: "main", provider: "claude", label: "Main", configDir: nil, usage: [
                 UsageWindow(window: "five_hour", usedPercent: 12.4, resetsAt: nil),
@@ -69,13 +69,14 @@ struct SettingsMenuTests {
             Account(accountId: "gpt", provider: "codex", label: "GPT", configDir: nil, usage: []),
             Account(accountId: "work", provider: "claude", label: "Work", configDir: nil, usage: []),
         ]
-        let options = SettingsOption.accounts(accounts, provider: "claude", current: "work")
-        #expect(options.map(\.id) == ["main", "work"])
+        let options = SettingsOption.accounts(accounts, current: "work")
+        #expect(options.map(\.id) == ["main", "gpt", "work"])
+        #expect(options.map(\.provider) == ["claude", "codex", "claude"])
         #expect(options[0].detail == "Weekly 62%")
         #expect(options[0].usage == 61.6)
-        #expect(options.map(\.current) == [false, true])
+        #expect(options.map(\.current) == [false, false, true])
         // No usage reported: no detail and no meter.
-        #expect(options[1].detail == nil && options[1].usage == nil)
+        #expect(options[2].detail == nil && options[2].usage == nil)
     }
 
     @Test func machinesPutTheCurrentFirstAndSayWhyOthersCannotBePicked() {
