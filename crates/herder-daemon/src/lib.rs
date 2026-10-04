@@ -15,6 +15,7 @@ pub mod projects;
 pub mod prs;
 pub mod resources;
 pub mod session;
+pub mod settings;
 pub mod terminal;
 pub mod usage;
 pub mod vault;
@@ -33,8 +34,17 @@ pub use config::Config;
 pub use data_dir::DataDir;
 pub use hub::Hub;
 
-/// Runs the daemon until SIGTERM or Ctrl-C, then shuts down cleanly.
-pub fn run(config: Config) -> Result<()> {
+/// How the daemon stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exit {
+    /// On SIGTERM or Ctrl-C.
+    Stopped,
+    /// An owner asked it to start again ([`settings`]).
+    Restart,
+}
+
+/// Runs the daemon until SIGTERM, Ctrl-C or an owner's restart, then shuts down cleanly.
+pub fn run(config: Config) -> Result<Exit> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -55,11 +65,17 @@ pub fn run(config: Config) -> Result<()> {
                 token.cancel();
             });
             if config.mode == config::Mode::Vault {
-                return vault::serve(&config, shutdown).await;
+                vault::serve(&config, shutdown).await?;
+            } else {
+                let adapters = accounts::adapters(&config.binaries);
+                let probes = accounts::probes(&config.binaries);
+                serve(&config, adapters, probes, config.accounts.clone(), shutdown).await?;
             }
-            let adapters = accounts::adapters(&config.binaries);
-            let probes = accounts::probes(&config.binaries);
-            serve(&config, adapters, probes, config.accounts.clone(), shutdown).await
+            Ok(if settings::restart_requested() {
+                Exit::Restart
+            } else {
+                Exit::Stopped
+            })
         })
 }
 
@@ -174,7 +190,12 @@ pub async fn serve(
         config.resources.budget(resources::cores()),
         Box::new(resources::ProcHost::default()),
     ));
-    sessions.admit_turns(Arc::clone(&admission), config.path.clone())?;
+    sessions.admit_turns(Arc::clone(&admission))?;
+    let settings = Arc::new(settings::Settings::new(
+        config,
+        Some(Arc::clone(&admission)),
+        shutdown.clone(),
+    ));
     let budget = admission.budget();
     info!(
         max_turns = budget.max_turns,
@@ -240,6 +261,7 @@ pub async fn serve(
     );
     let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
     server.link_vault(link)?;
+    server.manage_settings(settings)?;
     server.run(listeners, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");
