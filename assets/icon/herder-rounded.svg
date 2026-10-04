@@ -1,0 +1,18 @@
+<!-- herder.svg on the macOS icon grid: an 824 pt rounded square with a soft shadow, which the
+     Linux app uses too. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2233"/>
+      <stop offset="1" stop-color="#111216"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
+  <g fill="none" stroke="#7aa2f7" stroke-width="100" stroke-linecap="round" transform="translate(100 92) scale(0.8047)">
+    <path d="M250 390 V330 A110 110 0 0 1 470 330 V800"/>
+    <path d="M470 610 A150 150 0 0 1 770 610 V800"/>
+  </g>
+</svg>

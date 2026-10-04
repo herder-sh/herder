@@ -1,0 +1,16 @@
+<!-- The herder app icon, full bleed: a lowercase h whose ascender is a shepherd's crook, in
+     the palette's primary on its dark surface (docs/tui-design.md §6). iOS masks the corners
+     itself. scripts/icons.sh renders every platform's icon from this and herder-rounded.svg. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f2233"/>
+      <stop offset="1" stop-color="#111216"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <g fill="none" stroke="#7aa2f7" stroke-width="100" stroke-linecap="round" transform="translate(0 -10)">
+    <path d="M250 390 V330 A110 110 0 0 1 470 330 V800"/>
+    <path d="M470 610 A150 150 0 0 1 770 610 V800"/>
+  </g>
+</svg>
