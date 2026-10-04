@@ -1,15 +1,14 @@
 # herder-ffi
 
-UniFFI bindings of `herder-client-core` for the Swift and Kotlin apps. The API is
+UniFFI bindings of `herder-client-core` for the Swift apps. The API is
 client-core's (`crates/herder-client-core/API.md`), with three additions described in
-`src/lib.rs`: the client owns its tokio runtime, errors are `HerderError` (Kotlin:
-`HerderException`), and pairing links parse and format with `parsePairingUri` and
+`src/lib.rs`: the client owns its tokio runtime, errors are `HerderError`, and pairing links parse and format with `parsePairingUri` and
 `pairingUriToString` (one machine) and `parsePairingLink` and `pairingLinkToString` (one or
 more, as `Client.share` makes them). Protocol ids, providers and timestamps are strings (timestamps RFC 3339),
 terminal bytes are byte arrays and a tool call's input is JSON text.
 
-The `ffi` workflow builds and tests the Kotlin package, and the `apple` workflow the Swift one
-(through `apple/scripts/build-ffi.sh`); this is what they do.
+The `apple` workflow builds and tests the Swift package (through `apple/scripts/build-ffi.sh`);
+this is what it does.
 
 ## The fake daemon
 
@@ -17,21 +16,6 @@ The `ffi` workflow builds and tests the Kotlin package, and the `apple` workflow
 runs on the fake adapter, replaying `fixtures/hello.jsonl`. It prints a pairing link, the path
 of a git repository to create a session on, and the account, one per line, and runs until its
 stdin closes.
-
-## Kotlin: an AAR, and a test on the host JVM
-
-```sh
-cargo build -p herder-ffi --features bindgen --lib --bin uniffi-bindgen --example fake_daemon
-target/debug/uniffi-bindgen generate --library target/debug/libherder_ffi.so \
-  --language kotlin --no-format --out-dir crates/herder-ffi/kotlin/build/generated/uniffi
-cargo ndk -t arm64-v8a -t x86_64 -o crates/herder-ffi/kotlin/build/jniLibs \
-  build -p herder-ffi --release
-gradle -p crates/herder-ffi/kotlin :jvm:test :android:assembleRelease
-```
-
-`:jvm:test` loads `target/debug/libherder_ffi.so` and drives the fake daemon. The AAR lands in
-`kotlin/android/build/outputs/aar/`; apps add JNA (`net.java.dev.jna:jna:5.15.0@aar`) and
-kotlinx-coroutines next to it.
 
 ## Swift: an xcframework, and a sample program (macOS)
 

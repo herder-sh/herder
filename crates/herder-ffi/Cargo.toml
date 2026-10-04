@@ -10,7 +10,7 @@ repository.workspace = true
 crate-type = ["lib", "cdylib"]
 name = "herder_ffi"
 
-# Generates the Swift and Kotlin bindings from the built library.
+# Generates the Swift bindings from the built library.
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
