@@ -82,13 +82,6 @@ struct PromptEditorTests {
 
 @MainActor
 struct DictationTests {
-    @Test func deniedSpeechRecognitionSaysWhereToAllowIt() async {
-        let dictation = Dictation { .speechDenied }
-        await dictation.start { _ in }
-        #expect(!dictation.listening)
-        #expect(dictation.error?.contains("Speech Recognition") == true)
-    }
-
     @Test func deniedMicrophoneSaysWhereToAllowIt() async {
         let dictation = Dictation { .microphoneDenied }
         await dictation.start { _ in }
@@ -96,19 +89,24 @@ struct DictationTests {
         #expect(dictation.error?.contains("Microphone") == true)
     }
 
-    @Test func dictationTurnedOffInSettingsIsExplained() {
-        let off = NSError(domain: "kLSRErrorDomain", code: 201, userInfo: [NSLocalizedDescriptionKey: "Siri and Dictation are disabled"])
-        #expect(Dictation.message(for: off) == "Turn on Dictation in System Settings › Keyboard to dictate.")
-        #expect(Dictation.message(for: NSError(domain: "kAFAssistantErrorDomain", code: 216)) == nil)
-        #expect(Dictation.message(for: NSError(domain: "x", code: 1, userInfo: [NSLocalizedDescriptionKey: "boom"])) == "Dictation stopped: boom")
+    @Test func stoppingWhileGettingReadyCancelsTheStart() async {
+        final class Box: @unchecked Sendable { var dictation: Dictation? }
+        let box = Box()
+        let dictation = Dictation {
+            await MainActor.run { box.dictation?.stop() }
+            return .granted
+        }
+        box.dictation = dictation
+        await dictation.start { _ in }
+        #expect(!dictation.listening)
+        #expect(dictation.error == nil)
     }
 
-    /// Without these the system refuses the microphone and the recognizer without asking.
+    /// Without these the system refuses the microphone without asking.
     @Test func theAppDeclaresWhatDictationNeeds() throws {
         let apple = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../..").standardized
         let project = try String(contentsOf: apple.appending(path: "project.yml"), encoding: .utf8)
         #expect(project.contains("INFOPLIST_KEY_NSMicrophoneUsageDescription:"))
-        #expect(project.contains("INFOPLIST_KEY_NSSpeechRecognitionUsageDescription:"))
         let entitlements = try PropertyListSerialization.propertyList(
             from: Data(contentsOf: apple.appending(path: "App/herder.entitlements")), format: nil) as? [String: Any]
         #expect(entitlements?["com.apple.security.device.audio-input"] as? Bool == true)
