@@ -29,6 +29,8 @@ struct SessionView: View {
     @State private var typedPR = ""
     /// Where the transcript is scrolled, and where each session shown here was left.
     @State private var scroll = TranscriptScroll()
+    /// The block at the top of the transcript, for the checkpoint rail.
+    @State private var top = TranscriptTop()
     /// Bumped on every send, so the transcript jumps to its end.
     @State private var sent = 0
 
@@ -75,9 +77,18 @@ struct SessionView: View {
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsGrowth(key: key, scroll: $scroll))
+            .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top))
             .id(key)
             .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
+            .overlay(alignment: .leading) {
+                let checkpoints = Checkpoints(blocks)
+                // Hover is how the rail reads; a phone has none, and no margin to spare.
+                if !compact && checkpoints.items.count > 1 {
+                    CheckpointRail(checkpoints: checkpoints, top: top) { id in
+                        withAnimation { proxy.scrollTo(id, anchor: .top) }
+                    }
+                }
+            }
             }
             if let model {
                 controls(model, summary)
@@ -299,12 +310,16 @@ struct SessionView: View {
 private struct FollowsGrowth: ViewModifier {
     let key: SessionKey
     @Binding var scroll: TranscriptScroll
+    let top: TranscriptTop
 
     func body(content: Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
             content
                 .defaultScrollAnchor(.bottom, for: .sizeChanges)
-                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { scroll.saw($0.first, in: key) }
+                .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) {
+                    scroll.saw($0.first, in: key)
+                    top.id = $0.first
+                }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.visibleRect.maxY >= geometry.contentSize.height - 40
                 } action: { _, atEnd in
