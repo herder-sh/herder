@@ -1,7 +1,7 @@
 //! One running `claude`: the startup handshake, then the loop that turns commands into
 //! stream-json lines and the CLI's lines into adapter events.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use herder_protocol::{
@@ -71,7 +71,7 @@ pub(super) async fn start(
         block: None,
         streaming: None,
         tool_calls: HashMap::new(),
-        tasks: HashMap::new(),
+        agents: HashSet::new(),
         approvals: HashMap::new(),
         asks: Vec::new(),
         next_item: 0,
@@ -186,6 +186,15 @@ struct Deferred {
     agent_sender: Option<herder_protocol::SessionId>,
 }
 
+/// A tool call item, and the turn it is in.
+#[derive(Clone)]
+struct Call {
+    id: ItemId,
+    turn_id: TurnId,
+    /// It runs an agent, which Claude may run in the background.
+    agent: bool,
+}
+
 /// A text or thinking item being streamed.
 struct Streaming {
     id: ItemId,
@@ -211,11 +220,11 @@ struct Session {
     /// The kind of the content block streaming, `true` for thinking, before it has an item.
     block: Option<bool>,
     streaming: Option<Streaming>,
-    /// Tool call items of the open turn, by Claude's `tool_use` id.
-    tool_calls: HashMap<String, ItemId>,
-    /// Tool call items that started a background task, by Claude's `tool_use` id: kept across
-    /// turns, as the task ends in a later one.
-    tasks: HashMap<String, ItemId>,
+    /// Tool call items by Claude's `tool_use` id, kept as long as the CLI runs: a background
+    /// task ends in a later turn, and its agent's own calls arrive between turns.
+    tool_calls: HashMap<String, Call>,
+    /// Claude's `tool_use` ids of the agents working in the background.
+    agents: HashSet<String>,
     /// Open approval requests and the CLI's `request_id` to answer each on.
     approvals: HashMap<ApprovalId, String>,
     /// Open `AskUserQuestion` calls, in the order asked.
@@ -393,9 +402,13 @@ impl Session {
                 }
                 if system.subtype.as_deref() == Some("task_started")
                     && let Some(tool_use_id) = system.tool_use_id
-                    && let Some(call_id) = self.tool_calls.get(&tool_use_id)
+                    && self
+                        .tool_calls
+                        .get(&tool_use_id)
+                        .is_some_and(|call| call.agent)
+                    && self.agents.insert(tool_use_id)
                 {
-                    self.tasks.insert(tool_use_id, call_id.clone());
+                    self.agents_changed().await;
                 }
             }
             Incoming::StreamEvent(stream) if stream.parent_tool_use_id.is_none() => {
@@ -568,12 +581,15 @@ impl Session {
     }
 
     /// Child messages arrive interleaved with the parent stream. Emit their completed
-    /// blocks independently so they cannot finish or overwrite a parent streaming item.
+    /// blocks independently so they cannot finish or overwrite a parent streaming item, in the
+    /// turn of the call that spawned them: a background agent's arrive in later turns, or
+    /// while none runs.
     async fn nested_assistant(&mut self, assistant: wire::Assistant) {
-        let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
-            return;
-        };
-        let Some(parent_call_id) = assistant
+        let Some(Call {
+            id: parent_call_id,
+            turn_id,
+            ..
+        }) = assistant
             .parent_tool_use_id
             .as_ref()
             .and_then(|parent| self.tool_calls.get(parent))
@@ -656,7 +672,12 @@ impl Session {
         parent_call_id: Option<ItemId>,
     ) -> ItemId {
         let id = self.item_id();
-        self.tool_calls.insert(tool_use_id, id.clone());
+        let call = Call {
+            id: id.clone(),
+            turn_id: turn_id.clone(),
+            agent: is_agent(&name),
+        };
+        self.tool_calls.insert(tool_use_id, call);
         let body = ItemBody::ToolCall { name, input };
         self.emit(AdapterEvent::ItemCompleted {
             item: Item {
@@ -693,39 +714,39 @@ impl Session {
             return;
         };
         for notification in text.split(NOTIFICATION).skip(1) {
-            let Some(call_id) = tag(notification, "tool-use-id").and_then(|tool_use_id| {
-                self.tasks
-                    .get(&tool_use_id)
-                    .or_else(|| self.tool_calls.get(&tool_use_id))
-                    .cloned()
-            }) else {
+            let Some(tool_use_id) = tag(notification, "tool-use-id") else {
                 continue;
             };
-            let Some(output) = tag(notification, "result").or_else(|| tag(notification, "summary"))
-            else {
-                continue;
-            };
-            let is_error = tag(notification, "status").as_deref() == Some("failed");
-            let id = self.item_id();
-            let body = ItemBody::ToolResult {
-                call_id,
-                output,
-                is_error,
-            };
-            self.emit_item(id, turn_id.clone(), body).await;
+            let call_id = self
+                .tool_calls
+                .get(&tool_use_id)
+                .map(|call| call.id.clone());
+            let output = tag(notification, "result").or_else(|| tag(notification, "summary"));
+            if let (Some(call_id), Some(output)) = (call_id, output) {
+                let is_error = tag(notification, "status").as_deref() == Some("failed");
+                let id = self.item_id();
+                let body = ItemBody::ToolResult {
+                    call_id,
+                    output,
+                    is_error,
+                };
+                self.emit_item(id, turn_id.clone(), body).await;
+            }
+            self.agent_ended(&tool_use_id).await;
         }
     }
 
+    /// Results in the open turn, or for a subagent's calls in the turn that spawned it.
     async fn tool_results(&mut self, content: Value, parent: Option<String>) {
-        let parent_call_id = match parent {
+        let (parent_call_id, turn_id) = match parent {
             Some(parent) => match self.tool_calls.get(&parent) {
-                Some(id) => Some(id.clone()),
+                Some(call) => (Some(call.id.clone()), call.turn_id.clone()),
                 None => return, // Never misattribute an unknown child to the main transcript.
             },
-            None => None,
-        };
-        let Some(turn_id) = self.turn.as_ref().map(|turn| turn.id.clone()) else {
-            return;
+            None => match &self.turn {
+                Some(turn) => (None, turn.id.clone()),
+                None => return,
+            },
         };
         let Ok(blocks) = serde_json::from_value::<Vec<Block>>(content) else {
             // A plain string is a prompt echo or a note, not a tool result.
@@ -740,7 +761,11 @@ impl Session {
             else {
                 continue;
             };
-            let Some(call_id) = self.tool_calls.get(&tool_use_id).cloned() else {
+            let Some(call_id) = self
+                .tool_calls
+                .get(&tool_use_id)
+                .map(|call| call.id.clone())
+            else {
                 continue;
             };
             let id = self.item_id();
@@ -789,7 +814,7 @@ impl Session {
         }
         let summary = summary(&request);
         let tool_call_id = match self.tool_calls.get(&request.tool_use_id) {
-            Some(id) => id.clone(),
+            Some(call) => call.id.clone(),
             // A call omitted by the CLI: emit it now so the approval names it.
             None => {
                 self.finish_streaming().await;
@@ -960,7 +985,6 @@ impl Session {
         self.finish_streaming().await;
         self.block = None;
         let Some(turn) = self.turn.take() else { return };
-        self.tool_calls.clear();
         self.approvals.clear();
         self.asks.clear();
         let turn_id = turn.id;
@@ -970,6 +994,18 @@ impl Session {
             TurnEnd::Failed(error) => AdapterEvent::TurnFailed { turn_id, error },
         })
         .await;
+    }
+
+    /// The background agent `tool_use_id` started, if one did, is done.
+    async fn agent_ended(&mut self, tool_use_id: &str) {
+        if self.agents.remove(tool_use_id) {
+            self.agents_changed().await;
+        }
+    }
+
+    async fn agents_changed(&mut self) {
+        let running = u32::try_from(self.agents.len()).unwrap_or(u32::MAX);
+        self.emit(AdapterEvent::BackgroundAgents { running }).await;
     }
 
     // ---- Plumbing ----
@@ -1051,6 +1087,11 @@ fn content<'a>(text: &'a str, images: &'a [Image]) -> wire::Content<'a> {
         },
     });
     wire::Content::Blocks(images.chain([wire::UserBlock::Text { text }]).collect())
+}
+
+/// Whether Claude's tool `name` runs an agent: `Agent`, called `Task` by older CLIs.
+fn is_agent(name: &str) -> bool {
+    matches!(name, "Agent" | "Task")
 }
 
 fn streamed_body(reasoning: bool, text: String) -> ItemBody {

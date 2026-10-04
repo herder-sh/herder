@@ -82,7 +82,8 @@
 //! first non-empty delta, so thinking that the API only summarises as empty is never shown.
 //! A `tool_use` block becomes a completed `tool_call` item, and the `tool_result` block in the
 //! following `user` line its `tool_result` item. Lines from subagents (`parent_tool_use_id`
-//! set) emit completed items with `parent_call_id` pointing to the spawning tool call.
+//! set) emit completed items with `parent_call_id` pointing to the spawning tool call, in
+//! that call's turn: a background agent's keep coming after its turn ended, between turns too.
 //! Nested streaming deltas are skipped; completed child blocks never change the parent stream.
 //! A permission request whose tool call was omitted first emits its call so the approval has an item to name. The user's own prompt is not echoed. Items still streaming when a turn
 //! ends, as on interrupt, are completed with the text received so far.
@@ -104,6 +105,12 @@
 //! the task's real outcome to its call by `call_id`, as for any tool. The calls that started a
 //! task are remembered for the rest of the session; a notification for a call this process did
 //! not see, as after a restart, adds no item.
+//!
+//! An agent's task runs from its `task_started` to its notification; `BackgroundAgents`
+//! reports how many run each time that changes. The count drops only once the notification's
+//! turn is open, not at the `system` `task_notification` line the CLI writes just before, so
+//! the session never looks idle between the agent's end and the reply to it. Background `Bash` commands are not counted: a dev server runs
+//! for as long as the session.
 //!
 //! When the task ends while a turn runs, the CLI folds the notification into that turn. When
 //! none runs, the CLI starts a turn itself: the adapter then sends `TurnStarted` with an id it

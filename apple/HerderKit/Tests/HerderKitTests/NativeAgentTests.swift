@@ -163,6 +163,27 @@ struct NativeAgentTests {
         #expect(after?.duration(at: .distantFuture) == nil)
     }
 
+    @Test func backgroundAgentRunsWhileTheSessionStaysRunningPastItsTurn() {
+        // The daemon keeps the session running while background agents work.
+        var script = Script()
+        let model = script.model([
+            created(), .sessionStatusChanged(status: .running, retryAt: nil), .turnStarted(turnId: "t1"),
+            nestedItem("a", .toolCall(name: "Agent", input: agentInput)),
+            nestedItem("launch", .toolResult(callId: "a", output: launchMetadata, isError: false)),
+            .turnCompleted(turnId: "t1"),
+            nestedItem("a-grep", .toolCall(name: "Grep", input: #"{"pattern":"TODO"}"#), parent: "a"),
+        ])
+        let reference = NativeAgent.ID(turnId: "t1", callId: "a")
+        let running = NativeAgent.find(reference, in: model)
+        #expect(running?.outcome == .running)
+        #expect(running?.status == "Running in the background")
+        #expect(NativeAgent.summary(running.map { [$0] } ?? []) == "1 working")
+
+        var stopped = model
+        stopped.apply(script.event(.sessionStatusChanged(status: .idle, retryAt: nil)))
+        #expect(NativeAgent.find(reference, in: stopped)?.outcome == .unknown)
+    }
+
     @Test func backgroundAgentResultFromALaterTurnCompletesIt() {
         // Claude reports a background agent's result in a turn it starts itself, as a later
         // result for the launching call.
