@@ -172,6 +172,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             host: host.id.clone(),
             config: Arc::new(Overrides::new(
                 dir.join("daemon.toml"),
+                dir.join("project-icons"),
                 ProjectsConfig::default(),
             )),
             hub: Arc::clone(&hub),

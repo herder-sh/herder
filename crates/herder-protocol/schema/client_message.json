@@ -1278,7 +1278,36 @@
           ]
         },
         {
-          "description": "Fetch a project's icon, the file its `icon` names; owners and members alike. Answered\nwith `project_icon`, or refused with `not_found` when the project has none. It changes\nnothing, so a resend is answered afresh.",
+          "description": "Set or clear a project's uploaded icon on this host, kept in the daemon's data dir;\nowners only. An uploaded icon wins over the `[[project]]` entry's `icon` and over the\nfiles found in the clone. Answered with `applied`; the project list follows with the\nnew `icon` and `icon_uploaded`. Refused with `bad_request` when the media type is not\none of [`crate::PROJECT_ICON_MEDIA_TYPES`], or the data is empty or over\n[`crate::MAX_PROJECT_ICON_BYTES`].",
+          "type": "object",
+          "properties": {
+            "icon": {
+              "description": "The image to use; absent clears the upload, so the icon is found in the clone again.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Image"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "project_id": {
+              "description": "The project, one of this daemon's.",
+              "$ref": "#/$defs/ProjectId"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_project_icon"
+            }
+          },
+          "required": [
+            "type",
+            "project_id"
+          ]
+        },
+        {
+          "description": "Fetch a project's icon, the image its `icon` names; owners and members alike. Answered\nwith `project_icon`, or refused with `not_found` when the project has none. It changes\nnothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
             "project_id": {
@@ -2413,15 +2442,15 @@
       "type": "string"
     },
     "Image": {
-      "description": "An image sent with a prompt.",
+      "description": "An image file a client sends: with a prompt, or as a project's icon.",
       "type": "object",
       "properties": {
         "data": {
-          "description": "The image file's bytes, at most [`MAX_IMAGE_BYTES`].",
+          "description": "The image file's bytes: at most [`MAX_IMAGE_BYTES`] with a prompt, at most\n[`crate::MAX_PROJECT_ICON_BYTES`] as an icon.",
           "$ref": "#/$defs/Bytes"
         },
         "media_type": {
-          "description": "One of [`IMAGE_MEDIA_TYPES`]; the bytes must be an image of that type.",
+          "description": "The image's media type: one of [`IMAGE_MEDIA_TYPES`] with a prompt, of\n[`crate::PROJECT_ICON_MEDIA_TYPES`] as an icon; the bytes must be an image of that type.",
           "type": "string"
         }
       },

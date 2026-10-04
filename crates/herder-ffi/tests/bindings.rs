@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use herder_client_core::PairResult;
 use herder_ffi::{
-    Client, HerderError, image_media_types, max_image_bytes, max_prompt_image_bytes,
-    pairing_link_to_string, pairing_uri_to_string, parse_pairing_link, parse_pairing_uri,
+    Client, HerderError, image_media_types, max_image_bytes, max_project_icon_bytes,
+    max_prompt_image_bytes, pairing_link_to_string, pairing_uri_to_string, parse_pairing_link,
+    parse_pairing_uri,
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
@@ -191,6 +192,10 @@ fn the_image_limits_are_the_protocols() {
     assert_eq!(
         max_prompt_image_bytes(),
         herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
+    );
+    assert_eq!(
+        max_project_icon_bytes(),
+        herder_protocol::MAX_PROJECT_ICON_BYTES as u64
     );
 }
 

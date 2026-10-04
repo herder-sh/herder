@@ -325,6 +325,14 @@ public final class Fleet {
             projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand))
     }
 
+    /// Uploads a PNG as a project's icon on a machine, or clears the upload when `png` is nil
+    /// so the machine finds one in the clone again; owners only. The project list that follows
+    /// carries the new icon hash, which `fetchProjectIcons` fetches.
+    func setProjectIcon(_ projectId: ProjectId, on hostId: HostId, png: Data?) async throws {
+        let icon = png.map { Herder.Image(mediaType: "image/png", data: $0) }
+        _ = try await client.send(hostId: hostId, command: .setProjectIcon(projectId: projectId, icon: icon))
+    }
+
     /// Stops a machine managing a project; its clones stay on disk. The machine refuses while
     /// the project has sessions that are not archived.
     func removeProject(_ projectId: ProjectId, on hostId: HostId) async throws {

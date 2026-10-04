@@ -1083,6 +1083,10 @@ async fn browsing_folders_is_for_owners_only_and_never_remembered() {
         CommandBody::RemoveProject {
             project_id: herder_protocol::ProjectId::new("github.com/org/app"),
         },
+        CommandBody::SetProjectIcon {
+            project_id: herder_protocol::ProjectId::new("github.com/org/app"),
+            icon: None,
+        },
     ] {
         let ServerMessage::CommandRejected { error, .. } = member.command("c1", body).await else {
             panic!("expected a rejection");

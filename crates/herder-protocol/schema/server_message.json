@@ -2529,11 +2529,16 @@
           ]
         },
         "icon": {
-          "description": "The project's icon, an image file found in its clone on this host, named by the\nSHA-256 of its bytes as lowercase hex; absent when it has none. It changes whenever the\nfile does, so clients cache the icon by it and fetch it with `get_project_icon`.",
+          "description": "The project's icon, the image an owner uploaded with `set_project_icon`, else an image\nfile found in its clone on this host, named by the SHA-256 of its bytes as lowercase\nhex; absent when it has none. It changes whenever the image does, so clients cache the\nicon by it and fetch it with `get_project_icon`.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "icon_uploaded": {
+          "description": "Whether `icon` is an uploaded image rather than one found in the clone;\n`set_project_icon` without an image clears the upload.",
+          "type": "boolean",
+          "default": false
         },
         "name": {
           "description": "Display name: the configured name, else the last segment of the id.",

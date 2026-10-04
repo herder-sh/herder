@@ -223,9 +223,9 @@ use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord,
-    MAX_TITLE_CHARS, PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId,
-    SessionStatus, SessionSummary, Timestamp, TitleSource, TurnId, UsageWindow, UserId,
-    clean_title,
+    MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project,
+    ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
+    TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
@@ -612,6 +612,9 @@ impl SessionManager {
             CommandBody::RemoveProject { project_id } => {
                 return self.remove_project(&project_id).await;
             }
+            CommandBody::SetProjectIcon { project_id, icon } => {
+                return self.set_project_icon(&project_id, icon).await;
+            }
             CommandBody::GetProjectIcon { project_id } => {
                 return self.project_icon(&project_id).await;
             }
@@ -974,24 +977,64 @@ impl SessionManager {
         Ok(CommandResult::Applied)
     }
 
+    /// Keeps `icon` as the uploaded icon of `project_id`, one of the listed projects, or
+    /// deletes its upload when `None` ([`Overrides::set_icon`]).
+    async fn set_project_icon(
+        &self,
+        project_id: &ProjectId,
+        icon: Option<Image>,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let (_, overrides) = self.projects()?;
+        let project = self.listed_project(project_id)?;
+        if let Some(icon) = &icon {
+            if !PROJECT_ICON_MEDIA_TYPES.contains(&icon.media_type.as_str()) {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "a project icon must be one of {}, not {}",
+                        PROJECT_ICON_MEDIA_TYPES.join(", "),
+                        icon.media_type
+                    ),
+                ));
+            }
+            if icon.data.0.is_empty() || icon.data.0.len() > MAX_PROJECT_ICON_BYTES {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "a project icon must have 1 to {MAX_PROJECT_ICON_BYTES} bytes, not {}",
+                        icon.data.0.len()
+                    ),
+                ));
+            }
+        }
+        tokio::task::spawn_blocking(move || {
+            let icon = icon
+                .as_ref()
+                .map(|icon| (icon.media_type.as_str(), icon.data.0.as_slice()));
+            overrides
+                .set_icon(&project.project_id, icon)
+                .map_err(internal)
+        })
+        .await
+        .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
+        Ok(CommandResult::Applied)
+    }
+
     /// The icon of `project_id`, one of the listed projects, read afresh ([`projects::icon`]).
     async fn project_icon(&self, project_id: &ProjectId) -> Result<CommandResult, ErrorInfo> {
+        let (_, overrides) = self.projects()?;
         let project = self.listed_project(project_id)?;
-        let entries = self
-            .inner
-            .projects
-            .get()
-            .map(|(_, overrides)| overrides.config().entries)
-            .unwrap_or_default();
-        let icon = tokio::task::spawn_blocking(move || projects::icon(&project, &entries))
-            .await
-            .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?
-            .ok_or_else(|| {
-                error(
-                    ErrorCode::NotFound,
-                    format!("project {project_id} has no icon"),
-                )
-            })?;
+        let icon = tokio::task::spawn_blocking(move || {
+            projects::icon(&project, &overrides.config().entries, overrides.icons())
+        })
+        .await
+        .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?
+        .ok_or_else(|| {
+            error(
+                ErrorCode::NotFound,
+                format!("project {project_id} has no icon"),
+            )
+        })?;
         Ok(CommandResult::ProjectIcon {
             icon: icon.hash,
             media_type: icon.media_type.to_owned(),

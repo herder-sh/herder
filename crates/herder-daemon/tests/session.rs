@@ -1215,6 +1215,7 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         default_account,
         setup_command: None,
         icon: None,
+        icon_uploaded: false,
     };
     let create = |repo: Option<String>, project_id: Option<&str>| CommandBody::CreateSession {
         repo,
@@ -3652,7 +3653,7 @@ fn set_up_with(daemon: &Daemon, command: &str, timeout: Duration) {
         }],
         ..ProjectsConfig::default()
     };
-    let overrides = Overrides::new(dir.join("daemon.toml"), projects);
+    let overrides = Overrides::new(dir.join("daemon.toml"), dir.join("project-icons"), projects);
     daemon
         .manager
         .manage_projects(HostId::new("host-1"), Arc::new(overrides))
@@ -4257,6 +4258,7 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
             default_account: Some(account()),
             setup_command: None,
             icon: None,
+            icon_uploaded: false,
         }])
         .await;
     for (given, started) in [

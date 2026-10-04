@@ -137,6 +137,7 @@ pub async fn serve(
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
     let projects = Arc::new(projects::Overrides::new(
         config.path.clone(),
+        data_dir.root().join("project-icons"),
         config.projects.clone(),
     ));
     sessions.manage_projects(host.id.clone(), Arc::clone(&projects))?;

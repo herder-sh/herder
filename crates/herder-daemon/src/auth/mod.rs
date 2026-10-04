@@ -494,6 +494,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::AddProject { .. }
             | CommandBody::SetProjectSettings { .. }
             | CommandBody::RemoveProject { .. }
+            | CommandBody::SetProjectIcon { .. }
     );
     if host && identity.role != Role::Owner {
         return Err(forbidden(

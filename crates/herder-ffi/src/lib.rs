@@ -127,6 +127,12 @@ pub fn max_prompt_image_bytes() -> u64 {
     herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
 }
 
+/// The most bytes a project's icon may have, `herder_protocol::MAX_PROJECT_ICON_BYTES`.
+#[uniffi::export]
+pub fn max_project_icon_bytes() -> u64 {
+    herder_protocol::MAX_PROJECT_ICON_BYTES as u64
+}
+
 /// Parses a `herder://pair` link, to confirm it before pairing.
 #[uniffi::export]
 pub fn parse_pairing_uri(link: String) -> Result<PairingUri, HerderError> {
