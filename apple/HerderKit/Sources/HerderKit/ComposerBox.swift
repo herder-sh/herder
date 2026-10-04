@@ -126,6 +126,8 @@ struct ComposerBox<Footer: View>: View {
             Spacer()
             if let problem = imageError ?? dictation.error {
                 Text(problem).font(.caption).foregroundStyle(Theme.failure).lineLimit(2)
+            } else if dictation.downloading {
+                Text("Downloading the speech model…").font(.caption).foregroundStyle(Theme.secondary)
             }
             DictationButton(listening: dictation.listening, action: toggleDictation)
             #if os(macOS)
@@ -176,7 +178,7 @@ struct ComposerBox<Footer: View>: View {
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private func submit() {
-        dictation.stop()
+        dictation.cancel()
         text = PromptText.expand(text, pastes: pastes)
         pastes = []
         send()

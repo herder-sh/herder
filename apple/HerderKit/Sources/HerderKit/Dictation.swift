@@ -2,114 +2,157 @@ import AVFoundation
 import Observation
 import Speech
 
-/// Speech to text on this device: Apple's speech recognizer, kept on-device when the Mac has
-/// the model, transcribing the microphone live into the composer. Whatever stops it from
-/// listening shows as `error`.
+/// Speech to text on this device: Apple's speech model, transcribing the microphone live into
+/// the composer. It runs whether or not system Dictation is on; the first use per language
+/// downloads the model. Whatever stops it from listening shows as `error`.
 @MainActor
 @Observable
 final class Dictation {
     /// What the user has allowed.
-    enum Access: Sendable { case granted, speechDenied, microphoneDenied }
+    enum Access: Sendable { case granted, microphoneDenied }
 
     private(set) var listening = false
+    /// The speech model for this language is downloading, before the first listen.
+    private(set) var downloading = false
     private(set) var error: String?
     @ObservationIgnored private let authorize: @Sendable () async -> Access
     @ObservationIgnored private let engine = AVAudioEngine()
-    @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
-    @ObservationIgnored private var task: SFSpeechRecognitionTask?
+    @ObservationIgnored private var analyzer: SpeechAnalyzer?
+    @ObservationIgnored private var audio: AsyncStream<AnalyzerInput>.Continuation?
+    @ObservationIgnored private var results: Task<Void, Never>?
 
     init(authorize: @escaping @Sendable () async -> Access = Dictation.systemAccess) {
         self.authorize = authorize
     }
 
-    /// Starts listening; `heard` gets the whole transcript so far, each time it grows.
+    /// Starts listening; `heard` gets the whole transcript so far, each time it changes.
+    /// `stop()` while it is still getting ready cancels the start.
     func start(heard: @escaping @MainActor (String) -> Void) async {
         guard !listening else { return }
+        listening = true
         error = nil
-        switch await authorize() {
-        case .granted: break
-        case .speechDenied:
-            error = "Allow herder Speech Recognition in System Settings › Privacy & Security."
-            return
-        case .microphoneDenied:
-            error = "Allow herder the Microphone in System Settings › Privacy & Security."
-            return
+        let access = await authorize()
+        guard listening else { return }
+        guard access == .granted else {
+            return fail("Allow herder the Microphone in System Settings › Privacy & Security.")
         }
-        guard let recognizer = SFSpeechRecognizer(), recognizer.isAvailable else {
-            error = "Speech recognition is not available for this language."
-            return
+        guard SpeechTranscriber.isAvailable,
+              let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) else {
+            return fail("Speech recognition is not available for this language.")
         }
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        do {
+            if let install = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                downloading = true
+                defer { downloading = false }
+                try await install.downloadAndInstall()
+            }
+        } catch {
+            return fail("The speech model did not download: \(error.localizedDescription)")
+        }
         let input = engine.inputNode
-        // The tap runs on the audio thread, so it is `@Sendable`, not the main actor's; the
-        // request only takes buffers from it.
-        nonisolated(unsafe) let buffers = request
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { @Sendable buffer, _ in
-            buffers.append(buffer)
+        let microphone = input.outputFormat(forBus: 0)
+        guard listening else { return }
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: microphone),
+              let converter = AVAudioConverter(from: microphone, to: format) else {
+            return fail("The microphone's audio cannot be transcribed.")
+        }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let (stream, audio) = AsyncStream.makeStream(of: AnalyzerInput.self)
+        do {
+            try await analyzer.start(inputSequence: stream)
+        } catch {
+            return fail("Dictation did not start: \(error.localizedDescription)")
+        }
+        guard listening else {
+            await analyzer.cancelAndFinishNow()
+            return
+        }
+        // The tap runs on the audio thread, so it is `@Sendable`, not the main actor's; only it
+        // uses the converter.
+        nonisolated(unsafe) let convert = converter
+        input.installTap(onBus: 0, bufferSize: 1024, format: microphone) { @Sendable buffer, _ in
+            if let converted = Self.convert(buffer, with: convert) { audio.yield(AnalyzerInput(buffer: converted)) }
         }
         engine.prepare()
         do {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            self.error = "The microphone did not start: \(error.localizedDescription)"
-            return
+            await analyzer.cancelAndFinishNow()
+            return fail("The microphone did not start: \(error.localizedDescription)")
         }
-        self.request = request
-        listening = true
-        // Results arrive on the recognizer's queue.
-        task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, failure in
-            let text = result?.bestTranscription.formattedString
-            let done = (result?.isFinal ?? false) || failure != nil
-            let problem = failure.flatMap(Self.message(for:))
-            Task { @MainActor in
-                guard let self else { return }
-                if let text { heard(text) }
-                // A failure after the user stopped is the task winding down, not news.
-                if let problem, self.listening { self.error = problem }
-                if done { self.stop() }
+        self.analyzer = analyzer
+        self.audio = audio
+        // A result is final text, or a guess at what follows it that the next result replaces.
+        results = Task { [weak self] in
+            var final = ""
+            do {
+                for try await result in transcriber.results {
+                    let text = String(result.text.characters)
+                    if result.isFinal { final += text }
+                    guard !Task.isCancelled else { return }
+                    heard(result.isFinal ? final : final + text)
+                }
+            } catch {
+                guard let self, self.listening else { return }
+                self.error = "Dictation stopped: \(error.localizedDescription)"
+                self.stop()
             }
         }
     }
 
+    /// Stops listening; the last words still land in `heard`.
     func stop() {
+        end { try? await $0.finalizeAndFinishThroughEndOfInput() }
+    }
+
+    /// Stops listening and drops the words not yet heard, for when the prompt has gone.
+    func cancel() {
+        results?.cancel()
+        end { await $0.cancelAndFinishNow() }
+    }
+
+    private func end(_ finish: @escaping @Sendable (SpeechAnalyzer) async -> Void) {
         guard listening else { return }
+        listening = false
+        // Not started yet: `start` sees `listening` gone and backs out.
+        guard let analyzer else { return }
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        task?.finish()
-        request = nil
-        task = nil
+        audio?.finish()
+        Task { await finish(analyzer) }
+        self.analyzer = nil
+        audio = nil
+        results = nil
+    }
+
+    private func fail(_ problem: String) {
+        error = problem
         listening = false
     }
 
-    /// What to tell the user when recognition fails; nil when there is nothing to tell.
-    nonisolated static func message(for failure: any Error) -> String? {
-        let failure = failure as NSError
-        switch (failure.domain, failure.code) {
-        case ("kLSRErrorDomain", 201), ("kAFAssistantErrorDomain", 1700):
-            // The recognizer only runs with Dictation (or Siri) on.
-            return "Turn on Dictation in System Settings › Keyboard to dictate."
-        case ("kAFAssistantErrorDomain", 1110):
-            return "No speech heard."
-        case ("kAFAssistantErrorDomain", 216), ("kAFAssistantErrorDomain", 301), ("kLSRErrorDomain", 301):
-            // Cancelled: the user stopped.
-            return nil
-        default:
-            return "Dictation stopped: \(failure.localizedDescription)"
+    /// The microphone's buffer in the format the speech model takes.
+    private nonisolated static func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) -> AVAudioPCMBuffer? {
+        let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up))
+        guard let converted = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) else { return nil }
+        var given = false
+        var failure: NSError?
+        converter.convert(to: converted, error: &failure) { _, status in
+            if given {
+                status.pointee = .noDataNow
+                return nil
+            }
+            given = true
+            status.pointee = .haveData
+            return buffer
         }
+        return failure == nil ? converted : nil
     }
 
-    /// Asks for speech recognition, then the microphone. Off the main actor: the system answers
-    /// on a queue of its own.
+    /// Asks for the microphone. Off the main actor: the system answers on a queue of its own.
     nonisolated static func systemAccess() async -> Access {
-        let speech = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0 == .authorized) }
-        }
-        guard speech else { return .speechDenied }
-        return await AVCaptureDevice.requestAccess(for: .audio) ? .granted : .microphoneDenied
+        await AVCaptureDevice.requestAccess(for: .audio) ? .granted : .microphoneDenied
     }
 }
