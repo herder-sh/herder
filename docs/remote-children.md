@@ -1,6 +1,6 @@
 # Remote children: spawning a task's child on another machine
 
-Status: proposal for owner review. This document adds no code. Each layer in §6 is its own
+Status: accepted by the owner (§7). This document adds no code. Each layer in §6 is its own
 todo; the contract changes are their own `[CONTRACT]` todos.
 
 Today `spawn` always starts the child on the primary's host. An agent on `trash-can-01` that
@@ -68,16 +68,23 @@ Refusals the agent can act on:
 
 ## 4. How the child runs
 
-On the source, `spawn` with `machine` sends `create_child` to the target over the peer
-connection, carrying the primary's session id and host id, its project id, task, provider,
+On the source, `spawn` with `machine` first snapshots the primary's worktree as a checkpoint
+(`refs/herder/<primary>/spawn-<child>`, with the checkpoint rules on what is left out) and
+pushes it to `origin`, waiting for the push: the turn's own checkpoint comes only once the
+turn ends. A repository with no `origin`, or a failed push, refuses the spawn as
+`not_allowed` with the reason, as a bundle cannot reach another host. It then sends
+`create_child` to the target over the peer connection, carrying the checkpoint commit, the primary's session id and host id, its project id, task, provider,
 model and permission ceiling, and the hop count agent messages carry.
 
 On the target, `create_child`:
 
 - resolves the project by id on this host (project ids are the same across hosts, e.g.
   `github.com/herder-sh/herder`) and refuses when it is not here;
-- picks this host's account for the provider, the way a fork moves to a local account;
-- creates the session at the project's default base, as a local child starts today, with
+- picks this host's account for the provider with the most headroom (the lowest of each
+  account's highest usage window), so a remote child spreads load across the target;
+- fetches the checkpoint the spawn names from `origin` and creates the worktree from it, as
+  a fork restores one, so the child starts from the primary's work as it was at the spawn,
+  uncommitted changes included; the session is created with
   `parent` naming the remote primary and its host;
 - caps its permission mode (decision 6) and records `by` the peer user.
 
@@ -122,12 +129,9 @@ Each lands on a product that works end to end; the first two change nothing user
    paired with both machines; a "child on <machine>" card otherwise; peer pairing and
    revocation from the apps.
 
-## 7. Open questions for the owner
+## 7. Owner decisions
 
-- **Accounts.** The child runs on the target's account for the provider. Should a project's
-  `default_account` on the target win, or the account with the most headroom?
-- **Repository state.** A child starts at the default base, as local children do. Should a
-  remote child instead start from the primary's latest checkpoint on `origin`, so it sees
-  the primary's uncommitted work? That costs a checkpoint push per spawn.
-- **Two-way pairing.** One `herder pair --peer` per direction keeps trust explicit. Is a
-  single command that pairs both directions worth having later?
+- **Accounts:** the target's account for the provider with the most headroom.
+- **Repository state:** the child starts from a checkpoint of the primary's worktree taken at
+  the spawn and pushed to `origin`.
+- **Pairing:** one `herder pair --peer` per direction; no two-way shortcut.
