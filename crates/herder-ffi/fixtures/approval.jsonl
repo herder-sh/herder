@@ -1,0 +1,8 @@
+# A tool call that waits on an approval, so the apps have a request to show on Home.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Run the tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "cargo test"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "approval-1", "turn_id": "turn-1", "tool_call_id": "item-1", "summary": "Run cargo test"}}
+{"expect": {"type": "answer_approval", "approval_id": "approval-1", "decision": "allow"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"expect": {"type": "shutdown"}}

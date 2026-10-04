@@ -49,8 +49,9 @@ The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:
 HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-path apple/HerderKit
 ```
 
-The iOS UI test pairs the app on a simulator with two running fake daemons, from the link a
-device paired with both shares (as **Machines › Pair Another Device** on the Mac does):
+The iOS UI tests pair the app on a simulator with two running fake daemons, from the link a
+device paired with both shares (as **Machines › Pair Another Device** on the Mac does), then
+open the session waiting on an approval on the first from its card on Home:
 
 ```sh
 cargo run -p herder-ffi --example fake_daemon -- --share   # prints the shared link first

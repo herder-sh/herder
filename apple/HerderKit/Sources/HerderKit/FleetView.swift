@@ -188,7 +188,7 @@ struct HomeView: View {
                 if !lists.requests.isEmpty && query.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         SectionHeading(title: "Needs you", count: lists.requests.count, tint: Theme.accent)
-                        ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet) }
+                        ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet, selection: selection) }
                     }
                 }
                 SessionGroup(title: "Active", sessions: lists.active.filter { $0.matches(query) }, fleet: fleet,

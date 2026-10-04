@@ -387,5 +387,3 @@ iPhone layout fixes land in P7.21.
 - No **done** state and no roll-up: project rows show a session count, not their sessions'
   state, unlike the TUI —
   [P7.26](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353293).
-- A `RequestCard` on Home names its session but does not open it —
-  [P7.27](https://app.basecamp.com/6276894/buckets/49114742/todos/10369353300).
