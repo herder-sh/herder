@@ -326,21 +326,29 @@ struct SessionLink: View {
     }
 }
 
-/// Every session, grouped by project, with the task tree: the live sessions, then the archived
-/// ones folded away at the end.
+/// The projects as compact rows, most recently active first, each unfolding to its sessions
+/// in task-tree order: the live ones, then the archived ones folded away at the end. A search
+/// keeps the projects whose name or path matches, and those with sessions that match,
+/// unfolded to show just those sessions.
 struct ProjectsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @Binding var draft: Draft?
     let projects: [ProjectGroup]
     var title = "Projects"
-    /// The projects whose archived sessions are unfolded.
+    @State private var query = ""
+    /// What the user unfolded: project ids, and `archived:` ids for their archived sessions.
     @State private var unfolded: Set<String> = []
+    /// The same while a search runs, starting with what it found through sessions unfolded.
+    @State private var searchUnfolded: Set<String> = []
+
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
+        let shown = ProjectGroup.found(projects, query: query)
         List {
-            ForEach(projects) { project in
-                Section {
+            ForEach(shown) { project in
+                DisclosureGroup(isExpanded: folding(project.id)) {
                     ForEach(project.live) { session in
                         row(session)
                         ForEach(session.agents) { agent in
@@ -349,10 +357,7 @@ struct ProjectsView: View {
                         }
                     }
                     if !project.archived.isEmpty {
-                        DisclosureGroup(isExpanded: Binding(
-                            get: { unfolded.contains(project.id) },
-                            set: { if $0 { unfolded.insert(project.id) } else { unfolded.remove(project.id) } }
-                        )) {
+                        DisclosureGroup(isExpanded: folding("archived:" + project.id)) {
                             ForEach(project.archived) { row($0) }
                         } label: {
                             Text("Archived · \(project.archived.count)")
@@ -360,38 +365,90 @@ struct ProjectsView: View {
                         }
                         .listRowBackground(Theme.surface)
                     }
-                } header: {
-                    HStack(spacing: 6) {
-                        ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 18)
-                        if let state = project.state {
-                            StatusGlyph(state: state, size: 7, pulses: false)
-                        }
-                        Text(project.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text(project.machines.joined(separator: ", ")).font(.caption).foregroundStyle(Theme.tertiary)
-                        Spacer()
-                        if let id = project.projectId {
-                            Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
-                                .labelStyle(.iconOnly)
-                            Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
-                                .labelStyle(.iconOnly)
-                        }
-                    }
-                    .foregroundStyle(Theme.secondary)
-                    .textCase(nil)
+                } label: {
+                    header(project)
                 }
+                .listRowBackground(Theme.surface)
             }
         }
+        .environment(\.defaultMinListRowHeight, 36)
         .overlay {
             if projects.isEmpty {
                 ContentUnavailableView("No sessions", systemImage: "square.stack.3d.up",
                                        description: Text("Sessions on your machines appear here."))
+            } else if shown.isEmpty {
+                ContentUnavailableView.search(text: query)
             }
+        }
+        .searchable(text: $query, prompt: "Projects and sessions")
+        .onChange(of: query) {
+            // What a search finds only through sessions opens to show them.
+            let found = ProjectGroup.found(projects, query: query).filter { !$0.matches(query) }
+            searchUnfolded = Set(found.map(\.id) + found.filter { !$0.archived.isEmpty }.map { "archived:" + $0.id })
         }
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle(title)
         .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
+    }
+
+    /// Whether `id` is unfolded: the user's own choice, or while searching the search's.
+    private func folding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { searching ? searchUnfolded.contains(id) : unfolded.contains(id) },
+            set: { open in
+                if searching {
+                    if open { searchUnfolded.insert(id) } else { searchUnfolded.remove(id) }
+                } else {
+                    if open { unfolded.insert(id) } else { unfolded.remove(id) }
+                }
+            })
+    }
+
+    /// A project's one compact row: its icon and name, its live sessions and machines, and how
+    /// long since anything happened in it.
+    private func header(_ project: ProjectGroup) -> some View {
+        HStack(spacing: 10) {
+            ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId),
+                        size: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(project.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    if let state = project.state {
+                        StatusGlyph(state: state, size: 7, pulses: false)
+                    }
+                }
+                Text(([project.live.count == 1 ? "1 session" : "\(project.live.count) sessions"] + project.machines)
+                    .joined(separator: " · "))
+                    .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if !project.age.isEmpty {
+                Text(project.age).font(.caption).foregroundStyle(Theme.tertiary)
+            }
+            if let id = project.projectId {
+                // Borderless, so tapping it starts a session rather than unfolding the row.
+                Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Theme.secondary)
+            }
+        }
+        .contentShape(.rect)
+        .contextMenu {
+            if let id = project.projectId {
+                Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
+                Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            if let id = project.projectId {
+                Button("Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
+                    .tint(Theme.raised)
+            }
+        }
     }
 
     private func row(_ session: SessionSummary) -> some View {
