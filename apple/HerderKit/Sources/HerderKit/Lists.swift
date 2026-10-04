@@ -1,14 +1,18 @@
 import Foundation
 import Herder
 
-/// A project and its sessions across machines, in task-tree order.
+/// A project and its sessions across machines, in task-tree order: the live ones, then the
+/// archived ones, each group a task tree of its own.
 struct ProjectGroup: Hashable, Identifiable {
     var id: String { projectId ?? "" }
     /// `nil` for sessions whose project is not known yet.
     let projectId: String?
     let name: String
     let machines: [String]
-    let sessions: [SessionSummary]
+    let live: [SessionSummary]
+    let archived: [SessionSummary]
+
+    var sessions: [SessionSummary] { live + archived }
 }
 
 /// What the lists show, built from the machines and their sessions' folded state the way the
@@ -103,9 +107,9 @@ struct Lists {
     }
 
     /// Every project a machine lists or a listed session is in, and the sessions no project
-    /// holds yet. An archived session no project holds is left out: it is one of a project
-    /// the machine dropped, or of a repository gone from it, and would only keep that project
-    /// in the list.
+    /// holds yet, each with its live sessions apart from its archived ones. An archived
+    /// session no project holds is left out: it is one of a project the machine dropped, or
+    /// of a repository gone from it, and would only keep that project in the list.
     private static func projects(_ entries: [Entry], machines: [Machine], now: Date) -> [ProjectGroup] {
         let shown = entries.filter { $0.projectId != nil || $0.model.state != .archived }
         var grouped: [String?: [Entry]] = Dictionary(grouping: shown, by: \.projectId)
@@ -115,7 +119,15 @@ struct Lists {
         }
         return grouped.map { projectId, members in
             let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
-            let ordered = forest(members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) })
+            let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
+            // A child whose parent is in the other group leads a tree of its own in its group.
+            func tree(archived: Bool) -> [SessionSummary] {
+                forest(sorted.filter { ($0.model.state == .archived) == archived }).map { entry, depth in
+                    var summary = entry.summary(now: now, children: members)
+                    summary.depth = depth
+                    return summary
+                }
+            }
             var machineNames = machines.filter { machine in
                 projectId != nil && machine.projects.contains { $0.projectId == projectId }
             }.map(\.name)
@@ -124,11 +136,7 @@ struct Lists {
             }
             return ProjectGroup(
                 projectId: projectId, name: name, machines: machineNames,
-                sessions: ordered.map { entry, depth in
-                    var summary = entry.summary(now: now, children: members)
-                    summary.depth = depth
-                    return summary
-                })
+                live: tree(archived: false), archived: tree(archived: true))
         }
         .sorted { a, b in
             if (a.projectId == nil) != (b.projectId == nil) { return b.projectId == nil }

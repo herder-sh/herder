@@ -206,9 +206,9 @@ private struct EmptyFleet: View {
     }
 }
 
-/// A titled card of session rows.
+/// A card of session rows, under its title when it has one.
 struct SessionGroup: View {
-    let title: String
+    let title: String?
     let sessions: [SessionSummary]
     let fleet: Fleet
     var selection: Binding<SessionKey?>?
@@ -217,7 +217,7 @@ struct SessionGroup: View {
     var body: some View {
         if !sessions.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                SectionHeading(title: title, count: sessions.count)
+                if let title { SectionHeading(title: title, count: sessions.count) }
                 VStack(spacing: 0) {
                     ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                         if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
@@ -276,36 +276,33 @@ struct SessionLink: View {
     }
 }
 
-/// Every session, grouped by project, with the task tree.
+/// Every session, grouped by project, with the task tree: the live sessions, then the archived
+/// ones folded away at the end.
 struct ProjectsView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @Binding var draft: Draft?
     let projects: [ProjectGroup]
     var title = "Projects"
+    /// The projects whose archived sessions are unfolded.
+    @State private var unfolded: Set<String> = []
 
     var body: some View {
         List {
             ForEach(projects) { project in
                 Section {
-                    ForEach(project.sessions) { session in
-                        NavigationLink(value: session.key) {
-                            SessionRow(session: session, showsProject: false)
+                    ForEach(project.live) { row($0) }
+                    if !project.archived.isEmpty {
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { unfolded.contains(project.id) },
+                            set: { if $0 { unfolded.insert(project.id) } else { unfolded.remove(project.id) } }
+                        )) {
+                            ForEach(project.archived) { row($0) }
+                        } label: {
+                            Text("Archived · \(project.archived.count)")
+                                .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.secondary)
                         }
                         .listRowBackground(Theme.surface)
-                        .swipeActions(edge: .trailing) {
-                            if session.state != .archived {
-                                Button("Archive", systemImage: "archivebox") {
-                                    Task { await fleet.archive(session.key) }
-                                }
-                                .tint(Theme.raised)
-                            }
-                        }
-                        .contextMenu {
-                            if session.state != .archived {
-                                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
-                            }
-                        }
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -336,5 +333,25 @@ struct ProjectsView: View {
         .refreshable { fleet.wake() }
         .navigationTitle(title)
         .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
+    }
+
+    private func row(_ session: SessionSummary) -> some View {
+        NavigationLink(value: session.key) {
+            SessionRow(session: session, showsProject: false)
+        }
+        .listRowBackground(Theme.surface)
+        .swipeActions(edge: .trailing) {
+            if session.state != .archived {
+                Button("Archive", systemImage: "archivebox") {
+                    Task { await fleet.archive(session.key) }
+                }
+                .tint(Theme.raised)
+            }
+        }
+        .contextMenu {
+            if session.state != .archived {
+                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
+            }
+        }
     }
 }

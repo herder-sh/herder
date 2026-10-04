@@ -93,6 +93,35 @@ struct ListsTests {
         #expect(lists.projects[0].machines == ["alpha", "beta"])
     }
 
+    @Test func archivedSessionsFollowTheLiveOnesEachGroupATaskTree() {
+        let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
+        var scripts = ["01A", "01B", "01C", "01D", "01E", "01F", "01G"].map { Script($0) }
+        let sessions = [
+            scripts[0].model([created(task: "Live lead")]),
+            scripts[1].model([created(task: "Archived child of a live lead", parent: "01A"), archive]),
+            scripts[2].model([created(task: "Live child", parent: "01A")]),
+            scripts[3].model([created(task: "Archived lead"), archive]),
+            scripts[4].model([created(task: "Its archived child", parent: "01D"), archive]),
+            scripts[5].model([created(task: "Archived lead of a live child"), archive]),
+            scripts[6].model([created(task: "Live child of an archived lead", parent: "01F")]),
+        ]
+        var host = machine("host-a", name: "a", sessions: scripts.map(\.key.sessionId))
+        for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
+        let lists = Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) }))
+        let project = lists.projects[0]
+        // A child whose parent is in the other group leads in its own.
+        #expect(project.live.map(\.title) == ["Live child of an archived lead", "Live lead", "Live child"])
+        #expect(project.live.map(\.depth) == [0, 0, 1])
+        #expect(project.archived.map(\.title) == [
+            "Archived lead of a live child", "Archived lead", "Its archived child", "Archived child of a live lead",
+        ])
+        #expect(project.archived.map(\.depth) == [0, 0, 1, 0])
+        #expect(project.archived.allSatisfy { $0.state == .archived })
+        #expect(project.sessions.map(\.key) == (project.live + project.archived).map(\.key))
+        // A lead still counts all its children, in either group.
+        #expect(project.live[1].children == 2)
+    }
+
     @Test func aRemovedProjectLeavesTheListWithItsArchivedSessions() {
         // The machine lists neither the project nor a project for its sessions: it was removed.
         var archived = Script("01A")
