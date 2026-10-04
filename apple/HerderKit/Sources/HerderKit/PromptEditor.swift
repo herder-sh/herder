@@ -172,6 +172,16 @@ struct PromptEditor: NSViewRepresentable {
 final class ChipTextView: NSTextView {
     weak var coordinator: PromptEditor.Coordinator?
 
+    /// A plain text view enables Paste only for text; images paste here too.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), ImageAttachment.available() { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.readablePasteboardTypes + [.png, .tiff, .fileURL]
+    }
+
     override func paste(_ sender: Any?) {
         guard let coordinator else { return super.paste(sender) }
         let images = ImageAttachment.from()

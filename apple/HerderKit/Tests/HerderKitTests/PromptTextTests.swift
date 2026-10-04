@@ -1,4 +1,8 @@
+import Foundation
 import Testing
+#if os(macOS)
+import AppKit
+#endif
 @testable import HerderKit
 
 struct PromptTextTests {
@@ -37,3 +41,26 @@ struct PromptTextTests {
         #expect(PromptText.isLong(String(repeating: "line\n", count: 15)))
     }
 }
+
+#if os(macOS)
+
+struct PastedImageTests {
+    @Test func anImageOnThePasteboardCanBePastedAndRead() throws {
+        let board = NSPasteboard(name: NSPasteboard.Name("herder-test-\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        #expect(!ImageAttachment.available(board))
+        board.clearContents()
+        board.setString("text", forType: .string)
+        #expect(!ImageAttachment.available(board))
+        let picture = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            NSColor.red.setFill(); rect.fill(); return true
+        }
+        let tiff = try #require(picture.tiffRepresentation)
+        let png = try #require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+        board.clearContents()
+        board.setData(png, forType: .png)
+        #expect(ImageAttachment.available(board))
+        #expect(ImageAttachment.from(board).map(\.mediaType) == ["image/png"])
+    }
+}
+#endif
