@@ -34,11 +34,19 @@ struct AgentMessageSource: View {
 
     private var senderLabel: some View {
         HStack(spacing: 4) {
-            Text(fleet.sessions[source]?.title ?? "Session …\(message.senderSessionId.suffix(6))")
+            Text(fleet.senderTitle(message, on: hostId))
                 .lineLimit(1).truncationMode(.middle)
             if senderAvailable { Image(systemName: "arrow.up.right") }
         }
         .font(.caption).foregroundStyle(Theme.tertiary)
         .accessibilityLabel("\(senderAvailable ? "Open sender session" : "Sender session") \(message.senderSessionId)")
+    }
+}
+
+extension Fleet {
+    /// The title of the session another agent's message came from, or the end of its id.
+    func senderTitle(_ message: AgentMessage, on hostId: HostId) -> String {
+        sessions[SessionKey(hostId: hostId, sessionId: message.senderSessionId)]?.title
+            ?? "Session …\(message.senderSessionId.suffix(6))"
     }
 }

@@ -329,9 +329,9 @@ private struct Composer: View {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
                     .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
             }
-            let queued = Transcript.queued(model)
-            if !queued.isEmpty {
-                QueueTray(queued: queued) { Task { await fleet.sendNow(key) } }
+            let queue = fleet.queue(of: key)
+            if !queue.isEmpty {
+                QueueTray(fleet: fleet, key: key, queue: queue, running: model.turn != nil)
             }
             ComposerBox(
                 text: $text,
