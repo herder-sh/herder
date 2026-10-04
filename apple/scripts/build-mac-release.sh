@@ -14,7 +14,7 @@ derived=$(mktemp -d)
 xcodegen generate --spec apple/project.yml
 xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-macOS -configuration Release -destination "generic/platform=macOS" \
-  -derivedDataPath "$derived" \
+  -derivedDataPath "$derived" COMPILER_INDEX_STORE_ENABLE=NO \
   MARKETING_VERSION="$version" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
 
