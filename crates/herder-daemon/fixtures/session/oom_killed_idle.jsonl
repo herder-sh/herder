@@ -1,0 +1,8 @@
+# systemd-oomd kills the CLI's whole scope after its turn ended, while a background agent it
+# started still builds: no turn is open, as `claude` reports it.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Build it in the background."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "background_agents", "running": 1}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Building."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"emit": {"type": "exited", "error": {"class": "fatal", "message": "claude was killed by a signal"}}}

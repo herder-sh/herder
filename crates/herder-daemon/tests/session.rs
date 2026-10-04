@@ -11,7 +11,9 @@ use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::Config;
 use herder_daemon::handoff;
 use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
-use herder_daemon::resources::{self, Admission, Host, ReadHost, Reading, ResourcesConfig, Scopes};
+use herder_daemon::resources::{
+    self, Admission, Host, OomKill, ReadHost, Reading, ResourcesConfig, Scopes,
+};
 use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup,
@@ -3980,7 +3982,7 @@ async fn an_agent_oom_killed_in_its_scope_fails_clearly_and_restarts_seeded() {
         },
         true,
     )
-    .with_oom_check(Box::new(|_| Box::pin(async { true })));
+    .with_oom_check(Box::new(|_| Box::pin(async { Some(OomKill::Kernel) })));
     let limit = scopes.limits(false).memory_max / (1024 * 1024);
     daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
     let session = daemon.create().await;
@@ -4041,7 +4043,7 @@ async fn an_agent_oom_killed_mid_turn_leaves_the_session_error_until_the_next_pr
         },
         true,
     )
-    .with_oom_check(Box::new(|_| Box::pin(async { true })));
+    .with_oom_check(Box::new(|_| Box::pin(async { Some(OomKill::Kernel) })));
     daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
@@ -4053,6 +4055,84 @@ async fn an_agent_oom_killed_mid_turn_leaves_the_session_error_until_the_next_pr
     assert_eq!(
         seed_texts(&starts[1]),
         ["user: First.", "assistant: Building."]
+    );
+    daemon.stop().await;
+}
+
+/// Scopes on a 10 GiB host, whose OOM check answers `kill`.
+fn oom_scopes(kill: Option<OomKill>) -> Scopes {
+    Scopes::new(
+        ResourcesConfig::default(),
+        Host {
+            memory_total: 10 * 1024 * 1024 * 1024,
+            cores: 2,
+            nice: 0,
+        },
+        true,
+    )
+    .with_oom_check(Box::new(move |_| Box::pin(async move { kill })))
+}
+
+#[tokio::test]
+async fn an_agent_oomd_kills_between_turns_fails_a_turn_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "oom_killed_idle.jsonl", Default::default()).await;
+    let scopes = oom_scopes(Some(OomKill::Oomd));
+    daemon.manager.limit_resources(Arc::new(scopes)).unwrap();
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Build it in the background.")
+        .await;
+    daemon.until_status(SessionStatus::Error).await;
+
+    let journal = daemon.journal(&session).await;
+    assert_eq!(
+        turn_error(&journal),
+        TurnError {
+            class: ErrorClass::Fatal,
+            message: "the agent ran out of memory: systemd-oomd stopped it and everything it \
+                      ran, as the host was short of memory (claude was killed by a signal). The \
+                      next prompt restarts the agent from the session's transcript"
+                .to_owned(),
+        }
+    );
+    assert_eq!(
+        describe(&journal)[1..],
+        [
+            "-: status Running",
+            "alice: user turn-1 Build it in the background.",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 Building.",
+            "-: turn_completed turn-1",
+            "-: turn_started turn-2",
+            "-: turn_failed turn-2 Fatal",
+            "-: status Error",
+        ]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn an_agent_that_exits_between_turns_without_an_oom_kill_fails_no_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "oom_killed_idle.jsonl", Default::default()).await;
+    daemon
+        .manager
+        .limit_resources(Arc::new(oom_scopes(None)))
+        .unwrap();
+    let session = daemon.create().await;
+    daemon
+        .prompt(alice(), &session, "Build it in the background.")
+        .await;
+    daemon.until_status(SessionStatus::Error).await;
+
+    let journal = daemon.journal(&session).await;
+    assert!(
+        !journal
+            .iter()
+            .any(|event| matches!(event.body, EventBody::TurnFailed { .. })),
+        "{:#?}",
+        describe(&journal)
     );
     daemon.stop().await;
 }

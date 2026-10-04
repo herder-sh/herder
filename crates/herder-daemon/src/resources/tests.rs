@@ -30,8 +30,14 @@ fn launcher_runs_the_cli_in_a_limited_collected_scope() {
         memory_max: 2000,
         nice: 10,
     };
+    let argv = |limits: &Limits| -> Vec<String> {
+        strings(&launcher("herder-s1-7.scope", limits))
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    };
     assert_eq!(
-        strings(&launcher("herder-s1-7.scope", &limits)),
+        argv(&limits),
         [
             "systemd-run",
             "--user",
@@ -48,6 +54,13 @@ fn launcher_runs_the_cli_in_a_limited_collected_scope() {
             "--",
         ]
     );
+    // No throttling band, the default: oomd would take its stall for the host's pressure.
+    let unthrottled = argv(&Limits {
+        memory_high: 2000,
+        ..limits
+    });
+    assert!(!unthrottled.iter().any(|arg| arg.contains("MemoryHigh")));
+    assert!(unthrottled.contains(&"--property=MemoryMax=2000".to_owned()));
 }
 
 #[test]
@@ -59,7 +72,7 @@ fn limits_are_shares_of_the_host_and_children_weigh_less() {
         primary,
         Limits {
             cpu_weight: 100,
-            memory_high: memory_max / 100 * 80,
+            memory_high: memory_max,
             memory_max,
             nice: 10,
         }
@@ -300,6 +313,23 @@ fn oom_kills_are_read_from_memory_events() {
     assert_eq!(oom_kills(""), 0);
 }
 
+#[test]
+fn the_killer_is_read_from_the_journaled_message_ids() {
+    assert_eq!(
+        oom_killer(&format!("{UNIT_OOM_MESSAGE_ID}\n")),
+        Some(OomKill::Kernel)
+    );
+    assert_eq!(
+        oom_killer(&format!("{UNIT_OOMD_MESSAGE_ID}\n")),
+        Some(OomKill::Oomd)
+    );
+    assert_eq!(
+        oom_killer(&format!("{UNIT_OOM_MESSAGE_ID}\n{UNIT_OOMD_MESSAGE_ID}\n")),
+        Some(OomKill::Oomd)
+    );
+    assert_eq!(oom_killer(""), None);
+}
+
 /// A CLI the kernel OOM-kills as its scope's last process takes the scope with it; the kill
 /// is still told from systemd's journal. A CLI that exits on its own is not taken for one.
 ///
@@ -329,11 +359,11 @@ async fn an_oom_kill_is_told_after_its_scope_is_gone() {
         cgroup_of(&hog).await.is_none(),
         "the scope outlived its process"
     );
-    assert!(systemd_oom_killed(hog).await);
+    assert_eq!(systemd_oom_killed(hog).await, Some(OomKill::Kernel));
 
     let output = run_in_scope(&calm, &tight, "exit 3").await;
     assert_eq!(output.status.code(), Some(3));
-    assert!(!systemd_oom_killed(calm).await);
+    assert_eq!(systemd_oom_killed(calm).await, None);
 }
 
 /// `sleep` started the way a session's CLI starts everything: with the session's id in its
