@@ -274,9 +274,9 @@ struct PaneButton: View {
                     .frame(width: 30)
             }
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.onPrimary)
+            .foregroundStyle(Theme.text)
             .frame(height: 30)
-            .background(Theme.primary, in: .rect(cornerRadius: 8))
+            .background(Theme.raised, in: .rect(cornerRadius: 8))
             .hitTarget()
         }
         .buttonStyle(.plain)
