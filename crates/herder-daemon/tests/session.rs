@@ -4396,8 +4396,8 @@ async fn successful_switches_cancel_limit_waits_and_invalid_switches_keep_them()
 fn title_cli(dir: &Path, answer: &str) -> TitleCli {
     let program = dir.join("title-cli");
     let script = format!(
-        "#!/bin/sh\nd='{}'\nn=$(( $(cat \"$d/runs\" 2>/dev/null || echo 0) + 1 ))\n\
-         echo $n > \"$d/runs\"\nprintf '%s\\n' \"$@\" > \"$d/args-$n\"\n\
+        "#!/bin/sh\nd='{}'\necho run >> \"$d/runs\"\nn=$(wc -l < \"$d/runs\" | tr -d ' ')\n\
+         printf '%s\\n' \"$@\" > \"$d/args-$n\"\n\
          cat > \"$d/stdin-$n\"\nprintf '%s' \"$FAKE_CONFIG_DIR\" > \"$d/config-$n\"\n{answer}\n",
         dir.display()
     );
@@ -4415,8 +4415,11 @@ fn title_cli(dir: &Path, answer: &str) -> TitleCli {
 }
 
 /// How many times the stand-in title CLI in `dir` ran.
+/// How many times the stand-in title CLI ran: one line each, appended, so runs that overlap
+/// are all counted.
 fn title_runs(dir: &Path) -> u32 {
-    std::fs::read_to_string(dir.join("runs")).map_or(0, |runs| runs.trim().parse().unwrap())
+    std::fs::read_to_string(dir.join("runs"))
+        .map_or(0, |runs| runs.lines().count().try_into().unwrap())
 }
 
 /// Opens a daemon on `dir` playing the four turns of `titles.jsonl`, titling sessions with a
@@ -4499,9 +4502,12 @@ async fn a_title_follows_the_first_prompt_and_is_refreshed_once() {
         read("config-1"),
         dir.path().join("account").to_str().unwrap()
     );
-    assert_eq!(
-        read("stdin-1"),
-        format!("{INSTRUCTION}\n\n<conversation>\nUser: First.\n</conversation>\n")
+    // The run reads the conversation so far, which may hold the first reply already.
+    let stdin = read("stdin-1");
+    assert!(
+        stdin.starts_with(&format!("{INSTRUCTION}\n\n<conversation>\nUser: First.\n"))
+            && stdin.ends_with("</conversation>\n"),
+        "{stdin}"
     );
     let Some(head) = daemon.manager.sessions().await.unwrap().pop() else {
         panic!("no session");
