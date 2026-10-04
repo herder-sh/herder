@@ -12,10 +12,10 @@ struct Script {
         key = SessionKey(hostId: host, sessionId: sessionId)
     }
 
-    mutating func event(_ body: EventBody) -> Event {
+    mutating func event(_ body: EventBody, by: UserId? = nil) -> Event {
         seq += 1
         let at = Date(timeIntervalSince1970: 1_767_225_600 + Double(seq))
-        return Event(sessionId: key.sessionId, seq: seq, at: at.ISO8601Format(), by: nil, body: body)
+        return Event(sessionId: key.sessionId, seq: seq, at: at.ISO8601Format(), by: by, body: body)
     }
 
     mutating func model(_ bodies: [EventBody]) -> SessionModel {

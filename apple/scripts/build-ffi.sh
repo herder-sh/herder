@@ -9,8 +9,12 @@ cd "$(dirname "$0")/../.."
 swift=crates/herder-ffi/swift
 target_dir=${CARGO_TARGET_DIR:-target}
 targets=(aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin)
-# Match the bindings package's platforms, for the C and assembly that ring builds.
-export MACOSX_DEPLOYMENT_TARGET=13.0 IPHONEOS_DEPLOYMENT_TARGET=16.0
+# Match the bindings package's platforms, for the C and assembly that ring builds. Per target:
+# a deployment target in the environment also reaches the host's proc macros, which Xcode 27's
+# linker then writes as dylibs that fail to load.
+export CFLAGS_aarch64_apple_darwin=-mmacosx-version-min=13.0
+export CFLAGS_aarch64_apple_ios=-miphoneos-version-min=16.0
+export CFLAGS_aarch64_apple_ios_sim=-mios-simulator-version-min=16.0
 
 cargo build -p herder-ffi --features bindgen --lib --bin uniffi-bindgen --example fake_daemon
 

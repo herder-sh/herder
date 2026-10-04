@@ -157,6 +157,11 @@ struct SessionModel {
         func notice(_ text: String, _ tone: Notice.Tone = .info) {
             log.append(.notice(Notice(id: event.seq, text: text, tone: tone)))
         }
+        func handoff(_ kind: Handoff.Kind, to: Handoff.Side) {
+            log.append(.handoff(Handoff(
+                id: event.seq, kind: kind, failover: kind != .model && event.by == nil,
+                from: Handoff.Side(provider: provider, model: model, accountId: accountId), to: to)))
+        }
         func asked(_ what: String, _ text: String, _ routedTo: Route, _ reason: EscalationReason?) {
             switch (routedTo, reason) {
             case (.primary, _): notice("\(what) for the primary session: \(text)")
@@ -202,15 +207,11 @@ struct SessionModel {
             notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
         case .childSpawned(let child, let task): log.append(.child(sessionId: child, task: task))
         case .childReported(_, _, let summary): notice("Child reported: \(summary)")
-        case .modelSwitched(let model): notice("Model switched to \(model)")
+        case .modelSwitched(let model): handoff(.model, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .accountSwitched(let accountId):
-            notice(event.by == nil
-                   ? "Failed over to account \(accountId): the last one hit its limit"
-                   : "Account switched to \(accountId)")
+            handoff(.account, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .providerSwitched(let provider, let accountId, let model):
-            notice(event.by == nil
-                   ? "Failed over to \(provider) (\(model), account \(accountId)): the last one hit its limit"
-                   : "Switched to \(provider) (\(model), account \(accountId))")
+            handoff(.provider, to: Handoff.Side(provider: provider, model: model, accountId: accountId))
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
@@ -425,6 +426,7 @@ enum Timestamp {
 enum LogEntry: Hashable {
     case item(Item)
     case notice(Notice)
+    case handoff(Handoff)
     case child(sessionId: SessionId, task: String)
 }
 
@@ -434,6 +436,24 @@ struct Notice: Hashable {
     let id: UInt64
     let text: String
     let tone: Tone
+}
+
+/// The session moved to another model, account or provider: what it ran on, and what it runs on
+/// from here.
+struct Handoff: Hashable {
+    enum Kind: Hashable { case model, account, provider }
+    /// A side of the switch; `nil` where the session had not said yet.
+    struct Side: Hashable {
+        let provider: Provider?
+        let model: String?
+        let accountId: AccountId?
+    }
+    let id: UInt64
+    let kind: Kind
+    /// Whether the daemon moved the session because the last account hit its limit.
+    let failover: Bool
+    let from: Side
+    let to: Side
 }
 
 extension PermissionMode {
