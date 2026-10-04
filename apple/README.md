@@ -49,19 +49,23 @@ The HerderKit tests pair with the fake daemon `build-ffi.sh` builds:
 HERDER_FAKE_DAEMON=$PWD/target/debug/examples/fake_daemon swift test --package-path apple/HerderKit
 ```
 
-The iOS UI test pairs the app on a simulator with a running fake daemon:
+The iOS UI test pairs the app on a simulator with two running fake daemons, from the link a
+device paired with both shares (as **Machines › Pair Another Device** on the Mac does):
 
 ```sh
-cargo run -p herder-ffi --example fake_daemon   # prints the pairing link first
+cargo run -p herder-ffi --example fake_daemon -- --share   # prints the shared link first
 TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 
-A pairing code works once, so start a new fake daemon for each run.
+A pairing code works once, so start new fake daemons for each run, and erase the app from the
+simulator (`xcrun simctl uninstall booted sh.herder.Herder`) so it starts with no machines.
 
 To try the app against it, run `cargo run -p herder-ffi --example fake_daemon` and paste the
 link it prints into **Add Machine**. For a real machine, run `herder pair` on it: on iOS, scan
 the QR code it prints with **Scan QR Code**; on the Mac, paste the link (or all of its output).
+To add a device to every machine another one already has, open **Machines › Pair Another
+Device** on that one (the Mac app) and scan or paste the link it shows.
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.

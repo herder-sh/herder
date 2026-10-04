@@ -39,14 +39,14 @@ pub struct FakeDaemon {
 }
 
 impl FakeDaemon {
-    /// Starts the daemon on the current tokio runtime.
-    pub async fn start() -> Result<Self> {
+    /// Starts the daemon of host `name` on the current tokio runtime.
+    pub async fn start(name: &str) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("daemon");
         let repo = repo(&tmp.path().join("app"))?;
         std::fs::create_dir_all(dir.join("tls"))?;
 
-        let tls = Tls::load_or_create(&dir.join("tls"), "fake-host")?;
+        let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
         let hub = Arc::new(Hub::default());
         let fake = Provider::Other("fake".into());
@@ -85,8 +85,8 @@ impl FakeDaemon {
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
         let host = Host {
-            id: HostId::new("fake-host"),
-            name: "fake-host".into(),
+            id: HostId::new(name),
+            name: name.into(),
         };
         sessions.fork_from(session::fork::Forks {
             host: host.id.clone(),

@@ -1,20 +1,21 @@
 import Herder
 import SwiftUI
 
-/// The `herder://pair` link in text from a QR code or the clipboard: the link alone, or a copy
-/// of `herder pair`'s output with the link somewhere in it. Nil when there is none.
+/// The `herder://pair` link, of one machine or several, in text from a QR code or the
+/// clipboard: the link alone, or a copy of `herder pair`'s output with the link somewhere in
+/// it. Nil when there is none.
 func pairingLink(in text: String) -> String? {
     text.split(whereSeparator: \.isWhitespace)
         .lazy
         .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'\"<>()`")) }
-        .first { (try? parsePairingUri(link: $0)) != nil }
+        .first { (try? parsePairingLink(link: $0)) != nil }
 }
 
 #if os(iOS)
 import AVFoundation
 
-/// The camera, full screen, looking for the QR code `herder pair` prints; hands over the
-/// pairing link in it.
+/// The camera, full screen, looking for the QR code `herder pair` prints or another device
+/// shares; hands over the pairing link in it.
 struct PairScanner: View {
     let scanned: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -64,7 +65,7 @@ struct PairScanner: View {
 private final class QRCamera: NSObject, AVCaptureMetadataOutputObjectsDelegate {
     private(set) var running = false
     private(set) var error: String?
-    private(set) var hint = "Point the camera at the QR code herder pair prints."
+    private(set) var hint = "Point the camera at the QR code herder pair prints, or another device shows."
     @ObservationIgnored nonisolated(unsafe) let session = AVCaptureSession()
     @ObservationIgnored private var found: ((String) -> Void)?
 
