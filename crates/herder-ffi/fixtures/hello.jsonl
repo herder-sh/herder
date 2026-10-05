@@ -1,4 +1,4 @@
-# The turn the Swift and Kotlin samples drive: one prompt, a streamed answer.
+# The turn the Swift and Kotlin samples drive: one prompt, a streamed answer, and its usage.
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Say hello."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
 {"emit": {"type": "item_started", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": ""}}}}
@@ -7,5 +7,5 @@
 {"sleep_ms": 50}
 {"emit": {"type": "item_delta", "item_id": "item-1", "text": ", world."}}
 {"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Hello, world."}}}}
-{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1", "usage": {"input": 1200, "output": 340, "cache_read": 18000, "cache_write": 2048, "cost_usd": 0.0425, "cost_estimated": false}}}
 {"expect": {"type": "shutdown"}}
