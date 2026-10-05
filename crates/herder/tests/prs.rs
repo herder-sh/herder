@@ -572,13 +572,14 @@ async fn commit(worktree: &Path, file: &str, message: &str, hooks: bool) -> Stri
     git(worktree, &["log", "-1", "--format=%B"]).await
 }
 
-fn pr(number: u64, title: &str, branch: &str) -> PullRequest {
+/// Pull request `number` as herder tracks it, headed by `branch` of the fake GitHub.
+fn pr(world: &World, number: u64, title: &str, branch: &str) -> PullRequest {
     PullRequest {
         number,
         url: format!("https://github.com/acme/app/pull/{number}"),
         title: title.to_owned(),
         head_branch: Some(branch.to_owned()),
-        head_sha: None,
+        head_sha: Some(world.github.head_sha(branch)),
         unresolved_threads: None,
         state: PrState::Open,
         ci: CiStatus::None,
@@ -624,7 +625,7 @@ async fn a_pr_on_a_branch_the_agent_pushed_under_another_name_is_linked() {
         [(
             None,
             EventBody::PrLinked {
-                pr: pr(number, "Add a", "feature-x")
+                pr: pr(&world, number, "Add a", "feature-x")
             }
         )]
     );
@@ -644,7 +645,7 @@ async fn a_pr_opened_elsewhere_on_the_session_branch_is_linked_and_followed() {
     let other = world.session().await;
     let number = world.github.open(&branch, "Add a");
     world.poll().await;
-    let mut expected = pr(number, "Add a", &branch);
+    let mut expected = pr(&world, number, "Add a", &branch);
     assert_eq!(
         world.pr_events(&session_id).await,
         [(
@@ -711,7 +712,7 @@ async fn a_pr_on_a_renamed_branch_is_found_by_its_trailer() {
         [(
             None,
             EventBody::PrLinked {
-                pr: pr(number, "Add a", "renamed-on-github")
+                pr: pr(&world, number, "Add a", "renamed-on-github")
             }
         )]
     );
@@ -763,7 +764,7 @@ async fn a_pr_from_a_worktree_the_agent_added_is_linked() {
         [(
             None,
             EventBody::PrLinked {
-                pr: pr(number, "Add a", "feature-y")
+                pr: pr(&world, number, "Add a", "feature-y")
             }
         )]
     );
@@ -819,14 +820,14 @@ async fn unlink_keeps_a_pr_unlinked_until_a_user_links_it_again() {
             (
                 None,
                 EventBody::PrLinked {
-                    pr: pr(number, "Add a", &branch)
+                    pr: pr(&world, number, "Add a", &branch)
                 }
             ),
             (Some(alice()), EventBody::PrUnlinked { number }),
             (
                 Some(alice()),
                 EventBody::PrLinked {
-                    pr: pr(number, "Add a", &branch)
+                    pr: pr(&world, number, "Add a", &branch)
                 }
             ),
         ]
@@ -849,7 +850,7 @@ async fn unlink_keeps_a_pr_unlinked_until_a_user_links_it_again() {
         Some(&(
             Some(alice()),
             EventBody::PrLinked {
-                pr: pr(unrelated, "Unrelated", "unrelated")
+                pr: pr(&world, unrelated, "Unrelated", "unrelated")
             }
         ))
     );
@@ -874,6 +875,35 @@ async fn polling_an_unchanged_pr_costs_only_not_modified_answers() {
         assert!(call.conditional && call.answer == "304", "{call:?}");
     }
     assert_eq!(world.pr_events(&session_id).await, before);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_head_commit_journals_one_update() {
+    let world = World::new().await;
+    let (session_id, worktree, branch) = world.session().await;
+    commit(&worktree, "a.txt", "Add a", true).await;
+    git(&worktree, &["push", "--quiet", "origin", "HEAD"]).await;
+    let number = world.github.open(&branch, "Add a");
+    world.poll().await;
+    let linked = pr(&world, number, "Add a", &branch);
+    assert_eq!(
+        world.pr_events(&session_id).await,
+        [(None, EventBody::PrLinked { pr: linked.clone() })]
+    );
+
+    commit(&worktree, "b.txt", "Add b", true).await;
+    git(&worktree, &["push", "--quiet", "origin", "HEAD"]).await;
+    world.poll().await;
+    world.poll().await;
+    let updated = pr(&world, number, "Add a", &branch);
+    assert_ne!(updated.head_sha, linked.head_sha);
+    assert_eq!(
+        world.pr_events(&session_id).await,
+        [
+            (None, EventBody::PrLinked { pr: linked }),
+            (None, EventBody::PrUpdated { pr: updated }),
+        ]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

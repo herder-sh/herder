@@ -364,8 +364,9 @@ impl Store {
     /// Pull requests tracked for the session, ordered by number.
     pub fn session_prs(&self, session: &SessionId) -> Result<Vec<PullRequest>> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT number, url, title, state, ci, review, mergeable, head_branch FROM session_prs
-             WHERE session_id = ?1 ORDER BY number",
+            "SELECT number, url, title, state, ci, review, mergeable, head_branch, head_sha,
+                 unresolved_threads
+             FROM session_prs WHERE session_id = ?1 ORDER BY number",
         )?;
         let rows = stmt.query_map([session.as_str()], |row| {
             Ok(PullRequest {
@@ -373,8 +374,8 @@ impl Store {
                 url: row.get(1)?,
                 title: row.get(2)?,
                 head_branch: row.get(7)?,
-                head_sha: None,
-                unresolved_threads: None,
+                head_sha: row.get(8)?,
+                unresolved_threads: row.get(9)?,
                 state: get_tag(row, 3)?,
                 ci: get_tag(row, 4)?,
                 review: get_tag(row, 5)?,
