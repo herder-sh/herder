@@ -127,4 +127,10 @@ pub struct Project {
     /// so a transparent icon shows through to the client's own background.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_background: Option<String>,
+    /// The project's place in the order `set_project_order` last set, 0 first; absent when
+    /// that order does not name it. Positions index one order across all the daemons a
+    /// client sends it to, so clients sort the projects they merge by them, the unordered
+    /// ones last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<u32>,
 }

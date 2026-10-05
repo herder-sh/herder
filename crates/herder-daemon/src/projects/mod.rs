@@ -320,6 +320,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                 icon_uploaded: false,
                 icon_background: entry.and_then(|e| e.icon_background.clone()),
                 project_id,
+                position: None,
             }
         })
         .collect()
