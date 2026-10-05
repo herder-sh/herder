@@ -572,6 +572,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
     else {
         panic!("expected session_created, got {:?}", child[0].body);
     };
+    let branch = branch.as_ref().unwrap();
     assert_eq!(repo, daemon.repo.to_str().unwrap());
     // Archived: the worktree is gone, the branch kept.
     assert!(!Path::new(worktree).exists());

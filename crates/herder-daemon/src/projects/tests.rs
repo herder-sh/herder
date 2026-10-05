@@ -350,7 +350,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             body: herder_protocol::EventBody::SessionCreated {
                 repo: app.to_string_lossy().into_owned(),
                 worktree: tmp.path().join("wt").to_string_lossy().into_owned(),
-                branch: "b".into(),
+                branch: Some("b".into()),
                 provider: herder_protocol::Provider::Claude,
                 account_id: AccountId::new("a"),
                 model: "m".into(),
@@ -477,10 +477,10 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let owner = herder_protocol::UserId::new("owner");
     let handle = |command| sessions.handle(owner.clone(), command);
 
-    let not_a_repo = herder_protocol::CommandBody::AddProject {
-        path: tmp.path().join("src").to_string_lossy().into_owned(),
+    let missing = herder_protocol::CommandBody::AddProject {
+        path: tmp.path().join("nowhere").to_string_lossy().into_owned(),
     };
-    let error = handle(not_a_repo).await.unwrap_err();
+    let error = handle(missing).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
     let add = herder_protocol::CommandBody::AddProject {
         path: format!("{}/", app.display()),
@@ -523,19 +523,47 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let error = handle(unknown).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
 
+    // A folder that is not a git repository is a project of this host.
+    let notes = tmp.path().join("notes");
+    fs::create_dir(&notes).unwrap();
+    let notes_path = notes.to_string_lossy().into_owned();
+    let local = ProjectId::local(&host(), &notes_path);
+    let add = herder_protocol::CommandBody::AddProject {
+        path: notes_path.clone(),
+    };
+    assert_eq!(
+        handle(add).await,
+        Ok(herder_protocol::CommandResult::ProjectAdded {
+            project_id: local.clone()
+        })
+    );
+    let listed = next_projects(&outbox).await;
+    assert!(
+        listed
+            .iter()
+            .any(|project| project.project_id == local && project.paths == [notes_path.clone()]),
+        "{listed:?}"
+    );
+
     // The file keeps what was there and holds the project, as a restart reads it.
     let text = fs::read_to_string(&file).unwrap();
     assert!(text.starts_with("# mine\n"), "{text}");
     let entries = crate::config::read_projects(&file).unwrap().entries;
     assert_eq!(
         entries,
-        [ProjectEntry {
-            paths: vec![app.clone()],
-            default_account: Some(AccountId::new("main")),
-            default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
-            setup_command: Some("make setup".into()),
-            ..ProjectEntry::default()
-        }]
+        [
+            ProjectEntry {
+                paths: vec![app.clone()],
+                default_account: Some(AccountId::new("main")),
+                default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
+                setup_command: Some("make setup".into()),
+                ..ProjectEntry::default()
+            },
+            ProjectEntry {
+                paths: vec![notes],
+                ..ProjectEntry::default()
+            }
+        ]
     );
 
     shutdown.cancel();
@@ -576,7 +604,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
                 body: herder_protocol::EventBody::SessionCreated {
                     repo: repo.to_string_lossy().into_owned(),
                     worktree: tmp.path().join(id).to_string_lossy().into_owned(),
-                    branch: "b".into(),
+                    branch: Some("b".into()),
                     provider: herder_protocol::Provider::Claude,
                     account_id: AccountId::new("a"),
                     model: "m".into(),

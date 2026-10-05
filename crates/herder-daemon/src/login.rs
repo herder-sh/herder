@@ -842,7 +842,7 @@ mod tests {
                 body: EventBody::SessionCreated {
                     repo: "/test".into(),
                     worktree: "/test-wt".into(),
-                    branch: "test".into(),
+                    branch: Some("test".into()),
                     provider: Provider::Codex,
                     account_id: AccountId::new("codex"),
                     model: "fake".into(),

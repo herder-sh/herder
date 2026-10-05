@@ -952,10 +952,10 @@ impl SessionManager {
         let (host, overrides) = self.projects()?;
         let repo = crate::browse::absolute(path)?;
         let added = tokio::task::spawn_blocking(move || {
-            if !projects::scan::is_repo(&repo) {
+            if !repo.is_dir() {
                 return Err(error(
                     ErrorCode::BadRequest,
-                    format!("{} is not the top of a git repository", repo.display()),
+                    format!("{} is not a folder", repo.display()),
                 ));
             }
             overrides.add(&host, &repo).map_err(internal)
@@ -1284,9 +1284,10 @@ impl SessionManager {
             .branches(session_id.clone())
             .await
             .map_err(internal)?;
-        let checked_out = worktree::branches(Path::new(&session.worktree), &session.branch)
-            .await
-            .map_err(worktree_error)?;
+        let checked_out =
+            worktree::branches(Path::new(&session.worktree), session.branch.as_deref())
+                .await
+                .map_err(worktree_error)?;
         for branch in checked_out {
             if !owned.contains(&branch) {
                 owned.push(branch);
@@ -1582,12 +1583,13 @@ impl SessionManager {
         self.inner.journal.summaries(host).await
     }
 
-    /// Creates a session with its worktree; returns its id and branch.
+    /// Creates a session with its worktree; returns its id and branch, `None` for a session that
+    /// works in its folder itself.
     async fn create_session(
         &self,
         by: Option<UserId>,
         request: CreateRequest,
-    ) -> Result<(SessionId, String), ErrorInfo> {
+    ) -> Result<(SessionId, Option<String>), ErrorInfo> {
         let inner = &self.inner;
         let _settings = inner.account_settings.lock().await;
         let account = inner.account(&request.account_id).ok_or_else(|| {
@@ -1633,11 +1635,16 @@ impl SessionManager {
             .record(session_id.clone(), by, body)
             .await
             .map_err(internal)?;
-        if let Some(prs) = inner.prs.get() {
+        if let Some(prs) = inner.prs.get()
+            && worktree.branch.is_some()
+        {
             prs.install(&session_id, &worktree.path).await;
         }
-        // Before the reply, so the session's first prompt queues behind the setup.
-        if let Some((command, timeout)) = inner.setup_command(&repo).await {
+        // Before the reply, so the session's first prompt queues behind the setup. A session
+        // in the folder itself has no new worktree to set up.
+        if worktree.branch.is_some()
+            && let Some((command, timeout)) = inner.setup_command(&repo).await
+        {
             self.send(
                 session_id.clone(),
                 None,

@@ -1016,7 +1016,7 @@ mod tests {
             session_id: SessionId::new(id),
             project_id: herder_protocol::ProjectId::new("github.com/org/repo"),
             repo: "/repo".into(),
-            branch: format!("herder/{id}"),
+            branch: Some(format!("herder/{id}")),
             status,
             prs: Vec::new(),
             parent: parent.map(SessionId::new),

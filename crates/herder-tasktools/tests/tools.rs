@@ -325,7 +325,7 @@ fn outputs_match_their_schemas() {
             Tool::Spawn,
             serde_json::to_value(SpawnOutput {
                 child: child(),
-                branch: "herder/1a2b3c4d".into(),
+                branch: Some("herder/1a2b3c4d".into()),
             }),
         ),
         (
@@ -343,7 +343,7 @@ fn outputs_match_their_schemas() {
                     ChildStatus {
                         child: child(),
                         task: "Fix tests".into(),
-                        branch: "herder/1a2b3c4d".into(),
+                        branch: Some("herder/1a2b3c4d".into()),
                         status: SessionStatus::Running,
                         last_report: None,
                         open_questions: vec![question(), approval()],
@@ -351,7 +351,7 @@ fn outputs_match_their_schemas() {
                     ChildStatus {
                         child: SessionId::new("01J9CHILD2"),
                         task: "Write docs".into(),
-                        branch: "herder/5e6f7a8b".into(),
+                        branch: Some("herder/5e6f7a8b".into()),
                         status: SessionStatus::Idle,
                         last_report: Some("Docs written.".into()),
                         open_questions: vec![],
@@ -425,7 +425,7 @@ fn call_results_are_the_mcp_shape() {
         serde_json::to_value(
             CallToolResult::success(&SpawnOutput {
                 child: SessionId::new("01J9CHILD"),
-                branch: "herder/1a2b3c4d".into(),
+                branch: Some("herder/1a2b3c4d".into()),
             })
             .unwrap()
         )

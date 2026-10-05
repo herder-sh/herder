@@ -693,7 +693,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             EventBody::SessionCreated {
                 repo: "/home/dev/herder".into(),
                 worktree: "/home/dev/herder-p0-2-protocol".into(),
-                branch: "p0-2-protocol".into(),
+                branch: Some("p0-2-protocol".into()),
                 provider: Provider::Claude,
                 account_id: account_id(),
                 model: "opus".into(),
@@ -1309,7 +1309,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
             EventBody::SessionCreated {
                 repo: "/home/dev/herder".into(),
                 worktree: "/home/dev/herder-p0-6-store".into(),
-                branch: "p0-6-store".into(),
+                branch: Some("p0-6-store".into()),
                 provider: Provider::Claude,
                 account_id: AccountId::new("01J9ACCOUNT"),
                 model: "opus".into(),
@@ -1345,7 +1345,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
             body: EventBody::SessionCreated {
                 repo: "/Users/dev/herder".into(),
                 worktree: "/Users/dev/herder-mac".into(),
-                branch: "herder/mac".into(),
+                branch: Some("herder/mac".into()),
                 provider: Provider::Claude,
                 account_id: AccountId::new("01J9ACCOUNT"),
                 model: "opus".into(),
@@ -1659,7 +1659,7 @@ fn remote_parent_and_child_host_are_on_the_wire_only_when_set() {
     let created = |parent_host: Option<HostId>| EventBody::SessionCreated {
         repo: "/r".into(),
         worktree: "/w".into(),
-        branch: "b".into(),
+        branch: Some("b".into()),
         provider: Provider::Claude,
         account_id: AccountId::new("a"),
         model: "opus".into(),
@@ -2418,7 +2418,7 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
         session_id: SessionId::new("01J9SESSION"),
         project_id: ProjectId::new("github.com/herder-sh/herder"),
         repo: "/home/dev/herder".into(),
-        branch: "herder/1a2b3c4d".into(),
+        branch: Some("herder/1a2b3c4d".into()),
         status,
         prs,
         parent: None,

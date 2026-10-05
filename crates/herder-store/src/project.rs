@@ -43,7 +43,9 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 event.seq,
                 event.at,
             ])?;
-            add_branch(tx, id, branch, event.seq)?;
+            if let Some(branch) = branch {
+                add_branch(tx, id, branch, event.seq)?;
+            }
         }
         EventBody::BranchCheckedOut { branch } => add_branch(tx, id, branch, event.seq)?,
         EventBody::SessionStatusChanged { status, .. } => {

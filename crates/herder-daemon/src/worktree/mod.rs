@@ -1,4 +1,6 @@
 //! Session worktrees: every session works in its own `git worktree`, on a branch it owns.
+//! A folder that is not a git repository with a commit has nothing to branch from, so its
+//! sessions work in the folder itself, without a worktree or branch ([`in_place`]).
 //!
 //! Everything goes through the `git` CLI, so the user's git config and hooks apply as they do
 //! in their own checkouts.
@@ -54,13 +56,14 @@ pub enum Error {
     Git(String),
 }
 
-/// A session's worktree.
+/// Where a session works.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
-    /// Absolute path of the worktree.
+    /// Absolute path of the worktree, or of the folder itself for a session without a branch.
     pub path: PathBuf,
-    /// Branch created for the session and checked out in the worktree.
-    pub branch: String,
+    /// Branch created for the session and checked out in the worktree; `None` when the
+    /// session works in the folder itself.
+    pub branch: Option<String>,
 }
 
 /// The session worktrees under one directory, `<data_dir>/worktrees`.
@@ -85,7 +88,8 @@ impl Worktrees {
     }
 
     /// Adds a worktree of `repo` for the session `slug`, on a new branch: `branch`, or
-    /// `herder/<slug>` when absent.
+    /// `herder/<slug>` when absent. A `repo` [`in_place`] is the session's folder itself, and
+    /// refuses a `branch`.
     pub async fn create(
         &self,
         repo: &Path,
@@ -96,24 +100,23 @@ impl Worktrees {
     }
 
     /// Adds a worktree of `repo` for the session `slug`, forked from another session, on a new
-    /// branch `branch`: at the parent of the commit `checkpoint` (see [`checkpoint`]), with the
-    /// checkpoint's files on disk as uncommitted changes, so the worktree is as the other
-    /// session left it. Without a checkpoint it starts at the default base, as [`Self::create`] does.
+    /// branch `herder/<slug>`: at the parent of the commit `checkpoint` (see [`checkpoint`]),
+    /// with the checkpoint's files on disk as uncommitted changes, so the worktree is as the
+    /// other session left it. Without a checkpoint it is as [`Self::create`] makes it.
     pub async fn restore(
         &self,
         repo: &Path,
         slug: &str,
-        branch: String,
         checkpoint: Option<&str>,
     ) -> Result<Worktree, Error> {
         let Some(checkpoint) = checkpoint else {
-            return self.add(repo, slug, Some(branch), None).await;
+            return self.add(repo, slug, None, None).await;
         };
         let parent = format!("{checkpoint}^");
         let base = git(repo, ["rev-parse", "--verify", "--quiet", &parent])
             .await
             .ok();
-        let worktree = self.add(repo, slug, Some(branch), base).await?;
+        let worktree = self.add(repo, slug, None, base).await?;
         // No-overlay: files the checkpoint does not have are removed too.
         git(
             &worktree.path,
@@ -130,7 +133,8 @@ impl Worktrees {
         Ok(worktree)
     }
 
-    /// Adds the worktree on a new branch starting at `base`, or the default base.
+    /// Adds the worktree on a new branch starting at `base`, or the default base; or, for a
+    /// `repo` [`in_place`], answers the folder itself.
     async fn add(
         &self,
         repo: &Path,
@@ -144,11 +148,19 @@ impl Worktrees {
                 repo.display()
             )));
         }
-        let toplevel = git(repo, ["rev-parse", "--show-toplevel"])
-            .await
-            .map_err(|_| {
-                Error::BadRequest(format!("{} is not a git repository", repo.display()))
-            })?;
+        if in_place(repo).await {
+            if let Some(branch) = branch {
+                return Err(Error::BadRequest(format!(
+                    "{} is not a git repository with a commit, so it cannot have branch {branch}",
+                    repo.display()
+                )));
+            }
+            return Ok(Worktree {
+                path: repo.to_path_buf(),
+                branch: None,
+            });
+        }
+        let toplevel = git(repo, ["rev-parse", "--show-toplevel"]).await?;
         let name = Path::new(&toplevel)
             .file_name()
             .and_then(OsStr::to_str)
@@ -192,7 +204,10 @@ impl Worktrees {
             ],
         )
         .await?;
-        Ok(Worktree { path, branch })
+        Ok(Worktree {
+            path,
+            branch: Some(branch),
+        })
     }
 
     /// Adds a worktree of `repo` back at `path`, where [`Self::remove`] removed it, on the
@@ -262,6 +277,14 @@ impl Worktrees {
     }
 }
 
+/// Whether sessions of the folder `repo` work in it directly: it is not in a git repository,
+/// the repository has no commit yet, or git cannot be run.
+pub async fn in_place(repo: &Path) -> bool {
+    git(repo, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .await
+        .is_err()
+}
+
 /// Whether the worktree at `path` has uncommitted or untracked changes.
 pub async fn dirty(path: &Path) -> Result<bool, Error> {
     Ok(!git(path, ["status", "--porcelain"]).await?.is_empty())
@@ -270,8 +293,12 @@ pub async fn dirty(path: &Path) -> Result<bool, Error> {
 /// Every branch the worktree at `path` has had checked out, in the order first checked out,
 /// starting with `own`, the branch it was created on. Detached checkouts (of a commit, tag or
 /// remote-tracking branch) are not branches and are left out; branches deleted since are kept.
-/// Only `own` once the worktree is gone.
-pub async fn branches(path: &Path, own: &str) -> Result<Vec<String>, Error> {
+/// Only `own` once the worktree is gone, and none for a session without a branch (`own` is
+/// `None`): it works in a folder it does not own.
+pub async fn branches(path: &Path, own: Option<&str>) -> Result<Vec<String>, Error> {
+    let Some(own) = own else {
+        return Ok(Vec::new());
+    };
     let mut seen = vec![own.to_owned()];
     if !path.exists() {
         return Ok(seen);

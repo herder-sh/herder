@@ -251,7 +251,7 @@ fn seed(dir: &Path, sessions: usize, events: usize) {
             let body = EventBody::SessionCreated {
                 repo: "/home/dev/herder".into(),
                 worktree: format!("/home/dev/worktrees/s{s}"),
-                branch: format!("herder/s{s}"),
+                branch: Some(format!("herder/s{s}")),
                 provider: Provider::Claude,
                 account_id: AccountId::new("main"),
                 model: "m0".into(),
@@ -433,7 +433,7 @@ async fn sessions_appear_in_the_vault_and_follow_live() {
     assert_eq!(last.by.as_ref().map(|by| by.as_str()), Some("alice"));
     let summaries = Vault::summaries(&vault_dir);
     assert_eq!(summaries.len(), 3);
-    assert_eq!(summaries[0].branch, "herder/s1");
+    assert_eq!(summaries[0].branch.as_deref(), Some("herder/s1"));
     assert_eq!(summaries[0].project_id.as_str(), "host-1:/home/dev/herder");
     host.runtime.kill().await;
     vault.runtime.kill().await;

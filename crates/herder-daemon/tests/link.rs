@@ -117,7 +117,7 @@ fn seed(data_dir: &Path, session: &str) {
             body: EventBody::SessionCreated {
                 repo: "/home/dev/app".into(),
                 worktree: "/home/dev/worktrees/s1".into(),
-                branch: "herder/s1".into(),
+                branch: Some("herder/s1".into()),
                 provider: Provider::Claude,
                 account_id: AccountId::new("main"),
                 model: "m0".into(),

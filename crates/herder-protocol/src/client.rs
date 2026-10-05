@@ -98,7 +98,8 @@ pub enum HistoryPart {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandBody {
     /// Create a session on a new worktree and branch of a repository, named by exactly one of
-    /// `repo` and `project_id`.
+    /// `repo` and `project_id`. A folder that is not a git repository with a commit gets no
+    /// worktree or branch: the session works in the folder itself.
     CreateSession {
         /// Absolute path of the repository on the host.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,7 +107,8 @@ pub enum CommandBody {
         /// Project to work on, in its first clone on the host.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_id: Option<ProjectId>,
-        /// Branch to create; the daemon picks a name when absent.
+        /// Branch to create; the daemon picks a name when absent. Refused for a folder that is
+        /// not a git repository with a commit.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
         /// Account to run on. When absent: the available account of `provider` with the most
@@ -402,11 +404,11 @@ pub enum CommandBody {
         /// Absolute path of the folder, or one starting with `~/`.
         path: String,
     },
-    /// Register a repository on the host as a project, as a `[[project]]` entry of the
-    /// daemon's config declaring its path; owners only. Answered with `project_added`. A path
-    /// declared already is answered with its project.
+    /// Register a repository, or any folder, on the host as a project, as a `[[project]]`
+    /// entry of the daemon's config declaring its path; owners only. Answered with
+    /// `project_added`. A path declared already is answered with its project.
     AddProject {
-        /// Absolute path of the repository, or one starting with `~/`.
+        /// Absolute path of the folder, or one starting with `~/`.
         path: String,
     },
     /// Replace a project's settings on this host, kept in its `[[project]]` entry of the

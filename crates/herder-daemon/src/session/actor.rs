@@ -1111,7 +1111,9 @@ impl Actor {
             )
             .await
             .map_err(super::worktree_error)?;
-        if let Some(prs) = self.inner.prs.get() {
+        if let Some(prs) = self.inner.prs.get()
+            && self.session.branch.is_some()
+        {
             let session = &self.session;
             prs.uninstall(
                 &session.session_id,
@@ -1266,16 +1268,28 @@ impl Actor {
             _ => return Err(error(ErrorCode::Conflict, "the session is not archived")),
         }
         let session = &self.session;
-        self.inner
-            .worktrees
-            .reopen(
-                Path::new(&session.repo),
-                Path::new(&session.worktree),
-                &session.branch,
-            )
-            .await
-            .map_err(super::worktree_error)?;
-        if let Some(prs) = self.inner.prs.get() {
+        match &session.branch {
+            Some(branch) => self
+                .inner
+                .worktrees
+                .reopen(
+                    Path::new(&session.repo),
+                    Path::new(&session.worktree),
+                    branch,
+                )
+                .await
+                .map_err(super::worktree_error)?,
+            None if !Path::new(&session.worktree).is_dir() => {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    format!("{} no longer exists", session.worktree),
+                ));
+            }
+            None => {}
+        }
+        if let Some(prs) = self.inner.prs.get()
+            && session.branch.is_some()
+        {
             prs.install(&session.session_id, Path::new(&session.worktree))
                 .await;
         }
@@ -1407,7 +1421,8 @@ impl Actor {
     async fn record_branches(&self) {
         let session = &self.session;
         let checked_out =
-            match worktree::branches(Path::new(&session.worktree), &session.branch).await {
+            match worktree::branches(Path::new(&session.worktree), session.branch.as_deref()).await
+            {
                 Ok(branches) => branches,
                 Err(err) => {
                     warn!(session_id = %session.session_id, "cannot list branches: {err}");
@@ -1439,6 +1454,10 @@ impl Actor {
         let Some(config) = self.inner.checkpoints.get() else {
             return;
         };
+        // A folder without a commit has nothing to checkpoint onto.
+        if self.session.branch.is_none() {
+            return;
+        }
         let session_id = &self.session.session_id;
         let worktree = PathBuf::from(&self.session.worktree);
         if let Err(err) = checkpoint::snapshot(config, &worktree, session_id, turn_id).await {
@@ -2202,7 +2221,10 @@ impl Actor {
             && self.queue.is_empty()
             && self.setup.is_none();
         let mut archive = false;
-        if finished {
+        if finished && self.session.branch.is_none() {
+            // Archiving leaves the folder as it is.
+            archive = true;
+        } else if finished {
             match worktree::dirty(Path::new(&self.session.worktree)).await {
                 Ok(false) => archive = true,
                 Ok(true) => summary.push_str(KEPT_DIRTY),

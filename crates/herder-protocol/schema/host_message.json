@@ -438,8 +438,11 @@
       "type": "object",
       "properties": {
         "branch": {
-          "description": "Branch the session's worktree has checked out, or had when it was removed.",
-          "type": "string"
+          "description": "Branch the session's worktree has checked out, or had when it was removed; absent for\na session that works in its folder itself.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "head_seq": {
           "description": "Seq of the session's latest event on the host; the vault is caught up once it holds it.",
@@ -516,7 +519,6 @@
         "session_id",
         "project_id",
         "repo",
-        "branch",
         "status",
         "prs",
         "head_seq",
