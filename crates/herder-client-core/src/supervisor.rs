@@ -438,6 +438,23 @@ impl Supervisor {
         }
     }
 
+    /// Which connection this is, counting from 1, and the skill library's repository as the
+    /// daemon reported it on it; `None` unless connected as an owner to a daemon that sent its
+    /// skills status.
+    pub(crate) fn library(&self) -> Option<(u32, Option<String>)> {
+        let state = self.lock();
+        if state.connection != Some(ConnectionState::Connected) || state.role != Some(Role::Owner) {
+            return None;
+        }
+        let repo = state.skills.as_ref()?.repo.clone();
+        Some((state.quality.connections, repo))
+    }
+
+    /// Which connection this is, counting from 1.
+    pub(crate) fn connections(&self) -> u32 {
+        self.lock().quality.connections
+    }
+
     /// Waits until the machine is connected and the daemon sent everything it owes for what
     /// this client sent before the call: the lists that follow its hello and the replay of
     /// every subscription made before.
