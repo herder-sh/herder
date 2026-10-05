@@ -1,0 +1,4 @@
+# Another session's turn hits its account's limit.
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Add tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-2", "error": {"class": "limit_reached", "message": "5-hour limit reached"}}}
