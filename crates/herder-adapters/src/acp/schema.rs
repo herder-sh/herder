@@ -117,6 +117,33 @@ pub(super) fn prompt(session_id: &str, text: &str, images: &[Image]) -> Value {
 #[serde(rename_all = "camelCase")]
 pub(super) struct PromptResponse {
     pub stop_reason: StopReason,
+    /// The turn's tokens, from agents that report them (OpenCode).
+    #[serde(default)]
+    pub usage: Option<PromptUsage>,
+}
+
+/// A `session/prompt` response's `usage`; input excludes the cached tokens, output excludes
+/// the thought tokens.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PromptUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub thought_tokens: u64,
+    #[serde(default)]
+    pub cached_read_tokens: u64,
+    #[serde(default)]
+    pub cached_write_tokens: u64,
+}
+
+/// A `usage_update`'s `cost`: the session's spend so far.
+#[derive(Debug, Deserialize)]
+pub(super) struct Cost {
+    pub amount: f64,
+    pub currency: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -153,6 +180,11 @@ pub(super) enum SessionUpdate {
     #[serde(rename_all = "camelCase")]
     ConfigOptionUpdate {
         config_options: Vec<ConfigOption>,
+    },
+    /// The context window's fill, and the session's cost so far where the agent knows it.
+    UsageUpdate {
+        #[serde(default)]
+        cost: Option<Cost>,
     },
     #[serde(other)]
     Other,

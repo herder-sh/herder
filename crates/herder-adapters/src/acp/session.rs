@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
-    TurnError, TurnId,
+    TurnError, TurnId, TurnUsage,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -18,9 +18,10 @@ use super::rpc::{Incoming, Rpc};
 use super::schema::{
     self, ConfigOption, ConfigOptionsResponse, ContentBlock, Error, InitializeResponse,
     NewSessionResponse, Outcome, PermissionOption, PermissionOptionKind, PromptResponse,
-    RequestPermissionRequest, SessionNotification, SessionUpdate, StopReason, ToolCallContent,
-    ToolCallFields, ToolCallStatus, ToolKind,
+    PromptUsage, RequestPermissionRequest, SessionNotification, SessionUpdate, StopReason,
+    ToolCallContent, ToolCallFields, ToolCallStatus, ToolKind,
 };
+use crate::price;
 use crate::transport::{Exit, Transport};
 use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 
@@ -195,6 +196,8 @@ pub(super) async fn start(
         turn: None,
         approvals: HashMap::new(),
         model_requests: HashMap::new(),
+        spent_usd: 0.0,
+        reported_usd: None,
         next_item: 0,
         next_approval: 0,
     };
@@ -289,6 +292,10 @@ struct Session {
     approvals: HashMap<ApprovalId, Approval>,
     /// `session/set_config_option` requests for the model, by id.
     model_requests: HashMap<u64, String>,
+    /// The session's cost in US dollars as of the last turn that had one.
+    spent_usd: f64,
+    /// The session's cost the agent last reported, not yet put on a turn.
+    reported_usd: Option<f64>,
     next_item: u64,
     next_approval: u64,
 }
@@ -561,7 +568,7 @@ impl Session {
                     },
                     _ => AdapterEvent::TurnCompleted {
                         turn_id,
-                        usage: None,
+                        usage: response.usage.map(|usage| self.turn_usage(usage)),
                     },
                 },
                 Err(err) => AdapterEvent::TurnFailed {
@@ -578,6 +585,24 @@ impl Session {
             },
         };
         self.emit(event).await;
+    }
+
+    /// A turn's tokens, and its cost: what the session's reported cost grew by during it, or
+    /// the price table's estimate when the agent reported none.
+    fn turn_usage(&mut self, usage: PromptUsage) -> TurnUsage {
+        let cost_usd = self
+            .reported_usd
+            .take()
+            .map(|total| price::spent_since(&mut self.spent_usd, total));
+        let usage = TurnUsage {
+            input: usage.input_tokens,
+            output: usage.output_tokens + usage.thought_tokens,
+            cache_read: usage.cached_read_tokens,
+            cache_write: usage.cached_write_tokens,
+            cost_usd,
+            cost_estimated: false,
+        };
+        price::fill(usage, self.model.as_deref())
     }
 
     async fn model_set(&mut self, wanted: String, outcome: Result<Value, Error>) {
@@ -614,7 +639,10 @@ impl Session {
                         .await;
                 }
             }
-            SessionUpdate::Other => {}
+            SessionUpdate::UsageUpdate { cost: Some(cost) } if cost.currency == "USD" => {
+                self.reported_usd = Some(cost.amount);
+            }
+            SessionUpdate::UsageUpdate { .. } | SessionUpdate::Other => {}
         }
     }
 

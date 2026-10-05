@@ -20,6 +20,10 @@
 //! [`CodexAdapter::read_usage`] runs only the handshake and `account/rateLimits/read`, then
 //! asks the app-server to exit: the limit windows of an account no session runs on.
 //!
+//! A turn's tokens are the `last` of every `thread/tokenUsage/updated` for it, one per model
+//! call, added up; Codex's `inputTokens` include the cached ones, which herder splits out.
+//! Codex reports no cost, so the price table estimates it on the turn's model.
+//!
 //! The process runs with exactly [`StartRequest::env`] plus `CODEX_HOME` set to the account's
 //! config dir, when it has one. The adapter never looks inside that dir.
 //!

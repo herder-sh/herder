@@ -325,6 +325,35 @@ pub struct RateLimitWindow {
     pub resets_at: Option<i64>,
 }
 
+/// `thread/tokenUsage/updated`, sent after each model call.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageUpdated {
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ThreadTokenUsage {
+    /// The model call just made; `total` is the whole thread's.
+    pub last: TokenBreakdown,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenBreakdown {
+    /// Cached input included.
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_input_tokens: u64,
+    #[serde(default)]
+    pub cache_write_input_tokens: u64,
+    /// Reasoning included.
+    #[serde(default)]
+    pub output_tokens: u64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelRerouted {

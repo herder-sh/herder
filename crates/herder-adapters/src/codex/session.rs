@@ -9,7 +9,7 @@ use base64::engine::general_purpose::STANDARD;
 
 use herder_protocol::{
     ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
-    Timestamp, TurnError, TurnId, UsageWindow,
+    Timestamp, TurnError, TurnId, TurnUsage, UsageWindow,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -18,6 +18,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::wire::{self, Incoming, RpcError, ThreadItem, ToolStatus};
 use super::{classify, policy, sandbox_policy};
+use crate::price;
 use crate::transport::{Exit, Transport};
 use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 
@@ -134,6 +135,8 @@ struct OpenTurn {
     error: Option<TurnError>,
     /// An interrupt asked for before Codex's id was known.
     interrupt: bool,
+    /// The tokens of the turn's model calls so far, once Codex reported one.
+    usage: Option<TurnUsage>,
 }
 
 /// A Codex item herder has emitted something for, keyed by Codex's item id.
@@ -154,6 +157,8 @@ struct Session {
     events: mpsc::Sender<AdapterEvent>,
     thread_id: String,
     model: Option<String>,
+    /// The model Codex opened the thread on, which turns run on until one is chosen.
+    thread_model: Option<String>,
     mode: PermissionMode,
     next_request: u64,
     pending: HashMap<u64, Pending>,
@@ -176,6 +181,7 @@ impl Session {
             events,
             thread_id: String::new(),
             model: request.model.clone(),
+            thread_model: None,
             mode: request.permission_mode,
             next_request: 0,
             pending: HashMap::new(),
@@ -264,6 +270,7 @@ impl Session {
             native_id: self.thread_id.clone(),
         })
         .await;
+        self.thread_model = Some(thread.model.clone());
         self.emit(AdapterEvent::ModelChanged {
             model: thread.model,
         })
@@ -411,6 +418,7 @@ impl Session {
                     started: false,
                     error: None,
                     interrupt: false,
+                    usage: None,
                 });
                 let (approval_policy, sandbox) = policy(self.mode);
                 let thread_id = self.thread_id.clone();
@@ -556,6 +564,11 @@ impl Session {
                     self.delta(delta).await;
                 }
             }
+            "thread/tokenUsage/updated" => {
+                if let Some(update) = parse::<wire::TokenUsageUpdated>(params) {
+                    self.tokens_used(update);
+                }
+            }
             "account/rateLimits/updated" => {
                 if let Some(update) = parse::<wire::RateLimitsUpdated>(params) {
                     self.usage(windows(&update.rate_limits)).await;
@@ -661,6 +674,20 @@ impl Session {
         self.emit(AdapterEvent::TurnStarted { turn_id }).await;
     }
 
+    /// Adds a model call's tokens to the open turn it belongs to.
+    fn tokens_used(&mut self, update: wire::TokenUsageUpdated) {
+        let Some(turn) = &mut self.turn else { return };
+        if turn.codex_id.as_deref() != Some(update.turn_id.as_str()) {
+            return;
+        }
+        let call = update.token_usage.last;
+        let usage = turn.usage.get_or_insert_with(TurnUsage::default);
+        usage.input += call.input_tokens.saturating_sub(call.cached_input_tokens);
+        usage.output += call.output_tokens;
+        usage.cache_read += call.cached_input_tokens;
+        usage.cache_write += call.cache_write_input_tokens;
+    }
+
     async fn turn_completed(&mut self, turn: wire::Turn) {
         let end = match turn.status {
             wire::TurnStatus::Completed | wire::TurnStatus::InProgress => TurnEnd::Completed,
@@ -709,11 +736,11 @@ impl Session {
         }
         self.approvals.clear();
         let turn_id = turn.id;
+        let model = self.model.as_deref().or(self.thread_model.as_deref());
+        // Codex reports no cost, so the price table estimates it.
+        let usage = turn.usage.map(|usage| price::fill(usage, model));
         self.emit(match end {
-            TurnEnd::Completed => AdapterEvent::TurnCompleted {
-                turn_id,
-                usage: None,
-            },
+            TurnEnd::Completed => AdapterEvent::TurnCompleted { turn_id, usage },
             TurnEnd::Interrupted => AdapterEvent::TurnInterrupted { turn_id },
             TurnEnd::Failed(error) => AdapterEvent::TurnFailed { turn_id, error },
         })
