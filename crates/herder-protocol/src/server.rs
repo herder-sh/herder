@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, HostId,
     HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId,
-    SessionStatus, SessionUsage, TerminalId, Timestamp, UserId,
+    SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
 /// A daemon-to-client message.
@@ -380,7 +380,7 @@ pub enum TerminalPurpose {
 }
 
 /// What an accepted command produced.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandResult {
     /// Applied; the effects arrive as events.
@@ -436,6 +436,17 @@ pub enum CommandResult {
         media_type: String,
         /// The image file's bytes, at most [`crate::MAX_PROJECT_ICON_BYTES`].
         data: Bytes,
+    },
+    /// The tokens and cost of the turns completed on this daemon's host over a period,
+    /// answering `get_usage_summary`.
+    UsageSummary {
+        /// The period asked for.
+        period: UsagePeriod,
+        /// When it starts, as [`UsagePeriod::start`] has it at the time of the answer.
+        since: Timestamp,
+        /// One total per account and model with a turn in the period, ordered by account,
+        /// then model.
+        totals: Vec<UsageTotal>,
     },
     /// Where the daemon backs its sessions up, answering `get_vault_link`.
     VaultLink {

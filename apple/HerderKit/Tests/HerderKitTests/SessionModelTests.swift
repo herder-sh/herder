@@ -114,7 +114,7 @@ struct SessionModelTests {
             created(), .turnStarted(turnId: "t1"),
             .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "i1", turnId: "t1", body: .toolCall(name: "Bash", input: #"{"command":"ls -la"}"#))),
             .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "i2", turnId: "t1", body: .assistantMessage(text: "Done.\nMore detail."))),
-            .turnCompleted(turnId: "t1"), .sessionStatusChanged(status: .idle, retryAt: nil),
+            .turnCompleted(turnId: "t1", usage: nil), .sessionStatusChanged(status: .idle, retryAt: nil),
         ])
         #expect(model.lastTool == "Bash ls -la")
         #expect(model.activity == "Done.")

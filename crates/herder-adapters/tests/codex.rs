@@ -239,7 +239,10 @@ async fn turn_streams_the_answer_on_the_switched_model_and_mode() {
             AdapterEvent::UsageReported {
                 windows: vec![weekly(25.0)]
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     shutdown(session).await;
@@ -273,7 +276,10 @@ async fn a_prompts_images_go_ahead_of_its_text_as_data_urls() {
     let events = until(&mut session, is_turn_end).await;
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -301,7 +307,10 @@ async fn resume_reopens_the_thread_and_goes_on_in_it() {
     assert_eq!(streamed(&events, "item-1"), "ok");
     assert_eq!(
         events.last(),
-        Some(&AdapterEvent::TurnCompleted { turn_id: turn() })
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None
+        })
     );
     shutdown(session).await;
 }
@@ -428,7 +437,10 @@ async fn approval_blocks_the_command_until_allowed() {
             AdapterEvent::UsageReported {
                 windows: vec![weekly(25.0)]
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     shutdown(session).await;
@@ -550,7 +562,10 @@ async fn seed_transcript_is_context_for_the_first_turn() {
             AdapterEvent::UsageReported {
                 windows: vec![weekly(25.0)]
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     shutdown(session).await;

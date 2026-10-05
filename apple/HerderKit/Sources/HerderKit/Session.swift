@@ -123,7 +123,7 @@ struct SessionModel {
             turnStartedAt = at
             lastTool = nil
             failure = nil
-        case .turnCompleted(let turnId):
+        case .turnCompleted(let turnId, _):
             endTurn(turnId)
             turnEnds[turnId] = .completed
         case .turnInterrupted(let turnId):
@@ -289,7 +289,7 @@ struct SessionModel {
         case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _, _): add(.created(branch: branch))
         case .branchCheckedOut(let branch): add(.setting("Checked out \(branch)"))
         case .permissionModeChanged(let mode): add(.setting("Permissions set to \(mode.label.lowercased())"))
-        case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
+        case .turnCompleted(let turnId, _), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
             let duration = turn == turnId ? turnStartedAt.map { at.timeIntervalSince($0) } : nil
             let kind: Moment.Kind = switch event.body {
             case .turnFailed(_, let error): .turnEnded(.failed, duration: duration, error: TurnFailure.summary(error))
@@ -359,7 +359,7 @@ struct SessionModel {
         case .turnStarted(let turnId):
             stats.turns += 1
             stats.turnLog.append(TurnRecord(id: turnId, number: stats.turns, started: at, provider: provider, model: model))
-        case .turnCompleted(let turnId), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
+        case .turnCompleted(let turnId, _), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
             if turn == turnId, let started = turnStartedAt { stats.busy += at.timeIntervalSince(started) }
             let end: TurnEnd = switch event.body {
             case .turnCompleted: .completed

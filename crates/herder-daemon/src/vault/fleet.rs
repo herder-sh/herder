@@ -407,6 +407,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::SetProjectIcon { .. }
         | CommandBody::GetProjectIcon { .. }
         | CommandBody::GetVaultLink
+        | CommandBody::GetUsageSummary { .. }
         | CommandBody::LinkVault { .. }
         | CommandBody::UnlinkVault
         | CommandBody::PairVaultHost { .. }

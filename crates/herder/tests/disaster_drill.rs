@@ -124,7 +124,10 @@ impl Adapter for Agent {
                         AdapterEvent::ItemCompleted { item: reply },
                     ];
                     if !hang {
-                        out.push(AdapterEvent::TurnCompleted { turn_id });
+                        out.push(AdapterEvent::TurnCompleted {
+                            turn_id,
+                            usage: None,
+                        });
                     }
                     for event in out {
                         if events.send(event).await.is_err() {

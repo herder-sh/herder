@@ -138,7 +138,7 @@ impl Hub {
         let streaming = state.items.entry(event.session_id.clone()).or_default();
         match &event.body {
             EventBody::ItemAdded { item } => streaming.retain(|live| live.id != item.id),
-            EventBody::TurnCompleted { turn_id }
+            EventBody::TurnCompleted { turn_id, .. }
             | EventBody::TurnInterrupted { turn_id }
             | EventBody::TurnFailed { turn_id, .. } => {
                 streaming.retain(|live| live.turn_id != *turn_id);

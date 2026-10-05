@@ -1,4 +1,4 @@
-# One prompt answered with a streamed assistant message, then usage, then shutdown.
+# One prompt answered with a streamed assistant message, then plan usage and the turn's own usage, then shutdown.
 {"emit": {"type": "model_changed", "model": "fake-model-1"}}
 {"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Say hello."}}
 {"emit": {"type": "turn_started", "turn_id": "turn-1"}}
@@ -9,5 +9,5 @@
 {"emit": {"type": "item_delta", "item_id": "item-1", "text": ", world."}}
 {"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "Hello, world."}}}}
 {"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 12.5}]}}
-{"emit": {"type": "turn_completed", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-1", "usage": {"input": 1200, "output": 340, "cache_read": 18000, "cache_write": 2048, "cost_usd": 0.0425, "cost_estimated": false}}}
 {"expect": {"type": "shutdown"}}

@@ -44,7 +44,7 @@ use std::pin::Pin;
 
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, Attachment, Image, Item, ItemId, PermissionMode,
-    QuestionId, TurnError, TurnId, UsageWindow,
+    QuestionId, TurnError, TurnId, TurnUsage, UsageWindow,
 };
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
@@ -226,6 +226,11 @@ pub enum AdapterEvent {
     TurnCompleted {
         /// The finished turn.
         turn_id: TurnId,
+        /// Tokens and cost of the turn, as the CLI reported them; absent when it did not.
+        /// Where the CLI gives tokens but no cost, the adapter estimates the cost from its
+        /// price table and sets `cost_estimated`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<TurnUsage>,
     },
     /// The turn stopped because of `Interrupt`.
     TurnInterrupted {

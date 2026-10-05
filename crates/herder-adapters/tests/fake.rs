@@ -7,7 +7,7 @@ use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, ErrorClass, Item, ItemBody, ItemId, PermissionMode,
-    QuestionId, TurnError, TurnId, UsageWindow,
+    QuestionId, TurnError, TurnId, TurnUsage, UsageWindow,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -134,7 +134,17 @@ async fn full_turn_streams_an_assistant_message() {
                     resets_at: None,
                 }]
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: Some(TurnUsage {
+                    input: 1_200,
+                    output: 340,
+                    cache_read: 18_000,
+                    cache_write: 2_048,
+                    cost_usd: Some(0.0425),
+                    cost_estimated: false,
+                }),
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);
@@ -193,7 +203,10 @@ async fn approval_blocks_the_turn_until_answered() {
                     }
                 )
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);
@@ -250,7 +263,10 @@ async fn question_blocks_the_turn_until_answered() {
                     }
                 )
             },
-            AdapterEvent::TurnCompleted { turn_id: turn() },
+            AdapterEvent::TurnCompleted {
+                turn_id: turn(),
+                usage: None
+            },
         ]
     );
     assert_eq!(shutdown(session).await, [clean_exit()]);

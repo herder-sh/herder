@@ -18,7 +18,7 @@ struct TranscriptTests {
             item("c2", .toolCall(name: "Edit", input: #"{"file_path":"a.rs","old_string":"x","new_string":"y\nz"}"#)),
             item("r2", .toolResult(callId: "c2", output: "no such file", isError: true)),
             item("a", .assistantMessage(text: "Done.")),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
         ])
         let blocks = Transcript.blocks(model)
         guard blocks.count == 3, case .tools(_, let calls) = blocks[1] else {
@@ -39,10 +39,10 @@ struct TranscriptTests {
             created(), .turnStarted(turnId: "t1"),
             item("c1", .toolCall(name: "Bash", input: "{}")),
             item("r1", .toolResult(callId: "c1", output: "first", isError: false)),
-            .turnCompleted(turnId: "t1"), .turnStarted(turnId: "t2"),
+            .turnCompleted(turnId: "t1", usage: nil), .turnStarted(turnId: "t2"),
             item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
             item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2"),
-            .turnCompleted(turnId: "t2"),
+            .turnCompleted(turnId: "t2", usage: nil),
         ])
         let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
             if case .tools(_, let calls) = block { return calls }
@@ -71,11 +71,11 @@ struct TranscriptTests {
         #expect(streamingCalls[0].outcome == .running)
         model.apply(SessionUpdate(events: [
             script.event(item("r1", .toolResult(callId: "c1", output: "failed", isError: true))),
-            script.event(.turnCompleted(turnId: "t1")),
+            script.event(.turnCompleted(turnId: "t1", usage: nil)),
             script.event(.turnStarted(turnId: "t2")),
             script.event(item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2")),
             script.event(item("r1", .toolResult(callId: "c1", output: "second", isError: false), turn: "t2")),
-            script.event(.turnCompleted(turnId: "t2")),
+            script.event(.turnCompleted(turnId: "t2", usage: nil)),
         ], streaming: []))
         let groups = Transcript.blocks(model).compactMap { block -> [ToolCall]? in
             if case .tools(_, let calls) = block { return calls }
@@ -166,7 +166,7 @@ struct TranscriptTests {
         #expect(model.outbox.isEmpty)
         #expect(Transcript.blocks(model).last == .working(since: model.turnStartedAt, waiting: false))
         // Idle: the message, then the wait for the agent to take it, until it does.
-        model.apply(script.event(.turnCompleted(turnId: "t1")))
+        model.apply(script.event(.turnCompleted(turnId: "t1", usage: nil)))
         model.outbox = [outgoing]
         #expect(Transcript.blocks(model).last == .working(since: nil, waiting: true))
         model.apply(script.event(item("u2", .userMessage(text: "next", attachments: []), turn: "t2")))
@@ -214,11 +214,11 @@ struct DefaultAccountTests {
             .turnStarted(turnId: "t1"),
             item("u1", .userMessage(text: "asd", attachments: []), turn: "t1"),
             item("item-2", .assistantMessage(text: "First."), turn: "t1"),
-            .turnCompleted(turnId: "t1"),
+            .turnCompleted(turnId: "t1", usage: nil),
             .turnStarted(turnId: "t2"),
             item("u2", .userMessage(text: "asd", attachments: []), turn: "t2"),
             item("item-2", .assistantMessage(text: "Second."), turn: "t2"),
-            .turnCompleted(turnId: "t2"),
+            .turnCompleted(turnId: "t2", usage: nil),
         ])
         let blocks = Transcript.blocks(model)
         #expect(Set(blocks.map(\.id)).count == blocks.count)

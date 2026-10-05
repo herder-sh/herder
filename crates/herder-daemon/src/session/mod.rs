@@ -756,6 +756,12 @@ impl SessionManager {
                     "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
+            CommandBody::GetUsageSummary { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon does not add usage up yet",
+                ));
+            }
         };
         self.send(session_id, Some(by), request).await
     }
@@ -1709,6 +1715,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::ListDirectory { .. }
             | CommandBody::GetProjectIcon { .. }
             | CommandBody::GetVaultLink
+            | CommandBody::GetUsageSummary { .. }
     )
 }
 

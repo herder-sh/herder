@@ -101,7 +101,10 @@ async fn agent(
         };
         [
             AdapterEvent::ItemCompleted { item },
-            AdapterEvent::TurnCompleted { turn_id },
+            AdapterEvent::TurnCompleted {
+                turn_id,
+                usage: None,
+            },
         ]
     };
     // The turn blocked on a request.

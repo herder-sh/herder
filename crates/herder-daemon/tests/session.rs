@@ -27,7 +27,7 @@ use herder_protocol::{
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
     ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, MAX_TITLE_CHARS,
     PermissionMode, Project, ProjectId, PromptId, Provider, QuestionId, SessionHead, SessionId,
-    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, UsageWindow, UserId,
+    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use tokio::sync::mpsc;
@@ -369,7 +369,7 @@ fn describe(events: &[Event]) -> Vec<String> {
                 EventBody::SessionCreated { .. } => "session_created".to_owned(),
                 EventBody::SessionStatusChanged { status, .. } => format!("status {status:?}"),
                 EventBody::TurnStarted { turn_id } => format!("turn_started {turn_id}"),
-                EventBody::TurnCompleted { turn_id } => format!("turn_completed {turn_id}"),
+                EventBody::TurnCompleted { turn_id, .. } => format!("turn_completed {turn_id}"),
                 EventBody::TurnInterrupted { turn_id } => format!("turn_interrupted {turn_id}"),
                 EventBody::TurnFailed { turn_id, error } => {
                     format!("turn_failed {turn_id} {:?}", error.class)
@@ -461,6 +461,28 @@ async fn two_clients_prompting_one_session_share_one_ordered_history() {
     assert_eq!(describe(&for_alice), history);
     assert_eq!(for_alice, for_bob);
     assert_eq!(seqs(&for_alice), (1..=12).collect::<Vec<_>>());
+    // The usage the adapter reported with a turn's end is journaled with it.
+    let usage: Vec<_> = for_alice
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::TurnCompleted { usage, .. } => Some(usage.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        usage,
+        [
+            Some(TurnUsage {
+                input: 1_200,
+                output: 340,
+                cache_read: 18_000,
+                cache_write: 2_048,
+                cost_usd: Some(0.0425),
+                cost_estimated: false,
+            }),
+            None,
+        ]
+    );
     // Live subscribers get exactly the stored events, in the same order.
     published.retain(|event| event.session_id == session);
     assert_eq!(published, for_alice);
@@ -769,7 +791,7 @@ async fn queued_prompts_are_removed_moved_and_sent_now_until_they_start() {
         ["C.", "D.", "A."]
     );
     daemon
-        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-4"))
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "turn-4"))
         .await;
     daemon.until_status(SessionStatus::Idle).await;
     let journal = daemon.journal(&session).await;
@@ -868,7 +890,7 @@ async fn queued_prompts_merge_into_one_turn_with_all_their_images() {
     };
     daemon.manager.handle(alice(), interrupt).await.unwrap();
     daemon
-        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-2"))
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "turn-2"))
         .await;
     daemon.until_status(SessionStatus::Idle).await;
     let journal = daemon.journal(&session).await;
@@ -1889,7 +1911,7 @@ async fn a_200_turn_session_hands_off_within_budget_keeping_the_first_request() 
             .await;
     }
     daemon
-        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id } if turn_id.as_str() == "turn-200"))
+        .events_until(|body| matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "turn-200"))
         .await;
     daemon.stop().await;
 
@@ -4859,7 +4881,7 @@ async fn prompt_turn(daemon: &mut Daemon, session: &SessionId, text: &str, n: u3
     let turn = TurnId::new(format!("turn-{n}"));
     daemon
         .events_until(
-            |body| matches!(body, EventBody::TurnCompleted { turn_id } if *turn_id == turn),
+            |body| matches!(body, EventBody::TurnCompleted { turn_id, .. } if *turn_id == turn),
         )
         .await;
 }
