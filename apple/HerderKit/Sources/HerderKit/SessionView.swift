@@ -42,11 +42,15 @@ struct SessionView: View {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
             }
-            header(model, summary)
-                .overlay(alignment: .leading) {
-                    if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
-                }
-            Rectangle().fill(Theme.stroke).frame(height: 1)
+            // On a phone the navigation bar carries the title and the actions, so the
+            // transcript starts right under it.
+            if !compact {
+                header(model, summary)
+                    .overlay(alignment: .leading) {
+                        if model?.parent != nil { Rectangle().fill(Theme.child).frame(width: 3) }
+                    }
+                Rectangle().fill(Theme.stroke).frame(height: 1)
+            }
             if showsTerminal {
                 TerminalPane(fleet: fleet, key: key)
             } else {
@@ -136,7 +140,44 @@ struct SessionView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            if compact {
+                ToolbarItem(placement: .principal) { compactTitle(model, summary) }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    prButton(labels: false, inToolbar: true)
+                    if let model { actionsMenu(model, inToolbar: true) }
+                }
+            }
+        }
         #endif
+    }
+
+    // MARK: Phone header
+
+    /// The title on a phone: one line of title, tail-truncated, over one caption line of the
+    /// provider, the state, the project and the machine, so it fits beside the back button.
+    private func compactTitle(_ model: SessionModel?, _ summary: SessionSummary?) -> some View {
+        VStack(spacing: 1) {
+            HStack(spacing: 5) {
+                if model?.parent != nil { ChildAvatar(session: model, size: 16, showsState: false) }
+                Text(summary?.title ?? model?.title ?? "Session")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            HStack(spacing: 4) {
+                if let provider = model?.provider { ProviderMark(provider: provider, size: 10) }
+                StatusGlyph(state: model?.state ?? .idle, size: 6)
+                let detail = SessionHeading.detail(project: summary?.project, machine: summary?.machine,
+                                                   archiving: fleet.archiving.contains(key))
+                (Text(model?.state.label ?? "")
+                    .foregroundStyle(model?.state == .needsYou ? Theme.accent : Theme.secondary)
+                 + Text(detail.isEmpty ? "" : " · " + detail).foregroundStyle(Theme.tertiary))
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .font(.caption2.weight(.medium))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
     // MARK: Header
@@ -183,23 +224,8 @@ struct SessionView: View {
             }
             .frame(idealWidth: 160, maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 6) {
-            let rollup = PRRollup(of: key, sessions: fleet.sessions)
-            if !rollup.groups.isEmpty {
-                HeaderButton(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
-                             tint: rollup.urgent?.color ?? Theme.secondary) {
-                    showsPRs.toggle()
-                }
-                .accessibilityLabel(rollup.chip)
-                // On compact width the popover adapts to a sheet, which PRStrip then frames.
-                .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
-                    PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
-                        showsPRs = false
-                        if let open { open(child) } else { path?.wrappedValue.append(child) }
-                    }
-                    .presentationCompactAdaptation(.sheet)
-                }
-            }
-            if fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner, model?.state != .archived {
+            prButton(labels: labels, inToolbar: false)
+            if ownsTerminal, model?.state != .archived {
                 HeaderButton(symbol: showsTerminal ? "text.bubble" : "terminal",
                              title: labels ? showsTerminal ? "Chat" : "Terminal" : nil,
                              selected: showsTerminal) { showsTerminal.toggle() }
@@ -208,10 +234,7 @@ struct SessionView: View {
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
             HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
-                switch inspector {
-                case .pane: inspectorShown.toggle()
-                case .sheet: inspectorSheet = true
-                }
+                showInspector()
             }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .help("Events and statistics (⌥⌘I)")
@@ -225,29 +248,87 @@ struct SessionView: View {
                 ArchivingLabel()
             }
             if let model {
-                Menu {
-                    if model.state != .archived {
-                        if model.turn != nil {
-                            Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
-                        }
-                        Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
-                        Button("Link Pull Request…", systemImage: "link") { linking = true }
-                        Divider()
-                        Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
-                            .disabled(fleet.archiving.contains(key))
-                    }
-                } label: {
-                    HeaderLabel(symbol: "ellipsis", title: nil)
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
+                actionsMenu(model, inToolbar: false)
             }
             }
             // The buttons keep their size; the title, status and branch take what is left.
             .fixedSize()
         }
+    }
+
+    private var ownsTerminal: Bool {
+        fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner
+    }
+
+    private func showInspector() {
+        switch inspector {
+        case .pane: inspectorShown.toggle()
+        case .sheet: inspectorSheet = true
+        }
+    }
+
+    /// The session's pull requests, tinted by the most urgent, opening their list.
+    @ViewBuilder
+    private func prButton(labels: Bool, inToolbar: Bool) -> some View {
+        let rollup = PRRollup(of: key, sessions: fleet.sessions)
+        if !rollup.groups.isEmpty {
+            Group {
+                if inToolbar {
+                    Button(rollup.chip, systemImage: "arrow.triangle.pull") { showsPRs.toggle() }
+                        .tint(rollup.urgent?.color ?? Theme.secondary)
+                } else {
+                    HeaderButton(symbol: "arrow.triangle.pull", title: labels ? rollup.chip : rollup.shortChip,
+                                 tint: rollup.urgent?.color ?? Theme.secondary) {
+                        showsPRs.toggle()
+                    }
+                }
+            }
+            .accessibilityLabel(rollup.chip)
+            // On compact width the popover adapts to a sheet, which PRStrip then frames.
+            .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
+                PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
+                    showsPRs = false
+                    if let open { open(child) } else { path?.wrappedValue.append(child) }
+                }
+                .presentationCompactAdaptation(.sheet)
+            }
+        }
+    }
+
+    /// The session's actions. In the phone's toolbar it also holds what the wide header shows
+    /// as buttons and lines: the terminal, the inspector, the branch and the fork origin.
+    private func actionsMenu(_ model: SessionModel, inToolbar: Bool) -> some View {
+        Menu {
+            if inToolbar {
+                // The branch and fork origin title the section, as the menu has no other line
+                // for them.
+                Section(SessionHeading.facts(branch: model.branch,
+                                             forkedFrom: fleet.forkOrigins[key])) {
+                    if ownsTerminal, model.state != .archived {
+                        Button(showsTerminal ? "Chat" : "Terminal",
+                               systemImage: showsTerminal ? "text.bubble" : "terminal") { showsTerminal.toggle() }
+                    }
+                    Button("Events and Statistics", systemImage: "info.circle") { showInspector() }
+                }
+            }
+            if model.state != .archived {
+                if model.turn != nil {
+                    Button("Interrupt", systemImage: "stop.circle") { Task { await fleet.interrupt(key) } }
+                }
+                Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
+                Button("Link Pull Request…", systemImage: "link") { linking = true }
+                Divider()
+                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
+                    .disabled(fleet.archiving.contains(key))
+            }
+        } label: {
+            if inToolbar {
+                Label("Session Actions", systemImage: "ellipsis")
+            } else {
+                HeaderLabel(symbol: "ellipsis", title: nil)
+            }
+        }
+        .modifier(HeaderMenuStyle(applies: !inToolbar))
     }
 
     // MARK: Controls
@@ -717,6 +798,39 @@ enum ModePreference {
         case .fullAccess: "full_access"
         }
         UserDefaults.standard.set(value, forKey: key(draft))
+    }
+}
+
+/// The wide header's menu look: a plain button with no indicator, at its own size. A toolbar
+/// menu keeps the system's.
+private struct HeaderMenuStyle: ViewModifier {
+    let applies: Bool
+
+    func body(content: Content) -> some View {
+        if applies {
+            content
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+        } else {
+            content
+        }
+    }
+}
+
+/// The phone header's caption after the session's state: its project and machine, or that it
+/// is being archived.
+enum SessionHeading {
+    static func detail(project: String?, machine: String?, archiving: Bool) -> String {
+        let parts = archiving ? ["Archiving…"] : [project, machine].compactMap { $0 }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// What the phone's actions menu is titled with: the branch, and where it was forked from.
+    static func facts(branch: String?, forkedFrom: ForkOrigin?) -> String {
+        [branch, forkedFrom.map { "Forked from \($0.sessionId) on \($0.hostId)" }]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 }
 
