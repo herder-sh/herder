@@ -172,6 +172,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
+            name: Some("herder".into()),
             default_permission_mode: Some(PermissionMode::AutoEdit),
             default_account: Some(AccountId::new("01J9ACCOUNT")),
             setup_command: Some("cargo fetch".into()),
@@ -179,6 +180,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
+            name: None,
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
@@ -2104,6 +2106,7 @@ fn project_optional_fields_may_be_absent() {
         command,
         CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/org/repo"),
+            name: None,
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
