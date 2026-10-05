@@ -270,7 +270,7 @@ pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
 
 /// The `claude` command for `request`: its environment is exactly the request's plus
 /// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree, with
-/// herder's MCP server registered.
+/// herder's MCP server registered and herder's skill library added.
 pub fn command(program: &Path, request: &StartRequest) -> Command {
     let mut command = request.command(program);
     command
@@ -294,6 +294,10 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
         .current_dir(&request.cwd);
     if let Some(dir) = &request.config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    // Claude loads the skills in `<dir>/.claude/skills` of every added dir, as plain `/name`.
+    if let Some(dir) = &request.skills {
+        command.arg("--add-dir").arg(dir);
     }
     if let Some(model) = &request.model {
         command.args(["--model", model]);
@@ -523,6 +527,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(Path::new("claude"), &request);
         let command = command.as_std();
@@ -575,6 +580,7 @@ mod tests {
             resume: Some("499f57af-e4af-4c6c-b348-d47c9b704e70".into()),
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(Path::new("claude"), &request);
         let args: Vec<_> = command.as_std().get_args().collect();
@@ -600,6 +606,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(Path::new("claude"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
@@ -623,6 +630,7 @@ mod tests {
                 args: vec!["mcp".into(), "--session".into(), "s1".into()],
             }),
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(Path::new("claude"), &request);
         let args: Vec<_> = command
@@ -668,6 +676,32 @@ mod tests {
     }
 
     #[test]
+    fn command_adds_the_skill_library_dir() {
+        let request = StartRequest {
+            config_dir: None,
+            env: BTreeMap::new(),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            resume: None,
+            mcp: None,
+            launcher: Vec::new(),
+            skills: Some(PathBuf::from("/data/skill-links/claude")),
+        };
+        let command = command(Path::new("claude"), &request);
+        let args: Vec<_> = command.as_std().get_args().collect();
+        let at = args.iter().position(|arg| *arg == "--add-dir").unwrap();
+        assert_eq!(args[at + 1], "/data/skill-links/claude");
+        let without = StartRequest {
+            skills: None,
+            ..request
+        };
+        let command = super::command(Path::new("claude"), &without);
+        assert!(!command.as_std().get_args().any(|arg| arg == "--add-dir"));
+    }
+
+    #[test]
     fn command_runs_behind_the_launcher_and_directly_without_one() {
         let direct = StartRequest {
             config_dir: Some(PathBuf::from("/accounts/work/claude")),
@@ -679,6 +713,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let launched = StartRequest {
             launcher: crate::testing::launcher(),

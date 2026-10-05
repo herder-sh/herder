@@ -319,6 +319,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(std::path::Path::new("codex"), &request);
         let command = command.as_std();
@@ -354,6 +355,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let command = command(std::path::Path::new("codex"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
@@ -372,6 +374,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let launched = StartRequest {
             launcher: crate::testing::launcher(),

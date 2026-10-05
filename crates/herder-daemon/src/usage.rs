@@ -182,6 +182,7 @@ fn request(account: &AccountConfig, dir: PathBuf) -> StartRequest {
         resume: None,
         mcp: None,
         launcher: Vec::new(),
+        skills: None,
     }
 }
 

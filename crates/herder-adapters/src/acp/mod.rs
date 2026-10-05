@@ -72,7 +72,7 @@ use crate::fixture::Fixture;
 use crate::transport::Transport;
 use crate::{Adapter, StartFuture, StartRequest};
 
-pub use profile::{AgentProfile, SkillMention};
+pub use profile::{AgentProfile, SkillMention, SkillsLaunch};
 
 #[cfg(doc)]
 use crate::{AdapterCommand, AdapterEvent, Capabilities};
