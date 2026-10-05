@@ -348,12 +348,49 @@ pub struct AgentMessage {
     pub permission_ceiling: PermissionMode,
 }
 
+/// Why the daemon prompted an idle agent on its own: a follow-up.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FollowUp {
+    /// What prompted it.
+    pub reason: FollowUpReason,
+    /// Number of the pull request it is about, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u64>,
+    /// That pull request's head commit when the follow-up was sent, if it is about one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+}
+
+/// What prompted a follow-up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FollowUpReason {
+    /// The pull request's checks failed.
+    CiFailed,
+    /// The pull request's checks passed.
+    CiPassed,
+    /// The pull request no longer merges cleanly.
+    Conflicting,
+    /// A reviewer requested changes on the pull request.
+    ChangesRequested,
+    /// The agent stopped with its work unfinished.
+    Stalled,
+    /// A reason newer than this build.
+    #[serde(other, skip_serializing)]
+    #[schemars(skip)]
+    Unknown,
+}
+
 /// One entry of the transcript.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
     /// Authenticated agent sender of a prompt. Only the daemon sets this; absent for humans.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_message: Option<AgentMessage>,
+    /// Why the daemon sent this `user_message` on its own. Only the daemon sets this; absent
+    /// for prompts users and agents send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<FollowUp>,
     /// Spawning tool call for provider-native sub-agent content, in the same turn.
     /// None identifies the main conversation. This ancestry survives journal replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -508,6 +545,14 @@ pub struct PullRequest {
     /// before herder recorded it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_branch: Option<String>,
+    /// Commit the pull request's branch points at; absent from events journaled before herder
+    /// recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
+    /// Review threads not yet resolved; absent from events journaled before herder recorded
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_threads: Option<u32>,
     /// Lifecycle state.
     pub state: PrState,
     /// Combined status of required checks.

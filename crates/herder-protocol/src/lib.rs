@@ -32,8 +32,8 @@ pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};
 pub use event::{
     AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalOutcome, CiStatus, ErrorClass,
-    EscalationReason, Event, EventBody, Item, ItemBody, Mergeable, PrState, PullRequest,
-    ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
+    EscalationReason, Event, EventBody, FollowUp, FollowUpReason, Item, ItemBody, Mergeable,
+    PrState, PullRequest, ReviewStatus, Route, SessionStatus, TitleSource, TurnError,
 };
 pub use ids::{
     AccountId, ApprovalId, AttachmentId, CommandId, DeviceId, HostId, ItemId, PromptId, QuestionId,
@@ -52,8 +52,8 @@ pub use server::{
     SessionHead, Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
 };
 pub use settings::{
-    BackupSettings, DaemonSettings, LogFormat, LogSettings, ProjectDiscovery, ProviderBinary,
-    ResourceSettings, TaskSettings, TitleSettings,
+    BackupSettings, DaemonSettings, FollowUpSettings, LogFormat, LogSettings, ProjectDiscovery,
+    ProviderBinary, ResourceSettings, TaskSettings, TitleSettings,
 };
 pub use skills::{
     LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload, SessionSkill, SkillFile,

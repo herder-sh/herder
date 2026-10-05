@@ -558,6 +558,7 @@ impl Session {
                     let body = streamed_body(reasoning, String::new());
                     let item = Item {
                         agent_message: None,
+                        follow_up: None,
                         parent_call_id: None,
                         id,
                         turn_id,
@@ -648,6 +649,7 @@ impl Session {
                     turn_id: turn_id.clone(),
                     body,
                     agent_message: None,
+                    follow_up: None,
                     parent_call_id: Some(parent_call_id.clone()),
                 },
             })
@@ -712,6 +714,7 @@ impl Session {
                 turn_id,
                 body,
                 agent_message: None,
+                follow_up: None,
                 parent_call_id,
             },
         })
@@ -807,6 +810,7 @@ impl Session {
                     turn_id: turn_id.clone(),
                     body,
                     agent_message: None,
+                    follow_up: None,
                     parent_call_id: parent_call_id.clone(),
                 },
             })
@@ -1074,6 +1078,7 @@ impl Session {
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -1363,6 +1368,7 @@ mod tests {
 
         let item = |body| Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: TurnId::new("t"),
@@ -1412,6 +1418,7 @@ mod tests {
                 hop_count: 1,
                 permission_ceiling: PermissionMode::Ask,
             }),
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("prompt"),
             turn_id: TurnId::new("turn"),

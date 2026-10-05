@@ -90,6 +90,7 @@ pub fn status(status: SessionStatus) -> EventBody {
 pub fn item(id: &str, body: ItemBody) -> Item {
     Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: TurnId::new("turn-1"),
@@ -315,6 +316,8 @@ pub fn pr(number: u64, title: &str, state: PrState) -> PullRequest {
         url: format!("https://github.com/acme/app/pull/{number}"),
         title: title.to_owned(),
         head_branch: Some(format!("fix-{number}")),
+        head_sha: None,
+        unresolved_threads: None,
         state,
         ci: CiStatus::None,
         review: ReviewStatus::None,
@@ -596,6 +599,7 @@ fn call(id: &str, turn: &str, name: &str, input: serde_json::Value) -> EventBody
     EventBody::ItemAdded {
         item: Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
@@ -612,6 +616,7 @@ fn result(call: &str, turn: &str, output: &str) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(format!("{call}-result")),
             turn_id: TurnId::new(turn),
@@ -629,6 +634,7 @@ fn turn_item(id: &str, turn: &str, body: ItemBody) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: TurnId::new(turn),
@@ -824,6 +830,7 @@ pub fn chat() -> App {
     }
     let streaming = vec![Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new("a2"),
         turn_id: TurnId::new("turn-2"),

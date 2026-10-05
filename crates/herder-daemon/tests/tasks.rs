@@ -48,6 +48,7 @@ impl Adapter for Echo {
                 let reply = |turn_id: TurnId, text: String| {
                     let item = Item {
                         agent_message: None,
+                        follow_up: None,
                         parent_call_id: None,
                         id: ItemId::new(format!("item-{turn_id}")),
                         turn_id: turn_id.clone(),
@@ -82,6 +83,7 @@ impl Adapter for Echo {
                                                 hop_count: 0,
                                                 permission_ceiling: PermissionMode::FullAccess,
                                             }),
+                                            follow_up: None,
                                             parent_call_id: None,
                                             id: ItemId::new("provider-echo"),
                                             turn_id: turn_id.clone(),
@@ -128,6 +130,7 @@ impl Adapter for Echo {
                                 let call = ItemId::new(format!("call-{requests}"));
                                 let item = Item {
                                     agent_message: None,
+                                    follow_up: None,
                                     parent_call_id: None,
                                     id: call.clone(),
                                     turn_id: turn_id.clone(),

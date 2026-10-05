@@ -13,14 +13,15 @@ use herder_protocol::{
     ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus, CommandBody,
     CommandResult, Constraint, Container, ContainerState, DaemonSettings, DirectoryEntry,
     ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FailoverSettings,
-    FleetHost, HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item,
-    ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode,
-    PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary,
-    ProviderReload, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
-    Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
-    UsageWindow, UserId, VaultStatus, VaultVolume,
+    FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication,
+    HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat,
+    LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectDiscovery,
+    ProjectId, PromptId, Provider, ProviderBinary, ProviderReload, PullRequest, QuestionId,
+    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SessionHead, SessionId,
+    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
+    TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
+    VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -357,8 +358,28 @@ pub struct AgentMessage {
 }
 
 #[uniffi::remote(Record)]
+pub struct FollowUp {
+    pub reason: FollowUpReason,
+    pub pr: Option<u64>,
+    pub head_sha: Option<String>,
+}
+
+#[uniffi::remote(Enum)]
+pub enum FollowUpReason {
+    CiFailed,
+    CiPassed,
+    Conflicting,
+    ChangesRequested,
+    Stalled,
+    Unknown,
+}
+
+#[uniffi::remote(Record)]
 pub struct Item {
     pub agent_message: Option<AgentMessage>,
+    // Defaulted, so Swift and Kotlin code that builds an item, as tests do, need not name it.
+    #[uniffi(default = None)]
+    pub follow_up: Option<FollowUp>,
     pub parent_call_id: Option<ItemId>,
     pub id: ItemId,
     pub turn_id: TurnId,
@@ -440,6 +461,12 @@ pub struct PullRequest {
     pub url: String,
     pub title: String,
     pub head_branch: Option<String>,
+    // Defaulted, so Swift and Kotlin code that builds a pull request, as tests do, need not
+    // name them.
+    #[uniffi(default = None)]
+    pub head_sha: Option<String>,
+    #[uniffi(default = None)]
+    pub unresolved_threads: Option<u32>,
     pub state: PrState,
     pub ci: CiStatus,
     pub review: ReviewStatus,
@@ -962,6 +989,7 @@ pub struct DaemonSettings {
     pub resources: ResourceSettings,
     pub projects: ProjectDiscovery,
     pub backup: BackupSettings,
+    pub follow_ups: FollowUpSettings,
 }
 
 #[uniffi::remote(Record)]
@@ -1020,6 +1048,13 @@ pub struct BackupSettings {
     pub attachments: bool,
     pub attachments_cap: u64,
     pub archive_retention_days: u32,
+}
+
+#[uniffi::remote(Record)]
+pub struct FollowUpSettings {
+    pub pr_events: bool,
+    pub stall_after_secs: u64,
+    pub max_stall_nudges: u32,
 }
 
 #[uniffi::remote(Record)]

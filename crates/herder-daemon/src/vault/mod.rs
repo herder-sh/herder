@@ -298,6 +298,7 @@ mod tests {
             tasks: Default::default(),
             failover: Default::default(),
             titles: Default::default(),
+            follow_ups: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
             mode: crate::config::Mode::Vault,

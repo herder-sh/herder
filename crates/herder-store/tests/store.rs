@@ -78,6 +78,8 @@ fn pr(number: u64, state: PrState) -> PullRequest {
         url: format!("https://github.com/herder-sh/herder/pull/{number}"),
         title: format!("PR {number}"),
         head_branch: Some(format!("pr-{number}")),
+        head_sha: None,
+        unresolved_threads: None,
         state,
         ci: CiStatus::Pending,
         review: ReviewStatus::Required,
@@ -89,6 +91,7 @@ fn message(text: String) -> EventBody {
     EventBody::ItemAdded {
         item: Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("item"),
             turn_id: TurnId::new("turn"),
@@ -1312,6 +1315,7 @@ fn nested_item_ancestry_survives_journal_reopen() {
             id: ItemId::new("child-message"),
             turn_id: TurnId::new("turn"),
             agent_message: None,
+            follow_up: None,
             parent_call_id: Some(ItemId::new("agent-call")),
             body: ItemBody::AssistantMessage {
                 text: "Child output".into(),
@@ -1366,6 +1370,7 @@ fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
     );
     let item = Item {
         agent_message: Some(metadata.clone()),
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new("message"),
         turn_id: TurnId::new("turn"),

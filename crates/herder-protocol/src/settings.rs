@@ -29,6 +29,9 @@ pub struct DaemonSettings {
     pub projects: ProjectDiscovery,
     /// What is backed up, and kept, on a vault.
     pub backup: BackupSettings,
+    /// When the daemon prompts an idle agent on its own; the defaults from daemons before it.
+    #[serde(default)]
+    pub follow_ups: FollowUpSettings,
 }
 
 /// The `[log]` table.
@@ -129,4 +132,27 @@ pub struct BackupSettings {
     pub attachments_cap: u64,
     /// On a vault: days an archived session of an online host is kept after its latest event.
     pub archive_retention_days: u32,
+}
+
+/// The `[follow_ups]` table: when the daemon prompts an idle agent on its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FollowUpSettings {
+    /// Whether an agent is prompted when its pull request's checks fail or pass, it stops
+    /// merging cleanly, or a reviewer requests changes.
+    pub pr_events: bool,
+    /// Seconds an agent may sit idle with its work unfinished before it is prompted to go on;
+    /// 0 never prompts it.
+    pub stall_after_secs: u64,
+    /// Most times a stalled agent is prompted before it is left to a user.
+    pub max_stall_nudges: u32,
+}
+
+impl Default for FollowUpSettings {
+    fn default() -> Self {
+        Self {
+            pr_events: true,
+            stall_after_secs: 0,
+            max_stall_nudges: 2,
+        }
+    }
 }

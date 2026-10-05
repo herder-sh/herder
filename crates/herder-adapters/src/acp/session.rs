@@ -684,6 +684,7 @@ impl Session {
             };
             let item = Item {
                 agent_message: None,
+                follow_up: None,
                 parent_call_id: None,
                 id: id.clone(),
                 turn_id: turn.id.clone(),
@@ -719,6 +720,7 @@ impl Session {
         };
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: text.id,
             turn_id: turn.id.clone(),
@@ -797,6 +799,7 @@ impl Session {
         tool.called = true;
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: tool.id.clone(),
             turn_id: turn.id.clone(),
@@ -826,6 +829,7 @@ impl Session {
         tool.finished = true;
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id,
             turn_id: turn.id.clone(),
@@ -941,6 +945,7 @@ mod tests {
         let turn = TurnId::new("t");
         let item = |id: &str, body| Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(id),
             turn_id: turn.clone(),
@@ -998,6 +1003,7 @@ mod tests {
                 hop_count: 1,
                 permission_ceiling: PermissionMode::Ask,
             }),
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("prompt"),
             turn_id: TurnId::new("turn"),
