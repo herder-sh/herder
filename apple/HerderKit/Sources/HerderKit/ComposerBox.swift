@@ -26,6 +26,8 @@ struct ComposerBox<Footer: View>: View {
     let choose: (ModelCatalog.Choice) -> Void
     /// The settings the model menu offers after the models: account and machine.
     var settings: [SettingsSection] = []
+    /// The skills the prompt can mention with `$`.
+    var skills: [SessionSkill] = []
     let setMode: (PermissionMode) -> Void
     let send: () -> Void
     let stop: () -> Void
@@ -46,9 +48,13 @@ struct ComposerBox<Footer: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
+                if !skillMatches.isEmpty {
+                    SkillPicker(skills: Array(skillMatches.prefix(6)), choose: mention)
+                    Rectangle().fill(Theme.stroke).frame(height: 1)
+                }
                 #if os(macOS)
                 PromptEditor(
-                    text: $text, focused: $editing, images: images, pastes: pastes,
+                    text: $text, focused: $editing, images: images, pastes: pastes, skills: skills,
                     addImages: add, addPaste: addPaste, submit: submit)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
@@ -58,6 +64,10 @@ struct ComposerBox<Footer: View>: View {
                     .padding(.bottom, 8)
                 #else
                 if !images.isEmpty { AttachmentStrip(images: images, remove: remove) }
+                let mentioned = SkillMention.mentioned(in: text, skills: skills)
+                if !mentioned.isEmpty {
+                    SkillStrip(skills: mentioned) { text = SkillMention.remove($0.name, from: text) }
+                }
                 PromptEditor(text: $text, focused: $editing, addImages: add, addPaste: addPaste, submit: submit)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
@@ -184,7 +194,22 @@ struct ComposerBox<Footer: View>: View {
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    /// The skills the `$` mention being typed picks.
+    private var skillMatches: [SessionSkill] {
+        SkillMention.query(in: text).map { SkillMention.matches($0, in: skills) } ?? []
+    }
+
+    private func mention(_ skill: SessionSkill) {
+        text = SkillMention.complete(text, with: skill.name)
+        focus()
+    }
+
+    /// Sends the prompt; while the skill picker is open, Return chooses its first skill instead.
     private func submit() {
+        if let first = skillMatches.first {
+            mention(first)
+            return
+        }
         dictation.cancel()
         text = PromptText.expand(text, pastes: pastes)
         pastes = []

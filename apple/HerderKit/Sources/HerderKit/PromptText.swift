@@ -3,29 +3,41 @@ import Foundation
 /// The composer's text: what the user typed, with a marker for each image and each long paste,
 /// `[Image #N]` and `[Pasted text #N]`, numbered in the order they were added. The composer
 /// draws the markers as chips; an image's marker goes to the agent as is, so the prompt can
-/// refer to it, and a paste's is replaced by the text when the prompt is sent.
+/// refer to it, and a paste's is replaced by the text when the prompt is sent. A skill the
+/// session has, mentioned as `$name`, is a marker too, sent as is.
 enum PromptText {
     enum Kind: Hashable {
-        case image, paste
+        case image, paste, skill
 
         fileprivate var word: String { self == .image ? "Image" : "Pasted text" }
     }
 
-    /// A marker in the text: the `number`th image or paste.
+    /// A marker in the text: the `number`th image or paste, or the skill `name`.
     struct Token: Hashable {
         let kind: Kind
         let number: Int
-        var marker: String { PromptText.marker(kind, number) }
+        /// The skill's name; empty for an image or a paste.
+        var name = ""
+        var marker: String { kind == .skill ? "$\(name)" : PromptText.marker(kind, number) }
     }
 
     static func marker(_ kind: Kind, _ number: Int) -> String { "[\(kind.word) #\(number)]" }
 
-    /// The text's markers, in order, with where they are.
-    static func tokens(in text: String) -> [(range: Range<String.Index>, token: Token)] {
-        text.matches(of: /\[(Image|Pasted text) #(\d+)\]/).compactMap { match in
-            guard let number = Int(match.output.2) else { return nil }
-            return (match.range, Token(kind: match.output.1 == "Image" ? .image : .paste, number: number))
+    /// The text's markers, in order, with where they are: each image and paste, and each
+    /// mention of one of `skills`, a `$name` that starts a word and ends one.
+    static func tokens(in text: String, skills: Set<String> = []) -> [(range: Range<String.Index>, token: Token)] {
+        var found: [(range: Range<String.Index>, token: Token)] = text.matches(of: /\[(Image|Pasted text) #(\d+)\]/)
+            .compactMap { match in
+                guard let number = Int(match.output.2) else { return nil }
+                return (match.range, Token(kind: match.output.1 == "Image" ? .image : .paste, number: number))
+            }
+        guard !skills.isEmpty else { return found }
+        for match in text.matches(of: /(^|\s)\$([a-z0-9-]+)(?![a-z0-9-])/) where skills.contains(String(match.output.2)) {
+            let name = match.output.2
+            found.append((text.index(before: name.startIndex)..<name.endIndex,
+                          Token(kind: .skill, number: 0, name: String(name))))
         }
+        return found.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     /// Whether pasted text is long enough to go in as a chip rather than inline.

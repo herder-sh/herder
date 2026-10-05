@@ -15,6 +15,8 @@ struct PromptEditor: NSViewRepresentable {
     @Binding var focused: Bool
     let images: [Herder.Image]
     let pastes: [String]
+    /// The session's skills, whose `$name` mentions draw as chips.
+    var skills: [SessionSkill] = []
     /// Attaches pasted or dropped images; returns their markers, to go in at the caret.
     let addImages: ([Herder.Image]) -> String
     /// Takes long pasted text; returns its marker, to go in at the caret.
@@ -91,15 +93,18 @@ struct PromptEditor: NSViewRepresentable {
         weak var view: ChipTextView?
         /// While `show` replaces the text: the binding already holds it.
         private var showing = false
-        /// The images and pastes the chips were last drawn with.
+        /// The images, pastes and skills the chips were last drawn with.
         private var drawn: Content?
 
         struct Content: Equatable {
             let images: [Data]
             let pastes: [String]
+            let skills: [SessionSkill]
         }
 
-        private var content: Content { Content(images: parent.images.map(\.data), pastes: parent.pastes) }
+        private var content: Content {
+            Content(images: parent.images.map(\.data), pastes: parent.pastes, skills: parent.skills)
+        }
 
         init(_ parent: PromptEditor) { self.parent = parent }
 
@@ -137,7 +142,7 @@ struct PromptEditor: NSViewRepresentable {
         func show(_ text: String, in view: NSTextView) {
             let shown = NSMutableAttributedString()
             var rest = text.startIndex
-            for (range, token) in PromptText.tokens(in: text) {
+            for (range, token) in PromptText.tokens(in: text, skills: Set(parent.skills.map(\.name))) {
                 shown.append(NSAttributedString(string: String(text[rest..<range.lowerBound]), attributes: PromptEditor.attributes))
                 let dark = view.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                 let attachment = ChipAttachment(token: token, label: ChipLabel(chip: chip(token)), dark: dark)
@@ -211,7 +216,8 @@ struct PromptEditor: NSViewRepresentable {
 
         func chip(_ token: PromptText.Token) -> PromptChip {
             PromptChip(token: token, image: token.kind == .image ? parent.images[safe: token.number - 1] : nil,
-                 paste: token.kind == .paste ? parent.pastes[safe: token.number - 1] : nil)
+                 paste: token.kind == .paste ? parent.pastes[safe: token.number - 1] : nil,
+                 skill: token.kind == .skill ? parent.skills.first(where: { $0.name == token.name }) : nil)
         }
 
         /// Opens what a chip stands for, under it.
@@ -221,7 +227,8 @@ struct PromptEditor: NSViewRepresentable {
             popover.contentViewController = NSHostingController(rootView: ChipDetail(chip: chip(token)) { [weak self, weak popover] in
                 popover?.close()
                 guard let self, let view = self.view else { return }
-                self.parent.text = self.parent.text.replacingOccurrences(of: token.marker, with: "")
+                self.parent.text = token.kind == .skill ? SkillMention.remove(token.name, from: self.parent.text)
+                    : self.parent.text.replacingOccurrences(of: token.marker, with: "")
                 self.show(self.parent.text, in: view)
             })
             popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
@@ -311,9 +318,12 @@ struct PromptChip {
     let token: PromptText.Token
     let image: Herder.Image?
     let paste: String?
+    var skill: SessionSkill?
 
     var name: String {
         switch token.kind {
+        case .skill:
+            return token.marker
         case .image:
             let ext = image.flatMap { $0.mediaType.split(separator: "/").last.map(String.init) } ?? "png"
             return token.number == 1 ? "image.\(ext)" : "image-\(token.number).\(ext)"
@@ -324,6 +334,10 @@ struct PromptChip {
 
     var detail: String {
         switch token.kind {
+        case .skill:
+            // A chip in the text stays short; its popover has the whole description.
+            let description = skill?.description ?? ""
+            return description.count > 48 ? String(description.prefix(47)) + "…" : description
         case .image:
             return ByteCountFormatter.string(fromByteCount: Int64(image?.data.count ?? 0), countStyle: .file)
         case .paste:
@@ -345,7 +359,7 @@ struct ChipLabel: View {
                 SwiftUI.Image(nsImage: picture).resizable().scaledToFill()
                     .frame(width: 14, height: 14).clipShape(.rect(cornerRadius: 3))
             } else {
-                SwiftUI.Image(systemName: "doc.text").foregroundStyle(Theme.secondary)
+                SwiftUI.Image(systemName: chip.skill == nil ? "doc.text" : "book.closed").foregroundStyle(Theme.secondary)
             }
             Text(chip.name).foregroundStyle(Theme.text)
             Text(chip.detail).foregroundStyle(Theme.tertiary)
@@ -372,7 +386,12 @@ struct ChipDetail: View {
                 Spacer()
                 Button("Remove", role: .destructive, action: remove)
             }
-            if let image = chip.image {
+            if let skill = chip.skill {
+                Text(skill.description).foregroundStyle(Theme.text).frame(maxWidth: 420, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(skill.sourceLabel) skill\(skill.path.map { " · \($0)" } ?? "")")
+                    .font(.caption).foregroundStyle(Theme.tertiary)
+            } else if let image = chip.image {
                 Picture(data: image.data, height: 360)
             } else if let paste = chip.paste {
                 ScrollView {
