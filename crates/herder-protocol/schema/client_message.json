@@ -378,7 +378,7 @@
       "description": "What a command asks for.",
       "oneOf": [
         {
-          "description": "Create a session on a new worktree and branch of a repository, named by exactly one of\n`repo` and `project_id`.",
+          "description": "Create a session on a new worktree and branch of a repository, named by exactly one of\n`repo` and `project_id`. A folder that is not a git repository with a commit gets no\nworktree or branch: the session works in the folder itself.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -393,7 +393,7 @@
               ]
             },
             "branch": {
-              "description": "Branch to create; the daemon picks a name when absent.",
+              "description": "Branch to create; the daemon picks a name when absent. Refused for a folder that is\nnot a git repository with a commit.",
               "type": [
                 "string",
                 "null"
@@ -1221,11 +1221,11 @@
           ]
         },
         {
-          "description": "Register a repository on the host as a project, as a `[[project]]` entry of the\ndaemon's config declaring its path; owners only. Answered with `project_added`. A path\ndeclared already is answered with its project.",
+          "description": "Register a repository, or any folder, on the host as a project, as a `[[project]]`\nentry of the daemon's config declaring its path; owners only. Answered with\n`project_added`. A path declared already is answered with its project.",
           "type": "object",
           "properties": {
             "path": {
-              "description": "Absolute path of the repository, or one starting with `~/`.",
+              "description": "Absolute path of the folder, or one starting with `~/`.",
               "type": "string"
             },
             "type": {
@@ -1873,7 +1873,7 @@
       "description": "What a durable event records.\n\nA task is a primary session that spawns child sessions. Each child is a full session with\nits own journal; the primary's journal records `child_spawned` and `child_reported`. A\nchild's approvals and questions are journaled in the child's own journal, whoever answers\nthem.",
       "oneOf": [
         {
-          "description": "The session exists: one repo, one worktree and branch, on this host.",
+          "description": "The session exists: one repo, one worktree and branch, on this host; or, for a folder\nthat is not a git repository with a commit, the folder itself and no branch.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1881,8 +1881,11 @@
               "$ref": "#/$defs/AccountId"
             },
             "branch": {
-              "description": "Branch the session owns.",
-              "type": "string"
+              "description": "Branch the session owns; absent for a session that works in `repo` itself.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "failover_pin": {
               "description": "Whether the session stays on its account when it hits a limit; absent for the\ndaemon's `[failover] pin`.",
@@ -1935,7 +1938,7 @@
               "$ref": "#/$defs/Provider"
             },
             "repo": {
-              "description": "Absolute path of the repository on the host.",
+              "description": "Absolute path of the repository, or folder, on the host.",
               "type": "string"
             },
             "task": {
@@ -1950,7 +1953,7 @@
               "const": "session_created"
             },
             "worktree": {
-              "description": "Absolute path of the session's worktree on the host.",
+              "description": "Absolute path of the session's worktree on the host; `repo` itself when it has no\nbranch.",
               "type": "string"
             }
           },
@@ -1958,7 +1961,6 @@
             "type",
             "repo",
             "worktree",
-            "branch",
             "provider",
             "account_id",
             "model",

@@ -30,7 +30,7 @@ pub struct Session {
     pub repo: String,
     /// The session's worktree on the host.
     pub worktree: String,
-    /// Branch the session works on now.
+    /// Branch the session works on now; empty for one that works in its folder itself.
     pub branch: String,
     /// Current model, in the provider's naming.
     pub model: String,
@@ -318,7 +318,7 @@ impl Session {
                 self.permission_mode = permission_mode;
                 self.repo = repo;
                 self.worktree = worktree;
-                self.branch = branch;
+                self.branch = branch.unwrap_or_default();
                 self.model = model;
                 self.parent = parent;
                 self.task = task;

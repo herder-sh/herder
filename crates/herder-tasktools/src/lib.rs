@@ -77,8 +77,9 @@ impl Tool {
         match self {
             Tool::Spawn => {
                 "Start a child session to work on part of your task in parallel. The child is a \
-                 separate agent with its own git worktree and branch of this repository, and it \
-                 does not see your conversation, so `prompt` must say everything it needs. \
+                 separate agent with its own git worktree and branch of this repository (in a \
+                 folder that is not a git repository with a commit, it shares the folder with \
+                 you and has no branch), and it does not see your conversation, so `prompt` must say everything it needs. \
                  Returns at once with the child's id and branch while the child works in the \
                  background; call wait_for to get its report. Children cannot spawn children, \
                  and a task has a limit on live children (5 unless the user changed it). A \

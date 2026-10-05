@@ -628,6 +628,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     else {
         panic!("the journal starts with {:?}", copied[0].body);
     };
+    let branch = branch.as_ref().unwrap();
     assert_eq!(&git(&b_worktree, &["branch", "--show-current"]), branch);
     assert_ne!(
         branch,

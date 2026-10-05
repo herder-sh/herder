@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -163,6 +163,38 @@ CREATE TABLE turn_usage (
     PRIMARY KEY (session_id, turn_id)
 ) STRICT;
 CREATE INDEX turn_usage_at ON turn_usage (at_ms);
+";
+
+/// Sessions without a branch: those that work in a folder that is not a git repository with a
+/// commit. SQLite cannot drop a `NOT NULL`, so the table is rebuilt.
+const V14: &str = "
+CREATE TABLE sessions_v14 (
+    session_id      TEXT    NOT NULL PRIMARY KEY,
+    repo            TEXT    NOT NULL,
+    worktree        TEXT    NOT NULL,
+    branch          TEXT,
+    provider        TEXT    NOT NULL,
+    account_id      TEXT    NOT NULL,
+    model           TEXT    NOT NULL,
+    permission_mode TEXT    NOT NULL,
+    status          TEXT    NOT NULL,
+    last_seq        INTEGER NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    parent          TEXT,
+    task            TEXT,
+    title           TEXT,
+    title_source    TEXT,
+    parent_host     TEXT
+) STRICT;
+INSERT INTO sessions_v14 (session_id, repo, worktree, branch, provider, account_id, model,
+        permission_mode, status, last_seq, updated_at, parent, task, title, title_source,
+        parent_host)
+    SELECT session_id, repo, worktree, branch, provider, account_id, model, permission_mode,
+        status, last_seq, updated_at, parent, task, title, title_source, parent_host
+    FROM sessions;
+DROP TABLE sessions;
+ALTER TABLE sessions_v14 RENAME TO sessions;
+CREATE INDEX sessions_parent ON sessions (parent);
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

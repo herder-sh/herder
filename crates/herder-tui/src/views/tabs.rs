@@ -117,10 +117,15 @@ pub(super) fn tasks(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hit
                 Span::raw(" "),
                 Span::styled(session.title(), ui.text()),
             ]);
-            let right = Line::from(ui.joined([
-                Span::styled(session.branch.clone(), ui.muted()),
-                Span::styled(state.label(), state::style(ui, state)),
-            ]));
+            let branch = Some(&session.branch).filter(|branch| !branch.is_empty());
+            let right = Line::from(
+                ui.joined(
+                    branch
+                        .map(|branch| Span::styled(branch.clone(), ui.muted()))
+                        .into_iter()
+                        .chain([Span::styled(state.label(), state::style(ui, state))]),
+                ),
+            );
             Some(Item::item(left).right(right))
         })
         .collect();
