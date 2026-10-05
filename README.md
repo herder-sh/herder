@@ -24,6 +24,18 @@ herder update            # replace herder with the latest release
 The script installs a static binary to `~/.local/bin/herder` after checking its sha256.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
+### Check the machine
+
+```sh
+herder doctor            # or: herder doctor --config /path/to/daemon.toml
+```
+
+It checks that the config parses, each provider's CLI runs, each account is logged in, git
+and `gh` are set up, the service is installed and running, the daemon answers on its listen
+addresses and the vault (if any) is reachable. Each line is ✓ (pass), ! (warning) or ✗
+(fail), with how to fix anything that does not pass. It exits non-zero while a check fails, so
+run it until it passes.
+
 ## Keeping accounts safe
 
 herder logs each account in with the vendor's own CLI, on the machine that runs it, so the

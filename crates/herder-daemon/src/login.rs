@@ -319,7 +319,7 @@ impl Pending {
     pub(crate) fn check(&self) -> impl Fn() -> bool + Send + 'static {
         let program = self.program.clone();
         let dir = self.account.config_dir.clone().unwrap_or_default();
-        move || logged_in(&program, &dir) == Ok(true)
+        move || logged_in(&program, Some(&dir)) == Ok(true)
     }
 
     /// Adds the account if the provider reports the config dir logged in, however the login
@@ -339,7 +339,7 @@ impl Pending {
             Some(code) => format!("the login exited with {code}"),
             None => "the login ended".to_owned(),
         };
-        let failure = match logged_in(&program, &dir) {
+        let failure = match logged_in(&program, Some(&dir)) {
             Ok(true) => None,
             Ok(false) => Some(format!(
                 "{exited}, but {} reports no login in {}",
@@ -371,18 +371,21 @@ impl Pending {
     }
 }
 
-/// Whether `program`'s status check finds `dir` logged in; an error says why it could not tell.
-fn logged_in(program: &LoginProgram, dir: &Path) -> Result<bool, String> {
+/// Whether `program`'s status check finds `dir` logged in, or the CLI's default location
+/// without one; an error says why it could not tell. Blocks while the check runs.
+pub fn logged_in(program: &LoginProgram, dir: Option<&Path>) -> Result<bool, String> {
     let name = program.program.display();
     let mut command = Command::new(&program.program);
     command
         .args(&program.status.args)
-        .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    for var in &program.config_env {
-        command.env(var, dir);
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+        for var in &program.config_env {
+            command.env(var, dir);
+        }
     }
     let mut child = command
         .spawn()
@@ -548,6 +551,23 @@ mod tests {
                     (key == "HOME").then(|| home.clone())
                 })
         }
+    }
+
+    #[test]
+    fn status_check_runs_in_the_config_dir_or_the_clis_default_location() {
+        let mut program = programs(&HashMap::new())[&Provider::Codex].clone();
+        program.program = PathBuf::from("/bin/sh");
+        program.status.args = vec!["-c".into(), r#"[ "$CODEX_HOME" = "$PWD" ]"#.into()];
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.path().canonicalize().unwrap();
+        assert_eq!(logged_in(&program, Some(&dir)), Ok(true));
+        let elsewhere = format!(
+            r#"[ "$PWD" != "{0}" ] && [ "$CODEX_HOME" != "{0}" ]"#,
+            dir.display()
+        );
+        program.status.args = vec!["-c".into(), elsewhere];
+        assert_eq!(logged_in(&program, None), Ok(true));
+        assert_eq!(logged_in(&program, Some(&dir)), Ok(false));
     }
 
     #[test]

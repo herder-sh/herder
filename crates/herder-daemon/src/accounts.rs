@@ -69,6 +69,25 @@ fn adapter(provider: &Provider, binary: Option<PathBuf>) -> Option<Arc<dyn Adapt
     })
 }
 
+/// The CLI herder runs `provider`'s sessions with: the binary `binaries` names for it, else the
+/// provider's own CLI, looked up on `PATH`; `None` when herder cannot run it.
+pub fn program(provider: &Provider, binaries: &HashMap<Provider, PathBuf>) -> Option<PathBuf> {
+    if !runs(provider) {
+        return None;
+    }
+    if let Some(binary) = binaries.get(provider) {
+        return Some(binary.clone());
+    }
+    Some(match provider {
+        Provider::Claude => ClaudeAdapter::default().program,
+        Provider::Codex => CodexAdapter::default().program,
+        Provider::Cursor => PathBuf::from(AgentProfile::cursor().program),
+        Provider::Grok => PathBuf::from(AgentProfile::grok().program),
+        Provider::Opencode => PathBuf::from(AgentProfile::opencode().program),
+        Provider::Gemini | Provider::Other(_) => return None,
+    })
+}
+
 /// The usage probe ([`crate::usage`]) for every provider that has one, running the same binary
 /// as its adapter; ready for accounts added later.
 pub fn probes(binaries: &HashMap<Provider, PathBuf>) -> Probes {
@@ -231,6 +250,22 @@ mod tests {
         }
         assert!(adapters.get(&Provider::Gemini).is_none());
         assert!(super::adapter(&Provider::Gemini, None).is_none());
+    }
+
+    #[test]
+    fn program_is_the_configured_binary_else_the_providers_own_cli() {
+        let binaries = HashMap::from([(Provider::Codex, PathBuf::from("/opt/codex"))]);
+        let program = |provider: &Provider| program(provider, &binaries);
+        assert_eq!(program(&Provider::Codex), Some(PathBuf::from("/opt/codex")));
+        assert_eq!(program(&Provider::Claude), Some(PathBuf::from("claude")));
+        assert_eq!(
+            program(&Provider::Cursor),
+            Some(PathBuf::from(AgentProfile::cursor().program))
+        );
+        for provider in PROVIDERS {
+            assert!(program(&provider).is_some(), "{}", provider.as_str());
+        }
+        assert_eq!(program(&Provider::Gemini), None);
     }
 
     #[test]
