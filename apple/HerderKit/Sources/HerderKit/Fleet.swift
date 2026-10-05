@@ -286,16 +286,16 @@ public final class Fleet {
     }
 
     /// The first fetched icon any machine lists for the project, with that machine's
-    /// background for it.
+    /// background for it; without one, the first background a machine sets for it.
     nonisolated static func icon(
         of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]
     ) -> ProjectIconImage? {
         guard let projectId else { return nil }
-        return machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId } }
-            .compactMap { project in
-                project.icon.flatMap { fetched[$0] }.map { ProjectIconImage(data: $0, background: project.iconBackground) }
-            }
-            .first
+        let listed = machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId } }
+        let iconed = listed.compactMap { project in
+            project.icon.flatMap { fetched[$0] }.map { ProjectIconImage(data: $0, background: project.iconBackground) }
+        }
+        return iconed.first ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
     }
 
     /// Fetches each icon the machines list and this app has not got, once per hash.
