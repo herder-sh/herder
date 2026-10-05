@@ -17,8 +17,8 @@ public final class Fleet {
     var handoffs: [SessionKey: HostId] = [:]
     /// The last command a session refused, until its next command succeeds.
     private(set) var refusals: [SessionKey: String] = [:]
-    /// Sessions whose archive the machine is working on.
-    private(set) var archiving: Set<SessionKey> = []
+    /// Sessions whose archive the machine is working on; the lists show them archived already.
+    private(set) var archiving: Set<SessionKey> = [] { didSet { refreshLists() } }
     /// An archive the machine refused, for the user to decide on.
     var archiveRefusal: ArchiveRefusal?
     /// A short note about something that just finished, shown briefly.
@@ -59,7 +59,7 @@ public final class Fleet {
     }
 
     private func refreshLists() {
-        let lists = Lists(machines: machines, sessions: sessions, done: done.keys)
+        let lists = Lists(machines: machines, sessions: sessions, done: done.keys, archiving: archiving)
         if lists != self.lists { self.lists = lists }
     }
 
@@ -389,18 +389,21 @@ public final class Fleet {
         }
     }
 
-    /// Archives a session, showing it as archiving until the machine is done. A refusal, such
-    /// as a running turn, goes to `archiveRefusal` to show.
+    /// Archives a session: the lists show it archived, with its Undo toast, while the machine
+    /// works on it. A refusal, such as a running turn, brings it back and goes to
+    /// `archiveRefusal` to show.
     func archive(_ key: SessionKey) async {
         guard !archiving.contains(key) else { return }
         let title = sessions[key]?.title ?? "Session"
         archiving.insert(key)
         defer { archiving.remove(key) }
+        let archived = Toast(text: "Archived “\(title)”", undo: key)
+        toast = archived
         do {
             _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId))
             refusals[key] = nil
-            toast = Toast(text: "Archived “\(title)”", undo: key)
         } catch {
+            if toast == archived { toast = nil }
             archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error))
         }
     }
