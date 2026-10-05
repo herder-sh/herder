@@ -15,7 +15,7 @@ use herder_adapters::{
 };
 use herder_protocol::{
     ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
-    TurnError, TurnId,
+    TurnError, TurnId, TurnUsage,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -164,7 +164,7 @@ async fn prompt_streams_the_reply() {
             },
             AdapterEvent::TurnCompleted {
                 turn_id: turn(),
-                usage: None
+                usage: free(5801, 3, 1941)
             },
         ]
     );
@@ -254,7 +254,7 @@ async fn permission_request_is_asked_and_answered() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: free(54, 3, 7754)
         })
     );
     shutdown(session).await;
@@ -281,7 +281,7 @@ async fn full_access_allows_without_asking() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: free(54, 3, 7754)
         })
     );
     shutdown(session).await;
@@ -477,7 +477,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: free(5801, 3, 1941)
         })
     );
     shutdown(session).await;
@@ -654,7 +654,7 @@ async fn an_agent_that_advertises_images_gets_them_as_image_blocks() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: free(5801, 3, 1941)
         })
     );
     assert!(adapter.accepts_images());
@@ -681,4 +681,17 @@ async fn an_agent_that_takes_no_images_gets_a_line_naming_each_and_is_believed()
     assert!(!adapter.accepts_images());
     assert!(!AcpAdapter::new(AgentProfile::grok()).accepts_images());
     assert!(!AcpAdapter::new(AgentProfile::cursor()).accepts_images());
+}
+
+/// An OpenCode turn's tokens. Its `usage_update` puts the session's cost at $0 on the free
+/// `opencode/big-pickle`, and that reported cost is used, not estimated.
+fn free(input: u64, output: u64, cache_read: u64) -> Option<TurnUsage> {
+    Some(TurnUsage {
+        input,
+        output,
+        cache_read,
+        cache_write: 0,
+        cost_usd: Some(0.0),
+        cost_estimated: false,
+    })
 }

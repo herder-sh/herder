@@ -176,6 +176,11 @@
 //! `seven_day` and `seven_day_<model>` windows (utilization 0 to 100, ISO 8601 `resets_at`);
 //! the per-model ones in `model_scoped` are named the same way, `seven_day_fable` for Fable.
 //! The CLI reads its own login to answer; herder sees only the numbers.
+//!
+//! A completed turn's tokens come from its `result` line's `usage`. Its cost comes from
+//! `total_cost_usd`, which adds up over the life of the process, so a turn costs what it grew
+//! by since the last `result`, side calls on other models included. A `result` without it
+//! gets the price table's estimate on the model last reported.
 
 mod hooks;
 mod session;

@@ -41,9 +41,16 @@
 //!
 //! - `session/load`: [`Capabilities::native_resume`] is false, so the daemon never passes
 //!   [`StartRequest::resume`]: every start is `session/new` and continuity comes from the seed.
-//! - Limit windows: ACP has none (`usage_update` is the context window), so
+//! - Limit windows: ACP has none (`usage_update` is the context window and cost), so
 //!   [`Capabilities::reports_usage`] is false and limits surface only as errors.
 //! - Client file system and terminal capabilities are not offered; agents use their own tools.
+//!
+//! # Turn usage
+//!
+//! A `session/prompt` response's `usage`, from agents that send it (OpenCode does, Grok does
+//! not), gives a completed turn's tokens. Its cost is what the session's cost in the
+//! last `usage_update` grew by during the turn; an agent that reports no cost in US dollars
+//! gets the price table's estimate on the current model.
 
 mod classify;
 mod profile;

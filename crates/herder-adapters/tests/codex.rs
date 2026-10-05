@@ -14,7 +14,7 @@ use herder_adapters::transport::Transport;
 use herder_adapters::{Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
 use herder_protocol::{
     ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
-    Timestamp, TurnError, TurnId, UsageWindow,
+    Timestamp, TurnError, TurnId, TurnUsage, UsageWindow,
 };
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -241,7 +241,7 @@ async fn turn_streams_the_answer_on_the_switched_model_and_mode() {
             },
             AdapterEvent::TurnCompleted {
                 turn_id: turn(),
-                usage: None
+                usage: tokens(7391, 5, 12032)
             },
         ]
     );
@@ -278,7 +278,7 @@ async fn a_prompts_images_go_ahead_of_its_text_as_data_urls() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: tokens(7391, 5, 12032)
         })
     );
     shutdown(session).await;
@@ -309,7 +309,7 @@ async fn resume_reopens_the_thread_and_goes_on_in_it() {
         events.last(),
         Some(&AdapterEvent::TurnCompleted {
             turn_id: turn(),
-            usage: None
+            usage: tokens(7391, 5, 12032)
         })
     );
     shutdown(session).await;
@@ -439,7 +439,7 @@ async fn approval_blocks_the_command_until_allowed() {
             },
             AdapterEvent::TurnCompleted {
                 turn_id: turn(),
-                usage: None
+                usage: tokens(3861, 79, 28032)
             },
         ]
     );
@@ -564,7 +564,7 @@ async fn seed_transcript_is_context_for_the_first_turn() {
             },
             AdapterEvent::TurnCompleted {
                 turn_id: turn(),
-                usage: None
+                usage: tokens(3618, 6, 12288)
             },
         ]
     );
@@ -761,4 +761,15 @@ async fn read_usage_reads_the_limits_without_opening_a_thread() {
     .unwrap()
     .unwrap();
     assert_eq!(windows, [weekly(25.0)]);
+}
+
+/// A turn's tokens, the `last` of its `thread/tokenUsage/updated`s added up with the cached
+/// input split out. `gpt-6-luna` is not in the price table, so there is no cost.
+fn tokens(input: u64, output: u64, cache_read: u64) -> Option<TurnUsage> {
+    Some(TurnUsage {
+        input,
+        output,
+        cache_read,
+        ..TurnUsage::default()
+    })
 }
