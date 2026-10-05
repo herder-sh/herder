@@ -1088,6 +1088,7 @@ pub struct Project {
     pub icon_uploaded: bool,
     #[uniffi(default)]
     pub icon_background: Option<String>,
+    position: None,
 }
 
 // Resources
