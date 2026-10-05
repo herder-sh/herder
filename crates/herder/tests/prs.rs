@@ -2,6 +2,7 @@
 //! built `herder` binary, pushing to a bare "GitHub" remote, with GitHub's REST API faked from
 //! that remote's contents.
 
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_adapters::fake::FakeAdapter;
+use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::prs::{self, Fetched, GetFuture, GitHub, PrTracker};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::worktree::Worktrees;
@@ -35,12 +37,26 @@ async fn git(dir: &Path, args: &[&str]) -> String {
         .unwrap()
 }
 
+/// [`git`] with `env` added to its environment, as the session's agent runs it.
+async fn agent_git(dir: &Path, env: &BTreeMap<String, String>, args: &[&str]) -> String {
+    let (dir, env) = (dir.to_owned(), env.clone());
+    let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+    tokio::task::spawn_blocking(move || git_env(&dir, &env, &args))
+        .await
+        .unwrap()
+}
+
 fn git_sync(dir: &Path, args: &[String]) -> String {
+    git_env(dir, &BTreeMap::new(), args)
+}
+
+fn git_env(dir: &Path, env: &BTreeMap<String, String>, args: &[String]) -> String {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
         .args(args)
+        .envs(env)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -81,6 +97,19 @@ impl EventSink for Silent {
     fn delta(&self, _: &SessionId, _: &ItemId, _: &str) {}
     fn sessions_changed(&self, _: &[SessionHead]) {}
     fn accounts_changed(&self, _: &[Account]) {}
+}
+
+/// The fake adapter, keeping every start request so tests can see the CLI's environment.
+struct Recording {
+    fake: FakeAdapter,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
+}
+
+impl Adapter for Recording {
+    fn start(&self, request: StartRequest) -> StartFuture {
+        self.starts.lock().unwrap().push(request.clone());
+        self.fake.start(request)
+    }
 }
 
 /// A pull request on the fake GitHub.
@@ -304,6 +333,7 @@ struct World {
     manager: SessionManager,
     tracker: Arc<PrTracker>,
     github: Arc<FakeGitHub>,
+    starts: Arc<Mutex<Vec<StartRequest>>>,
     shutdown: CancellationToken,
 }
 
@@ -359,10 +389,14 @@ impl World {
         }
 
         let fake = Provider::Other("fake".into());
+        let starts = Arc::new(Mutex::new(Vec::new()));
         let mut adapters = Adapters::new();
         adapters.register(
             fake.clone(),
-            Arc::new(FakeAdapter::new(root.join("unused.jsonl"))),
+            Arc::new(Recording {
+                fake: FakeAdapter::new(root.join("unused.jsonl")),
+                starts: starts.clone(),
+            }),
         );
         let mut accounts = Accounts::new();
         accounts.insert(
@@ -411,6 +445,7 @@ impl World {
             manager,
             tracker,
             github,
+            starts,
             shutdown,
         }
     }
@@ -444,6 +479,29 @@ impl World {
         ));
         let branch = git(&worktree, &["branch", "--show-current"]).await;
         (session_id, worktree, branch)
+    }
+
+    /// The git config entries in the environment the session's CLI starts with, once a prompt
+    /// starts it.
+    async fn cli_git_config(&self, session_id: &SessionId) -> BTreeMap<String, String> {
+        let command = CommandBody::SendPrompt {
+            session_id: session_id.clone(),
+            text: "Go.".into(),
+            images: Vec::new(),
+        };
+        assert_eq!(self.command(command).await, Ok(CommandResult::Applied));
+        for _ in 0..500 {
+            if let Some(start) = self.starts.lock().unwrap().first() {
+                return start
+                    .env
+                    .iter()
+                    .filter(|(var, _)| var.starts_with("GIT_CONFIG_"))
+                    .map(|(var, value)| (var.clone(), value.clone()))
+                    .collect();
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the session's CLI never started");
     }
 
     /// The session's pull request events, in order.
@@ -655,6 +713,71 @@ async fn a_pr_on_a_renamed_branch_is_found_by_its_trailer() {
             }
         )]
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pr_from_a_worktree_the_agent_added_is_linked() {
+    let world = World::new().await;
+    let (session_id, _, _) = world.session().await;
+    let env = world.cli_git_config(&session_id).await;
+    // Claude Code's Agent tool adds its worktrees under the main worktree, running git there:
+    // they get none of the session worktree's config.
+    let agent = world.repo.join(".claude/worktrees/agent-1");
+    agent_git(
+        &world.repo,
+        &env,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "agent-branch",
+            agent.to_str().unwrap(),
+            "main",
+        ],
+    )
+    .await;
+    std::fs::write(agent.join("a.txt"), "a").unwrap();
+    agent_git(&agent, &env, &["add", "a.txt"]).await;
+    agent_git(&agent, &env, &["commit", "--quiet", "-m", "Add a"]).await;
+    let message = git(&agent, &["log", "-1", "--format=%B"]).await;
+    assert_eq!(message, format!("Add a\n\nHerder-Session: {session_id}"));
+    agent_git(
+        &agent,
+        &env,
+        &["push", "--quiet", "origin", "HEAD:feature-y"],
+    )
+    .await;
+    // The repository's own hooks still ran.
+    let prepare = std::fs::read_to_string(world.root.join("user-prepare")).unwrap();
+    assert_eq!(prepare.lines().count(), 1, "{prepare}");
+    let pre_push = std::fs::read_to_string(world.root.join("user-pre-push")).unwrap();
+    assert!(pre_push.contains("origin"), "{pre_push}");
+
+    let number = world.github.open("feature-y", "Add a");
+    world.poll().await;
+    assert_eq!(
+        world.pr_events(&session_id).await,
+        [(
+            None,
+            EventBody::PrLinked {
+                pr: pr(number, "Add a", "feature-y")
+            }
+        )]
+    );
+
+    // Another repository the agent commits in only runs its own hooks.
+    let other = world.root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "--quiet"]).await;
+    agent_git(
+        &other,
+        &env,
+        &["commit", "--quiet", "--allow-empty", "-m", "Elsewhere"],
+    )
+    .await;
+    let message = git(&other, &["log", "-1", "--format=%B"]).await;
+    assert_eq!(message, "Elsewhere");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
