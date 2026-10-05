@@ -214,11 +214,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
-            force: false,
         }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
-            force: true,
         }),
         command(CommandBody::Interrupt {
             session_id: session_id(),

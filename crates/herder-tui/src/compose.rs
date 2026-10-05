@@ -716,10 +716,7 @@ impl App {
                 None => return Err(format!("unknown mode {mode}")),
             },
             ("mode", _) => return Err("usage: mode read_only|ask|auto_edit|full_access".into()),
-            ("archive" | "archive!", []) => CommandBody::ArchiveSession {
-                session_id,
-                force: name == "archive!",
-            },
+            ("archive", []) => CommandBody::ArchiveSession { session_id },
             ("unarchive", []) => CommandBody::UnarchiveSession { session_id },
             ("interrupt", []) => CommandBody::Interrupt { session_id },
             ("down", []) => match self.compose_projects(key).as_slice() {
@@ -1391,11 +1388,8 @@ mod tests {
             })]
         );
         assert_eq!(
-            run(&mut app, "archive!"),
-            [on_s2(CommandBody::ArchiveSession {
-                session_id: s2(),
-                force: true
-            })]
+            run(&mut app, "archive"),
+            [on_s2(CommandBody::ArchiveSession { session_id: s2() })]
         );
         assert_eq!(
             run(&mut app, "unarchive"),

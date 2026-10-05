@@ -16,8 +16,8 @@ use herder_daemon::resources::{
 };
 use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, SessionManager, Setup,
-    TaskLimits, TitleCli, TitleClis, TitlesConfig,
+    AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, KEEP_ARCHIVED_WORKTREE,
+    SessionManager, Setup, TaskLimits, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
@@ -31,6 +31,7 @@ use herder_protocol::{
     SessionStatus, Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
+use jiff::SignedDuration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -1248,7 +1249,6 @@ async fn a_branch_checked_out_during_a_session_is_journaled_when_the_turn_ends()
     // Once only: archiving reads the reflog again and finds nothing new.
     let archive = CommandBody::ArchiveSession {
         session_id: session.clone(),
-        force: false,
     };
     daemon.manager.handle(alice(), archive).await.unwrap();
     let journal = describe(&daemon.journal(&session).await);
@@ -1491,7 +1491,7 @@ async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
 }
 
 #[tokio::test]
-async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_read_only() {
+async fn archive_keeps_the_worktree_for_days_then_removes_it_keeping_the_branches() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
     let session = daemon.create().await;
@@ -1509,18 +1509,9 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     git(&worktree, &["checkout", "--quiet", "-b", "side"]);
     std::fs::write(worktree.join("draft.txt"), "wip").unwrap();
 
-    let error = daemon
-        .manager
-        .archive(bob(), session.clone(), false)
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, ErrorCode::Conflict);
-    assert!(worktree.is_dir());
-
-    std::fs::remove_file(worktree.join("draft.txt")).unwrap();
+    // Changes in the worktree do not stop it.
     let archive = CommandBody::ArchiveSession {
         session_id: session.clone(),
-        force: false,
     };
     let result = daemon.manager.handle(bob(), archive).await;
     assert_eq!(result, Ok(CommandResult::Applied));
@@ -1529,6 +1520,23 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
         describe(&events)[events.len() - 2..],
         ["-: branch_checked_out side", "bob: status Archived"]
     );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("draft.txt")).unwrap(),
+        "wip"
+    );
+
+    // Kept until it has been archived long enough, then removed with what it holds.
+    daemon
+        .manager
+        .remove_archived_worktrees(KEEP_ARCHIVED_WORKTREE)
+        .await
+        .unwrap();
+    assert!(worktree.is_dir());
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
     assert!(!worktree.exists());
     // The session still owns both once the worktree and its reflog are gone.
     assert_eq!(
@@ -1548,7 +1556,7 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     assert_eq!(error.code, ErrorCode::Conflict);
     let error = daemon
         .manager
-        .archive(alice(), session.clone(), true)
+        .archive(alice(), session.clone())
         .await
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -1638,7 +1646,7 @@ async fn rename_and_retitle_until_the_session_is_read_only() {
 
     daemon
         .manager
-        .archive(alice(), session.clone(), false)
+        .archive(alice(), session.clone())
         .await
         .unwrap();
     let error = daemon.manager.handle(alice(), rename("Later")).await;
@@ -1668,7 +1676,7 @@ async fn terminals_get_the_worktree_until_the_session_is_archived() {
     assert_eq!(error.code, ErrorCode::NotFound);
     daemon
         .manager
-        .archive(alice(), session.clone(), false)
+        .archive(alice(), session.clone())
         .await
         .unwrap();
     let error = daemon.manager.worktree(&session).await.unwrap_err();
@@ -1877,7 +1885,6 @@ async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session()
     // Archiving withdraws the token.
     let archive = CommandBody::ArchiveSession {
         session_id: session.clone(),
-        force: true,
     };
     daemon.manager.handle(alice(), archive).await.unwrap();
     let (_, shim) = call(session).await;
@@ -2075,7 +2082,6 @@ async fn archive_stops_what_the_session_left_running() {
 
     let archive = CommandBody::ArchiveSession {
         session_id: session.clone(),
-        force: true,
     };
     daemon.manager.handle(alice(), archive).await.unwrap();
     let status = tokio::time::timeout(Duration::from_secs(10), leftover.wait())
@@ -4323,7 +4329,7 @@ async fn a_running_setup_command_blocks_archive_and_stops_on_interrupt() {
     set_up_with(&daemon, "sleep 30", Duration::from_secs(60));
     let session = daemon.create().await;
 
-    let archive = daemon.manager.archive(alice(), session.clone(), true).await;
+    let archive = daemon.manager.archive(alice(), session.clone()).await;
     assert_eq!(archive.unwrap_err().code, ErrorCode::Conflict);
     let interrupt = CommandBody::Interrupt {
         session_id: session.clone(),
@@ -4635,6 +4641,35 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
 }
 
 #[tokio::test]
+async fn a_worktree_git_no_longer_knows_is_archived_and_removed_all_the_same() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let journal = daemon.journal(&session).await;
+    let EventBody::SessionCreated { worktree, .. } = &journal[0].body else {
+        panic!("expected session_created");
+    };
+    let worktree = PathBuf::from(worktree);
+    // Only build output left, its `.git` link gone.
+    std::fs::remove_file(worktree.join(".git")).unwrap();
+    std::fs::create_dir_all(worktree.join("apple/build")).unwrap();
+
+    daemon
+        .manager
+        .archive(alice(), session.clone())
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
+    assert!(!worktree.exists());
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_runs_again() {
     let dir = tempfile::tempdir().unwrap();
     let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
@@ -4663,21 +4698,44 @@ async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_r
     assert_eq!(error.code, ErrorCode::Conflict, "not archived: {error:?}");
     daemon
         .manager
-        .archive(alice(), session.clone(), false)
+        .archive(alice(), session.clone())
         .await
         .unwrap();
     daemon.until_status(SessionStatus::Archived).await;
-    assert!(!worktree.exists());
+    std::fs::write(worktree.join("draft.txt"), "wip").unwrap();
 
+    // Within days, it goes on in the worktree as archive left it.
     let result = daemon.manager.handle(bob(), unarchive.clone()).await;
     assert_eq!(result, Ok(CommandResult::Applied));
     let events = daemon.until_status(SessionStatus::Idle).await;
     assert_eq!(describe(&events).last().unwrap(), "bob: status Idle");
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("draft.txt")).unwrap(),
+        "wip"
+    );
+
+    // Once removed, the worktree comes back on the kept branch.
+    daemon
+        .manager
+        .archive(alice(), session.clone())
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
+    assert!(!worktree.exists());
+    let result = daemon.manager.handle(bob(), unarchive.clone()).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
     assert_eq!(git(&worktree, &["branch", "--show-current"]), *branch);
     assert_eq!(
         std::fs::read_to_string(worktree.join("work.txt")).unwrap(),
         "kept"
     );
+    assert!(!worktree.join("draft.txt").exists());
     assert_eq!(
         daemon.manager.worktree(&session).await,
         Ok(worktree.clone())
@@ -4690,10 +4748,15 @@ async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_r
     // Without its branch, there is nothing to bring back.
     daemon
         .manager
-        .archive(alice(), session.clone(), false)
+        .archive(alice(), session.clone())
         .await
         .unwrap();
     daemon.until_status(SessionStatus::Archived).await;
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
     git(&daemon.repo, &["branch", "--quiet", "-D", branch]);
     let error = daemon.manager.handle(alice(), unarchive).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict, "{error:?}");
@@ -4727,13 +4790,20 @@ async fn a_session_in_a_folder_that_is_not_a_git_repository_works_in_the_folder(
     daemon.until_status(SessionStatus::Idle).await;
     assert_eq!(daemon.starts.lock().unwrap()[0].cwd, folder);
 
-    // Archiving and unarchiving leave the folder as it is, and never make it a repository.
+    // Archiving, the sweep and unarchiving leave the folder as it is, and never make it a
+    // repository.
     daemon
         .manager
-        .archive(alice(), session.clone(), false)
+        .archive(alice(), session.clone())
         .await
         .unwrap();
     daemon.until_status(SessionStatus::Archived).await;
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
+    assert!(folder.join("notes.txt").is_file());
     let unarchive = CommandBody::UnarchiveSession {
         session_id: session.clone(),
     };

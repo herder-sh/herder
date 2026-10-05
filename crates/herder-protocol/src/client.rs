@@ -136,15 +136,15 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failover_pin: Option<bool>,
     },
-    /// Archive a session: remove its worktree, keep its branches, and make it read-only.
+    /// Archive a session: stop it and make it read-only. Its worktree stays, whatever it
+    /// holds, and is removed three days later; its branches are kept.
     ArchiveSession {
         /// Target session.
         session_id: SessionId,
-        /// Remove the worktree even when it has uncommitted or untracked changes.
-        force: bool,
     },
-    /// Bring an archived session back: recreate its worktree, at the path it had, on the
-    /// session's own branch as archive kept it, and make the session writable again.
+    /// Bring an archived session back: go on in its worktree when it is still there, else
+    /// recreate it at the path it had, on the session's own branch as archive kept it; and
+    /// make the session writable again.
     UnarchiveSession {
         /// Target session.
         session_id: SessionId,

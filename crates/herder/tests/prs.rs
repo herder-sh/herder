@@ -897,17 +897,17 @@ async fn archive_removes_the_hooks_and_the_repository_config_with_the_last_sessi
 
     let archive = |session_id: &SessionId| CommandBody::ArchiveSession {
         session_id: session_id.clone(),
-        force: false,
     };
     world.command(archive(&first)).await.unwrap();
     assert!(!hooks.join(first.as_str()).exists());
-    assert!(!first_worktree.exists());
+    // The worktree stays for days, without the hooks.
+    assert!(first_worktree.is_dir());
     // The second session still needs per-worktree config.
     assert!(config_set(&world.repo, "extensions.worktreeConfig").await);
     assert!(hooks.join(second.as_str()).join("pre-push").is_file());
 
     world.command(archive(&second)).await.unwrap();
-    assert!(!second_worktree.exists());
+    assert!(second_worktree.is_dir());
     assert!(!hooks.join(second.as_str()).exists());
     assert!(!config_set(&world.repo, "extensions.worktreeConfig").await);
     let config = std::fs::read_to_string(world.repo.join(".git/config")).unwrap();

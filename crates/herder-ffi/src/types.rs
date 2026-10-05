@@ -502,7 +502,6 @@ pub enum CommandBody {
     },
     ArchiveSession {
         session_id: SessionId,
-        force: bool,
     },
     UnarchiveSession {
         session_id: SessionId,

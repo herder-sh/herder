@@ -84,8 +84,8 @@ impl Tool {
                  background; call wait_for to get its report. Children cannot spawn children, \
                  and a task has a limit on live children (5 unless the user changed it). A \
                  child that completes a turn with nothing queued and a clean worktree is \
-                 archived automatically right after it reports: its worktree is removed, its \
-                 branch kept, and it stops counting toward the limit. When this \
+                 archived automatically right after it reports: its worktree is removed three \
+                 days later, its branch kept, and it stops counting toward the limit. When this \
                  machine is too loaded for another agent, fails with `host_busy` and \
                  `retry_after_secs`: keep working or call wait_for, then retry."
             }

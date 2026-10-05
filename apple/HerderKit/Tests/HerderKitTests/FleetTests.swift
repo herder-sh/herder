@@ -173,20 +173,19 @@ struct FleetTests {
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func archivingAWorktreeWithChangesAsksBeforeDeletingThem() async throws {
+    func archivingAWorktreeWithChangesKeepsThem() async throws {
         let (daemon, fleet, following, key) = try await pairedSession()
         defer { following.cancel(); _ = daemon }
         let worktree = try #require(await eventually { fleet.sessions[key]?.worktree != nil } ? fleet.sessions[key]?.worktree : nil)
-        try "hi".write(toFile: (worktree as NSString).appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let notes = (worktree as NSString).appendingPathComponent("notes.txt")
+        try "hi".write(toFile: notes, atomically: true, encoding: .utf8)
 
         await fleet.archive(key)
-        #expect(fleet.archiving.isEmpty)
-        #expect(fleet.archiveRefusal?.canForce == true)
-        #expect(fleet.toast == nil)
-
-        await fleet.archive(key, force: true)
+        #expect(fleet.archiveRefusal == nil)
         #expect(await eventually { fleet.sessions[key]?.state == .archived })
         #expect(fleet.toast?.undo == key)
+        // The worktree goes days later, not now.
+        #expect(FileManager.default.fileExists(atPath: notes))
     }
 
     /// Adding a project and its settings need a daemon with a config file, which the fake one

@@ -364,10 +364,7 @@ impl Scenario<'_> {
         self.client
             .send(
                 HostId::new("devbox"),
-                CommandBody::ArchiveSession {
-                    session_id: flaky,
-                    force: false,
-                },
+                CommandBody::ArchiveSession { session_id: flaky },
             )
             .await?;
         self.prompt("studio", &session_id, SAFARI).await?;
