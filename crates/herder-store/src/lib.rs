@@ -11,7 +11,7 @@
 //! Beside the journal, the store keeps daemon state that must survive a restart and is not a
 //! projection: the results of accepted commands ([`Store::command_result`]), each session's
 //! queued prompts ([`Store::queued_prompts`]) and the vendor CLI session behind each session
-//! ([`Store::native_session`]).
+//! ([`Store::native_session`]) and the usage of each completed turn ([`Store::record_turn_usage`]).
 //!
 //! Reads are forward compatible: a stored body this build cannot decode (an event type from a
 //! newer build, or a known type whose shape changed) is returned as [`EventBody::Unknown`] with
@@ -27,7 +27,7 @@ use std::path::Path;
 use herder_protocol::{
     AccountId, Attachment, CommandId, CommandResult, Event, EventBody, HostId, JournalRecord,
     PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus,
-    Timestamp, TitleSource, UserId,
+    Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -554,6 +554,64 @@ impl Store {
                 native.native_id,
             ])?;
         Ok(())
+    }
+
+    /// Records the usage of `session`'s turn `turn_id`, completed at `at`, against the
+    /// session's current account, provider and model. A turn already recorded keeps its first
+    /// figures; an unknown session records nothing.
+    pub fn record_turn_usage(
+        &mut self,
+        session: &SessionId,
+        turn_id: &TurnId,
+        usage: &TurnUsage,
+        at: Timestamp,
+    ) -> Result<()> {
+        self.conn
+            .prepare_cached(
+                "INSERT OR IGNORE INTO turn_usage (session_id, turn_id, account_id, provider,
+                    model, input, output, cache_read, cache_write, cost_usd, cost_estimated, at_ms)
+                 SELECT session_id, ?2, account_id, provider, model, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+                 FROM sessions WHERE session_id = ?1",
+            )?
+            .execute(params![
+                session.as_str(),
+                turn_id.as_str(),
+                clamp(usage.input),
+                clamp(usage.output),
+                clamp(usage.cache_read),
+                clamp(usage.cache_write),
+                usage.cost_usd,
+                usage.cost_estimated,
+                at.as_millisecond(),
+            ])?;
+        Ok(())
+    }
+
+    /// The usage of the turns completed at or after `since`, one total per account and model,
+    /// ordered by account, then model.
+    pub fn usage_totals(&self, since: Timestamp) -> Result<Vec<UsageTotal>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT account_id, provider, model, COUNT(*), SUM(input), SUM(output),
+                SUM(cache_read), SUM(cache_write), TOTAL(cost_usd),
+                MAX(cost_estimated OR cost_usd IS NULL)
+             FROM turn_usage WHERE at_ms >= ?1
+             GROUP BY account_id, provider, model ORDER BY account_id, model, provider",
+        )?;
+        let rows = stmt.query_map([since.as_millisecond()], |row| {
+            Ok(UsageTotal {
+                account_id: AccountId::new(row.get::<_, String>(0)?),
+                provider: Provider::from(row.get::<_, String>(1)?),
+                model: row.get(2)?,
+                turns: row.get(3)?,
+                input: row.get(4)?,
+                output: row.get(5)?,
+                cache_read: row.get(6)?,
+                cache_write: row.get(7)?,
+                cost_usd: row.get(8)?,
+                cost_estimated: row.get(9)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Every session with a prompt queued, ordered by session id.

@@ -756,11 +756,21 @@ impl SessionManager {
                     "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
-            CommandBody::GetUsageSummary { .. } => {
-                return Err(error(
-                    ErrorCode::Unsupported,
-                    "this daemon does not add usage up yet",
-                ));
+            // Every user sees every session, children included, so owners and members get
+            // the same totals.
+            CommandBody::GetUsageSummary { period } => {
+                let since = period.start(Timestamp::now());
+                let totals = self
+                    .inner
+                    .journal
+                    .usage_totals(since)
+                    .await
+                    .map_err(internal)?;
+                return Ok(CommandResult::UsageSummary {
+                    period,
+                    since,
+                    totals,
+                });
             }
         };
         self.send(session_id, Some(by), request).await

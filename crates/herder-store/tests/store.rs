@@ -10,7 +10,7 @@ use herder_protocol::{
     AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, Event, EventBody,
     HostId, Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, PromptId,
     Provider, PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TitleSource, TurnId,
-    UserId,
+    TurnUsage, UsageTotal, UserId,
 };
 use herder_store::{
     COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
@@ -1050,6 +1050,93 @@ fn command_results_survive_a_reopen_and_the_oldest_are_forgotten() {
         store.command_result(&bob, &CommandId::new("n0")).unwrap(),
         Some(CommandResult::Applied)
     );
+}
+
+fn usage(input: u64, cost_usd: Option<f64>, cost_estimated: bool) -> TurnUsage {
+    TurnUsage {
+        input,
+        output: 10,
+        cache_read: 100,
+        cache_write: 1,
+        cost_usd,
+        cost_estimated,
+    }
+}
+
+#[test]
+fn turn_usage_adds_up_per_account_and_model_since_a_time_and_survives_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let mut store = Store::open(&path).unwrap();
+    let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
+    store.append(new_event(&primary, 0, created())).unwrap();
+    store
+        .append(new_event(&child, 0, child_created(&primary, "help")))
+        .unwrap();
+    let turn = |n: &str| TurnId::new(n);
+
+    // An old turn, then two recent ones on the primary's account and model.
+    store
+        .record_turn_usage(&primary, &turn("t1"), &usage(1, Some(1.0), false), at(10))
+        .unwrap();
+    store
+        .record_turn_usage(&primary, &turn("t2"), &usage(2, Some(0.5), false), at(100))
+        .unwrap();
+    // A turn already recorded keeps its first figures.
+    store
+        .record_turn_usage(&primary, &turn("t2"), &usage(99, None, true), at(100))
+        .unwrap();
+    // The child's turn counts against the account and model it ran on when it ended.
+    store
+        .append(new_event(
+            &child,
+            150,
+            EventBody::AccountSwitched {
+                account_id: AccountId::new("acct-2"),
+            },
+        ))
+        .unwrap();
+    store
+        .record_turn_usage(&child, &turn("t1"), &usage(4, None, false), at(200))
+        .unwrap();
+    // An unknown session records nothing.
+    store
+        .record_turn_usage(
+            &SessionId::new("gone"),
+            &turn("t1"),
+            &usage(8, None, false),
+            at(200),
+        )
+        .unwrap();
+
+    let total =
+        |account: &str, turns: u64, input: u64, cost_usd: f64, cost_estimated: bool| UsageTotal {
+            account_id: AccountId::new(account),
+            provider: Provider::Claude,
+            model: "opus".into(),
+            turns,
+            input,
+            output: 10 * turns,
+            cache_read: 100 * turns,
+            cache_write: turns,
+            cost_usd,
+            cost_estimated,
+        };
+    let everything = [
+        total("acct-1", 2, 3, 1.5, false),
+        // The child's cost is unknown, so its total is marked as not exact.
+        total("acct-2", 1, 4, 0.0, true),
+    ];
+    assert_eq!(store.usage_totals(at(0)).unwrap(), everything);
+    assert_eq!(
+        store.usage_totals(at(100)).unwrap(),
+        [total("acct-1", 1, 2, 0.5, false), everything[1].clone()]
+    );
+    assert_eq!(store.usage_totals(at(201)).unwrap(), []);
+    drop(store);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.usage_totals(at(0)).unwrap(), everything);
 }
 
 #[test]
