@@ -1,0 +1,12 @@
+# A primary session that splits its task across three children, which the demo spawns over
+# herder's MCP server while this turn waits for them.
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "model_changed", "model": "claude-opus-5-5"}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Glob", "input": {"pattern": "{terraform,charts,docs}/**/*logs*"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "terraform/modules/logs/main.tf\ncharts/loki/values-staging.yaml\ncharts/loki/values-production.yaml\ndocs/runbooks/logs.md", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Three pieces that don't touch each other: the bucket lifecycle in Terraform, Loki's retention in the Helm values, and the restore runbook. I'll give each to a child on its own branch, then review the three diffs together."}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Terraform: 30-day lifecycle on the log bucket"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-5", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Helm: Loki retention to 30 days"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-6", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Runbook: restoring logs from cold storage"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-7", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Three children are on it, each on its own branch. Waiting for their reports before I review the diffs together."}}}}
+"hold"

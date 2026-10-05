@@ -1,0 +1,10 @@
+# The Work account hits its five-hour limit partway through the turn: herder fails the session
+# over to the next Claude account, which retries the prompt (failover.jsonl).
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "model_changed", "model": "claude-opus-5-5"}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Read", "input": {"file_path": "src/billing/invoices.rs"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "pub struct Invoice {\n    pub id: InvoiceId,\n    pub amount_cents: i64,", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Read", "input": {"file_path": "migrations/0042_ledger_entries.sql"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-3", "output": "CREATE TABLE ledger_entries (\n    id uuid PRIMARY KEY,\n    account_id uuid NOT NULL,", "is_error": false}}}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 100, "resets_at": "$in_130m"}, {"window": "seven_day", "used_percent": 71, "resets_at": "$in_4300m"}]}}
+{"emit": {"type": "turn_failed", "turn_id": "$turn", "error": {"class": "limit_reached", "message": "Claude usage limit reached · resets in 2h 10m"}}}
