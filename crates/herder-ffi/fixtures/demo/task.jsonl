@@ -8,4 +8,5 @@
 {"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Terraform: 30-day lifecycle on the log bucket"}}}}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-5", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Helm: Loki retention to 30 days"}}}}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-6", "turn_id": "$turn", "body": {"type": "tool_call", "name": "mcp__herder__spawn", "input": {"task": "Runbook: restoring logs from cold storage"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-7", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Three children are on it, each on its own branch. Waiting for their reports before I review the diffs together."}}}}
 "hold"

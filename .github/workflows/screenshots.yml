@@ -55,6 +55,27 @@ jobs:
       - name: Build the bindings, the xcframework and the fake daemon
         if: steps.cache.outputs.cache-hit != 'true'
         run: apple/scripts/build-ffi.sh
+      - name: Save the bindings, the xcframework and the fake daemon
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ steps.key.outputs.key }}
+      # The runner's display is small; the largest mode it offers gives the Mac window room.
+      - name: Enlarge the display
+        run: |
+          system_profiler SPDisplaysDataType | grep -iE "resolution|retina|looks like" || true
+          brew install jakehilborn/jakehilborn/displayplacer || exit 0
+          displayplacer list | tail -40 || true
+          id=$(displayplacer list | awk '/^Persistent screen id:/ {print $4; exit}')
+          mode=$(displayplacer list | grep -E '^ *mode [0-9]+: res:' |
+            sed -E 's/.*res:([0-9]+)x([0-9]+).*/\1 \2 &/' | sort -n -k1 -k2 | tail -1 |
+            sed -E 's/.*res:([0-9]+x[0-9]+).*hz:([0-9]+).*/\1 \2/')
+          echo "screen $id, best mode: $mode"
+          [ -n "$id" ] && [ -n "$mode" ] && displayplacer "id:$id res:${mode% *} hz:${mode#* } scaling:off origin:(0,0) degree:0" || true
+          system_profiler SPDisplaysDataType | grep -iE "resolution|retina|looks like" || true
       - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
         run: xcodebuild -downloadComponent MetalToolchain
       - name: Generate the Xcode project

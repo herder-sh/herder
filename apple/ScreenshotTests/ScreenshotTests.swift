@@ -20,6 +20,10 @@ final class ScreenshotTests: XCTestCase {
         resize(to: CGSize(width: 1440, height: 900))
         #endif
         try pair(link)
+        #if os(macOS)
+        let expand = app.buttons["Expand the sidebar"].firstMatch
+        if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
+        #endif
 
         // Home: the approval waiting on you, then the work in progress.
         guard wait(text("Upgrade date-fns to v4"), "home") else { return finish() }
@@ -95,37 +99,56 @@ final class ScreenshotTests: XCTestCase {
         press(done)
     }
 
-    /// Opens the session titled `title` from the list on screen, going Home first.
+    /// Opens the session titled `title` from Home, scrolling its row into view.
     private func open(_ title: String) -> Bool {
         #if os(iOS)
         // Back to the list the session is in.
         let back = app.navigationBars.buttons.firstMatch
-        if back.exists, !app.staticTexts[title].firstMatch.isHittable { back.tap() }
+        if back.exists { back.tap() }
         #endif
         _ = section("Home")
-        let row = text(title)
+        // A row is one button labelled with its state, title, age and activity.
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(title),")).firstMatch
         guard wait(row, title) else { return false }
+        reveal(row)
         press(row)
         settle()
         return true
     }
 
-    /// Switches to the section named `name`: a tab on the iPhone, a sidebar row on the Mac.
+    /// Scrolls the list on screen until `element` can be pressed: down first, then back up.
+    private func reveal(_ element: XCUIElement) {
+        for step in 0..<12 where !element.isHittable {
+            let down = step < 4
+            #if os(iOS)
+            if down { app.swipeUp(velocity: .slow) } else { app.swipeDown(velocity: .slow) }
+            #else
+            app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: down ? -250 : 250)
+            #endif
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+    }
+
+    /// Switches to the section named `name`: a tab on the iPhone, a sidebar row on the Mac, found
+    /// by its symbol, as the rail's labels change with what it holds.
     private func section(_ name: String) -> Bool {
         #if os(iOS)
         let tab = app.tabBars.buttons[name].firstMatch
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
         #else
-        let row = app.buttons[name].firstMatch
+        let symbols = ["Home": "tray", "Machines": "server.rack"]
+        let symbol = symbols[name] ?? name
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", symbol)).firstMatch
         guard wait(row, "\(name) in the sidebar") else { return false }
         row.click()
         #endif
+        settle()
         return true
     }
 
     private func text(_ text: String) -> XCUIElement {
-        app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", text, text)).firstMatch
+        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).firstMatch
     }
 
     /// Whether `element` shows up; when it does not, records `what` as missed with the tree.
@@ -175,10 +198,14 @@ final class ScreenshotTests: XCTestCase {
     }
 
     #if os(macOS)
-    /// Drags the window's bottom-right corner until the window is `size`.
+    /// Drags the window's bottom-right corner until the window is `size`, or as large as the
+    /// screen allows, its top-left corner first moved to the screen's.
     private func resize(to size: CGSize) {
         let window = app.windows.firstMatch
         guard window.waitForExistence(timeout: 10) else { return }
+        // The top bar is where the window drags from.
+        let bar = window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 10))
+        bar.press(forDuration: 0.2, thenDragTo: bar.withOffset(CGVector(dx: -window.frame.minX, dy: 40 - window.frame.minY)))
         let frame = window.frame
         let corner = window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: frame.width - 2, dy: frame.height - 2))
