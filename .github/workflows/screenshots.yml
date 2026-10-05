@@ -75,7 +75,7 @@ jobs:
             sed -E 's/.*res:([0-9]+x[0-9]+).*hz:([0-9]+).*/\1 \2/')
           echo "screen $id, best mode: $mode"
           [ -n "$id" ] && [ -n "$mode" ] && displayplacer "id:$id res:${mode% *} hz:${mode#* } scaling:off origin:(0,0) degree:0" || true
-          system_profiler SPDisplaysDataType | grep -iE "resolution|retina|looks like" || true
+          displayplacer list | grep -E "^(Resolution|Scaling)" || true
       - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
         run: xcodebuild -downloadComponent MetalToolchain
       - name: Generate the Xcode project
@@ -132,6 +132,7 @@ jobs:
           done
       - name: Export the screenshots
         if: success() || failure()
+        shell: bash {0}
         run: |
           mkdir -p screenshots
           for result in ios mac; do
@@ -144,7 +145,7 @@ jobs:
             jq -r '.[].attachments[] | [.exportedFileName, .suggestedHumanReadableName] | @tsv' \
               "$out/manifest.json" | while IFS=$'\t' read -r file name; do
               clean=$(echo "$name" | sed -E 's/_[0-9]+_[0-9A-Fa-f-]{36}//')
-              cp "$out/$file" "screenshots/$clean"
+              cp "$out/$file" "screenshots/$clean" || echo "could not copy $file ($name)"
             done
           done
           ls -l screenshots

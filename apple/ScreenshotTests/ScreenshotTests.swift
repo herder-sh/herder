@@ -26,7 +26,7 @@ final class ScreenshotTests: XCTestCase {
         #endif
 
         // Home: the approval waiting on you, then the work in progress.
-        guard wait(text("Upgrade date-fns to v4"), "home") else { return finish() }
+        guard wait(row("Upgrade date-fns to v4"), "home") else { return finish() }
         settle()
         #if os(macOS)
         shoot("mac-home")
@@ -102,13 +102,15 @@ final class ScreenshotTests: XCTestCase {
     /// Opens the session titled `title` from Home, scrolling its row into view.
     private func open(_ title: String) -> Bool {
         #if os(iOS)
-        // Back to the list the session is in.
-        let back = app.navigationBars.buttons.firstMatch
-        if back.exists { back.tap() }
+        // Back from a session to the list, with the edge swipe.
+        for _ in 0..<3 where app.descendants(matching: .any)["composer"].exists {
+            let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            edge.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+            settle()
+        }
         #endif
         _ = section("Home")
-        // A row is one button labelled with its state, title, age and activity.
-        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(title),")).firstMatch
+        let row = row(title)
         guard wait(row, title) else { return false }
         reveal(row)
         press(row)
@@ -147,8 +149,9 @@ final class ScreenshotTests: XCTestCase {
         return true
     }
 
-    private func text(_ text: String) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)).firstMatch
+    /// A session's row: one button labelled with its state, title, age and activity.
+    private func row(_ title: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", ", \(title),")).firstMatch
     }
 
     /// Whether `element` shows up; when it does not, records `what` as missed with the tree.
