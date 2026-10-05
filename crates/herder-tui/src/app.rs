@@ -10,6 +10,7 @@ use ratatui::crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
+use crate::board::Board;
 use crate::chat::Chat;
 use crate::compose::{Act, Compose, Origin};
 use crate::fork::Fork;
@@ -160,6 +161,8 @@ pub enum Focus {
     AllPrs,
     /// Everything waiting on the user, in the main pane.
     Inbox,
+    /// Every session's work state, in the main pane.
+    Board,
     /// The open session's task children, in its tasks tab.
     Tasks,
 }
@@ -269,6 +272,8 @@ pub struct App {
     pub folded: HashSet<SessionKey>,
     /// The inbox's selection and answer editor.
     pub inbox: Inbox,
+    /// The board's selection.
+    pub board: Board,
     /// The accounts screen, if shown.
     pub account_screen: Option<AccountScreen>,
     /// The switch dialog, while it is open.
@@ -333,6 +338,7 @@ impl Default for App {
             terminals: None,
             folded: HashSet::new(),
             inbox: Inbox::default(),
+            board: Board::default(),
             account_screen: None,
             switch: None,
             fork: None,
@@ -441,7 +447,7 @@ impl App {
                 // A PR command's failure for a session not in view goes to the status line.
                 if let (Origin::Session(key), Err(error)) = (&origin, &result)
                     && (self.open.as_ref() != Some(key)
-                        || matches!(self.focus, Focus::AllPrs | Focus::Inbox))
+                        || matches!(self.focus, Focus::AllPrs | Focus::Inbox | Focus::Board))
                 {
                     self.notice = Some(error.clone());
                 }
@@ -496,6 +502,7 @@ impl App {
             Action::ToggleHelp => self.help = !self.help,
             Action::Pr(action) => return self.act_pr(action),
             Action::Inbox(action) => return self.act_inbox(action),
+            Action::Board(action) => return self.act_board(action),
             Action::Fold => self.fold(),
             Action::OpenAccounts => {
                 self.account_screen
@@ -580,21 +587,21 @@ impl App {
                         };
                         self.scroll.by(lines);
                     }
-                    // Their keys are taken by `prs::for_key` and `inbox::for_key` first.
-                    Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
+                    // Their keys are taken by `prs::for_key`, `inbox::for_key` and `board::for_key` first.
+                    Focus::Prs | Focus::AllPrs | Focus::Inbox | Focus::Board => {}
                 }
             }
             Action::Top => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().into_iter().next(),
                 Focus::Tasks => self.task_cursor = 0,
                 Focus::Transcript | Focus::Composer => self.scroll.top = Some(0),
-                Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
+                Focus::Prs | Focus::AllPrs | Focus::Inbox | Focus::Board => {}
             },
             Action::Bottom => match self.focus {
                 Focus::Sessions => self.chosen = self.rows().pop(),
                 Focus::Tasks => self.task_cursor = self.tasks().len().saturating_sub(1),
                 Focus::Transcript | Focus::Composer => self.scroll.top = None,
-                Focus::Prs | Focus::AllPrs | Focus::Inbox => {}
+                Focus::Prs | Focus::AllPrs | Focus::Inbox | Focus::Board => {}
             },
         }
         Vec::new()

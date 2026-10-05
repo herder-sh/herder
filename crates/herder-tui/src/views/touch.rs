@@ -135,6 +135,7 @@ fn buttons(app: &App) -> Vec<Button> {
             button("‹", "back", mouse::key(KeyCode::Esc)),
         ],
         Focus::Inbox => inbox_buttons(app),
+        Focus::Board => vec![button("⏎", "open", enter())],
         Focus::Prs => vec![
             button("⏎", "open", enter()),
             button("x", "unlink", char('x')),

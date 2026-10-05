@@ -273,6 +273,11 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 tap("enter", "send", KeyCode::Enter),
                 tap("esc", "cancel", KeyCode::Esc),
             ],
+            Focus::Board => vec![
+                hint("j/k", "move"),
+                tap("enter", "open", KeyCode::Enter),
+                tap("esc", "back", KeyCode::Esc),
+            ],
             Focus::Inbox => vec![
                 hint("j/k", "move"),
                 hint("1-9", "pick"),

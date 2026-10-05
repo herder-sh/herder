@@ -90,6 +90,11 @@ pub(super) fn header(frame: &mut Frame, area: Rect, app: &App, focused: bool, hi
             Some(Span::styled(ui.glyphs.back, ui.accent())),
             true,
         ),
+        Focus::Board => (
+            Line::styled(format!("board {}", app.board().len()), ui.strong()),
+            Some(Span::styled(ui.glyphs.back, ui.accent())),
+            true,
+        ),
         Focus::AllPrs => (
             Line::styled(format!("prs {}", app.all_prs().len()), ui.strong()),
             Some(Span::styled(ui.glyphs.back, ui.accent())),

@@ -1300,3 +1300,134 @@ pub fn backups() -> App {
     }
     app
 }
+
+/// The board's herd, every session loaded, grouped by machine: on `box` (h1) `b1` asks the
+/// user, `b2` has #21 failing CI, `b3` #22 with changes requested, `b4` #23 conflicting,
+/// `b6` is idle with no PR, `b7` runs with #25 pending, `b8` waits on #26's checks and `b9`
+/// merged #27; on `laptop` (h2) `b5` has #24 ready to merge, `b10` is archived and `b11`
+/// moved, each with a PR.
+pub fn board() -> App {
+    let mut app = App {
+        grouping: crate::projects::Grouping::Machines,
+        clock: Some(Timestamp::UNIX_EPOCH),
+        ..App::default()
+    };
+    let h1 = ["b1", "b2", "b3", "b4", "b6", "b7", "b8", "b9"];
+    app.update(Msg::Machines(vec![
+        machine("h1", "box", &h1),
+        machine("h2", "laptop", &["b5", "b10", "b11"]),
+    ]));
+    let open = |number, title: &str, ci, review, mergeable| PullRequest {
+        ci,
+        review,
+        mergeable,
+        ..pr(number, title, PrState::Open)
+    };
+    use {CiStatus as Ci, Mergeable as M, ReviewStatus as R, SessionStatus as S};
+    let sessions = [
+        ("h1", "b1", "herder/ask-port", S::NeedsYou, None),
+        (
+            "h1",
+            "b2",
+            "herder/health",
+            S::Idle,
+            Some(open(
+                21,
+                "Add a health endpoint",
+                Ci::Failing,
+                R::None,
+                M::Clean,
+            )),
+        ),
+        (
+            "h1",
+            "b3",
+            "herder/login",
+            S::Idle,
+            Some(open(
+                22,
+                "Fix the login redirect",
+                Ci::Passing,
+                R::ChangesRequested,
+                M::Clean,
+            )),
+        ),
+        (
+            "h1",
+            "b4",
+            "herder/schema",
+            S::Idle,
+            Some(open(
+                23,
+                "Rename the users table",
+                Ci::Passing,
+                R::None,
+                M::Conflicting,
+            )),
+        ),
+        (
+            "h2",
+            "b5",
+            "herder/docs",
+            S::Idle,
+            Some(open(
+                24,
+                "Document the API",
+                Ci::Passing,
+                R::Approved,
+                M::Clean,
+            )),
+        ),
+        ("h1", "b6", "herder/spike", S::Idle, None),
+        (
+            "h1",
+            "b7",
+            "herder/cache",
+            S::Running,
+            Some(open(
+                25,
+                "Cache the session list",
+                Ci::Pending,
+                R::None,
+                M::Unknown,
+            )),
+        ),
+        (
+            "h1",
+            "b8",
+            "herder/metrics",
+            S::Idle,
+            Some(open(26, "Export metrics", Ci::Pending, R::None, M::Clean)),
+        ),
+        (
+            "h1",
+            "b9",
+            "herder/logs",
+            S::Idle,
+            Some(PullRequest {
+                ci: Ci::Passing,
+                ..pr(27, "Rotate the logs", PrState::Merged)
+            }),
+        ),
+        (
+            "h2",
+            "b10",
+            "herder/old",
+            S::Archived,
+            Some(open(28, "Old work", Ci::Failing, R::None, M::Clean)),
+        ),
+        (
+            "h2",
+            "b11",
+            "herder/gone",
+            S::Moved,
+            Some(open(29, "Moved work", Ci::Failing, R::None, M::Clean)),
+        ),
+    ];
+    for (host, id, branch, state, pr) in sessions {
+        let mut events = vec![created(branch, None, None), status(state)];
+        events.extend(pr.map(|pr| EventBody::PrLinked { pr }));
+        feed(&mut app, host, id, update(id, 1, events, Vec::new()));
+    }
+    app
+}

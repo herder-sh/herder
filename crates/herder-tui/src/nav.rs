@@ -105,6 +105,7 @@ pub const LEADER_KEYS: &[(char, &str)] = &[
     ('n', "new session"),
     ('s', "switch"),
     ('I', "inbox"),
+    ('B', "board"),
     ('P', "all PRs"),
     ('p', "session PRs"),
     ('A', "accounts"),
