@@ -9,9 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
-    ClientMessage, Command, Cursor, ErrorCode, ErrorInfo, EventBody, PROTOCOL_VERSION, ServerHello,
-    ServerMessage,
+    ClientMessage, Command, CommandId, Cursor, ErrorCode, ErrorInfo, EventBody, PROTOCOL_VERSION,
+    ServerHello, ServerMessage,
 };
+use serde::Deserialize;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -120,7 +121,7 @@ async fn read<B: Backend>(
     let hello = match first {
         Some(Ok(ClientMessage::Hello(hello))) => hello,
         Some(Ok(_)) => return reject(outbox, "the first message must be a hello"),
-        Some(Err(err)) => return reject(outbox, &err),
+        Some(Err(err)) => return reject(outbox, &err.message),
         None => return Ok(()),
     };
     if hello.protocol_version != PROTOCOL_VERSION {
@@ -224,29 +225,75 @@ async fn read<B: Backend>(
                     },
                 });
             }
-            Err(err) => error(outbox, ErrorCode::BadRequest, &err),
+            // A command this build cannot read, such as one from a newer client, is refused
+            // as that command, so the client does not wait for an answer forever.
+            Err(Undecodable {
+                command_id: Some(command_id),
+                message,
+            }) => outbox.push(ServerMessage::CommandRejected {
+                command_id,
+                error: ErrorInfo {
+                    code: ErrorCode::BadRequest,
+                    message,
+                },
+            }),
+            Err(Undecodable { message, .. }) => error(outbox, ErrorCode::BadRequest, &message),
         }
     }
     Ok(())
 }
 
+/// A frame that is not a client message: why, and the id of the command it carries when it
+/// still reads as one.
+struct Undecodable {
+    command_id: Option<CommandId>,
+    message: String,
+}
+
+impl Undecodable {
+    fn new(message: String) -> Self {
+        Self {
+            command_id: None,
+            message,
+        }
+    }
+}
+
 /// The next client message: `Some(Err)` describes a frame that is not one.
-async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessage, String>>> {
+async fn next(stream: &mut SplitStream<Ws>) -> Result<Option<Result<ClientMessage, Undecodable>>> {
     loop {
         let Some(frame) = stream.next().await else {
             return Ok(None);
         };
         return Ok(Some(match frame.context("reading from the client")? {
             Message::Text(text) => decode(&text),
-            Message::Binary(_) => Err("messages must be JSON text frames".to_owned()),
+            Message::Binary(_) => Err(Undecodable::new(
+                "messages must be JSON text frames".to_owned(),
+            )),
             Message::Close(_) => return Ok(None),
             Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
         }));
     }
 }
 
-fn decode(text: &str) -> Result<ClientMessage, String> {
-    serde_json::from_str(text).map_err(|err| format!("invalid message: {err}"))
+fn decode(text: &str) -> Result<ClientMessage, Undecodable> {
+    serde_json::from_str(text).map_err(|err| Undecodable {
+        command_id: command_id(text),
+        message: format!("invalid message: {err}"),
+    })
+}
+
+/// The id of the command `text` is, read without its body.
+fn command_id(text: &str) -> Option<CommandId> {
+    #[derive(Deserialize)]
+    struct Tagged {
+        r#type: String,
+        id: CommandId,
+    }
+    serde_json::from_str::<Tagged>(text)
+        .ok()
+        .filter(|tagged| tagged.r#type == "command")
+        .map(|tagged| tagged.id)
 }
 
 /// Replays the session's journal after the cursor, then switches the subscription to live.

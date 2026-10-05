@@ -529,6 +529,28 @@ async fn a_wrong_protocol_version_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_command_this_build_cannot_read_is_refused_as_that_command() {
+    let daemon = Daemon::start().await;
+    let mut client = daemon.client().await;
+    client.hello(Vec::new()).await;
+    // As a client from another build may send it: a command this build does not know.
+    let text = r#"{"type":"command","id":"c1","body":{"type":"no_such_command"}}"#;
+    client.ws.send(Message::text(text)).await.unwrap();
+    let ServerMessage::CommandRejected { command_id, error } = client.recv().await else {
+        panic!("expected the command refused");
+    };
+    assert_eq!(command_id, CommandId::new("c1"));
+    assert_eq!(error.code, ErrorCode::BadRequest);
+    // A frame that is no command still gets a plain error.
+    client.ws.send(Message::text("{}")).await.unwrap();
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Error { error } if error.code == ErrorCode::BadRequest
+    ));
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_are_answered_by_the_backend() {
     let daemon = Daemon::start().await;
     let session = daemon.create_session("s1");
