@@ -784,7 +784,7 @@ impl Adapter for Scripted {
         Box::pin(async move {
             let (commands, received) = mpsc::unbounded_channel();
             let (events, rx) = mpsc::channel(64);
-            tokio::spawn(play(dir, account, request.cwd, received, events));
+            tokio::spawn(play(dir, account, received, events));
             Ok(AdapterSession {
                 capabilities: Capabilities {
                     native_model_switch: true,
@@ -799,22 +799,20 @@ impl Adapter for Scripted {
     }
 }
 
-/// One step of a demo script: an event to emit, a pause, a wait for an answer or an interrupt,
-/// or a file to write in the worktree.
+/// One step of a demo script: an event to emit, a pause, or a wait for an answer or an
+/// interrupt.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum Step {
     Emit(AdapterEvent),
     SleepMs(u64),
     Hold,
-    Write { path: PathBuf, text: String },
 }
 
 /// Runs a session: each prompt plays its script, until the daemon shuts the session down.
 async fn play(
     dir: PathBuf,
     account: String,
-    cwd: PathBuf,
     mut commands: mpsc::UnboundedReceiver<AdapterCommand>,
     events: mpsc::Sender<AdapterEvent>,
 ) {
@@ -832,7 +830,7 @@ async fn play(
                         break;
                     }
                 };
-                if !run(steps, &turn_id, &cwd, &mut commands, &events).await {
+                if !run(steps, &turn_id, &mut commands, &events).await {
                     break;
                 }
             }
@@ -848,7 +846,6 @@ async fn play(
 async fn run(
     steps: Vec<Step>,
     turn_id: &TurnId,
-    cwd: &Path,
     commands: &mut mpsc::UnboundedReceiver<AdapterCommand>,
     events: &mpsc::Sender<AdapterEvent>,
 ) -> bool {
@@ -860,16 +857,6 @@ async fn run(
                 }
             }
             Step::SleepMs(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
-            Step::Write { path, text } => {
-                let path = cwd.join(path);
-                let written = path
-                    .parent()
-                    .map_or(Ok(()), std::fs::create_dir_all)
-                    .and_then(|()| std::fs::write(&path, text));
-                if written.is_err() {
-                    return false;
-                }
-            }
             Step::Hold => loop {
                 match commands.recv().await {
                     Some(

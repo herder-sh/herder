@@ -144,7 +144,9 @@ jobs:
             # the test gave it, such as `mac-home_0_<uuid>.png`.
             jq -r '.[].attachments[] | [.exportedFileName, .suggestedHumanReadableName] | @tsv' \
               "$out/manifest.json" | while IFS=$'\t' read -r file name; do
-              clean=$(echo "$name" | sed -E 's/_[0-9]+_[0-9A-Fa-f-]{36}//')
+              # Without the characters an artifact may not hold, such as quotes and colons.
+              clean=$(echo "$name" | sed -E 's/_[0-9]+_[0-9A-Fa-f-]{36}//' | tr -d '"`:<>|*?\r\n')
+              case "$clean" in *.png|*.txt) ;; *) continue ;; esac
               cp "$out/$file" "screenshots/$clean" || echo "could not copy $file ($name)"
             done
           done
