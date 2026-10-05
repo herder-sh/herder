@@ -1344,6 +1344,7 @@ dependencies = [
  "herder-daemon",
  "herder-protocol",
  "herder-store",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",

@@ -1,0 +1,7 @@
+# A child still writing.
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "model_changed", "model": "claude-opus-5-5"}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Read", "input": {"file_path": "docs/runbooks/logs.md"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "# Logs\n\nLogs are kept for 90 days in Loki and in the acme-logs bucket.", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Drafting the restore steps: find the archive by date, restore it from Glacier, then load it into a temporary Loki."}}}}
+"hold"

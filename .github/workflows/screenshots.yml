@@ -1,0 +1,123 @@
+name: screenshots
+
+# Takes the app screenshots on herder.sh: runs the demo fleet (`fake_daemon --demo`), drives the
+# iOS app on a simulator and the macOS app with the screenshot UI tests in
+# apple/ScreenshotTests, and uploads the PNGs as the `screenshots` artifact. Run it by hand to
+# refresh the site's images; it also runs when the demo or the tests change.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "apple/ScreenshotTests/**"
+      - "crates/herder-ffi/examples/fake_daemon/**"
+      - "crates/herder-ffi/fixtures/demo/**"
+      - ".github/workflows/screenshots.yml"
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_STRIP: debuginfo
+
+jobs:
+  screenshots:
+    name: screenshots
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # The bindings, the xcframework and the fake daemon, as the `apple` workflow builds and
+      # caches them.
+      - id: key
+        run: >-
+          echo "key=apple-ffi-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**',
+          'apple/scripts/build-ffi.sh', '.github/workflows/apple.yml') }}" >> "$GITHUB_OUTPUT"
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ steps.key.outputs.key }}
+      - name: Install the toolchain and the Apple targets
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Build the bindings, the xcframework and the fake daemon
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: apple/scripts/build-ffi.sh
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it)
+        run: xcodebuild -downloadComponent MetalToolchain
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec apple/project.yml
+      - name: Screenshot the iOS app
+        timeout-minutes: 30
+        run: |
+          # A demo fleet per app: a pairing link works once. It runs until stdin closes.
+          (sleep 3600 | target/debug/examples/fake_daemon --demo > "$RUNNER_TEMP/ios-demo.out" &)
+          for _ in $(seq 120); do [ -s "$RUNNER_TEMP/ios-demo.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/ios-demo.out" ] || { echo "the demo did not start"; exit 1; }
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices[][] | select(.name | test("^iPhone [0-9]+ Pro$"))] | last | .udid')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device"
+          xcrun simctl status_bar "$device" override --time 9:41 --dataNetwork wifi --wifiBars 3 \
+            --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
+          TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/ios-demo.out") \
+            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            -scheme herder-iOS-Screenshots -destination "platform=iOS Simulator,id=$device" \
+            -resultBundlePath "$RUNNER_TEMP/ios.xcresult" COMPILER_INDEX_STORE_ENABLE=NO
+      - name: Screenshot the macOS app
+        if: success() || failure()
+        timeout-minutes: 30
+        run: |
+          system_profiler SPDisplaysDataType | grep -i resolution || true
+          (sleep 3600 | target/debug/examples/fake_daemon --demo > "$RUNNER_TEMP/mac-demo.out" &)
+          for _ in $(seq 120); do [ -s "$RUNNER_TEMP/mac-demo.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/mac-demo.out" ] || { echo "the demo did not start"; exit 1; }
+          TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/mac-demo.out") \
+            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            -scheme herder-macOS-Screenshots -destination "platform=macOS,arch=arm64" \
+            -resultBundlePath "$RUNNER_TEMP/mac.xcresult" COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO
+      - name: Export the screenshots
+        if: success() || failure()
+        run: |
+          mkdir -p screenshots
+          for result in ios mac; do
+            bundle="$RUNNER_TEMP/$result.xcresult"
+            [ -d "$bundle" ] || continue
+            out="$RUNNER_TEMP/$result-attachments"
+            xcrun xcresulttool export attachments --path "$bundle" --output-path "$out"
+            # Each attachment is exported under a generated name; the manifest maps it to the name
+            # the test gave it, such as `mac-home_0_<uuid>.png`.
+            jq -r '.[].attachments[] | [.exportedFileName, .suggestedHumanReadableName] | @tsv' \
+              "$out/manifest.json" | while IFS=$'\t' read -r file name; do
+              clean=$(echo "$name" | sed -E 's/_[0-9]+_[0-9A-Fa-f-]{36}//')
+              cp "$out/$file" "screenshots/$clean"
+            done
+          done
+          ls -l screenshots
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: screenshots-xcresult
+          path: ${{ runner.temp }}/*.xcresult
+          if-no-files-found: ignore
