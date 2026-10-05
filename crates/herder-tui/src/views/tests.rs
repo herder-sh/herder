@@ -1657,3 +1657,36 @@ fn a_fork_reads_as_a_switch_to_its_machine() {
         "{text:?}"
     );
 }
+
+#[test]
+fn a_follow_up_shows_as_from_herder() {
+    let mut follow_up = item(
+        "i2",
+        ItemBody::UserMessage {
+            text: "CI failed on #7: test. Find out why, fix it and push.".into(),
+            attachments: Vec::new(),
+        },
+    );
+    follow_up.follow_up = Some(herder_protocol::FollowUp {
+        reason: herder_protocol::FollowUpReason::CiFailed,
+        pr: Some(7),
+        head_sha: Some("abc123".into()),
+    });
+    let app = open_s2(vec![
+        fake::started("turn-1"),
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Fix the build.".into(),
+                attachments: Vec::new(),
+            },
+        ),
+        herder_protocol::EventBody::ItemAdded { item: follow_up },
+    ]);
+    let session = &app.sessions[&fake::key("h1", "s2")];
+    let (rows, _) = super::transcript::rows(&app, session, 80);
+    let text: Vec<String> = rows.iter().map(|row| row.line.to_string()).collect();
+    let line = |prompt: &str| text.iter().find(|line| line.contains(prompt)).unwrap();
+    assert!(line("CI failed on #7").contains(" herder "), "{text:?}");
+    assert!(!line("Fix the build.").contains(" herder "), "{text:?}");
+}

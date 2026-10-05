@@ -12,8 +12,8 @@ use herder_adapters::{
 };
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
-    CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, Image, Item,
-    ItemBody, ItemId, MAX_PROMPT_IMAGE_BYTES, PermissionMode, PromptId, QuestionId, Route,
+    CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
+    Item, ItemBody, ItemId, MAX_PROMPT_IMAGE_BYTES, PermissionMode, PromptId, QuestionId, Route,
     SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
@@ -56,6 +56,11 @@ pub(super) enum Request {
         text: String,
         message: herder_protocol::AgentMessage,
         done: oneshot::Sender<herder_tasktools::SendSessionOutput>,
+    },
+    /// Starts a turn with a follow-up prompt from herder; refused unless the session is idle.
+    FollowUp {
+        text: String,
+        follow_up: FollowUp,
     },
     /// Queues a prompt, keeping its images; `queued` learns whether it waits behind a running
     /// turn.
@@ -150,6 +155,9 @@ pub(super) enum PrimaryAct {
 struct Prompt {
     prompt_id: PromptId,
     agent_message: Option<herder_protocol::AgentMessage>,
+    /// Why herder sent it, for a follow-up. Follow-ups are not saved with the queue: one lost
+    /// to a restart is sent again if its pull request still calls for it.
+    follow_up: Option<FollowUp>,
     by: Option<UserId>,
     text: String,
     /// The images it carries, kept apart ([`attachments`]).
@@ -283,6 +291,7 @@ impl Actor {
                     .map(|prompt| Prompt {
                         prompt_id: prompt.prompt_id.clone(),
                         agent_message: prompt.agent_message.clone(),
+                        follow_up: None,
                         by: prompt.by.clone(),
                         text: prompt.text.clone(),
                         attachments: prompt.attachments.clone(),
@@ -319,6 +328,7 @@ impl Actor {
         let queue: Vec<QueuedPrompt> = self
             .queue
             .iter()
+            .filter(|prompt| prompt.follow_up.is_none())
             .map(|prompt| QueuedPrompt {
                 prompt_id: prompt.prompt_id.clone(),
                 agent_message: prompt.agent_message.clone(),
@@ -556,6 +566,7 @@ impl Actor {
                 self.queue.push_back(Prompt {
                     prompt_id: new_prompt_id(),
                     agent_message: Some(message),
+                    follow_up: None,
                     by: None,
                     text,
                     attachments: Vec::new(),
@@ -572,6 +583,26 @@ impl Actor {
                     duplicate: false,
                 });
             }
+            Request::FollowUp { text, follow_up } => {
+                let idle = self.session.status == SessionStatus::Idle
+                    && self.turn.is_none()
+                    && self.queue.is_empty()
+                    && self.setup.is_none()
+                    && self.retry_deadline.is_none();
+                if !idle {
+                    return Err(error(ErrorCode::Conflict, "the session is not idle"));
+                }
+                self.queue.push_back(Prompt {
+                    prompt_id: new_prompt_id(),
+                    agent_message: None,
+                    follow_up: Some(follow_up),
+                    by: None,
+                    text,
+                    attachments: Vec::new(),
+                    retry: false,
+                    retry_at: None,
+                });
+            }
             Request::SendPrompt {
                 text,
                 images,
@@ -583,6 +614,7 @@ impl Actor {
                 self.queue.push_back(Prompt {
                     prompt_id: new_prompt_id(),
                     agent_message: None,
+                    follow_up: None,
                     by,
                     text,
                     attachments,
@@ -1548,6 +1580,7 @@ impl Actor {
             let Prompt {
                 prompt_id,
                 agent_message,
+                follow_up,
                 by,
                 text,
                 attachments,
@@ -1561,7 +1594,7 @@ impl Actor {
                     > super::tasks::rank(message.permission_ceiling)
             }) {
                 if let Err(err) = self
-                    .user_message(by, &turn_id, text, attachments, agent_message)
+                    .user_message(by, &turn_id, text, attachments, agent_message, follow_up)
                     .await
                 {
                     warn!("cannot journal rejected agent message: {err:#}");
@@ -1592,7 +1625,7 @@ impl Actor {
                     Ok(adapter) => self.adapter = Some(adapter),
                     Err(error) => {
                         if let Err(err) = self
-                            .user_message(by, &turn_id, text, attachments, agent_message)
+                            .user_message(by, &turn_id, text, attachments, agent_message, follow_up)
                             .await
                         {
                             warn!("cannot journal prompt: {err:#}");
@@ -1628,6 +1661,7 @@ impl Actor {
                     text.clone(),
                     attachments.clone(),
                     agent_message.clone(),
+                    follow_up.clone(),
                 )
                 .await
             {
@@ -1652,6 +1686,7 @@ impl Actor {
             self.prompt = Some(Prompt {
                 prompt_id,
                 agent_message,
+                follow_up,
                 by,
                 text,
                 attachments,
@@ -2526,10 +2561,11 @@ impl Actor {
         text: String,
         attachments: Vec<Attachment>,
         agent_message: Option<herder_protocol::AgentMessage>,
+        follow_up: Option<FollowUp>,
     ) -> Result<()> {
         let item = Item {
             agent_message,
-            follow_up: None,
+            follow_up,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),

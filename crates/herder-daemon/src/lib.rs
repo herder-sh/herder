@@ -227,6 +227,7 @@ pub async fn serve(
             github: Arc::new(prs::GhCli),
             fast: prs::FAST,
             slow: prs::SLOW,
+            follow_ups: config.follow_ups.pr_events,
         })
         .await?;
     sessions.track_usage(usage::Config {

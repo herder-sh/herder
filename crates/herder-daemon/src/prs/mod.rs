@@ -25,9 +25,10 @@
 //!
 //! # State
 //!
-//! Each linked pull request is read from GitHub with its head commit's check runs and statuses
-//! and its reviews, and journaled as `pr_updated` whenever any of what [`PullRequest`] holds
-//! changes, its head commit included. A merged pull request is final and no longer read.
+//! Each linked pull request is read from GitHub with its head commit's check runs and statuses,
+//! its reviews and its unresolved review threads, and journaled as `pr_updated` whenever any of
+//! what [`PullRequest`] holds changes, its head commit included. A merged pull request is final
+//! and no longer read.
 //!
 //! # Polling
 //!
@@ -38,20 +39,37 @@
 //! every [`Config::slow`] otherwise. An archived session is polled while it has an open pull
 //! request, and keeps looking for new ones for [`ARCHIVED_DISCOVERY`] after its last event.
 //!
-//! Only the first 100 pull requests, commits, check runs and reviews of each list are read.
+//! Only the first 100 pull requests, commits, check runs, reviews and review threads of each
+//! list are read. Review threads are only in GraphQL, which has no conditional requests: they
+//! are read again only when the pull request, its checks or its reviews changed.
+//!
+//! # Follow-ups
+//!
+//! With `[follow_ups] pr_events` on, an idle session is prompted when one of its open pull
+//! requests changes so that its agent has something to do: its checks fail (naming them), its
+//! checks pass, it stops merging cleanly, or a reviewer requests changes. A change is a
+//! `pr_updated` whose pull request meets the condition when the one before did not; one that
+//! comes while the session is not idle is delivered once it is, if the pull request still
+//! meets it on the same head commit. The prompt is a `user_message` without `by` that carries
+//! [`FollowUp`]; at most one is sent per pull request, head commit and reason. Both what
+//! changed and what was sent are read back from the journal, so a restart neither loses nor
+//! repeats one.
 
 mod github;
 pub mod hooks;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    CiStatus, CommandResult, ErrorCode, ErrorInfo, EventBody, Mergeable, PrState, PullRequest,
-    SessionId, SessionStatus, Timestamp, UserId,
+    CiStatus, CommandResult, ErrorCode, ErrorInfo, Event, EventBody, FollowUp, FollowUpReason,
+    ItemBody, Mergeable, PrState, PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp,
+    UserId,
 };
 use herder_store::Session;
 use serde::de::DeserializeOwned;
@@ -63,11 +81,19 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
-pub use github::{Fetched, GetFuture, GhCli, GhRepo, GitHub};
+pub use github::{Fetched, GetFuture, GhCli, GhRepo, GitHub, GraphqlFuture, REVIEW_THREADS};
 
 use crate::session::journal::Journal;
 use crate::worktree::{self, git};
 use github::{ApiCheckRuns, ApiCommit, ApiPull, ApiReview, ApiStatus, encode_query};
+
+/// The reasons a pull request event prompts a session, in the order they are sent.
+const PR_REASONS: [FollowUpReason; 4] = [
+    FollowUpReason::CiFailed,
+    FollowUpReason::Conflicting,
+    FollowUpReason::ChangesRequested,
+    FollowUpReason::CiPassed,
+];
 use hooks::{Reply, Report};
 
 /// Default for [`Config::fast`].
@@ -104,7 +130,15 @@ pub struct Config {
     pub fast: Duration,
     /// Poll interval of everything else; [`SLOW`] outside tests.
     pub slow: Duration,
+    /// Whether idle sessions are prompted on their pull requests' events: `[follow_ups]
+    /// pr_events`.
+    pub follow_ups: bool,
 }
+
+/// Sends a session a follow-up prompt if it is idle; resolves to whether it was sent.
+pub(crate) type Prompter = Box<
+    dyn Fn(SessionId, String, FollowUp) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+>;
 
 /// A branch, on the GitHub account `owner`, that may head a session's pull request.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -117,6 +151,7 @@ struct Head {
 pub struct PrTracker {
     journal: Journal,
     config: Config,
+    prompter: Prompter,
     state: Mutex<State>,
     /// One poll pass at a time.
     polling: tokio::sync::Mutex<()>,
@@ -133,8 +168,19 @@ struct State {
     sessions: HashMap<SessionId, Tracked>,
     /// Sessions named by trailers in each open pull request's commits, with its head commit.
     trailers: HashMap<(GhRepo, u64), (String, Vec<SessionId>)>,
+    /// Each open pull request's unresolved review threads.
+    threads: HashMap<(GhRepo, u64), Threads>,
+    /// The checks that failed on each pull request's head commit when it was last read.
+    failing: HashMap<(GhRepo, u64), Vec<String>>,
     /// The last poll failure logged, so a lasting one is logged once.
     last_error: Option<String>,
+}
+
+/// How many of a pull request's review threads were unresolved.
+struct Threads {
+    /// The ETags of the pull request, its head commit's check runs and its reviews when read.
+    read_with: Vec<Option<String>>,
+    unresolved: Option<u32>,
 }
 
 struct Cached {
@@ -151,6 +197,26 @@ struct Tracked {
     pushed: Vec<Head>,
     hot_until: Option<Instant>,
     next_due: Instant,
+    /// Follow-ups the session is owed and those sent; read from the journal on first use.
+    follow_ups: Option<FollowUps>,
+}
+
+#[derive(Clone, Default)]
+struct FollowUps {
+    /// Pull request events not followed up yet, oldest first.
+    pending: Vec<FollowUp>,
+    sent: Vec<FollowUp>,
+}
+
+impl FollowUps {
+    /// Notes the follow-ups `pr` is owed now that it changed from `before`.
+    fn changed(&mut self, before: &PullRequest, pr: &PullRequest) {
+        for follow_up in owed(before, pr) {
+            if !self.sent.contains(&follow_up) && !self.pending.contains(&follow_up) {
+                self.pending.push(follow_up);
+            }
+        }
+    }
 }
 
 impl PrTracker {
@@ -159,11 +225,13 @@ impl PrTracker {
     pub(crate) async fn start(
         journal: Journal,
         config: Config,
+        prompter: Prompter,
         shutdown: CancellationToken,
     ) -> Result<Arc<Self>> {
         let tracker = Arc::new(Self {
             journal,
             config,
+            prompter,
             state: Mutex::new(State::default()),
             polling: tokio::sync::Mutex::new(()),
             links: tokio::sync::Mutex::new(()),
@@ -423,11 +491,10 @@ impl PrTracker {
         prs: &[PullRequest],
         now: Instant,
     ) -> Option<(Duration, bool)> {
-        let open = |pr: &&PullRequest| matches!(pr.state, PrState::Open | PrState::Draft);
-        let has_open = prs.iter().any(|pr| open(&pr));
+        let has_open = prs.iter().any(open);
         let settling = prs
             .iter()
-            .filter(open)
+            .filter(|pr| open(pr))
             .any(|pr| pr.ci == CiStatus::Pending || pr.mergeable == Mergeable::Unknown);
         // The host that took it over tracks its pull requests now.
         if session.status == SessionStatus::Moved {
@@ -488,8 +555,78 @@ impl PrTracker {
                     self.refresh(base, &session.session_id, &pr).await?;
                 }
             }
+            if self.config.follow_ups && session.status == SessionStatus::Idle {
+                self.follow_up(base, &session.session_id).await?;
+            }
         }
         Ok(())
+    }
+
+    /// Sends the session the oldest follow-up it is owed whose pull request still calls for it;
+    /// drops those whose pull request no longer does.
+    async fn follow_up(&self, base: &GhRepo, session_id: &SessionId) -> Result<()> {
+        let pending = self.follow_ups(session_id).await?.pending;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let prs = self.journal.prs(session_id.clone()).await?;
+        for follow_up in pending {
+            let current = prs.iter().find(|pr| Some(pr.number) == follow_up.pr);
+            let due = current.filter(|pr| {
+                open(pr) && pr.head_sha == follow_up.head_sha && meets(pr, follow_up.reason)
+            });
+            let Some(pr) = due else {
+                self.change_follow_ups(session_id, |follow_ups| {
+                    follow_ups.pending.retain(|pending| *pending != follow_up);
+                });
+                continue;
+            };
+            let failing = self
+                .lock()
+                .failing
+                .get(&(base.clone(), pr.number))
+                .cloned()
+                .unwrap_or_default();
+            let text = prompt(pr, follow_up.reason, &failing);
+            // Not sent: the session got busy since; it is tried again once idle.
+            if (self.prompter)(session_id.clone(), text, follow_up.clone()).await {
+                self.change_follow_ups(session_id, |follow_ups| {
+                    follow_ups.pending.retain(|pending| *pending != follow_up);
+                    follow_ups.sent.push(follow_up);
+                });
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    /// The session's follow-ups, read from the journal the first time.
+    async fn follow_ups(&self, session_id: &SessionId) -> Result<FollowUps> {
+        let loaded = self
+            .lock()
+            .sessions
+            .get(session_id)
+            .and_then(|tracked| tracked.follow_ups.clone());
+        if let Some(follow_ups) = loaded {
+            return Ok(follow_ups);
+        }
+        let follow_ups = replay(&self.journal.all(session_id.clone()).await?);
+        if let Some(tracked) = self.lock().sessions.get_mut(session_id) {
+            tracked.follow_ups = Some(follow_ups.clone());
+        }
+        Ok(follow_ups)
+    }
+
+    /// Runs `change` on the session's follow-ups, if they are loaded.
+    fn change_follow_ups(&self, session_id: &SessionId, change: impl FnOnce(&mut FollowUps)) {
+        let mut state = self.lock();
+        if let Some(follow_ups) = state
+            .sessions
+            .get_mut(session_id)
+            .and_then(|tracked| tracked.follow_ups.as_mut())
+        {
+            change(follow_ups);
+        }
     }
 
     /// Pull requests headed by a branch the session owns or pushed.
@@ -633,19 +770,30 @@ impl PrTracker {
         if pr == *known {
             return Ok(());
         }
+        if self.config.follow_ups {
+            // Before the update is journaled, so reading the journal does not count it twice.
+            self.follow_ups(session_id).await?;
+        }
         let _links = self.links.lock().await;
         let linked = self.journal.prs(session_id.clone()).await?;
-        let current = linked.iter().find(|linked| linked.number == pr.number);
-        if current.is_some_and(|current| *current != pr) {
+        let Some(current) = linked.iter().find(|linked| linked.number == pr.number) else {
+            return Ok(());
+        };
+        if *current != pr {
             self.journal
-                .record(session_id.clone(), None, EventBody::PrUpdated { pr })
+                .record(
+                    session_id.clone(),
+                    None,
+                    EventBody::PrUpdated { pr: pr.clone() },
+                )
                 .await?;
+            self.change_follow_ups(session_id, |follow_ups| follow_ups.changed(current, &pr));
         }
         Ok(())
     }
 
-    /// Pull request `number` of `base` with its checks and reviews; `None` when it does not
-    /// exist.
+    /// Pull request `number` of `base` with its checks, reviews and review threads; `None` when
+    /// it does not exist. Notes which checks failed.
     async fn fetch_pr(&self, base: &GhRepo, number: u64) -> Result<Option<PullRequest>> {
         let repo = base.full_name();
         let host = &base.host;
@@ -656,25 +804,72 @@ impl PrTracker {
             return Ok(None);
         };
         let sha = &pull.head.sha;
+        let runs_path = format!("repos/{repo}/commits/{sha}/check-runs?per_page=100");
         let runs = self
-            .fetch::<ApiCheckRuns>(
-                host,
-                &format!("repos/{repo}/commits/{sha}/check-runs?per_page=100"),
-            )
+            .fetch::<ApiCheckRuns>(host, &runs_path)
             .await?
             .unwrap_or_default();
         let status = self
             .fetch::<ApiStatus>(host, &format!("repos/{repo}/commits/{sha}/status"))
             .await?
             .unwrap_or_default();
+        let reviews_path = format!("repos/{repo}/pulls/{number}/reviews?per_page=100");
         let reviews = self
-            .fetch::<Vec<ApiReview>>(
-                host,
-                &format!("repos/{repo}/pulls/{number}/reviews?per_page=100"),
-            )
+            .fetch::<Vec<ApiReview>>(host, &reviews_path)
             .await?
             .unwrap_or_default();
-        Ok(Some(github::pull_request(&pull, &runs, &status, &reviews)))
+        let key = (base.clone(), number);
+        let threads = if matches!(github::state(&pull), PrState::Open | PrState::Draft) {
+            // A new thread comes with a review; a resolved one is read again once the pull
+            // request or its checks change, as when its checks pass.
+            let pull_path = format!("repos/{repo}/pulls/{number}");
+            let etags: Vec<Option<String>> = {
+                let state = self.lock();
+                [&pull_path, &runs_path, &reviews_path]
+                    .into_iter()
+                    .map(|path| {
+                        let cached = state.cache.get(&format!("{host}/{path}"));
+                        cached.map(|cached| cached.etag.clone())
+                    })
+                    .collect()
+            };
+            let known = self
+                .lock()
+                .threads
+                .get(&key)
+                .filter(|threads| threads.read_with == etags && etags.iter().all(Option::is_some))
+                .map(|threads| threads.unresolved);
+            match known {
+                Some(threads) => threads,
+                None => {
+                    let variables = serde_json::json!({
+                        "owner": base.owner,
+                        "name": base.name,
+                        "number": number,
+                    });
+                    let data = self
+                        .config
+                        .github
+                        .graphql(host, github::REVIEW_THREADS, &variables)
+                        .await?;
+                    let unresolved = github::unresolved_threads(&data);
+                    let threads = Threads {
+                        read_with: etags,
+                        unresolved,
+                    };
+                    self.lock().threads.insert(key.clone(), threads);
+                    unresolved
+                }
+            }
+        } else {
+            self.lock().threads.remove(&key);
+            None
+        };
+        let failing = github::failing_checks(&runs, &status);
+        self.lock().failing.insert(key, failing);
+        Ok(Some(github::pull_request(
+            &pull, &runs, &status, &reviews, threads,
+        )))
     }
 
     /// `GET`s `path`, conditionally when a response is cached; `None` on a 404.
@@ -735,6 +930,7 @@ impl PrTracker {
             pushed,
             hot_until: None,
             next_due: Instant::now() + slow,
+            follow_ups: None,
         });
         Ok(())
     }
@@ -907,6 +1103,108 @@ impl PrTracker {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Whether `pr` is still open, a draft or not.
+fn open(pr: &PullRequest) -> bool {
+    matches!(pr.state, PrState::Open | PrState::Draft)
+}
+
+/// Whether `pr` calls for a follow-up for `reason`.
+fn meets(pr: &PullRequest, reason: FollowUpReason) -> bool {
+    match reason {
+        FollowUpReason::CiFailed => pr.ci == CiStatus::Failing,
+        FollowUpReason::CiPassed => pr.ci == CiStatus::Passing,
+        FollowUpReason::Conflicting => pr.mergeable == Mergeable::Conflicting,
+        FollowUpReason::ChangesRequested => pr.review == ReviewStatus::ChangesRequested,
+        FollowUpReason::Stalled | FollowUpReason::Unknown => false,
+    }
+}
+
+/// The follow-ups `pr` is owed, having changed from `before`: each condition it meets now and
+/// did not before. None for a pull request without a known head commit, as those tracked
+/// before head commits were.
+fn owed(before: &PullRequest, pr: &PullRequest) -> Vec<FollowUp> {
+    if !open(pr) || pr.head_sha.is_none() {
+        return Vec::new();
+    }
+    PR_REASONS
+        .into_iter()
+        .filter(|reason| meets(pr, *reason) && !meets(before, *reason))
+        .map(|reason| FollowUp {
+            reason,
+            pr: Some(pr.number),
+            head_sha: pr.head_sha.clone(),
+        })
+        .collect()
+}
+
+/// The follow-ups a session's journal says it is owed and has been sent.
+fn replay(events: &[Event]) -> FollowUps {
+    let mut follow_ups = FollowUps::default();
+    let mut prs: HashMap<u64, PullRequest> = HashMap::new();
+    for event in events {
+        match &event.body {
+            EventBody::PrLinked { pr } => {
+                prs.insert(pr.number, pr.clone());
+            }
+            EventBody::PrUpdated { pr } => {
+                if let Some(before) = prs.get_mut(&pr.number) {
+                    follow_ups.changed(before, pr);
+                    *before = pr.clone();
+                }
+            }
+            EventBody::PrUnlinked { number } => {
+                prs.remove(number);
+            }
+            EventBody::ItemAdded { item } => {
+                if let (Some(follow_up), ItemBody::UserMessage { .. }) =
+                    (&item.follow_up, &item.body)
+                {
+                    follow_ups.pending.retain(|pending| pending != follow_up);
+                    follow_ups.sent.push(follow_up.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    follow_ups
+}
+
+/// The prompt of a follow-up for `reason` on `pr`, whose head commit's `failing` checks failed.
+fn prompt(pr: &PullRequest, reason: FollowUpReason, failing: &[String]) -> String {
+    let number = pr.number;
+    match reason {
+        FollowUpReason::CiFailed if failing.is_empty() => {
+            format!("CI failed on #{number}. Find out why, fix it and push.")
+        }
+        FollowUpReason::CiFailed => format!(
+            "CI failed on #{number}: {}. Find out why, fix it and push.",
+            failing.join(", ")
+        ),
+        FollowUpReason::CiPassed => {
+            let mut text = format!(
+                "CI is green on #{number}. Finish it the way your instructions say, e.g. merge \
+                 it and close the todo, or report that it is done."
+            );
+            match pr.unresolved_threads {
+                Some(1) => text.push_str(" It has 1 unresolved review thread: resolve it first."),
+                Some(threads) if threads > 1 => text.push_str(&format!(
+                    " It has {threads} unresolved review threads: resolve them first."
+                )),
+                _ => {}
+            }
+            text
+        }
+        FollowUpReason::Conflicting => format!(
+            "#{number} has merge conflicts with its base branch. Rebase or merge the base, \
+             resolve them and push."
+        ),
+        FollowUpReason::ChangesRequested => {
+            format!("A reviewer requested changes on #{number}. Address the review and push.")
+        }
+        FollowUpReason::Stalled | FollowUpReason::Unknown => String::new(),
     }
 }
 

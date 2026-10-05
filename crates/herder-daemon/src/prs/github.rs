@@ -1,8 +1,11 @@
-//! GitHub, as the PR tracker reads it: conditional REST `GET`s through the machine's `gh`, and
-//! the mapping from GitHub's JSON to [`PullRequest`].
+//! GitHub, as the PR tracker reads it: conditional REST `GET`s and GraphQL queries through the
+//! machine's `gh`, and the mapping from GitHub's JSON to [`PullRequest`].
 //!
 //! herder never holds a GitHub token: [`GhCli`] runs `gh api`, which uses whatever login `gh`
 //! has on this machine.
+//!
+//! Review threads are only in GraphQL, which has no conditional requests; see
+//! [`REVIEW_THREADS`].
 
 use std::future::Future;
 use std::pin::Pin;
@@ -35,11 +38,31 @@ pub enum Fetched {
 /// Future returned by [`GitHub::get`].
 pub type GetFuture<'a> = Pin<Box<dyn Future<Output = Result<Fetched>> + Send + 'a>>;
 
-/// Read access to GitHub's REST API.
+/// Future returned by [`GitHub::graphql`].
+pub type GraphqlFuture<'a> = Pin<Box<dyn Future<Output = Result<serde_json::Value>> + Send + 'a>>;
+
+/// The GraphQL query for a pull request's review threads, with the variables `owner`, `name`
+/// and `number`.
+pub const REVIEW_THREADS: &str = "query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved } } }
+  }
+}";
+
+/// Read access to GitHub's REST and GraphQL APIs.
 pub trait GitHub: Send + Sync + 'static {
     /// `GET`s `path`, such as `repos/acme/app/pulls/1`, on the API of `host`, such as
     /// `github.com`; with `etag`, only if the resource changed since.
     fn get<'a>(&'a self, host: &'a str, path: &'a str, etag: Option<&'a str>) -> GetFuture<'a>;
+
+    /// Runs the GraphQL `query` with `variables`, a JSON object of strings and numbers, on the
+    /// API of `host`; returns the response's `data`.
+    fn graphql<'a>(
+        &'a self,
+        host: &'a str,
+        query: &'a str,
+        variables: &'a serde_json::Value,
+    ) -> GraphqlFuture<'a>;
 }
 
 /// [`GitHub`] through the `gh` CLI and its login on this machine.
@@ -76,6 +99,78 @@ impl GitHub for GhCli {
             })
         })
     }
+
+    fn graphql<'a>(
+        &'a self,
+        host: &'a str,
+        query: &'a str,
+        variables: &'a serde_json::Value,
+    ) -> GraphqlFuture<'a> {
+        Box::pin(async move {
+            let mut command = Command::new("gh");
+            command
+                .args(["api", "graphql", "--hostname", host, "-f"])
+                .arg(format!("query={query}"));
+            for (name, value) in variables.as_object().into_iter().flatten() {
+                // `-f` passes a string, `-F` a number as a number.
+                match value {
+                    serde_json::Value::String(value) => {
+                        command.arg("-f").arg(format!("{name}={value}"))
+                    }
+                    value => command.arg("-F").arg(format!("{name}={value}")),
+                };
+            }
+            command
+                .env("GH_NO_UPDATE_NOTIFIER", "1")
+                .env("GH_PROMPT_DISABLED", "1")
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true);
+            let output = tokio::time::timeout(GH_TIMEOUT, command.output())
+                .await
+                .map_err(|_| anyhow!("gh api graphql timed out"))?
+                .context("running gh")?;
+            parse_graphql(&output.stdout).with_context(|| {
+                format!(
+                    "gh api graphql: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )
+            })
+        })
+    }
+}
+
+/// The `data` of a GraphQL response; an error when it reports any.
+pub(crate) fn parse_graphql(body: &[u8]) -> Result<serde_json::Value> {
+    let mut response: serde_json::Value =
+        serde_json::from_slice(body).context("decoding the response")?;
+    if let Some(errors) = response.get("errors").and_then(|errors| errors.as_array())
+        && let Some(first) = errors.first()
+    {
+        bail!(
+            "{}",
+            first
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("GraphQL error")
+        );
+    }
+    match response.get_mut("data") {
+        Some(data) => Ok(data.take()),
+        None => bail!("no data in the response"),
+    }
+}
+
+/// How many of a pull request's review threads are unresolved, from the `data` of
+/// [`REVIEW_THREADS`]; `None` when the pull request is not there.
+pub(crate) fn unresolved_threads(data: &serde_json::Value) -> Option<u32> {
+    let nodes = data
+        .pointer("/repository/pullRequest/reviewThreads/nodes")?
+        .as_array()?;
+    let unresolved = nodes
+        .iter()
+        .filter(|thread| thread.get("isResolved") == Some(&serde_json::Value::Bool(false)))
+        .count();
+    Some(u32::try_from(unresolved).unwrap_or(u32::MAX))
 }
 
 /// Parses `gh api --include` output: a status line, headers, a blank line, the body.
@@ -219,6 +314,8 @@ pub(crate) struct ApiCheckRuns {
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ApiCheckRun {
+    #[serde(default)]
+    pub(crate) name: String,
     pub(crate) status: String,
     #[serde(default)]
     pub(crate) conclusion: Option<String>,
@@ -230,6 +327,15 @@ pub(crate) struct ApiStatus {
     pub(crate) state: String,
     #[serde(default)]
     pub(crate) total_count: u64,
+    #[serde(default)]
+    pub(crate) statuses: Vec<ApiCommitStatus>,
+}
+
+/// One status of [`ApiStatus`]: the latest of its context.
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ApiCommitStatus {
+    pub(crate) context: String,
+    pub(crate) state: String,
 }
 
 /// One entry of `GET repos/{o}/{r}/pulls/{n}/reviews`.
@@ -246,12 +352,13 @@ pub(crate) struct ApiUser {
 }
 
 /// The pull request herder tracks, from GitHub's pull request, its head commit's checks and
-/// statuses, and its reviews.
+/// statuses, its reviews, and how many of its review threads are unresolved.
 pub(crate) fn pull_request(
     pull: &ApiPull,
     runs: &ApiCheckRuns,
     status: &ApiStatus,
     reviews: &[ApiReview],
+    unresolved_threads: Option<u32>,
 ) -> PullRequest {
     PullRequest {
         number: pull.number,
@@ -259,7 +366,7 @@ pub(crate) fn pull_request(
         title: pull.title.clone(),
         head_branch: pull.head.branch.clone(),
         head_sha: Some(pull.head.sha.clone()),
-        unresolved_threads: None,
+        unresolved_threads,
         state: state(pull),
         ci: ci(runs, status),
         review: review(pull, reviews),
@@ -281,6 +388,26 @@ pub(crate) fn state(pull: &ApiPull) -> PrState {
     } else {
         PrState::Open
     }
+}
+
+/// The names of the check runs and status contexts that failed, as [`ci`] counts them.
+pub(crate) fn failing_checks(runs: &ApiCheckRuns, status: &ApiStatus) -> Vec<String> {
+    let runs = runs.check_runs.iter().filter(|run| {
+        run.status == "completed"
+            && !matches!(
+                run.conclusion.as_deref(),
+                Some("success" | "neutral" | "skipped")
+            )
+    });
+    let statuses = status
+        .statuses
+        .iter()
+        .filter(|status| !matches!(status.state.as_str(), "success" | "pending"));
+    let mut names: Vec<String> = runs.map(|run| run.name.clone()).collect();
+    names.extend(statuses.map(|status| status.context.clone()));
+    names.retain(|name| !name.is_empty());
+    names.dedup();
+    names
 }
 
 /// Failing if any check run or status failed, else pending if any is still running, else
@@ -444,6 +571,7 @@ mod tests {
             check_runs: runs
                 .iter()
                 .map(|(status, conclusion)| ApiCheckRun {
+                    name: format!("{status}-{}", conclusion.unwrap_or("none")),
                     status: (*status).into(),
                     conclusion: conclusion.map(Into::into),
                 })
@@ -488,6 +616,7 @@ mod tests {
         let status = |state: &str| ApiStatus {
             state: state.into(),
             total_count: 1,
+            statuses: Vec::new(),
         };
         assert_eq!(ci(&runs(&[]), &status("success")), CiStatus::Passing);
         assert_eq!(ci(&passing, &status("pending")), CiStatus::Pending);
@@ -496,8 +625,49 @@ mod tests {
         let empty = ApiStatus {
             state: "pending".into(),
             total_count: 0,
+            statuses: Vec::new(),
         };
         assert_eq!(ci(&passing, &empty), CiStatus::Passing);
+    }
+
+    #[test]
+    fn failing_checks_are_named() {
+        let runs = runs(&[
+            ("completed", Some("success")),
+            ("completed", Some("failure")),
+            ("completed", Some("timed_out")),
+            ("in_progress", None),
+        ]);
+        let status = ApiStatus {
+            state: "failure".into(),
+            total_count: 2,
+            statuses: vec![
+                ApiCommitStatus {
+                    context: "lint".into(),
+                    state: "error".into(),
+                },
+                ApiCommitStatus {
+                    context: "deploy".into(),
+                    state: "success".into(),
+                },
+            ],
+        };
+        assert_eq!(
+            failing_checks(&runs, &status),
+            ["completed-failure", "completed-timed_out", "lint"]
+        );
+    }
+
+    #[test]
+    fn review_threads_count_the_unresolved_ones() {
+        let recorded = include_bytes!("../../tests/fixtures/github/review_threads.json");
+        let data = parse_graphql(recorded).unwrap();
+        assert_eq!(unresolved_threads(&data), Some(2));
+        let missing = br#"{"data":{"repository":{"pullRequest":null}}}"#;
+        assert_eq!(unresolved_threads(&parse_graphql(missing).unwrap()), None);
+        let failed = br#"{"data":null,"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Repository"}]}"#;
+        let err = parse_graphql(failed).unwrap_err();
+        assert!(err.to_string().contains("Could not resolve"), "{err}");
     }
 
     #[test]

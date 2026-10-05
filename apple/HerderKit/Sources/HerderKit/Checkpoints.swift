@@ -18,7 +18,7 @@ struct Checkpoints: Equatable {
     init(_ blocks: [TranscriptBlock]) {
         for block in blocks {
             switch block {
-            case .user(let id, let text, _, _, _):
+            case .user(let id, let text, _, _, _, _):
                 items.append(Checkpoint(id: id, prompt: Self.flat(text), reply: nil))
             case .assistant(_, let text, _):
                 if let last = items.indices.last, items[last].reply == nil, !text.isEmpty {

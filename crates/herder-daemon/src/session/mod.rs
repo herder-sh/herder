@@ -235,10 +235,10 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
-    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord,
-    MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project,
-    ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
-    TitleSource, TurnId, UsageWindow, UserId, clean_title,
+    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, FollowUp, HostId, Image, Item, ItemId,
+    JournalRecord, MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES,
+    PermissionMode, Project, ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus,
+    SessionSummary, Timestamp, TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
 use jiff::SignedDuration;
@@ -870,8 +870,23 @@ impl SessionManager {
         if inner.prs.get().is_some() {
             anyhow::bail!("pull requests are tracked already");
         }
-        let tracker =
-            PrTracker::start(inner.journal.clone(), config, inner.shutdown.clone()).await?;
+        let manager = Arc::downgrade(inner);
+        let prompter: prs::Prompter = Box::new(move |session_id, text, follow_up| {
+            let manager = manager.upgrade().map(|inner| Self { inner });
+            Box::pin(async move {
+                match manager {
+                    Some(manager) => manager.follow_up(session_id, text, follow_up).await,
+                    None => false,
+                }
+            })
+        });
+        let tracker = PrTracker::start(
+            inner.journal.clone(),
+            config,
+            prompter,
+            inner.shutdown.clone(),
+        )
+        .await?;
         let _ = inner.prs.set(Arc::clone(&tracker));
         Ok(tracker)
     }
@@ -1784,6 +1799,13 @@ impl SessionManager {
             .deliver_agent_message(session_id, text, message)
             .await?
             .queued)
+    }
+
+    /// Sends the session the follow-up prompt `text` if it is idle; whether it was sent.
+    async fn follow_up(&self, session_id: SessionId, text: String, follow_up: FollowUp) -> bool {
+        self.send(session_id, None, Request::FollowUp { text, follow_up })
+            .await
+            .is_ok()
     }
 
     async fn deliver_agent_message(
