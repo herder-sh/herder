@@ -1,5 +1,6 @@
 import Foundation
 import Herder
+import Synchronization
 
 /// One machine's answer to a usage summary, with the accounts it lists.
 struct MachineUsage: Equatable {
@@ -166,22 +167,80 @@ extension UsagePeriod {
 }
 
 extension Fleet {
-    /// Asks every connected machine for its usage over `period`, one after another. A machine
-    /// that does not answer is left out, with why; a vault runs no sessions, so it is not asked.
+    /// How long a machine gets to add its usage up. A daemon older than the Usage screen
+    /// never answers it, so without a limit the screen would wait forever.
+    static let usageTimeout: Duration = .seconds(10)
+
+    /// Asks every connected machine for its usage over `period`, all at once. A machine that
+    /// does not answer in time is left out, with why; a vault runs no sessions, so it is not
+    /// asked.
     func usage(over period: UsagePeriod) async -> (machines: [MachineUsage], failures: [String]) {
-        var answers: [MachineUsage] = []
+        let asked = machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
+        let client = client
+        let answers = await withTaskGroup(of: (Int, Result<[UsageTotal], any Error>).self) { group in
+            for (index, machine) in asked.enumerated() {
+                let hostId = machine.hostId
+                group.addTask {
+                    do {
+                        let totals = try await answered(within: Self.usageTimeout,
+                                                      or: "did not answer; it may run an older herder") {
+                            guard case .usageSummary(_, _, let totals) = try await client.send(
+                                hostId: hostId, command: .getUsageSummary(period: period))
+                            else { throw HerderError.Local(detail: "the machine did not add its usage up") }
+                            return totals
+                        }
+                        return (index, .success(totals))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            var answers: [(Int, Result<[UsageTotal], any Error>)] = []
+            for await answer in group { answers.append(answer) }
+            return answers.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        var machines: [MachineUsage] = []
         var failures: [String] = []
-        for machine in machines where machine.connection == .connected && machine.hosts.isEmpty {
-            do {
-                guard case .usageSummary(_, _, let totals) = try await client.send(
-                    hostId: machine.hostId, command: .getUsageSummary(period: period))
-                else { throw HerderError.Local(detail: "the machine did not add its usage up") }
-                answers.append(MachineUsage(hostId: machine.hostId, name: machine.name,
-                                            accounts: machine.accounts, totals: totals))
-            } catch {
+        for (machine, answer) in zip(asked, answers) {
+            switch answer {
+            case .success(let totals):
+                machines.append(MachineUsage(hostId: machine.hostId, name: machine.name,
+                                             accounts: machine.accounts, totals: totals))
+            case .failure(let error):
                 failures.append("\(machine.name): \(describe(error))")
             }
         }
-        return (answers, failures)
+        return (machines, failures)
+    }
+}
+
+/// `operation`'s answer, or a `.Local` error saying `late` once `limit` passes without one.
+/// A call into herder cannot be cancelled, so it runs on and its late answer is dropped.
+func answered<T: Sendable>(
+    within limit: Duration, or late: String, _ operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        let once = Once(continuation)
+        let timer = Task {
+            try await Task.sleep(for: limit)
+            once.resume(with: .failure(HerderError.Local(detail: late)))
+        }
+        Task {
+            do { once.resume(with: .success(try await operation())) } catch { once.resume(with: .failure(error)) }
+            timer.cancel()
+        }
+    }
+}
+
+/// A continuation resumed by whichever caller comes first.
+private final class Once<T: Sendable>: Sendable {
+    private let continuation: Mutex<CheckedContinuation<T, any Error>?>
+
+    init(_ continuation: CheckedContinuation<T, any Error>) {
+        self.continuation = Mutex(continuation)
+    }
+
+    func resume(with result: Result<T, any Error>) {
+        continuation.withLock { $0.take() }?.resume(with: result)
     }
 }

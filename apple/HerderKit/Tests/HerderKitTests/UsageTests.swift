@@ -180,3 +180,22 @@ struct UsageFleetTests {
         #expect(memberSees == ownerSees)
     }
 }
+
+struct AnsweredWithinTests {
+    @Test func anAnswerInTimeIsReturned() async throws {
+        #expect(try await answered(within: .seconds(5), or: "late") { 42 } == 42)
+    }
+
+    /// A machine that never answers, like a daemon older than the command, fails once the
+    /// limit passes instead of holding the caller forever.
+    @Test func noAnswerFailsOnceTheLimitPasses() async {
+        let started = ContinuousClock.now
+        await #expect(throws: HerderError.Local(detail: "late")) {
+            try await answered(within: .milliseconds(100), or: "late") {
+                try await Task.sleep(for: .seconds(60))
+                return 42
+            }
+        }
+        #expect(ContinuousClock.now - started < .seconds(5))
+    }
+}
