@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, ErrorClass, Image, Item, ItemBody, ItemId,
-    PermissionMode, QuestionId, TurnError, TurnId,
+    PermissionMode, QuestionId, TurnError, TurnId, TurnUsage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -17,6 +17,7 @@ use super::wire::{
     Incoming, Permission, Question, Request, Response,
 };
 use super::{Failure, classify, mode_flag, mode_from_flag, usage};
+use crate::price;
 use crate::transport::{Exit, Transport};
 use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 
@@ -63,6 +64,7 @@ pub(super) async fn start(
         events: event_tx,
         model: None,
         native_id: None,
+        spent_usd: 0.0,
         mode: request.permission_mode,
         next_request: 0,
         pending: HashMap::new(),
@@ -210,6 +212,8 @@ struct Session {
     model: Option<String>,
     /// The CLI's session id last reported.
     native_id: Option<String>,
+    /// The last `result`'s `total_cost_usd`, which adds up over the life of the process.
+    spent_usd: f64,
     /// The permission mode last reported or started with.
     mode: PermissionMode,
     next_request: u64,
@@ -941,9 +945,10 @@ impl Session {
     // ---- Turns ----
 
     async fn result(&mut self, result: wire::ResultMessage) {
+        let usage = self.turn_usage(&result);
         let Some(turn) = &mut self.turn else { return };
         let end = if result.subtype == "success" && !result.is_error {
-            TurnEnd::Completed
+            TurnEnd::Completed(usage)
         } else if turn.interrupted {
             TurnEnd::Interrupted
         } else {
@@ -960,6 +965,25 @@ impl Session {
         if let Some(prompt) = self.deferred.take() {
             self.prompt(prompt).await;
         }
+    }
+
+    /// The tokens and cost of the turn `result` ends. Its cost is what the process spent since
+    /// the last `result`, so a turn's side calls on other models count too; without a
+    /// `total_cost_usd` the price table estimates it.
+    fn turn_usage(&mut self, result: &wire::ResultMessage) -> Option<TurnUsage> {
+        let cost_usd = result
+            .total_cost_usd
+            .map(|total| price::spent_since(&mut self.spent_usd, total));
+        let usage = result.usage.as_ref()?;
+        let usage = TurnUsage {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_input_tokens,
+            cache_write: usage.cache_creation_input_tokens,
+            cost_usd,
+            cost_estimated: false,
+        };
+        Some(price::fill(usage, self.model.as_deref()))
     }
 
     async fn fail_open_turn(&mut self, error: TurnError) {
@@ -989,10 +1013,7 @@ impl Session {
         self.asks.clear();
         let turn_id = turn.id;
         self.emit(match end {
-            TurnEnd::Completed => AdapterEvent::TurnCompleted {
-                turn_id,
-                usage: None,
-            },
+            TurnEnd::Completed(usage) => AdapterEvent::TurnCompleted { turn_id, usage },
             TurnEnd::Interrupted => AdapterEvent::TurnInterrupted { turn_id },
             TurnEnd::Failed(error) => AdapterEvent::TurnFailed { turn_id, error },
         })
@@ -1062,7 +1083,7 @@ impl Session {
 }
 
 enum TurnEnd {
-    Completed,
+    Completed(Option<TurnUsage>),
     Interrupted,
     Failed(TurnError),
 }

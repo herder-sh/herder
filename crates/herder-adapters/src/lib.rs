@@ -55,6 +55,7 @@ pub mod claude;
 pub mod codex;
 pub mod fake;
 pub mod fixture;
+pub mod price;
 pub mod record;
 pub mod transcript;
 pub mod transport;

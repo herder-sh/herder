@@ -17,7 +17,7 @@ use herder_adapters::transport::Transport;
 use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId,
-    PermissionMode, QuestionId, Timestamp, TurnError, TurnId, UsageWindow,
+    PermissionMode, QuestionId, Timestamp, TurnError, TurnId, TurnUsage, UsageWindow,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -209,6 +209,25 @@ fn completed() -> AdapterEvent {
     }
 }
 
+fn completed_with(usage: TurnUsage) -> AdapterEvent {
+    AdapterEvent::TurnCompleted {
+        turn_id: turn(),
+        usage: Some(usage),
+    }
+}
+
+/// A turn's usage as its `result` line reports it, cost included.
+fn reported(input: u64, output: u64, cache_read: u64, cache_write: u64, cost: f64) -> TurnUsage {
+    TurnUsage {
+        input,
+        output,
+        cache_read,
+        cache_write,
+        cost_usd: Some(cost),
+        cost_estimated: false,
+    }
+}
+
 #[test]
 fn every_fixture_parses() {
     for name in FIXTURES {
@@ -238,7 +257,7 @@ async fn a_turn_streams_its_reply() {
         usage(47.0, 5.0),
     ];
     expected.extend(streamed(1, &["ok"]));
-    expected.push(completed());
+    expected.push(completed_with(reported(10, 61, 16304, 3114, 0.0093474)));
     assert_eq!(events, expected);
     shutdown(session).await;
 }
@@ -285,7 +304,7 @@ async fn model_and_permission_mode_switch_natively() {
         usage(47.0, 5.0),
     ];
     expected.extend(streamed(1, &["ok"]));
-    expected.push(completed());
+    expected.push(completed_with(reported(2, 4, 13420, 3565, 0.018162)));
     assert_eq!(events, expected);
     shutdown(session).await;
 }
@@ -350,7 +369,13 @@ async fn a_tool_call_waits_for_its_approval() {
         ),
     }];
     expected.extend(streamed(3, &["done"]));
-    expected.push(completed());
+    expected.push(completed_with(reported(
+        18,
+        177,
+        35742,
+        3336,
+        0.012368200000000001,
+    )));
     assert_eq!(events, expected);
     shutdown(session).await;
 }
@@ -401,7 +426,16 @@ async fn full_access_allows_what_a_safety_check_still_asks() {
             json!("(Bash completed with no output)"),
         ]
     );
-    assert_eq!(events.last(), Some(&completed()));
+    assert_eq!(
+        events.last(),
+        Some(&completed_with(reported(
+            26,
+            492,
+            59111,
+            630,
+            0.009657100000000002
+        )))
+    );
     shutdown(session).await;
 }
 
@@ -477,7 +511,7 @@ async fn a_question_waits_for_its_answer_and_claude_goes_on_with_it() {
         ),
     }];
     expected.extend(streamed(3, &["B"]));
-    expected.push(completed());
+    expected.push(completed_with(reported(18, 198, 35742, 3382, 0.0125502)));
     assert_eq!(events, expected);
     shutdown(session).await;
 }
@@ -608,7 +642,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
         usage(47.0, 5.0),
     ];
     expected.extend(streamed(1, &["Teal"]));
-    expected.push(completed());
+    expected.push(completed_with(reported(10, 66, 16304, 3161, 0.0094714)));
     assert_eq!(events, expected);
     shutdown(session).await;
 }
@@ -1432,6 +1466,87 @@ async fn an_interrupt_stops_a_turn_the_cli_started() {
     assert_eq!(
         until(&mut session, is_turn_end).await,
         [AdapterEvent::TurnInterrupted { turn_id }]
+    );
+    shutdown(session).await;
+}
+
+fn result(input: u64, output: u64, total_cost_usd: Option<f64>) -> String {
+    let mut result = json!({
+        "type": "result", "subtype": "success", "is_error": false, "result": "",
+        "usage": {
+            "input_tokens": input, "output_tokens": output,
+            "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200,
+        },
+    });
+    if let Some(total) = total_cost_usd {
+        result["total_cost_usd"] = json!(total);
+    }
+    out(result)
+}
+
+/// The usage a turn ends with.
+fn turn_usage(events: &[AdapterEvent]) -> TurnUsage {
+    match events.last() {
+        Some(AdapterEvent::TurnCompleted {
+            usage: Some(usage), ..
+        }) => usage.clone(),
+        other => panic!("no usage: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn each_turn_costs_what_the_process_spent_during_it_or_the_price_table_s_estimate() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            sent("one"),
+            out(json!({"type": "system", "subtype": "init", "model": "claude-haiku-4-5-20251001"})),
+            result(10, 20, Some(0.01)),
+            sent("two"),
+            result(30, 40, Some(0.03)),
+            sent("three"),
+            result(1_000_000, 100_000, None),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+
+    session.commands.send(prompt("one")).unwrap();
+    let first = turn_usage(&until(&mut session, is_turn_end).await);
+    assert_eq!(
+        first,
+        TurnUsage {
+            input: 10,
+            output: 20,
+            cache_read: 1000,
+            cache_write: 200,
+            cost_usd: Some(0.01),
+            cost_estimated: false,
+        }
+    );
+
+    // `total_cost_usd` adds up over the process, so the second turn cost the difference.
+    session.commands.send(prompt("two")).unwrap();
+    let second = turn_usage(&until(&mut session, is_turn_end).await);
+    assert_eq!((second.input, second.output), (30, 40));
+    assert!(
+        (second.cost_usd.unwrap() - 0.02).abs() < 1e-12,
+        "{second:?}"
+    );
+    assert!(!second.cost_estimated);
+
+    // No cost from the CLI: the haiku price table, $1 in, $5 out, $0.10 cache read, $1.25
+    // cache write per million tokens.
+    session.commands.send(prompt("three")).unwrap();
+    let third = turn_usage(&until(&mut session, is_turn_end).await);
+    assert!(third.cost_estimated);
+    let estimate = 1.0 + 0.5 + 0.0001 + 0.00025;
+    assert!(
+        (third.cost_usd.unwrap() - estimate).abs() < 1e-12,
+        "{third:?}"
     );
     shutdown(session).await;
 }

@@ -186,6 +186,26 @@ pub(super) struct ResultMessage {
     pub api_error_status: Option<u16>,
     #[serde(default)]
     pub errors: Vec<String>,
+    /// The turn's tokens, on the main thread's model.
+    #[serde(default)]
+    pub usage: Option<ResultUsage>,
+    /// What the CLI process has spent so far at API prices, every model it called included.
+    #[serde(default)]
+    pub total_cost_usd: Option<f64>,
+}
+
+/// A `result`'s `usage`.
+#[derive(Debug, Deserialize)]
+pub(super) struct ResultUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// Thinking included.
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
