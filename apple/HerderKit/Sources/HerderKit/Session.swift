@@ -211,8 +211,9 @@ struct SessionModel {
             notice("Turn failed: \(summary)", .error, detail: summary == error.message ? nil : error.message)
         case .approvalRequested(_, _, _, let summary, let routedTo, let reason):
             asked("Approval", summary, routedTo, reason)
-        case .questionAsked(_, _, let text, _, let routedTo, let reason):
-            asked("Question", text, routedTo, reason)
+        case .questionAsked(let id, _, let text, let choices, let routedTo, let reason):
+            log.append(.question(AskedQuestion(
+                id: id, seq: event.seq, text: text, choices: choices, routedTo: routedTo, reason: reason)))
         case .approvalEscalated(_, let reason, let note): escalated("Approval", reason, note)
         case .questionEscalated(_, let reason, let note): escalated("Question", reason, note)
         case .approvalResolved(_, let decision, let answeredBy):
@@ -223,8 +224,12 @@ struct SessionModel {
             }
             notice(answeredBy == .user ? what : "\(what) by the primary session")
         case .questionAnswered(let id, let answer, let answeredBy):
-            let text = answerText(id, answer)
-            notice(answeredBy == .user ? "Answered: \(text)" : "The primary session answered: \(text)")
+            if let index = log.lastIndex(where: { if case .question(let asked) = $0 { asked.id == id } else { false } }),
+               case .question(var asked) = log[index] {
+                asked.answer = answer
+                asked.answeredBy = answeredBy
+                log[index] = .question(asked)
+            }
         case .childSpawned(let child, _, let task): log.append(.child(sessionId: child, task: task))
         case .childReported(let child, let turnId, let summary):
             log.append(.report(ChildReport(id: event.seq, sessionId: child, turnId: turnId, summary: summary)))
@@ -631,6 +636,25 @@ enum LogEntry: Hashable {
     case handoff(Handoff)
     case child(sessionId: SessionId, task: String)
     case report(ChildReport)
+    case question(AskedQuestion)
+}
+
+/// A question the agent asked, with its answer once it has one.
+struct AskedQuestion: Hashable {
+    let id: QuestionId
+    let seq: UInt64
+    let text: String
+    let choices: [String]
+    let routedTo: Route
+    let reason: EscalationReason?
+    var answer: Answer?
+    var answeredBy: Answerer?
+
+    /// The index of the choice the answer picked; `nil` unanswered or answered in words.
+    var picked: Int? {
+        guard case .choice(let index)? = answer, Int(index) < choices.count else { return nil }
+        return Int(index)
+    }
 }
 
 /// A child session ended a turn and reported back to this one.

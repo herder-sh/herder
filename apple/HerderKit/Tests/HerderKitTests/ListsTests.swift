@@ -129,6 +129,19 @@ struct ListsTests {
         #expect(project.live[1].children == 2)
     }
 
+    @Test func aSessionBeingArchivedIsListedArchivedAlready() {
+        var archiving = Script("01A")
+        var live = Script("01B")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B"])
+        for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
+        let lists = Lists(machines: [host], sessions: [
+            archiving.key: archiving.model([created()]), live.key: live.model([created()]),
+        ], archiving: [archiving.key])
+        #expect(lists.home.map(\.key) == [live.key])
+        #expect(lists.projects[0].live.map(\.key) == [live.key])
+        #expect(lists.projects[0].archived.map(\.key) == [archiving.key])
+    }
+
     @Test func aRemovedProjectLeavesTheListWithItsArchivedSessions() {
         // The machine lists neither the project nor a project for its sessions: it was removed.
         var archived = Script("01A")
