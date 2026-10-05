@@ -1,0 +1,7 @@
+# A short finished turn, for the sessions that fill out the lists.
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Read", "input": {"file_path": "README.md"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "# acme", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Done. The change is on this session's branch, with the tests passing."}}}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 9, "resets_at": "$in_260m"}, {"window": "seven_day", "used_percent": 30, "resets_at": "$in_6100m"}]}}
+{"emit": {"type": "turn_completed", "turn_id": "$turn", "usage": {"input": 3200, "output": 410, "cache_read": 22000, "cache_write": 1500, "cost_usd": 0.09, "cost_estimated": false}}}

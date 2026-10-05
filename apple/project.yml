@@ -64,6 +64,38 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.UITests
         GENERATE_INFOPLIST_FILE: YES
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+  # The screenshots on herder.sh (the `screenshots` workflow), against `fake_daemon --demo`;
+  # their own schemes, so the app's tests never run them.
+  herder-iOS-Screenshots:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ScreenshotTests]
+    dependencies:
+      - target: herder-iOS
+    settings:
+      base:
+        PRODUCT_NAME: herder-iOS-Screenshots
+        PRODUCT_MODULE_NAME: HerderScreenshots
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.Screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+    scheme:
+      testTargets: [herder-iOS-Screenshots]
+  herder-macOS-Screenshots:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [ScreenshotTests]
+    dependencies:
+      - target: herder-macOS
+    settings:
+      base:
+        PRODUCT_NAME: herder-macOS-Screenshots
+        PRODUCT_MODULE_NAME: HerderScreenshots
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.Screenshots
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+    scheme:
+      testTargets: [herder-macOS-Screenshots]
   herder-macOS:
     type: application
     platform: macOS

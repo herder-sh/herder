@@ -1,0 +1,9 @@
+# The turn before the handoff: the bug needs Safari, which only the Mac has.
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "model_changed", "model": "claude-opus-5-5"}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "pnpm playwright test checkout --repeat-each=10"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "30 passed (1.1m)\n  chromium: 10 passed\n  firefox: 10 passed\n  webkit: skipped, no browser on linux-arm64", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Read", "input": {"file_path": "e2e/checkout.spec.ts"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-3", "output": "await page.getByRole('button', { name: 'Pay' }).click();\nawait expect(page).toHaveURL(/\\/orders\\//);", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-5", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "Chromium and Firefox pass 10 out of 10; every CI failure is WebKit. The test clicks **Pay** before the card field reports ready, and only WebKit loads the payment iframe late enough to lose that race.\n\nThis box has no WebKit build, so I can't confirm a fix here. Hand the session to a Mac and I'll carry on there."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "$turn", "usage": {"input": 9120, "output": 1480, "cache_read": 96400, "cache_write": 5200, "cost_usd": 0.38, "cost_estimated": false}}}

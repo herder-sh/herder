@@ -1,0 +1,14 @@
+# A Codex turn that waits for the user to allow the test run.
+{"emit": {"type": "turn_started", "turn_id": "$turn"}}
+{"emit": {"type": "model_changed", "model": "gpt-6.1-sol"}}
+{"emit": {"type": "usage_reported", "windows": [{"window": "five_hour", "used_percent": 12, "resets_at": "$in_250m"}, {"window": "weekly", "used_percent": 34, "resets_at": "$in_7000m"}]}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "shell", "input": {"command": "rg -l \"from 'date-fns'\" src"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "src/lib/format.ts\nsrc/components/OrderTimeline.tsx\nsrc/components/InvoiceList.tsx\nsrc/pages/reports.tsx", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "tool_call", "name": "apply_patch", "input": {"path": "package.json", "new_string": "    \"date-fns\": \"^4.1.0\",\n    \"@date-fns/tz\": \"^1.2.0\",", "old_string": "    \"date-fns\": \"^2.30.0\","}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-3", "output": "Success. Updated package.json", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-5", "turn_id": "$turn", "body": {"type": "tool_call", "name": "apply_patch", "input": {"path": "src/lib/format.ts", "new_string": "import { format } from 'date-fns';\nimport { tz } from '@date-fns/tz';\n\nexport const formatOrderDate = (date: Date, zone: string) =>\n  format(date, 'd MMM yyyy, HH:mm', { in: tz(zone) });", "old_string": "import { format, utcToZonedTime } from 'date-fns-tz';\n\nexport const formatOrderDate = (date: Date, zone: string) =>\n  format(utcToZonedTime(date, zone), 'd MMM yyyy, HH:mm');"}}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-6", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-5", "output": "Success. Updated src/lib/format.ts", "is_error": false}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-7", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "date-fns 4 drops `utcToZonedTime`; time zones now go through `@date-fns/tz`. I've moved `formatOrderDate` over. Running the web tests to see what else breaks."}}}}
+{"emit": {"type": "item_completed", "item": {"id": "$turn-8", "turn_id": "$turn", "body": {"type": "tool_call", "name": "shell", "input": {"command": "pnpm --filter web test"}}}}}
+{"emit": {"type": "approval_requested", "approval_id": "$turn-approval", "turn_id": "$turn", "tool_call_id": "$turn-8", "summary": "Run pnpm --filter web test"}}
+"hold"

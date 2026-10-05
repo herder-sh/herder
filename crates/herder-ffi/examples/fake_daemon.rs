@@ -6,7 +6,11 @@
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, and prints instead the link
 //! a device paired with both shares (`Client::share`), which pairs with both at once; the
 //! repository is the first's, and the first has a session waiting on an approval.
+//! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints
+//! only the link a device paired with all of it shares.
 
+#[path = "fake_daemon/demo.rs"]
+mod demo;
 #[path = "../tests/support/mod.rs"]
 mod support;
 
@@ -20,6 +24,12 @@ use tokio::io::AsyncReadExt;
 #[tokio::main]
 async fn main() -> Result<()> {
     let (daemons, link) = match std::env::args().nth(1).as_deref() {
+        Some("--demo") => {
+            let demo = demo::Demo::start().await?;
+            println!("{}", demo.link);
+            tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
+            return demo.stop().await;
+        }
         Some("--share") => {
             let daemons = vec![
                 support::FakeDaemon::start("fake-host-1").await?,
