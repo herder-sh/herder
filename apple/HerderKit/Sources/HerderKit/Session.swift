@@ -201,7 +201,7 @@ struct SessionModel {
         switch event.body {
         case .itemAdded(let item):
             log.append(.item(item))
-            if item.parentCallId == nil, item.agentMessage == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
+            if item.parentCallId == nil, item.agentMessage == nil, item.followUp == nil, case .userMessage(let text, _) = item.body, let index = outbox.firstIndex(where: { $0.text == text }) {
                 outbox.remove(at: index)
             }
         case .branchCheckedOut(let branch): notice("Checked out \(branch)")

@@ -12,13 +12,17 @@ struct TranscriptBlockView: View {
 
     var body: some View {
         switch block {
-        case .user(_, let text, let attachments, let outgoing, let agentMessage):
+        case .user(_, let text, let attachments, let outgoing, let agentMessage, let followUp):
             VStack(alignment: .trailing, spacing: 6) {
                 let pictures = MessagePicture.of(attachments: attachments, outgoing: outgoing, in: fleet)
                 // Images the text names by marker show as chips in it; others, above it.
                 let inline = MessageText.refers(text, to: pictures)
                 if let agentMessage {
                     AgentMessageSource(message: agentMessage, fleet: fleet, hostId: hostId, open: open)
+                }
+                if followUp != nil {
+                    Label("From herder", systemImage: "arrow.triangle.pull")
+                        .font(.caption).foregroundStyle(Theme.secondary)
                 }
                 if !inline && !attachments.isEmpty {
                     MessageImages(fleet: fleet, key: key, attachments: attachments)

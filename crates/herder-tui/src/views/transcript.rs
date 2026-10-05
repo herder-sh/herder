@@ -343,7 +343,12 @@ impl<'a> Builder<'a> {
         let ui = self.ui;
         match &item.body {
             ItemBody::UserMessage { text, attachments } => {
-                self.user(Some(&item.id), text, attachments, false);
+                let from = if item.follow_up.is_some() {
+                    From::Herder
+                } else {
+                    From::User
+                };
+                self.user(Some(&item.id), text, attachments, from);
             }
             ItemBody::AssistantMessage { text } => {
                 self.start(true);
@@ -411,15 +416,18 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The user's message: a bar in the accent, the text on the panel; `queued` while the
-    /// daemon holds it behind a running turn.
-    fn user(&mut self, id: Option<&ItemId>, text: &str, images: &[Attachment], queued: bool) {
+    /// A prompt: a bar in the accent, the text on the panel; badged while the daemon holds it
+    /// behind a running turn, or as from herder, with a muted bar, when herder sent it.
+    fn user(&mut self, id: Option<&ItemId>, text: &str, images: &[Attachment], from: From) {
         let ui = self.ui;
         self.start(true);
         if let Some(id) = id {
             self.select(id);
         }
-        let bar = ui.theme.primary;
+        let bar = match from {
+            From::Herder => ui.theme.border,
+            From::User | From::Queued => ui.theme.primary,
+        };
         let room = self.width.saturating_sub(3).max(1);
         if self.padded {
             self.push(Row::panel(ui, bar, vec![]));
@@ -428,8 +436,14 @@ impl<'a> Builder<'a> {
             .lines()
             .flat_map(|line| wrap(&[(line.to_owned(), ui.text())], room, &[], &[]))
             .collect();
-        if queued && let Some(first) = lines.first_mut() {
-            let badge = badge::subtle(ui, "queued", ui.theme.warning);
+        let badge = match from {
+            From::Queued => Some(badge::subtle(ui, "queued", ui.theme.warning)),
+            From::Herder => Some(badge::subtle(ui, "herder", ui.theme.secondary)),
+            From::User => None,
+        };
+        if let Some(badge) = badge
+            && let Some(first) = lines.first_mut()
+        {
             *first = spread(first.clone(), Line::from(badge), room, ui.glyphs);
         }
         for line in lines {
@@ -462,6 +476,17 @@ impl<'a> Builder<'a> {
         let before = before?;
         Some(at.as_second() - before.as_second()).filter(|took| *took > 0)
     }
+}
+
+/// Who a prompt in the transcript is from.
+#[derive(Clone, Copy)]
+enum From {
+    /// A user, or an agent.
+    User,
+    /// A user, waiting behind the running turn.
+    Queued,
+    /// herder, following up on its own.
+    Herder,
 }
 
 /// `seconds` as `4s`, `1m 12s` or `2h 05m`.
@@ -545,7 +570,7 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
         builder.item(item, true);
     }
     for prompt in &session.queued {
-        builder.user(None, prompt, &[], true);
+        builder.user(None, prompt, &[], From::Queued);
     }
     (builder.rows, builder.items)
 }

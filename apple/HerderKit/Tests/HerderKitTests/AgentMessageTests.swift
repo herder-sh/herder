@@ -35,6 +35,21 @@ struct AgentMessageTests {
         #expect(model.outbox.isEmpty)
     }
 
+    @Test func aFollowUpIsFromHerderNotTheUser() {
+        var script = Script()
+        let followUp = FollowUp(reason: .ciFailed, pr: 7, headSha: "abc123")
+        let text = "CI failed on #7: test. Find out why, fix it and push."
+        let event = EventBody.itemAdded(item: Item(agentMessage: nil, followUp: followUp, parentCallId: nil, id: "nudge",
+                                                   turnId: "t1", body: .userMessage(text: text, attachments: [])))
+        var model = script.model([created()])
+        let outgoing = Outgoing(text: text, state: .delivered)
+        model.outbox = [outgoing]
+        model.apply(script.event(event))
+        // Not the user's own prompt arriving.
+        #expect(model.outbox == [outgoing])
+        #expect(Transcript.blocks(model).contains(.user(id: "t1/nudge", text: text, outgoing: nil, followUp: followUp)))
+    }
+
     @Test func attributionIsNotInferredFromText() {
         var script = Script()
         let text = "Sent by another agent: please review"

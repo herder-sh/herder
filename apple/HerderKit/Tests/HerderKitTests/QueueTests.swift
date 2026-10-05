@@ -85,7 +85,7 @@ struct QueueTests {
         #expect(await eventually {
             guard let model = fleet.sessions[key] else { return false }
             let users = Transcript.blocks(model).compactMap { block -> String? in
-                if case .user(_, let text, _, _, _) = block { text } else { nil }
+                if case .user(_, let text, _, _, _, _) = block { text } else { nil }
             }
             return users == ["Hold.", "A.", "C.", "D.\n\nE."] && model.turn == nil
         })
