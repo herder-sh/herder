@@ -24,6 +24,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         icon: None,
         icon_uploaded: false,
         icon_background: None,
+        position: None,
     }
 }
 

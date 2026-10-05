@@ -465,6 +465,14 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         icon: Option<Image>,
     },
+    /// Replace the order the owners keep their projects in, kept in the daemon's data dir;
+    /// owners only. Answered with `applied`; the project list follows with each project's
+    /// `position`. The ids may name projects of other daemons too, so that a client sending
+    /// its whole order to each of its daemons gets the same positions back from all of them.
+    SetProjectOrder {
+        /// Every ordered project, first first.
+        project_ids: Vec<ProjectId>,
+    },
     /// Fetch a project's icon, the image its `icon` names; owners and members alike. Answered
     /// with `project_icon`, or refused with `not_found` when the project has none. It changes
     /// nothing, so a resend is answered afresh.
