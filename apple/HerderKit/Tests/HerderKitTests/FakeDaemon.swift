@@ -12,6 +12,8 @@ final class FakeDaemon {
     let account: String
     /// The account whose turn runs until it is interrupted (`fixtures/hold.jsonl`).
     let holdAccount: String
+    /// Pairs a device as a member, where `link` pairs it as the owner.
+    let memberLink: String
     private let process = Process()
     private let stdin = Pipe()
 
@@ -24,8 +26,8 @@ final class FakeDaemon {
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
-        let lines = try Self.readLines(4, from: stdout.fileHandleForReading)
-        (link, repo, account, holdAccount) = (lines[0], lines[1], lines[2], lines[3])
+        let lines = try Self.readLines(5, from: stdout.fileHandleForReading)
+        (link, repo, account, holdAccount, memberLink) = (lines[0], lines[1], lines[2], lines[3], lines[4])
     }
 
     deinit {
@@ -49,10 +51,10 @@ final class FakeDaemon {
 }
 
 extension Fleet {
-    /// Pairs with `daemon`, the one machine its link names.
+    /// Pairs with `daemon`, the one machine its link names, as its owner or as a member.
     @discardableResult
-    func pair(_ daemon: FakeDaemon) async throws -> Machine {
-        let results = try await pair(link: daemon.link)
+    func pair(_ daemon: FakeDaemon, member: Bool = false) async throws -> Machine {
+        let results = try await pair(link: member ? daemon.memberLink : daemon.link)
         guard case .paired(let machine) = results.first, results.count == 1 else {
             throw HerderError.Pairing(detail: "did not pair: \(results)")
         }
