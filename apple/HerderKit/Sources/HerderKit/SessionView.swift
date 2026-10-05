@@ -487,6 +487,7 @@ private struct Composer: View {
                     Task { await fleet.switchSession(key, to: account, model: choice.model) }
                 },
                 settings: [accountSection(accounts), machineSection],
+                skills: fleet.skills(of: key),
                 setMode: { mode in Task { await fleet.setMode(mode, of: key) } },
                 send: send,
                 stop: { Task { await fleet.interrupt(key) } }
@@ -685,6 +686,7 @@ struct DraftSessionView: View {
                 running: false,
                 choose: { choice = $0 },
                 settings: [accountSection, machineSection],
+                skills: fleet.librarySkills(on: hostId),
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}

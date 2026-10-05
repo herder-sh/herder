@@ -258,6 +258,13 @@ typing.
   session opens on its transcript, and the keyboard appears when the user taps the prompt.
   Dragging the transcript dismisses the keyboard.
 - Read-only sessions (moved, or on an offline host) show a lock line in its place.
+- **Skill mentions:** `$` starting the prompt's last word opens a picker (`SkillPicker`) at the
+  top of the box with the session's skills (`session_skills`; a draft offers the machine's enabled
+  library skills), names starting with what follows the `$` first, each with its description and
+  Library or Project. A click or Return picks one; it goes in as `$name `, the text the agent
+  gets, which the adapters rewrite per provider. A mention shows as a chip with its description:
+  inline on the Mac (`PromptEditor`, as images and pastes), and above the text on iOS
+  (`SkillStrip`), whose text view keeps the mention as typed.
 
 ### 5.5 Queue (`QueueTray`)
 
