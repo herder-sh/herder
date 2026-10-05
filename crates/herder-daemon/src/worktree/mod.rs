@@ -231,13 +231,15 @@ impl Worktrees {
     }
 
     /// Removes the worktree at `path` of `repo`, keeping every branch. Refuses while it has
-    /// uncommitted or untracked changes, unless `force`. A worktree that is already gone is
-    /// pruned; a path outside this directory, such as the repository itself, is left alone.
+    /// uncommitted or untracked changes, unless `force`. A worktree that is already gone, or no
+    /// longer a checkout, is pruned and whatever is left at `path` stays; a path outside this directory, such as the repository itself, is left alone.
     pub async fn remove(&self, repo: &Path, path: &Path, force: bool) -> Result<(), Error> {
         if path == self.root || !path.starts_with(&self.root) {
             return Ok(());
         }
-        if !path.exists() {
+        if !is_checkout(path) {
+            // Gone, or only files left behind, such as build output written after it went:
+            // git forgets it, and what is left is not git's to remove.
             git(repo, ["worktree", "prune"]).await?;
             return Ok(());
         }
@@ -262,9 +264,20 @@ impl Worktrees {
     }
 }
 
-/// Whether the worktree at `path` has uncommitted or untracked changes.
+/// Whether the worktree at `path` has uncommitted or untracked changes. One that is gone, or
+/// is no longer a checkout of its own, has none: there is nothing in it to keep, and asking
+/// git there would fail, or ask about whatever repository encloses it.
 pub async fn dirty(path: &Path) -> Result<bool, Error> {
+    if !is_checkout(path) {
+        return Ok(false);
+    }
     Ok(!git(path, ["status", "--porcelain"]).await?.is_empty())
+}
+
+/// Whether `path` is the top of a checkout: a worktree has a `.git` file there, a repository a
+/// `.git` dir.
+fn is_checkout(path: &Path) -> bool {
+    path.join(".git").exists()
 }
 
 /// Every branch the worktree at `path` has had checked out, in the order first checked out,

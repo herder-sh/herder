@@ -1434,6 +1434,78 @@ async fn a_background_agent_works_between_turns_and_its_result_starts_one() {
 }
 
 #[tokio::test]
+async fn a_background_command_is_counted_apart_from_agents_until_it_ends() {
+    let fixture = Fixture::parse(
+        "inline",
+        &[
+            INITIALIZED.to_owned(),
+            sent("Build it in the background."),
+            out(json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use", "id": "toolu_build", "name": "Bash",
+                    "input": {"command": "cargo build", "run_in_background": true},
+                }]},
+                "parent_tool_use_id": null,
+            })),
+            out(json!({
+                "type": "system", "subtype": "task_started", "task_id": "b1",
+                "tool_use_id": "toolu_build", "description": "cargo build", "task_type": "local_bash",
+                "uuid": "u0", "session_id": "s1",
+            })),
+            out(json!({
+                "type": "user",
+                "message": {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "toolu_build",
+                    "content": "Command running in background with ID: b1",
+                }]},
+                "parent_tool_use_id": null,
+            })),
+            reply("Building."),
+            success(),
+            notification("toolu_build", "completed", "Finished"),
+            out(json!({"type": "system", "subtype": "init", "session_id": "s1"})),
+            reply("It built."),
+            success(),
+            STOPPED.to_owned(),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    session
+        .commands
+        .send(prompt("Build it in the background."))
+        .unwrap();
+    let launched = until(&mut session, is_turn_end).await;
+    assert!(
+        launched.contains(&AdapterEvent::BackgroundCommands { running: 1 }),
+        "{launched:?}"
+    );
+    // A command is no agent: the session does not look busy for it.
+    assert!(
+        !launched
+            .iter()
+            .any(|event| matches!(event, AdapterEvent::BackgroundAgents { .. })),
+        "{launched:?}"
+    );
+    assert_eq!(launched.last(), Some(&completed()));
+
+    // Its end starts a turn of the CLI's own, in which it is no longer counted.
+    let own = until(&mut session, is_turn_end).await;
+    unprompted(&own[0]);
+    assert!(
+        own.contains(&AdapterEvent::BackgroundCommands { running: 0 }),
+        "{own:?}"
+    );
+    assert!(
+        matches!(own.last(), Some(AdapterEvent::TurnCompleted { .. })),
+        "{own:?}"
+    );
+    shutdown(session).await;
+}
+
+#[tokio::test]
 async fn a_prompt_sent_during_a_turn_the_cli_started_waits_for_its_end() {
     let fixture = Fixture::parse(
         "inline",

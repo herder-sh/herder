@@ -75,6 +75,7 @@ pub(super) async fn start(
         streaming: None,
         tool_calls: HashMap::new(),
         agents: HashSet::new(),
+        commands: HashSet::new(),
         approvals: HashMap::new(),
         asks: Vec::new(),
         next_item: 0,
@@ -242,6 +243,9 @@ struct Session {
     tool_calls: HashMap<String, Call>,
     /// Claude's `tool_use` ids of the agents working in the background.
     agents: HashSet<String>,
+    /// Claude's `tool_use` ids of the other tasks running in the background, such as `Bash`
+    /// commands.
+    commands: HashSet<String>,
     /// Open approval requests and the CLI's `request_id` to answer each on.
     approvals: HashMap<ApprovalId, String>,
     /// Open `AskUserQuestion` calls, in the order asked.
@@ -423,13 +427,15 @@ impl Session {
                 }
                 if system.subtype.as_deref() == Some("task_started")
                     && let Some(tool_use_id) = system.tool_use_id
-                    && self
-                        .tool_calls
-                        .get(&tool_use_id)
-                        .is_some_and(|call| call.agent)
-                    && self.agents.insert(tool_use_id)
+                    && let Some(call) = self.tool_calls.get(&tool_use_id)
                 {
-                    self.agents_changed().await;
+                    if call.agent {
+                        if self.agents.insert(tool_use_id) {
+                            self.agents_changed().await;
+                        }
+                    } else if self.commands.insert(tool_use_id) {
+                        self.commands_changed().await;
+                    }
                 }
             }
             Incoming::StreamEvent(stream) if stream.parent_tool_use_id.is_none() => {
@@ -1042,11 +1048,20 @@ impl Session {
         if self.agents.remove(tool_use_id) {
             self.agents_changed().await;
         }
+        if self.commands.remove(tool_use_id) {
+            self.commands_changed().await;
+        }
     }
 
     async fn agents_changed(&mut self) {
         let running = u32::try_from(self.agents.len()).unwrap_or(u32::MAX);
         self.emit(AdapterEvent::BackgroundAgents { running }).await;
+    }
+
+    async fn commands_changed(&mut self) {
+        let running = u32::try_from(self.commands.len()).unwrap_or(u32::MAX);
+        self.emit(AdapterEvent::BackgroundCommands { running })
+            .await;
     }
 
     // ---- Plumbing ----

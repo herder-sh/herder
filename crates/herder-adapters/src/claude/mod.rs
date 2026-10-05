@@ -125,8 +125,10 @@
 //! An agent's task runs from its `task_started` to its notification; `BackgroundAgents`
 //! reports how many run each time that changes. The count drops only once the notification's
 //! turn is open, not at the `system` `task_notification` line the CLI writes just before, so
-//! the session never looks idle between the agent's end and the reply to it. Background `Bash` commands are not counted: a dev server runs
-//! for as long as the session.
+//! the session never looks idle between the agent's end and the reply to it. Any other task,
+//! such as a `Bash` command run in the background, is counted apart in `BackgroundCommands`,
+//! from its `task_started` to its notification the same way: it does not keep the session
+//! `running`, as a dev server runs for as long as the session.
 //!
 //! When the task ends while a turn runs, the CLI folds the notification into that turn. When
 //! none runs, the CLI starts a turn itself: the adapter then sends `TurnStarted` with an id it

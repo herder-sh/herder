@@ -190,6 +190,9 @@ pub(super) struct Actor {
     /// Agents the adapter runs in the background. They outlive their turn, so the session stays
     /// `running` between turns while any work.
     background: u32,
+    /// Other tasks the adapter runs in the background, such as shell commands. They keep a
+    /// finished child from being archived, which would remove the worktree they run in.
+    commands: u32,
     /// The host's admission of the running turn, or of the next one while it waits to start.
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
@@ -244,6 +247,7 @@ impl Actor {
             turn: None,
             cli_turn: None,
             background: 0,
+            commands: 0,
             permit: None,
             waiting: None,
             prompt: None,
@@ -1986,6 +1990,7 @@ impl Actor {
                             tokio::spawn(stop(adapter));
                         }
                         self.background = 0;
+                        self.commands = 0;
                         settled = SessionStatus::Error;
                         oom
                     }
@@ -2121,12 +2126,14 @@ impl Actor {
                 self.background = running;
                 self.settle_background().await;
             }
+            AdapterEvent::BackgroundCommands { running } => self.commands = running,
             AdapterEvent::Exited { error } => self.exited(error).await,
         }
     }
 
     /// The adapter was stopped, and its background agents with it.
     async fn background_gone(&mut self) {
+        self.commands = 0;
         if std::mem::take(&mut self.background) > 0 {
             self.settle_background().await;
         }
@@ -2170,8 +2177,9 @@ impl Actor {
 
     /// Journals the end of the running turn and reports it as `summary`, then starts the next
     /// queued prompt or settles on `settled`. A child that completed its turn with nothing
-    /// queued is archived once it reported, unless its worktree has changes, which its report
-    /// then says.
+    /// queued is archived once it reported, unless its worktree has changes or commands it
+    /// started in the background still run there, which its report then says. A worktree that
+    /// is gone, or is no longer a checkout, has no changes.
     async fn turn_ended(
         &mut self,
         turn_id: TurnId,
@@ -2202,7 +2210,9 @@ impl Actor {
             && self.queue.is_empty()
             && self.setup.is_none();
         let mut archive = false;
-        if finished {
+        if finished && self.commands > 0 {
+            summary.push_str(KEPT_RUNNING);
+        } else if finished {
             match worktree::dirty(Path::new(&self.session.worktree)).await {
                 Ok(false) => archive = true,
                 Ok(true) => summary.push_str(KEPT_DIRTY),
@@ -2291,6 +2301,7 @@ impl Actor {
                 let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
             }
             self.background = 0;
+            self.commands = 0;
             self.queue.push_front(Prompt {
                 retry: true,
                 retry_at: Some(at),
@@ -2353,6 +2364,7 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let background = std::mem::take(&mut self.background) > 0;
+        self.commands = 0;
         let oom = match &error {
             Some(error) => self.out_of_memory(error).await,
             None => None,
@@ -2557,6 +2569,12 @@ impl Actor {
 const KEPT_DIRTY: &str = "\n\n(herder kept this child live instead of archiving it: its \
                           worktree has uncommitted or untracked changes. Send it a follow-up to \
                           commit or discard them.)";
+
+/// Appended to the report of a child that finished while commands it started in the background
+/// still run, which keep it from being archived: archiving would remove their worktree.
+const KEPT_RUNNING: &str = "\n\n(herder kept this child live instead of archiving it: commands \
+                            it started in the background still run in its worktree. It reports \
+                            again when it finishes after them.)";
 
 /// The journal event for `event` when it ends the turn `turn_id`.
 fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {
