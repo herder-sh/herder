@@ -9,8 +9,8 @@ import Observation
 @Observable
 public final class Fleet {
     public let client: Client
-    public private(set) var machines: [Machine] { didSet { refreshLists() } }
-    private(set) var sessions: [SessionKey: SessionModel] = [:] { didSet { refreshLists() } }
+    public private(set) var machines: [Machine] { didSet { listsChanged() } }
+    private(set) var sessions: [SessionKey: SessionModel] = [:] { didSet { listsChanged() } }
     /// Provenance returned by forks made on this device during this app run.
     var forkOrigins: [SessionKey: ForkOrigin] = [:]
     /// Sessions being handed off, to the machine they go to; see `handOff`.
@@ -38,10 +38,12 @@ public final class Fleet {
     /// Each machine's ping round trips since the app opened, oldest first.
     private(set) var roundTrips: [HostId: [RoundTrip]] = [:]
     /// The sessions that finished a turn since this device last opened them.
-    private(set) var done: DoneSessions { didSet { refreshLists() } }
+    private(set) var done: DoneSessions { didSet { listsChanged() } }
     /// What the lists show now. Replaced only when it differs, so the views that show it
     /// redraw when a list changes, not on every token a session streams.
     private(set) var lists = Lists()
+    /// The rebuild of `lists` waiting to run; see `listsChanged`.
+    @ObservationIgnored private var listsRefresh: Task<Void, Never>?
     /// The sessions shown on screen now, whose turns ending are seen.
     @ObservationIgnored private var watching: Set<SessionKey> = []
 
@@ -56,9 +58,24 @@ public final class Fleet {
     /// Replaces the machines without a client change, for tests.
     func setMachinesForTesting(_ machines: [Machine]) {
         self.machines = machines
+        refreshLists()
+    }
+
+    /// Rebuilds the lists at most ten times a second. Opening the app replays every session's
+    /// events, thousands at once; rebuilding on each kept the main thread busy until the
+    /// system killed the app.
+    private func listsChanged() {
+        guard listsRefresh == nil else { return }
+        listsRefresh = Task {
+            try? await Task.sleep(for: .milliseconds(100))
+            guard !Task.isCancelled else { return }
+            refreshLists()
+        }
     }
 
     private func refreshLists() {
+        listsRefresh?.cancel()
+        listsRefresh = nil
         let lists = Lists(machines: machines, sessions: sessions, done: done.keys)
         if lists != self.lists { self.lists = lists }
     }
