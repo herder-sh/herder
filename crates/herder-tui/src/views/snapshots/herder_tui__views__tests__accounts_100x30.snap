@@ -31,4 +31,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                          "
 " + new            ≡ menu │                                                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-" j/k move  n add account  r reconnect  esc back                                    ● box  ✗ laptop  "
+" j/k move  n add account  l log in again  r reconnect  esc back                    ● box  ✗ laptop  "

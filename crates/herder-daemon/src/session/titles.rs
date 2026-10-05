@@ -266,7 +266,7 @@ async fn generate(inner: Arc<Inner>, session_id: SessionId, ask: Ask) {
         answer = answer(&run, &launcher, env, &cwd, &prompt) => answer,
         () = inner.shutdown.cancelled() => return,
     };
-    inner.refresh_usage.notify_one();
+    inner.refresh_usage.stale();
     let title = match answer {
         Ok(output) => match title(&output) {
             Some(title) => title,

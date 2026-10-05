@@ -1,0 +1,5 @@
+# The failed turn's prompt, retried on the account that logged in again.
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Add tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "c-1", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Added the tests."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}

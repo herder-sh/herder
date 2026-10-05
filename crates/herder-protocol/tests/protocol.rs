@@ -290,6 +290,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::LogInAccount {
+            account_id: AccountId::new("claude-work"),
+            cols: 120,
+            rows: 40,
+        }),
         command(CommandBody::SetAccountSettings {
             account_id: AccountId::new("01J9ACCOUNT"),
             label: "Personal".into(),

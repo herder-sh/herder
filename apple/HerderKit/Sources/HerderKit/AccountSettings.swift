@@ -48,7 +48,8 @@ struct AddAccountSheet: View {
     private var canManage: Bool { machine?.role == .owner && machine?.connection == .connected }
 
     var body: some View {
-        SheetScaffold(title: "Add Account", subtitle: machine?.name ?? "Machine", height: 680) {
+        SheetScaffold(title: connection?.relogin == nil ? "Add Account" : "Log In Again",
+                      subtitle: machine?.name ?? "Machine", height: 680) {
             if let connection {
                 Text("Complete the provider’s login below. You can close this sheet and return to it from machine settings.")
                     .font(.footnote).foregroundStyle(Theme.secondary)
@@ -117,30 +118,81 @@ struct EditAccountSheet: View {
         fleet.machines.contains { $0.hostId == hostId && $0.role == .owner && $0.connection == .connected }
     }
 
+    /// This account's login, when one is running again from here.
+    private var login: TerminalConnection? {
+        fleet.accountLogins[hostId].flatMap { $0.relogin == account.accountId ? $0 : nil }
+    }
+
     var body: some View {
-        SheetScaffold(title: "Account Settings", subtitle: "\(account.provider) · \(account.accountId)", height: 430) {
-            Field(label: "Display label") { InputBox(placeholder: account.accountId, text: $label) }
-            Field(label: "Config directory", hint: "On this machine. Leave empty to use the provider’s default login. Archive all sessions on the machine before changing this directory.") {
-                InputBox(placeholder: "Provider default", text: $configDir, mono: true)
+        SheetScaffold(title: login == nil ? "Account Settings" : "Log In Again",
+                      subtitle: "\(account.provider) · \(account.accountId)", height: login == nil ? 470 : 680) {
+            if let login {
+                Text("Complete the provider’s login below. It ends once the provider reports the account logged in; sessions can then use it again.")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+                TerminalSurface(connection: login, client: fleet.client, sessionId: nil)
+                    .frame(height: 390).background(.black)
+            } else {
+                settings
             }
-            if let pathProblem { Text(pathProblem).font(.footnote).foregroundStyle(Theme.failure) }
-            if !canManage {
-                Text("Connect as the machine owner to save changes.").font(.footnote).foregroundStyle(Theme.secondary)
-            }
-            if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
         } footer: {
-            Spacer()
-            ActionButton(title: "Save", style: .primary) {
-                guard canManage, pathProblem == nil else { return }
-                do {
-                    let path = configDir.trimmingCharacters(in: .whitespacesAndNewlines)
-                    _ = try await fleet.client.send(hostId: hostId, command: .setAccountSettings(
-                        accountId: account.accountId, label: label.trimmingCharacters(in: .whitespacesAndNewlines),
-                        configDir: path.isEmpty ? nil : path))
-                    dismiss()
-                } catch { self.error = describe(error) }
-            }.frame(maxWidth: 180).disabled(!canManage || pathProblem != nil || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if let login {
+                switch login.state {
+                case .exited, .failed:
+                    ActionButton(title: "Back", style: .secondary) { fleet.accountLogins[hostId] = nil }
+                case .connecting, .attached:
+                    Text("Login runs on the selected machine.").font(.footnote).foregroundStyle(Theme.tertiary)
+                }
+                ActionButton(title: "Done", style: .primary) { dismiss() }
+            } else {
+                ActionButton(title: "Log In Again", style: .secondary) {
+                    guard canManage, !loginRunning else { return }
+                    fleet.accountLogins[hostId] = TerminalConnection(hostId: hostId, terminalId: nil, relogin: account.accountId)
+                }.frame(maxWidth: 180).disabled(!canManage || loginRunning)
+                Spacer()
+                save
+            }
         }
         .onAppear { label = account.label; configDir = account.configDir ?? "" }
+    }
+
+    /// Whether another login runs on the machine, which this one would take the place of.
+    private var loginRunning: Bool {
+        guard let other = fleet.accountLogins[hostId] else { return false }
+        switch other.state {
+        case .exited, .failed: return false
+        case .connecting, .attached: return true
+        }
+    }
+
+    @ViewBuilder private var settings: some View {
+        Field(label: "Display label") { InputBox(placeholder: account.accountId, text: $label) }
+        Field(label: "Config directory", hint: "On this machine. Leave empty to use the provider’s default login. Archive all sessions on the machine before changing this directory.") {
+            InputBox(placeholder: "Provider default", text: $configDir, mono: true)
+        }
+        if let pathProblem { Text(pathProblem).font(.footnote).foregroundStyle(Theme.failure) }
+        if !canManage {
+            Text("Connect as the machine owner to save changes.").font(.footnote).foregroundStyle(Theme.secondary)
+        }
+        if let error { Text(error).font(.footnote).foregroundStyle(Theme.failure) }
+        if loginRunning {
+            Text("Another login runs on this machine; finish it to log this account in again.")
+                .font(.footnote).foregroundStyle(Theme.secondary)
+        } else {
+            Text("Log In Again runs the provider’s login in this account’s config directory, for a login that expired.")
+                .font(.footnote).foregroundStyle(Theme.tertiary)
+        }
+    }
+
+    private var save: some View {
+        ActionButton(title: "Save", style: .primary) {
+            guard canManage, pathProblem == nil else { return }
+            do {
+                let path = configDir.trimmingCharacters(in: .whitespacesAndNewlines)
+                _ = try await fleet.client.send(hostId: hostId, command: .setAccountSettings(
+                    accountId: account.accountId, label: label.trimmingCharacters(in: .whitespacesAndNewlines),
+                    configDir: path.isEmpty ? nil : path))
+                dismiss()
+            } catch { self.error = describe(error) }
+        }.frame(maxWidth: 180).disabled(!canManage || pathProblem != nil || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }

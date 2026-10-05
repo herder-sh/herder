@@ -820,6 +820,26 @@ impl Client {
             .await
     }
 
+    /// Logs an existing account of a machine in again: runs its provider's own login in the
+    /// account's config dir, in a login terminal of `cols` by `rows`, and streams it, however
+    /// long it takes to connect; owners only. Once the provider reports the account logged
+    /// in, failover may choose it again.
+    pub async fn log_in_account(
+        &self,
+        host_id: HostId,
+        account_id: AccountId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(&host_id)?
+            .open_terminal(CommandBody::LogInAccount {
+                account_id,
+                cols,
+                rows,
+            })
+            .await
+    }
+
     /// Attaches to an open terminal and streams it, however long it takes to connect; owners
     /// only. One stream per terminal per client: a second attach fails until the first stream
     /// is dropped.

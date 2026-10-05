@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use herder_client_core::{Client, Error, Machine, NewAccount, TerminalEvent, TerminalStream};
-use herder_protocol::{ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
+use herder_protocol::{AccountId, ErrorCode, HostId, Role, SessionId, TerminalId, TerminalPurpose};
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::crossterm::{cursor, execute};
 use tokio::sync::mpsc;
@@ -44,6 +44,8 @@ pub enum Target {
     Existing(TerminalId),
     /// A new account's login.
     Login(NewAccount),
+    /// The login of an existing account, again.
+    LogInAgain(AccountId),
 }
 
 /// How an attach ended.
@@ -209,7 +211,7 @@ pub async fn attach(
     terminal: &mut crate::backend::Tui,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
-    let login = matches!(target, Target::Login(_));
+    let login = matches!(target, Target::Login(_) | Target::LogInAgain(_));
     let stream = match target {
         Target::New(session_id) => {
             tokio::time::timeout(
@@ -229,6 +231,13 @@ pub async fn attach(
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
                 client.add_account(host_id.clone(), account, cols, rows),
+            )
+            .await
+        }
+        Target::LogInAgain(account_id) => {
+            tokio::time::timeout(
+                ATTACH_TIMEOUT,
+                client.log_in_account(host_id.clone(), account_id, cols, rows),
             )
             .await
         }

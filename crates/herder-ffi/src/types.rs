@@ -676,6 +676,11 @@ pub enum CommandBody {
         cols: u16,
         rows: u16,
     },
+    LogInAccount {
+        account_id: AccountId,
+        cols: u16,
+        rows: u16,
+    },
     AttachTerminal {
         terminal_id: TerminalId,
     },

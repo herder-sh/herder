@@ -49,6 +49,28 @@ struct AccountSettingsTests {
     }
     @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func loggingInAgainAsksTheDaemonForTheAccountsLogin() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open profile")
+            return
+        }
+        let machine = try await fleet.pair(daemon)
+        try await fleet.client.synced(hostId: machine.hostId)
+        // The fake daemon cannot log its fake provider in, and says so.
+        let listed = { fleet.machines.first { $0.hostId == machine.hostId }?.accounts.first?.accountId }
+        #expect(await eventually { listed() != nil })
+        let accountId = try #require(listed())
+        let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, relogin: accountId)
+        connection.connect(client: fleet.client, sessionId: nil, cols: 80, rows: 24)
+        #expect(await eventually {
+            if case .failed(let message) = connection.state { return message.contains("cannot log") }
+            return false
+        })
+    }
+
+    @MainActor
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func editingReceivesDaemonErrorsWithoutChangingTheAccount() async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {

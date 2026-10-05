@@ -151,6 +151,11 @@ connection, role, running and total sessions, then each account with its usage w
 (`UsageBar`). The card's gear opens `MachineSettingsSheet`. Machines fills the width on the Mac
 (no list beside it). A vault shows its hosts (`VaultSection`) here.
 
+In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
+(`EditAccountSheet`). The edit sheet's **Log In Again** runs the provider's login of that
+account again, in its own config directory, for a login that expired; both show the login
+terminal in the sheet (`TerminalSurface`), and the login keeps running if the sheet closes.
+
 ### 4.5 Usage (`UsageView`)
 
 Modelled on T3 Code's Usage page. A period picker (24h, 7d, 30d, month to date) and a machine

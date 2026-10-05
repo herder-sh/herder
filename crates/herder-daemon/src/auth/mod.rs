@@ -451,15 +451,16 @@ impl Auth {
     }
 }
 
-/// Refuses commands the identity's role does not allow: terminals, and so adding accounts,
-/// bringing down containers, browsing folders, changing projects, reading or changing the
-/// daemon's settings, restarting it, backing up to a vault, forking sessions onto the host,
-/// and changing the skill library or which of its skills are enabled are for owners only.
+/// Refuses commands the identity's role does not allow: terminals, and so adding accounts or
+/// logging them in again, bringing down containers, browsing folders, changing projects,
+/// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
+/// sessions onto the host, and changing the skill library or which of its skills are enabled are for owners only.
 pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
         CommandBody::OpenTerminal { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::LogInAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
@@ -895,6 +896,24 @@ mod tests {
             account_id: herder_protocol::AccountId::new("work"),
             label: "Work".into(),
             config_dir: None,
+        };
+        assert!(authorize(&alice, &command).is_ok());
+        alice.role = Role::Member;
+        assert_eq!(
+            authorize(&alice, &command).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn only_owners_may_log_an_account_in_again() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let command = CommandBody::LogInAccount {
+            account_id: herder_protocol::AccountId::new("work"),
+            cols: 80,
+            rows: 24,
         };
         assert!(authorize(&alice, &command).is_ok());
         alice.role = Role::Member;

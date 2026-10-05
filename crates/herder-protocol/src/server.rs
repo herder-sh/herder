@@ -372,9 +372,9 @@ pub enum TerminalPurpose {
         /// Session whose worktree the shell runs in.
         session_id: SessionId,
     },
-    /// A provider's own login for an account being added.
+    /// A provider's own login for an account being added or logged in again.
     Login {
-        /// The account being added.
+        /// The account being added or logged in again.
         account_id: AccountId,
     },
 }
@@ -390,8 +390,8 @@ pub enum CommandResult {
         /// The new session.
         session_id: SessionId,
     },
-    /// A terminal was opened, by `open_terminal` or `add_account`, and this connection
-    /// attached to it.
+    /// A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this
+    /// connection attached to it.
     TerminalOpened {
         /// The new terminal.
         terminal_id: TerminalId,

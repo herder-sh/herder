@@ -237,7 +237,7 @@ use herder_protocol::{
     TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -379,8 +379,8 @@ struct Inner {
     docker: OnceLock<Arc<Docker>>,
     /// Every account's limit windows.
     usage: Usage,
-    /// Asks the usage poller, once started, to refresh accounts not read lately.
-    refresh_usage: Arc<Notify>,
+    /// Asks the usage poller, once started, for fresh usage.
+    refresh_usage: Arc<usage::Refresh>,
     /// What admits turns within the host's capacity, once set.
     admission: OnceLock<Arc<Admission>>,
     /// How sessions fail over, once set; the default otherwise.
@@ -520,7 +520,7 @@ impl SessionManager {
                 notifier: OnceLock::new(),
                 scopes: OnceLock::new(),
                 usage: Usage::default(),
-                refresh_usage: Arc::new(Notify::new()),
+                refresh_usage: Arc::default(),
                 admission: OnceLock::new(),
                 docker: OnceLock::new(),
                 failover: OnceLock::new(),
@@ -740,6 +740,7 @@ impl SessionManager {
             CommandBody::OpenTerminal { .. }
             | CommandBody::SetAccountSettings { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::LogInAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
@@ -1362,6 +1363,11 @@ impl SessionManager {
         crate::accounts::list(&self.inner.accounts_lock(), &self.inner.usage.all())
     }
 
+    /// How the account `account_id` runs, if it is one.
+    pub(crate) fn account(&self, account_id: &AccountId) -> Option<AccountConfig> {
+        self.inner.account(account_id)
+    }
+
     /// Serializes directory edits with new sessions. Existing sessions retain their login;
     /// directory changes are allowed only when every session on the machine is archived.
     pub(crate) async fn configure_account(
@@ -1391,7 +1397,7 @@ impl SessionManager {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(account_id.clone(), account);
         inner.journal.sink().accounts_changed(&self.accounts());
-        inner.refresh_usage.notify_one();
+        inner.refresh_usage.stale();
         Ok(())
     }
 
@@ -1410,7 +1416,7 @@ impl SessionManager {
             accounts.insert(account_id, account);
         }
         inner.journal.sink().accounts_changed(&self.accounts());
-        inner.refresh_usage.notify_one();
+        inner.refresh_usage.stale();
         true
     }
 
@@ -1444,7 +1450,14 @@ impl SessionManager {
     /// Asks for fresh usage of every account not read lately ([`usage::Config::fresh`]), as
     /// when a client opens; it arrives as an account list change.
     pub fn refresh_usage(&self) {
-        self.inner.refresh_usage.notify_one();
+        self.inner.refresh_usage.stale();
+    }
+
+    /// `account_id` was logged in again ([`crate::login`]): failover may choose it again, and
+    /// its usage is read at once, however lately it was read.
+    pub fn logged_in_again(&self, account_id: &AccountId) {
+        self.inner.limits.worked(account_id);
+        self.inner.refresh_usage.account(account_id);
     }
 
     /// Every session with its latest seq, ordered by session id.

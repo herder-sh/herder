@@ -145,9 +145,13 @@ impl Daemon {
                 id: host_id,
             };
             let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-            // The login is fake; the account it adds is a real provider's, as the config holds.
+            // The login is fake; the account it adds is a real provider's, as the config holds,
+            // and the one it logs in again the fake one.
             let logins = Logins::new(
-                HashMap::from([(Provider::Codex, fake_login())]),
+                HashMap::from([
+                    (Provider::Codex, fake_login()),
+                    (fake_provider(), fake_login()),
+                ]),
                 dir.join("daemon.toml"),
                 sessions.clone(),
             );
@@ -1091,6 +1095,73 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     }
     let saved = std::fs::read_to_string(daemon_dir.join("daemon.toml")).unwrap();
     assert!(saved.contains("id = \"codex-2\""), "{saved}");
+    daemon.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn logging_an_account_in_again_relays_its_login_in_its_own_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon_dir = tmp.path().join("daemon");
+    let daemon = Daemon::start(&daemon_dir, 0, "mid_turn.jsonl", Arc::default()).await;
+    // The account's config dir, holding a login that expired.
+    let account_dir = daemon_dir.join("account");
+    std::fs::create_dir_all(&account_dir).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
+
+    // Members never see a login.
+    let member = Client::open(
+        tmp.path().join("member").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    pair_one(&member, daemon.pairing_link_via("bob", daemon.addr))
+        .await
+        .unwrap();
+    let refused = member
+        .log_in_account(host.clone(), account(), 80, 24)
+        .await
+        .err();
+    assert!(
+        matches!(&refused, Some(Error::Rejected { info }) if info.code == ErrorCode::Forbidden),
+        "{refused:?}"
+    );
+    // Nor is an account that does not exist.
+    let unknown = client
+        .log_in_account(host.clone(), AccountId::new("nobody"), 80, 24)
+        .await
+        .err();
+    assert!(
+        matches!(&unknown, Some(Error::Rejected { info }) if info.code == ErrorCode::BadRequest),
+        "{unknown:?}"
+    );
+
+    let stream = client
+        .log_in_account(host.clone(), account(), 80, 24)
+        .await
+        .unwrap();
+    let mut screen = Screen::default();
+    screen.read_until(&stream, "Code: ").await;
+    stream.input(b"ABCD\n".to_vec());
+    assert_eq!(login_exit(&stream, &mut screen).await, Some(0));
+    assert!(
+        screen
+            .text
+            .contains("herder: logged account account-1 in again"),
+        "{}",
+        screen.text
+    );
+    // The login ran in the account's own dir, and the config is untouched.
+    assert!(account_dir.join("logged-in").exists());
+    assert!(!daemon_dir.join("daemon.toml").exists());
+    assert_eq!(client.machines()[0].accounts.len(), 1);
     daemon.kill().await;
 }
 
