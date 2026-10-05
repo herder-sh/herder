@@ -7,14 +7,16 @@
 //! and is not limited: no window of its usage ([`crate::usage`]) is at 100% before it resets,
 //! it has not hit a limit since its reset time, and it has not failed to log in since it last
 //! worked ([`Limits`]). Accounts whose usage is known come before those whose usage is not,
-//! which may be used up or logged out without herder knowing. Among them the one with the most
-//! quota left is best, then by id; the session keeps its model, so a failover never changes provider
-//! or model. A session pinned to its account (created with `failover_pin`, else by
+//! which may be used up or logged out without herder knowing. Among them the one refilled
+//! soonest is best, as what it has left is lost at its reset anyway; then the one with the most
+//! quota left, then by id. The session keeps its model, so a failover never changes provider or
+//! model. A session pinned to its account (created with `failover_pin`, else by
 //! [`FailoverConfig::pin`]) never fails over.
 //!
 //! A `create_session` naming a provider instead of an account starts on its best available
 //! account the same way.
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -120,19 +122,37 @@ pub(crate) fn best(
         })
         .filter_map(|(id, _)| {
             let usage = choice.usage.get(id);
-            Some((usage.is_none(), left(usage, choice.now)?, id))
+            Some((usage.is_none(), room(usage, choice.now)?, id))
         })
-        // Known usage first, then most quota left; ids break ties, as the map is ordered by id.
+        // Known usage first, then refilled soonest, then most quota left; ids break ties, as
+        // the map is ordered by id.
         .min_by(|(a_unknown, a, _), (b_unknown, b, _)| {
-            a_unknown.cmp(b_unknown).then(b.total_cmp(a))
+            a_unknown
+                .cmp(b_unknown)
+                .then_with(|| match (a.refilled, b.refilled) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (Some(_), None) => Ordering::Less,
+                    (None, Some(_)) => Ordering::Greater,
+                    (None, None) => Ordering::Equal,
+                })
+                .then(b.left.total_cmp(&a.left))
         })
         .map(|(_, _, id)| id.clone())
 }
 
-/// Quota left on an account with `windows`: its fullest window's share left, in percent, or
-/// `None` when a window is used up and has not reset by `now`. Windows that reset are empty.
-fn left(windows: Option<&Vec<UsageWindow>>, now: Timestamp) -> Option<f64> {
+/// What an account has left.
+struct Room {
+    /// Its fullest window's share left, in percent.
+    left: f64,
+    /// When its last window still in use resets, if any says: from then on it is full again.
+    refilled: Option<Timestamp>,
+}
+
+/// The room on an account with `windows`, or `None` when a window is used up and has not reset
+/// by `now`. Windows that reset are empty.
+fn room(windows: Option<&Vec<UsageWindow>>, now: Timestamp) -> Option<Room> {
     let mut used: f64 = 0.0;
+    let mut refilled = None;
     for window in windows.into_iter().flatten() {
         if window.resets_at.is_some_and(|resets_at| resets_at <= now) {
             continue;
@@ -141,8 +161,12 @@ fn left(windows: Option<&Vec<UsageWindow>>, now: Timestamp) -> Option<f64> {
             return None;
         }
         used = used.max(window.used_percent);
+        refilled = refilled.max(window.resets_at);
     }
-    Some(100.0 - used)
+    Some(Room {
+        left: 100.0 - used,
+        refilled,
+    })
 }
 
 #[cfg(test)]
@@ -257,7 +281,11 @@ mod tests {
         // A window used up excludes the account until it resets.
         case.usage("c", vec![window(100.0, "2026-10-02T15:00:00Z")]);
         assert_eq!(case.next("a").as_deref(), Some("d"));
+        // Once it resets it is available again, behind those whose quota runs out at 15:00.
         case.usage("c", vec![window(100.0, "2026-10-02T11:00:00Z")]);
+        assert_eq!(case.next("a").as_deref(), Some("d"));
+        case.limits.logged_out(&AccountId::new("b"));
+        case.limits.logged_out(&AccountId::new("d"));
         assert_eq!(case.next("a").as_deref(), Some("c"));
     }
 
@@ -300,6 +328,48 @@ mod tests {
         assert_eq!(case.next("a").as_deref(), Some("c"));
         case.now = at("2026-10-02T14:00:01Z");
         assert_eq!(case.next("a").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn the_account_refilled_soonest_is_used_first() {
+        let mut case = Case::new(&[
+            ("a", Provider::Claude),
+            ("b", Provider::Claude),
+            ("c", Provider::Claude),
+            ("d", Provider::Claude),
+        ]);
+        let weekly = |used_percent, resets_at: &str| UsageWindow {
+            window: "seven_day".into(),
+            ..window(used_percent, resets_at)
+        };
+        // "b" is full again in two days, "c" only in six: what "b" has left is lost sooner.
+        case.usage(
+            "b",
+            vec![
+                window(20.0, "2026-10-02T14:00:00Z"),
+                weekly(70.0, "2026-10-04T12:00:00Z"),
+            ],
+        );
+        case.usage(
+            "c",
+            vec![
+                window(0.0, "2026-10-02T13:00:00Z"),
+                weekly(10.0, "2026-10-08T12:00:00Z"),
+            ],
+        );
+        // "d" says nothing about its resets, so it waits behind both.
+        case.usage(
+            "d",
+            vec![UsageWindow {
+                resets_at: None,
+                ..window(0.0, "2026-10-02T13:00:00Z")
+            }],
+        );
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("b"));
+        assert_eq!(case.next("b").as_deref(), Some("c"));
+        case.usage("c", vec![weekly(100.0, "2026-10-08T12:00:00Z")]);
+        assert_eq!(case.next("b").as_deref(), Some("d"));
     }
 
     #[test]
