@@ -100,21 +100,28 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
+      - name: Build the iOS app and its tests for a simulator
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          echo "IOS_DEVICE=$device" >> "$GITHUB_ENV"
+          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            -scheme herder-iOS -destination "platform=iOS Simulator,id=$device" \
+            -derivedDataPath "$RUNNER_TEMP/ios-build" COMPILER_INDEX_STORE_ENABLE=NO
       - name: Test the iOS app on a simulator against the fake daemons
         # A UI test that loses its way can leave xcodebuild waiting forever.
         timeout-minutes: 30
         run: |
-          # Two daemons and the link a device paired with both shares. They run until stdin
-          # closes, so keep it open for the job.
+          # Started only once the app is built: the pairing codes in their link expire after
+          # ten minutes, which compiling the app can take. Two daemons and the link a device
+          # paired with both shares. They run until stdin closes, so keep it open for the job.
           (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_daemon.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_daemon.out" ] || { echo "the fake daemons did not start"; exit 1; }
-          device=$(xcrun simctl list devices available -j |
-            jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
-            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
-            -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            xcodebuild test-without-building -quiet -project apple/herder.xcodeproj -scheme herder-iOS \
+            -destination "platform=iOS Simulator,id=$IOS_DEVICE" -derivedDataPath "$RUNNER_TEMP/ios-build" \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
       # -quiet prints a failing UI test's name but not its assertion; the result bundle has both.
       - uses: actions/upload-artifact@v4
         if: failure()
