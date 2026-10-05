@@ -1180,6 +1180,7 @@ mod tests {
             icon: None,
             icon_uploaded: false,
             icon_background: None,
+            position: None,
         }];
         hub.projects_changed(projects.clone());
         let message = ServerMessage::Projects { projects };
