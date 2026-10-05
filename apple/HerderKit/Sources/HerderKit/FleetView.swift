@@ -3,21 +3,21 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case home, pullRequests, usage, skills, machines, vault
+    case home, board, pullRequests, usage, skills, machines, vault
     case project(String)
 }
 
-/// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab
-/// and Skills and a vault inside Machines.
+/// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
+/// Pull Requests inside the Board, and Skills and a vault inside Machines.
 enum CompactTab: Hashable, CaseIterable {
-    case home, projects, pullRequests, usage, machines
+    case home, projects, board, usage, machines
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
         switch item {
         case .home: self = .home
         case .project: self = .projects
-        case .pullRequests: self = .pullRequests
+        case .board, .pullRequests: self = .board
         case .usage: self = .usage
         case .skills, .machines, .vault: self = .machines
         }
@@ -27,7 +27,7 @@ enum CompactTab: Hashable, CaseIterable {
         switch self {
         case .home: "Home"
         case .projects: "Projects"
-        case .pullRequests: "PRs"
+        case .board: "Board"
         case .usage: "Usage"
         case .machines: "Machines"
         }
@@ -37,7 +37,7 @@ enum CompactTab: Hashable, CaseIterable {
         switch self {
         case .home: "tray.full"
         case .projects: "square.stack.3d.up"
-        case .pullRequests: "arrow.triangle.pull"
+        case .board: "checklist"
         case .usage: "chart.bar"
         case .machines: "server.rack"
         }
@@ -54,7 +54,7 @@ struct FleetView: View {
     @State private var tab = CompactTab.home
     @State private var homePath: [SessionKey] = []
     @State private var projectsPath: [SessionKey] = []
-    @State private var prsPath: [SessionKey] = []
+    @State private var boardPath: [SessionKey] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -154,9 +154,9 @@ struct FleetView: View {
                     .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
             }
             .environment(\.sessionPath, $projectsPath)
-        case .pullRequests:
-            NavigationStack(path: $prsPath) { PullRequestsView(fleet: fleet) }
-                .environment(\.sessionPath, $prsPath)
+        case .board:
+            NavigationStack(path: $boardPath) { BoardView(fleet: fleet, showsPullRequests: true) }
+                .environment(\.sessionPath, $boardPath)
         case .usage:
             NavigationStack { UsageView(fleet: fleet) }
         case .machines:
