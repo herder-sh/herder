@@ -1300,6 +1300,13 @@
                 "null"
               ]
             },
+            "name": {
+              "description": "Display name of the project; absent, blank or the last segment of its id goes back\nto that segment.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "project_id": {
               "description": "The project, one of this daemon's.",
               "$ref": "#/$defs/ProjectId"

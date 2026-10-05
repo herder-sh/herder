@@ -603,6 +603,7 @@ pub enum CommandBody {
     },
     SetProjectSettings {
         project_id: ProjectId,
+        name: Option<String>,
         default_permission_mode: Option<PermissionMode>,
         default_account: Option<AccountId>,
         setup_command: Option<String>,

@@ -640,12 +640,14 @@ impl SessionManager {
             }
             CommandBody::SetProjectSettings {
                 project_id,
+                name,
                 default_permission_mode,
                 default_account,
                 setup_command,
                 icon_background,
             } => {
                 let settings = ProjectSettings {
+                    name,
                     default_permission_mode,
                     default_account,
                     setup_command,
@@ -1023,7 +1025,7 @@ impl SessionManager {
                 format!("icon_background {colour:?} is not a #rrggbb colour"),
             ));
         }
-        tokio::task::spawn_blocking(move || overrides.set(&project, &settings).map_err(internal))
+        tokio::task::spawn_blocking(move || overrides.set(&project, settings).map_err(internal))
             .await
             .map_err(|err| error(ErrorCode::Internal, format!("{err}")))??;
         Ok(CommandResult::Applied)

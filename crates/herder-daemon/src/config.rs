@@ -113,7 +113,7 @@
 //! icon_background = "#ffffff"      # drawn behind the icon, for one that needs it
 //! ```
 //!
-//! Owners add `[[project]]` entries and change their `default_permission_mode`,
+//! Owners add `[[project]]` entries and change their `name`, `default_permission_mode`,
 //! `default_account`, `setup_command` and `icon_background` from a client too ([`add_project`],
 //! [`set_project_settings`]), and remove projects ([`remove_project`]): a removed project's
 //! clones leave every entry's `paths` and go into `exclude`; the rest of the file is kept as
@@ -991,6 +991,8 @@ fn names(value: &toml_edit::Value, path: &Path, env: &dyn Fn(&str) -> Option<OsS
 /// A project's settings as a client sets them; `None` leaves a setting out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectSettings {
+    /// Display name; the last segment of the project id when absent.
+    pub name: Option<String>,
     /// Permission mode new sessions start in when none is given.
     pub default_permission_mode: Option<PermissionMode>,
     /// Account new sessions use when none is given.
@@ -1030,6 +1032,7 @@ pub fn set_project_settings(
         });
         let account = settings.default_account.as_ref().map(AccountId::as_str);
         for (key, value) in [
+            ("name", settings.name.as_deref()),
             ("default_permission_mode", mode),
             ("default_account", account),
             ("setup_command", settings.setup_command.as_deref()),
@@ -2375,6 +2378,7 @@ mod tests {
         assert_eq!(projects.entries[0].paths, [PathBuf::from("/src/herder")]);
 
         let settings = ProjectSettings {
+            name: Some("The app".into()),
             default_permission_mode: Some(PermissionMode::FullAccess),
             default_account: Some(AccountId::new("main")),
             setup_command: Some("make \"setup\"".into()),
@@ -2385,12 +2389,14 @@ mod tests {
         for entry in &projects.entries[1..] {
             assert_eq!(
                 (
+                    entry.name.as_deref(),
                     entry.default_permission_mode,
                     entry.default_account.clone(),
                     entry.setup_command.as_deref(),
                     entry.icon_background.as_deref()
                 ),
                 (
+                    Some("The app"),
                     Some(PermissionMode::FullAccess),
                     Some(AccountId::new("main")),
                     Some("make \"setup\""),
@@ -2405,12 +2411,13 @@ mod tests {
                 .unwrap();
         assert_eq!(
             (
+                &projects.entries[1].name,
                 projects.entries[1].default_permission_mode,
                 &projects.entries[1].default_account,
                 &projects.entries[1].setup_command,
                 &projects.entries[1].icon_background
             ),
-            (None, &None, &None, &None)
+            (&None, None, &None, &None, &None)
         );
 
         let text = std::fs::read_to_string(&path).unwrap();

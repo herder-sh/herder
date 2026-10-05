@@ -40,7 +40,8 @@ says what exists, why, and how it maps to foreign languages.
   `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages. P11.1 added,
   compatibly, `TurnCompleted.usage` (`TurnUsage`) and the `GetUsageSummary` command with its
   `UsageSummary` result (`UsagePeriod`, `UsageTotal`). `Project.icon_background` and the `icon_background` of
-  `SetProjectSettings` were added compatibly too.
+  `SetProjectSettings` were added compatibly too, as was its `name` (absent, blank or the last
+  segment of the id goes back to that segment).
 
 ## Shape, and how it maps to UniFFI
 

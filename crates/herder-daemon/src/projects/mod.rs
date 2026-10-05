@@ -169,12 +169,19 @@ impl Overrides {
     }
 
     /// Replaces the settings of `project`, as discovery last listed it, in the entry that
-    /// shapes it, or a new entry declaring its first clone. Blocks on the file system.
+    /// shapes it, or a new entry declaring its first clone. A blank name, or the one the
+    /// project gets without any, is left out. Blocks on the file system.
     pub fn set(
         &self,
         project: &Project,
-        settings: &crate::config::ProjectSettings,
+        mut settings: crate::config::ProjectSettings,
     ) -> anyhow::Result<()> {
+        settings.name = settings
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && *name != default_name(&project.project_id))
+            .map(str::to_owned);
         let current = crate::config::read_projects(&self.file)?;
         let clone = project
             .paths
@@ -182,7 +189,7 @@ impl Overrides {
             .with_context(|| format!("project {} has no clone here", project.project_id))?;
         let entry = entry_of(&current.entries, project);
         let config =
-            crate::config::set_project_settings(&self.file, entry, Path::new(clone), settings)?;
+            crate::config::set_project_settings(&self.file, entry, Path::new(clone), &settings)?;
         self.replace(config);
         Ok(())
     }
