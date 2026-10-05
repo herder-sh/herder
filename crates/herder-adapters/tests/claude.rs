@@ -146,6 +146,7 @@ fn id(n: u32) -> ItemId {
 fn item(n: u32, body: ItemBody) -> Item {
     Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: id(n),
         turn_id: turn(),
@@ -613,6 +614,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
     let seed = vec![
         Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
@@ -623,6 +625,7 @@ async fn a_seed_becomes_context_before_the_first_prompt() {
         },
         Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),

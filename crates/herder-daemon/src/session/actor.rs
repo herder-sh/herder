@@ -1688,6 +1688,7 @@ impl Actor {
         .await;
         let call = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
@@ -1741,6 +1742,7 @@ impl Actor {
         let message = outcome.error_message(&setup.command);
         let result = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: setup.turn_id.clone(),
@@ -2527,6 +2529,7 @@ impl Actor {
     ) -> Result<()> {
         let item = Item {
             agent_message,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),

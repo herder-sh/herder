@@ -55,6 +55,18 @@
 //! session's, on that provider's available account with the most room left. A session whose
 //! provider cannot title gets no generated title.
 //!
+//! # Follow-ups
+//!
+//! The daemon can prompt an idle agent on its own when its pull request changes, or when it
+//! stops with its work unfinished:
+//!
+//! ```toml
+//! [follow_ups]
+//! pr_events = true      # prompt on failed or passed checks, conflicts and requested changes
+//! stall_after_secs = 0  # idle seconds before a stalled agent is prompted; 0 never prompts it
+//! max_stall_nudges = 2  # most prompts a stalled agent gets before it is left to a user
+//! ```
+//!
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
@@ -160,8 +172,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use herder_protocol::{
-    AccountId, BackupSettings, DaemonSettings, LogSettings, PermissionMode, ProjectDiscovery,
-    ProjectId, Provider, ProviderBinary, ResourceSettings, TaskSettings, TitleSettings,
+    AccountId, BackupSettings, DaemonSettings, FollowUpSettings, LogSettings, PermissionMode,
+    ProjectDiscovery, ProjectId, Provider, ProviderBinary, ResourceSettings, TaskSettings,
+    TitleSettings,
 };
 use serde::Deserialize;
 
@@ -194,6 +207,8 @@ pub struct Config {
     pub failover: FailoverConfig,
     /// How sessions are titled.
     pub titles: TitlesConfig,
+    /// When the daemon prompts an idle agent on its own.
+    pub follow_ups: FollowUpsConfig,
     /// Limits for the systemd scopes sessions run in.
     pub resources: ResourcesConfig,
     /// Where projects are discovered, and their overrides.
@@ -278,6 +293,35 @@ struct VaultFile {
     archive_retention_days: Option<u32>,
 }
 
+/// When the daemon prompts an idle agent on its own: the `[follow_ups]` table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FollowUpsConfig {
+    /// Whether an agent is prompted when its pull request's checks fail or pass, it stops
+    /// merging cleanly, or a reviewer requests changes.
+    pub pr_events: bool,
+    /// Seconds an agent may sit idle with its work unfinished before it is prompted; 0 never
+    /// prompts it.
+    pub stall_after_secs: u64,
+    /// Most times a stalled agent is prompted before it is left to a user.
+    pub max_stall_nudges: u32,
+}
+
+impl Default for FollowUpsConfig {
+    fn default() -> Self {
+        let FollowUpSettings {
+            pr_events,
+            stall_after_secs,
+            max_stall_nudges,
+        } = FollowUpSettings::default();
+        Self {
+            pr_events,
+            stall_after_secs,
+            max_stall_nudges,
+        }
+    }
+}
+
 /// Logging settings: the `[log]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -319,6 +363,7 @@ struct ConfigFile {
     tasks: TaskLimits,
     failover: FailoverConfig,
     titles: TitlesFile,
+    follow_ups: FollowUpsConfig,
     resources: ResourcesConfig,
     projects: ProjectsFile,
     project: Vec<ProjectFile>,
@@ -340,6 +385,7 @@ impl Default for ConfigFile {
             tasks: TaskLimits::default(),
             failover: FailoverConfig::default(),
             titles: TitlesFile::default(),
+            follow_ups: FollowUpsConfig::default(),
             resources: ResourcesConfig::default(),
             projects: ProjectsFile::default(),
             project: Vec::new(),
@@ -506,6 +552,11 @@ impl Config {
                 model: self.titles.model.clone(),
                 account: self.titles.account.clone(),
             },
+            follow_ups: FollowUpSettings {
+                pr_events: self.follow_ups.pr_events,
+                stall_after_secs: self.follow_ups.stall_after_secs,
+                max_stall_nudges: self.follow_ups.max_stall_nudges,
+            },
             resources: ResourceSettings {
                 memory_max_percent: resources.memory_max_percent,
                 memory_high_percent: resources.memory_high_percent,
@@ -558,6 +609,7 @@ fn resolve(
         tasks: file.tasks,
         failover: file.failover,
         titles,
+        follow_ups: file.follow_ups,
         resources: file.resources,
         projects,
         mode: file.mode,
@@ -1149,6 +1201,18 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
             let account = is.account.as_ref().map(|id| id.as_str().into());
             edit.set(&["titles"], "account", account)?;
         }
+        let (was, is) = (&old.follow_ups, &new.follow_ups);
+        if was.pr_events != is.pr_events {
+            edit.set(&["follow_ups"], "pr_events", Some(is.pr_events.into()))?;
+        }
+        if was.stall_after_secs != is.stall_after_secs {
+            let secs = int(is.stall_after_secs)?;
+            edit.set(&["follow_ups"], "stall_after_secs", Some(secs))?;
+        }
+        if was.max_stall_nudges != is.max_stall_nudges {
+            let nudges = int(is.max_stall_nudges)?;
+            edit.set(&["follow_ups"], "max_stall_nudges", Some(nudges))?;
+        }
         let (was, is) = (&old.resources, &new.resources);
         for (key, changed, value) in [
             (
@@ -1680,6 +1744,10 @@ mod tests {
             max_children = 2
             [failover]
             pin = true
+            [follow_ups]
+            pr_events = false
+            stall_after_secs = 900
+            max_stall_nudges = 3
             [resources]
             memory_max_percent = 25
             memory_high_percent = 90
@@ -1708,6 +1776,11 @@ mod tests {
                 tasks: TaskLimits { max_children: 2 },
                 failover: FailoverConfig { pin: true },
                 titles: TitlesConfig::default(),
+                follow_ups: FollowUpsConfig {
+                    pr_events: false,
+                    stall_after_secs: 900,
+                    max_stall_nudges: 3,
+                },
                 resources: ResourcesConfig {
                     memory_max_percent: 25,
                     memory_high_percent: 90,
@@ -1890,6 +1963,7 @@ mod tests {
             "[log]\ncolour = true\n",
             "[tls]\n",
             "[tasks]\nmax_depth = 2\n",
+            "[follow_ups]\nnudges = 2\n",
         ] {
             let path = write(tmp.path(), text);
             let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
@@ -1915,6 +1989,9 @@ mod tests {
         assert_eq!(settings.projects.setup_timeout_secs, 600);
         assert_eq!(settings.backup.attachments_cap, DEFAULT_ATTACHMENTS_CAP);
         assert_eq!(settings.backup.archive_retention_days, 90);
+        assert!(settings.follow_ups.pr_events);
+        assert_eq!(settings.follow_ups.stall_after_secs, 0);
+        assert_eq!(settings.follow_ups.max_stall_nudges, 2);
     }
 
     #[test]
@@ -1930,6 +2007,7 @@ mod tests {
         new.listen = vec!["127.0.0.1:7448".into()];
         new.resources.max_turns = Some(6);
         new.titles.model = Some("haiku".into());
+        new.follow_ups.stall_after_secs = 600;
         new.binaries.push(ProviderBinary {
             provider: Provider::Claude,
             binary: "/opt/claude/bin/claude".into(),
@@ -1942,7 +2020,8 @@ mod tests {
              [resources]\nnice = 5\nmax_turns = 6 # two at most\n\n\
              [failover]\npin = true\n\n\
              [providers.claude]\nbinary = \"/opt/claude/bin/claude\"\n\n\
-             [titles]\nmodel = \"haiku\"\n"
+             [titles]\nmodel = \"haiku\"\n\n\
+             [follow_ups]\nstall_after_secs = 600\n"
         );
 
         // Unchanged settings write nothing.

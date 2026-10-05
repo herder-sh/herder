@@ -40,7 +40,9 @@ says what exists, why, and how it maps to foreign languages.
   `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages. P11.1 added,
   compatibly, `TurnCompleted.usage` (`TurnUsage`) and the `GetUsageSummary` command with its
   `UsageSummary` result (`UsagePeriod`, `UsageTotal`). `Project.icon_background` and the `icon_background` of
-  `SetProjectSettings` were added compatibly too.
+  `SetProjectSettings` were added compatibly too. P12.1 added, compatibly, `Item.follow_up`
+  (`FollowUp`, `FollowUpReason`), `PullRequest.head_sha` and `unresolved_threads`, and
+  `DaemonSettings.follow_ups` (`FollowUpSettings`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -339,6 +341,17 @@ queued. The daemon alone sets it on user-message items, with no human `Event.by`
 items cannot set it. Clients label these prompts as sent by another agent and must not match
 them against pending human outbox entries. Older human prompts omit this field.
 
+### Follow-ups
+
+`Item.follow_up` (`FollowUp`) marks a user-message item the daemon sent on its own, to prompt
+an idle agent: its `reason` (`FollowUpReason`: `ci_failed`, `ci_passed`, `conflicting`,
+`changes_requested` or `stalled`), and the pull request `pr` and its `head_sha` when the
+follow-up is about one. Only the daemon sets it, with no `Event.by`; provider items cannot.
+Clients label these prompts as sent by herder and must not match them against pending human
+outbox entries. Items journaled before it existed omit it. `PullRequest.head_sha` (the head
+commit) and `unresolved_threads` (review threads not resolved) are optional, absent where
+the daemon has not recorded them.
+
 The MCP `send_session` tool accepts a destination session, text and stable `message_id`.
 It does not create a child or change task ancestry. Its acceptance means persisted normal
 queue delivery; it promises neither immediate execution nor an automatic reply. Retries of
@@ -402,7 +415,7 @@ additive (protocol 4) and this API is unchanged.
 
 `send(host, GetSettings)` answers `Settings`: every daemon-wide setting of the daemon's config
 file as a `DaemonSettings` (listen address, log, provider binaries, task, failover, title,
-resource and project-discovery settings, and what a vault backs up or keeps), with the
+resource, project-discovery and follow-up settings, and what a vault backs up or keeps), with the
 read-only `data_dir` and `is_vault`, and `restart_required` when the file holds settings not
 in effect yet. `send(host, SetSettings { settings })` writes the values that changed, in
 place, and answers the same way; a value the daemon cannot run with is refused with

@@ -930,6 +930,7 @@ fn times(raw: &str) -> Result<String> {
 fn reply(turn_id: &TurnId) -> Vec<Step> {
     let item = Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new(format!("{turn_id}-reply")),
         turn_id: turn_id.clone(),

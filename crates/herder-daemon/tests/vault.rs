@@ -287,6 +287,7 @@ fn seed_images(dir: &Path, sessions: usize, prompts: usize) {
             std::fs::write(images.join(format!("{id}.png")), &data).unwrap();
             let item = Item {
                 agent_message: None,
+                follow_up: None,
                 parent_call_id: None,
                 id: ItemId::new(format!("item-{id}")),
                 turn_id: TurnId::new("turn"),

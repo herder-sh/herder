@@ -120,6 +120,7 @@ fn prompt(session: &AdapterSession, text: &str) {
 fn item(id: &str, body: ItemBody) -> Item {
     Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new(id),
         turn_id: turn(),
@@ -456,6 +457,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
     start_request.seed = vec![
         Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("old-1"),
             turn_id: TurnId::new("old"),
@@ -466,6 +468,7 @@ async fn seed_goes_in_front_of_the_first_prompt() {
         },
         Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("old-2"),
             turn_id: TurnId::new("old"),

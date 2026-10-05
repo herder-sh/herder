@@ -315,6 +315,13 @@
             "null"
           ]
         },
+        "head_sha": {
+          "description": "Commit the pull request's branch points at; absent from events journaled before herder\nrecorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mergeable": {
           "description": "Whether it can merge cleanly.",
           "$ref": "#/$defs/Mergeable"
@@ -336,6 +343,15 @@
         "title": {
           "description": "Title.",
           "type": "string"
+        },
+        "unresolved_threads": {
+          "description": "Review threads not yet resolved; absent from events journaled before herder recorded\nit.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         },
         "url": {
           "description": "Web URL.",

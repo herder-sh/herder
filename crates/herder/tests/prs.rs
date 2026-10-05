@@ -578,6 +578,8 @@ fn pr(number: u64, title: &str, branch: &str) -> PullRequest {
         url: format!("https://github.com/acme/app/pull/{number}"),
         title: title.to_owned(),
         head_branch: Some(branch.to_owned()),
+        head_sha: None,
+        unresolved_threads: None,
         state: PrState::Open,
         ci: CiStatus::None,
         review: ReviewStatus::None,
