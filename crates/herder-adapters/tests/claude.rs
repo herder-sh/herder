@@ -1140,6 +1140,64 @@ async fn agent_prompts_are_labeled_and_never_claim_human_origin() {
     shutdown(session).await;
 }
 
+#[tokio::test]
+async fn skill_mentions_become_slash_commands_of_the_skills_the_cli_lists() {
+    // A human prompt's `user` line, as the adapter writes it.
+    let sent = |text: &str| {
+        let line = format!(
+            r#"{{"type":"user","message":{{"role":"user","content":{}}},"parent_tool_use_id":null,"session_id":"","origin":{{"kind":"human"}}}}"#,
+            serde_json::to_string(text).unwrap()
+        );
+        format!("{}\n", json!({"dir": "in", "line": line}))
+    };
+    let result =
+        out(json!({"type": "result", "subtype": "success", "is_error": false, "result": ""}));
+    // `initialize` lists every command; the first turn's `init` then lists the skills alone.
+    let initialized = out(json!({"type": "control_response", "response": {
+        "subtype": "success",
+        "request_id": "herder-1",
+        "response": {"commands": [
+            {"name": "review", "description": "Review the diff"},
+            {"name": "git:commit", "description": "Commit staged changes"},
+            {"name": "clear", "description": "Clear the conversation", "builtin": true},
+        ]},
+    }}));
+    let init = out(json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": "s1",
+        "skills": ["review", "git:commit"],
+    }));
+    let mut text = String::from(INITIALIZE.lines().next().unwrap());
+    text.push('\n');
+    text.push_str(&initialized);
+    for line in [
+        sent("Use /review on the diff"),
+        init,
+        result.clone(),
+        sent("Run /review, then /git:commit."),
+        result.clone(),
+        sent("echo $HOME costs $5, then $clear"),
+        result,
+    ] {
+        text.push_str(&line);
+    }
+    text.push_str("{\"dir\":\"in\",\"eof\":true}\n{\"exit\":0}\n");
+    let fixture = Fixture::parse("skill-mentions", &text).unwrap();
+    let mut session = start_with(fixture, request(Vec::new())).await;
+    for prompt_text in [
+        "Use $review on the diff",
+        "Run $review, then $git:commit.",
+        // `clear` was a command but is no skill.
+        "echo $HOME costs $5, then $clear",
+    ] {
+        session.commands.send(prompt(prompt_text)).unwrap();
+        let events = until(&mut session, is_turn_end).await;
+        assert_eq!(events.last(), Some(&completed()), "{prompt_text}");
+    }
+    shutdown(session).await;
+}
+
 // ---- Turns the CLI starts on its own ----
 
 /// The CLI's stdout line `line`, for an inline fixture.

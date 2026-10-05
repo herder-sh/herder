@@ -773,3 +773,35 @@ fn tokens(input: u64, output: u64, cache_read: u64) -> Option<TurnUsage> {
         ..TurnUsage::default()
     })
 }
+
+#[tokio::test]
+async fn skill_mentions_reach_codex_as_typed() {
+    // Codex expands `$name` itself, so each recording matches only with the text unchanged.
+    let recorded = std::fs::read_to_string(path("turn")).unwrap();
+    for text in [
+        "Use $review on the diff",
+        "Run $review, then $git:commit.",
+        "echo $HOME costs $5",
+    ] {
+        let edited = recorded.replace("Reply with the word ok.", text);
+        let fixture = Fixture::parse("skill-mentions", &edited).unwrap();
+        let mut session = start_with(fixture, request(Vec::new())).await;
+        for command in [
+            AdapterCommand::SetModel {
+                model: "gpt-6-luna".into(),
+            },
+            AdapterCommand::SetPermissionMode {
+                mode: PermissionMode::ReadOnly,
+            },
+            prompt(text),
+        ] {
+            session.commands.send(command).unwrap();
+        }
+        let events = until(&mut session, is_turn_end).await;
+        assert!(
+            matches!(events.last(), Some(AdapterEvent::TurnCompleted { .. })),
+            "{text}: {events:?}"
+        );
+        shutdown(session).await;
+    }
+}

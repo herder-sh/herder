@@ -186,8 +186,18 @@ pub(super) enum SessionUpdate {
         #[serde(default)]
         cost: Option<Cost>,
     },
+    #[serde(rename_all = "camelCase")]
+    AvailableCommandsUpdate {
+        available_commands: Vec<AvailableCommand>,
+    },
     #[serde(other)]
     Other,
+}
+
+/// A command the agent offers, such as a skill; only its name is used.
+#[derive(Debug, Deserialize)]
+pub(super) struct AvailableCommand {
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

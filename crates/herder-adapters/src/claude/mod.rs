@@ -15,6 +15,10 @@
 //!   withdraws an unanswered one with `control_cancel_request`.
 //! - A prompt with images is one `user` line whose content is the images, as base64 `image`
 //!   blocks, then the text as a `text` block; without images the content is the text alone.
+//! - A `$name` mention of a skill in a prompt becomes `/name`, which the CLI expands. The
+//!   skills are those the latest `system` `init` line listed; before the first turn, whose
+//!   `init` comes only after its prompt, they are every command the `initialize` answer
+//!   listed, as it does not tell skills apart from the CLI's own commands.
 //! - Interrupt is the `interrupt` control request; the turn's `result` then ends it.
 //! - Model and permission mode switch natively, with `set_model` and `set_permission_mode`.
 //! - The CLI's session id comes on the `system` `init` line of the first turn and is reported

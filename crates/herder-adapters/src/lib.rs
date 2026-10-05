@@ -36,7 +36,7 @@
 //! mints those of the turns its CLI starts on its own, as ULIDs like the daemon's. The adapter
 //! mints [`ItemId`]s, [`ApprovalId`]s and [`QuestionId`]s, unique within the session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::future::Future;
 use std::path::PathBuf;
@@ -354,6 +354,43 @@ pub(crate) fn agent_prompt(text: &str, sender: Option<&herder_protocol::SessionI
     }
 }
 
+/// `text` with each `$name` mention of a skill in `skills` replaced by `render(name)`, the way
+/// the CLI invokes that skill. Anything else after a `$`, such as `$HOME` or `$5`, is left as
+/// is, and so is a name that runs on, such as `$review-bot` where only `review` is a skill. The
+/// skill's content is never pasted in: the CLI expands the mention itself.
+pub(crate) fn rewrite_skill_mentions(
+    text: &str,
+    skills: &HashSet<String>,
+    render: impl Fn(&str) -> String,
+) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    let mut rewritten = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in text.match_indices('$') {
+        if text[..at].ends_with(|c: char| word(c) || c == '$') {
+            continue;
+        }
+        let start = at + 1;
+        // Skill names may be namespaced, as in `plugin:skill`.
+        let run = text[start..]
+            .split(|c: char| !(word(c) || c == ':' || c == '.'))
+            .next()
+            .unwrap_or_default();
+        let name = run
+            .char_indices()
+            .map(|(i, c)| &run[..i + c.len_utf8()])
+            .rev()
+            .find(|name| skills.contains(*name) && !run[name.len()..].starts_with(word));
+        if let Some(name) = name {
+            rewritten.push_str(&text[copied..at]);
+            rewritten.push_str(&render(name));
+            copied = start + name.len();
+        }
+    }
+    rewritten.push_str(&text[copied..]);
+    rewritten
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use std::ffi::{OsStr, OsString};
@@ -383,5 +420,28 @@ pub(crate) mod testing {
             direct.get_envs().collect::<Vec<_>>()
         );
         assert_eq!(launched.get_current_dir(), direct.get_current_dir());
+    }
+
+    #[test]
+    fn only_mentions_of_known_skills_are_rewritten() {
+        use std::collections::HashSet;
+
+        let skills = HashSet::from(["review".to_owned(), "git:commit".to_owned()]);
+        let slash = |text| super::rewrite_skill_mentions(text, &skills, |name| format!("/{name}"));
+        assert_eq!(slash("$review this"), "/review this");
+        assert_eq!(
+            slash("Run $review, then $git:commit."),
+            "Run /review, then /git:commit."
+        );
+        assert_eq!(slash("echo $HOME costs $5"), "echo $HOME costs $5");
+        assert_eq!(
+            slash("$review-bot a$review $$review $reviewer"),
+            "$review-bot a$review $$review $reviewer"
+        );
+        assert_eq!(slash("($review)"), "(/review)");
+        assert_eq!(
+            super::rewrite_skill_mentions("$review", &HashSet::new(), |_| unreachable!()),
+            "$review"
+        );
     }
 }

@@ -3,7 +3,8 @@
 //! `fixtures/opencode/` was recorded from `opencode acp` 1.18.21 with `herder dev record`, except
 //! the files whose first line says they are hand-built; `fixtures/grok/auth_required.jsonl` from
 //! `grok agent stdio` 1.0.46, logged out. The other Grok fixtures are hand-built around that
-//! recorded `initialize`, since no Grok login was available.
+//! recorded `initialize`, since no Grok login was available. `fixtures/cursor/` is hand-built
+//! from an OpenCode recording, since no Cursor CLI was available.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -694,4 +695,37 @@ fn free(input: u64, output: u64, cache_read: u64) -> Option<TurnUsage> {
         cost_usd: Some(0.0),
         cost_estimated: false,
     })
+}
+
+/// Sends the prompts of a `skill_mentions.jsonl`, as typed; the recording only matches each
+/// rewritten as the agent's profile says.
+async fn mention_skills(profile: AgentProfile, path: &str) {
+    let mut session = try_start(profile, path, request(PermissionMode::Ask))
+        .await
+        .unwrap();
+    for text in [
+        // The agent lists its skills only during this first prompt.
+        "$review the diff",
+        "Use $review the diff",
+        "Run $review, then $git:commit.",
+        "echo $HOME costs $5",
+    ] {
+        prompt(&session, text);
+        let events = until(&mut session, is_turn_end).await;
+        assert!(
+            matches!(events.last(), Some(AdapterEvent::TurnCompleted { .. })),
+            "{text}: {events:?}"
+        );
+    }
+    shutdown(session).await;
+}
+
+#[tokio::test]
+async fn opencode_gets_skill_mentions_as_plain_text_naming_the_skill() {
+    mention_skills(AgentProfile::opencode(), "opencode/skill_mentions.jsonl").await;
+}
+
+#[tokio::test]
+async fn cursor_gets_skill_mentions_as_slash_commands() {
+    mention_skills(AgentProfile::cursor(), "cursor/skill_mentions.jsonl").await;
 }
