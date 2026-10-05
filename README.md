@@ -1,12 +1,15 @@
 # herder
 
-herder runs coding agents — Claude Code, Codex, Cursor, and later others — across many
-Linux machines. It drives each vendor's own unmodified CLI; it never touches provider
-login tokens. A daemon on each machine hosts agent sessions, a vault keeps them durable,
-and you watch and steer them from a terminal UI or native apps for macOS and iOS, built
-on a shared Rust client core.
+**[herder.sh](https://herder.sh)**
 
-**Status:** pre-alpha, under construction. Nothing works yet.
+herder runs coding agents (Claude Code, Codex, Cursor and OpenCode) across all your
+accounts and Linux machines. It drives each vendor's own unmodified CLI and never touches
+provider login tokens. A daemon on each machine hosts agent sessions, fails over between
+accounts when one hits its limit, and an optional vault keeps sessions durable. You watch
+and steer them from a terminal UI or the native apps for macOS and iOS, built on a shared
+Rust client core.
+
+**Status:** early. Releases ship, but expect rough edges and breaking changes before 1.0.
 
 ## Install
 
