@@ -7,14 +7,16 @@ import UIKit
 import AppKit
 #endif
 
-/// A project's icon file and the colour its machine draws behind it, as `#rrggbb`.
+/// A project's icon file, when this app has one, and the colour its machine fills the tile
+/// with, as `#rrggbb`.
 struct ProjectIconImage: Equatable {
-    var data: Data
+    var data: Data?
     var background: String?
 }
 
-/// A project's small rounded tile: its own icon when there is one, else its initial on a
-/// colour that stays the same for the project everywhere.
+/// A project's small rounded tile: its own icon when there is one, else its initial; on the
+/// background its machine sets, else on a colour that stays the same for the project
+/// everywhere.
 struct ProjectIcon: View {
     /// `nil` for sessions whose project is not known yet.
     let projectId: String?
@@ -27,9 +29,15 @@ struct ProjectIcon: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
         Group {
-            if let image, let picture = Self.platformImage(image.data) {
+            if let image, let picture = image.data.flatMap(Self.platformImage) {
                 picture.resizable().interpolation(.high).scaledToFill()
                     .background(image.background.flatMap(Self.colour) ?? .clear)
+            } else if let projectId, let rgb = image?.background.flatMap(Self.rgb) {
+                Text(Self.initial(name ?? projectId))
+                    .font(.system(size: size * 0.56, weight: .bold, design: .rounded))
+                    .foregroundStyle(Self.isLight(rgb) ? Color(light: 0x1A1A1A, dark: 0x1A1A1A) : .white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(light: rgb, dark: rgb))
             } else if let projectId {
                 let tint = Self.tint(projectId)
                 Text(Self.initial(name ?? projectId))
@@ -83,10 +91,21 @@ struct ProjectIcon: View {
 
     /// The colour `#rrggbb` names, if it is one.
     static func colour(_ hex: String) -> Color? {
-        let digits = hex.dropFirst()
-        guard hex.first == "#", digits.count == 6, digits.allSatisfy(\.isHexDigit),
-              let rgb = UInt32(digits, radix: 16) else { return nil }
+        guard let rgb = rgb(hex) else { return nil }
         return Color(light: rgb, dark: rgb)
+    }
+
+    /// The `0xrrggbb` of `#rrggbb`, if it is one.
+    static func rgb(_ hex: String) -> UInt32? {
+        let digits = hex.dropFirst()
+        guard hex.first == "#", digits.count == 6, digits.allSatisfy(\.isHexDigit) else { return nil }
+        return UInt32(digits, radix: 16)
+    }
+
+    /// Whether dark text reads better than white on `rgb`, by its relative luminance.
+    static func isLight(_ rgb: UInt32) -> Bool {
+        let red = Double(rgb >> 16 & 0xFF), green = Double(rgb >> 8 & 0xFF), blue = Double(rgb & 0xFF)
+        return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255 > 0.5
     }
 
     private static func platformImage(_ data: Data) -> Image? {

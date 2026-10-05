@@ -494,7 +494,22 @@ struct ProjectSettingsForm: View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
             SettingsGroup(title: "Appearance") {
-                ProjectIconRow(fleet: fleet, machine: machine, project: project, error: $error)
+                ProjectIconRow(fleet: fleet, machine: machine, project: project, background: iconBackground,
+                               error: $error)
+                RowDivider()
+                SettingRow(label: "Background", detail: "Fills the tile behind the icon") {
+                    FooterItem(symbol: "paintpalette", text: Self.backgroundLabel(iconBackground)) {
+                        Picker("Background", selection: $iconBackground) {
+                            ForEach(Self.backgrounds, id: \.colour) { Text($0.label).tag($0.colour) }
+                            if let iconBackground, !Self.backgrounds.contains(where: { $0.colour == iconBackground }) {
+                                Text(iconBackground).tag(Optional(iconBackground))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    }
+                }
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondary)
             }
             .disabled(!owner)
             SettingsGroup(title: "New sessions") {
@@ -534,29 +549,6 @@ struct ProjectSettingsForm: View {
                         .padding(.horizontal, 10)
                         .frame(maxWidth: 240, minHeight: 32)
                         .background(Theme.surface, in: .rect(cornerRadius: 7))
-                }
-            }
-            .font(.subheadline)
-            .foregroundStyle(Theme.secondary)
-            .disabled(!owner)
-            SettingsGroup(title: "Icon") {
-                SettingRow(label: "Background", detail: "Drawn behind an icon that needs one") {
-                    HStack(spacing: 10) {
-                        ProjectIcon(projectId: project.projectId, name: project.name,
-                                    image: fleet.projectIcon(project.projectId).map {
-                                        ProjectIconImage(data: $0.data, background: iconBackground)
-                                    },
-                                    size: 28)
-                        FooterItem(symbol: "paintpalette", text: Self.backgroundLabel(iconBackground)) {
-                            Picker("Background", selection: $iconBackground) {
-                                ForEach(Self.backgrounds, id: \.colour) { Text($0.label).tag($0.colour) }
-                                if let iconBackground, !Self.backgrounds.contains(where: { $0.colour == iconBackground }) {
-                                    Text(iconBackground).tag(Optional(iconBackground))
-                                }
-                            }
-                            .pickerStyle(.inline)
-                        }
-                    }
                 }
             }
             .font(.subheadline)
