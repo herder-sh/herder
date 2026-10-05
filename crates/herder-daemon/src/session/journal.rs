@@ -93,12 +93,10 @@ impl Journal {
                 turn_id,
                 usage: Some(usage),
             } = &stored.body
-            {
-                if let Err(err) =
+                && let Err(err) =
                     store.record_turn_usage(&stored.session_id, turn_id, usage, stored.at)
-                {
-                    tracing::warn!(%turn_id, "cannot record a turn's usage: {err:#}");
-                }
+            {
+                tracing::warn!(%turn_id, "cannot record a turn's usage: {err:#}");
             }
             sink.event(&stored);
             if lists {

@@ -20,7 +20,8 @@ use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     CommandBody, CommandResult, ErrorClass, ErrorCode, EscalationReason, Event, EventBody, Item,
     ItemBody, ItemId, PermissionMode, PromptId, Provider, QuestionId, Route, SessionHead,
-    SessionId, SessionStatus, TurnError, TurnId, UserId,
+    SessionId, SessionStatus, Timestamp, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
+    UserId,
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
@@ -54,7 +55,7 @@ impl Adapter for Echo {
                         AdapterEvent::ItemCompleted { item },
                         AdapterEvent::TurnCompleted {
                             turn_id,
-                            usage: None,
+                            usage: Some(echo_usage()),
                         },
                     ]
                 };
@@ -176,6 +177,18 @@ impl Adapter for Echo {
                 events: rx,
             })
         })
+    }
+}
+
+/// What every turn `Echo` completes reports using.
+fn echo_usage() -> TurnUsage {
+    TurnUsage {
+        input: 100,
+        output: 10,
+        cache_read: 1_000,
+        cache_write: 5,
+        cost_usd: Some(0.25),
+        cost_estimated: false,
     }
 }
 
@@ -1013,6 +1026,91 @@ async fn a_child_turn_cut_short_by_a_restart_is_reported() {
     let report = tools.ok("wait_for", json!({ "timeout_secs": 5 })).await;
     assert_eq!(report["child"], child.as_str());
     assert_eq!(report["status"], "needs_you");
+}
+
+/// The turns with usage that `sessions` journaled.
+async fn turns_with_usage(daemon: &Daemon, sessions: &[&SessionId]) -> u64 {
+    let mut turns = 0;
+    for session in sessions {
+        let journal = daemon.journal(session).await;
+        turns += journal
+            .iter()
+            .filter(|event| matches!(event.body, EventBody::TurnCompleted { usage: Some(_), .. }))
+            .count() as u64;
+    }
+    turns
+}
+
+/// `by`'s usage summary for `period`, checking it starts where the period does.
+async fn usage_summary(daemon: &Daemon, by: UserId, period: UsagePeriod) -> Vec<UsageTotal> {
+    let before = period.start(Timestamp::now());
+    let result = daemon
+        .manager
+        .handle(by, CommandBody::GetUsageSummary { period })
+        .await
+        .unwrap();
+    let CommandResult::UsageSummary {
+        period: answered,
+        since,
+        totals,
+    } = result
+    else {
+        panic!("expected a usage summary, got {result:?}");
+    };
+    assert_eq!(answered, period);
+    assert!(before <= since && since <= period.start(Timestamp::now()));
+    totals
+}
+
+#[tokio::test]
+async fn a_childs_turns_count_in_the_usage_summary_for_every_user_and_period_across_a_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::AutoEdit).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "Fix A", "prompt": "Do A." }))
+        .await["child"]);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["kind"], "report", "{report}");
+    drop(tools);
+
+    // The primary's turn and its child's, archived since, each counted once.
+    let turns = turns_with_usage(&daemon, &[&primary, &child]).await;
+    assert!(turns >= 2, "{turns} turns");
+    let usage = echo_usage();
+    let expected = [UsageTotal {
+        account_id: AccountId::new("account-1"),
+        provider: Provider::Other("echo".into()),
+        model: "echo-1".into(),
+        turns,
+        input: usage.input * turns,
+        output: usage.output * turns,
+        cache_read: usage.cache_read * turns,
+        cache_write: usage.cache_write * turns,
+        cost_usd: 0.25 * turns as f64,
+        cost_estimated: false,
+    }];
+    // Every user sees every session, so a member gets what an owner does.
+    for by in [alice(), UserId::new("bob")] {
+        for period in [
+            UsagePeriod::Day,
+            UsagePeriod::Week,
+            UsagePeriod::ThirtyDays,
+            UsagePeriod::Month,
+        ] {
+            assert_eq!(usage_summary(&daemon, by.clone(), period).await, expected);
+        }
+    }
+    drop(daemon);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // A restarted daemon answers from the stored history.
+    let daemon = Daemon::open(dir.path()).await;
+    assert_eq!(
+        usage_summary(&daemon, alice(), UsagePeriod::ThirtyDays).await,
+        expected
+    );
 }
 
 /// The child's last journaled event matching `matching`.
