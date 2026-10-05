@@ -697,7 +697,7 @@ struct DraftSessionView: View {
                 running: false,
                 choose: { choice = $0 },
                 settings: [accountSection, machineSection],
-                skills: fleet.librarySkills(on: hostId),
+                skills: fleet.draftSkills(on: hostId, account: account?.accountId),
                 setMode: { mode = $0 },
                 send: { Task { await start() } },
                 stop: {}

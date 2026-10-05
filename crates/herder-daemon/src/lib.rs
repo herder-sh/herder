@@ -249,7 +249,13 @@ pub async fn serve(
         Arc::clone(&hub) as Arc<dyn skills::SkillsSink>,
     )?);
     sessions.deliver_skills(Arc::clone(&skills))?;
-    tokio::spawn(async move { skills.pull().await });
+    let listing = sessions.clone();
+    tokio::spawn(async move {
+        skills.pull().await;
+        if let Err(err) = listing.list_skills().await {
+            warn!("cannot list the sessions' skills: {err:#}");
+        }
+    });
     sessions.resume().await?;
     let listeners = listen::bind(&config.listen).await?;
     let listen = listen::local_addrs(&listeners)?;

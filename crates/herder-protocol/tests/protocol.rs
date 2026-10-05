@@ -1163,6 +1163,7 @@ fn skill_fixtures() -> Vec<ServerMessage> {
             pull_error: None,
             skills: Vec::new(),
             reload: Vec::new(),
+            accounts: Vec::new(),
         }),
         ServerMessage::SkillsStatus(SkillsStatus {
             repo: Some("https://github.com/you/herder-skills".into()),
@@ -1197,6 +1198,16 @@ fn skill_fixtures() -> Vec<ServerMessage> {
                     reload: SkillReload::NextSession,
                 },
             ],
+
+            accounts: vec![AccountSkills {
+                account_id: AccountId::new("work"),
+                skills: vec![SessionSkill {
+                    name: "pdf".into(),
+                    description: "Reads and writes PDF files.".into(),
+                    source: SkillSource::Account,
+                    path: Some("skills/synced/pdf".into()),
+                }],
+            }],
         }),
         ServerMessage::SessionSkills {
             session_id: SessionId::new("01J9SESSION"),
@@ -1960,6 +1971,7 @@ fn skills_wire_shape() {
         (status.repo, status.head, status.last_pull),
         (None, None, None)
     );
+    assert!(status.accounts.is_empty());
     let skills: ServerMessage = serde_json::from_value(json!({
         "type": "session_skills", "session_id": "s", "skills": [
             {"name": "deploy", "description": "d", "source": "library"},

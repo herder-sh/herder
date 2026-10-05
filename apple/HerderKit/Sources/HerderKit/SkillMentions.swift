@@ -66,7 +66,13 @@ enum SkillMention {
 
 extension SessionSkill {
     /// Where it comes from, as the picker and chips say it.
-    var sourceLabel: String { source == .library ? "Library" : "Project" }
+    var sourceLabel: String {
+        switch source {
+        case .library: "Library"
+        case .project: "Project"
+        case .account: "Account"
+        }
+    }
 }
 
 extension Fleet {
@@ -75,12 +81,15 @@ extension Fleet {
         machines.first { $0.hostId == key.hostId }?.sessionSkills[key.sessionId] ?? []
     }
 
-    /// The library skills enabled on a machine, which a new session there gets.
-    func librarySkills(on hostId: HostId) -> [SessionSkill] {
-        let library = machines.first { $0.hostId == hostId }?.skills?.skills ?? []
-        return library.filter(\.enabled).map {
+    /// The skills a new session on a machine gets: the library skills enabled there, and
+    /// those in the config dir of `account`, the account it starts on.
+    func draftSkills(on hostId: HostId, account: AccountId?) -> [SessionSkill] {
+        let status = machines.first { $0.hostId == hostId }?.skills
+        let library = (status?.skills ?? []).filter(\.enabled).map {
             SessionSkill(name: $0.name, description: $0.description, source: .library, path: nil)
         }
+        let own = status?.accounts.first { $0.accountId == account }?.skills ?? []
+        return library + own
     }
 }
 

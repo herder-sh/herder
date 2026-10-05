@@ -1511,7 +1511,7 @@
           ]
         },
         {
-          "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. Answered with `applied`; `skills_status` follows.",
+          "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. The skills of a library that was the machine's own and\nthat the repository lacks are added to it, committed and pushed. Answered with\n`applied`; `skills_status` follows.",
           "type": "object",
           "properties": {
             "type": {
@@ -1529,7 +1529,7 @@
           ]
         },
         {
-          "description": "Add a skill to the library, or replace one, with exactly `files`, committed and pushed;\nowners only. Answered with `applied` once pushed; `skills_status` follows, and the\nclient sends `pull_skills` to its other machines. Refused with `bad_request` for a name\n[`crate::is_valid_skill_name`] refuses, files without a top-level `SKILL.md`, an\ninvalid path, or files over [`crate::MAX_SKILL_BYTES`] together; with `not_found` when\nno library is set.",
+          "description": "Add a skill to the library, or replace one, with exactly `files`, committed, and pushed\nwhen the library has a repository; owners only. Answered with `applied` once pushed; `skills_status` follows, and the\nclient sends `pull_skills` to its other machines. Refused with `bad_request` for a name\n[`crate::is_valid_skill_name`] refuses, files without a top-level `SKILL.md`, an\ninvalid path, or files over [`crate::MAX_SKILL_BYTES`] together.",
           "type": "object",
           "properties": {
             "files": {
@@ -1555,7 +1555,7 @@
           ]
         },
         {
-          "description": "Remove a skill from the library, committed and pushed; owners only. Answered as\n`put_skill` is; refused with `not_found` for a skill the library does not have.",
+          "description": "Remove a skill from the library, committed, and pushed when it has a repository; owners\nonly. Answered as\n`put_skill` is; refused with `not_found` for a skill the library does not have.",
           "type": "object",
           "properties": {
             "name": {
@@ -1573,7 +1573,7 @@
           ]
         },
         {
-          "description": "Copy a skill folder out of another git repository into the library, named after the\nfolder, committed and pushed; owners only. Answered as `put_skill` is; refused with\n`bad_request` when the folder has no `SKILL.md` or its name is not a valid skill name.",
+          "description": "Copy a skill folder out of another git repository into the library, named after the\nfolder, committed, and pushed when the library has a repository; owners only. Answered as `put_skill` is; refused with\n`bad_request` when the folder has no `SKILL.md` or its name is not a valid skill name.",
           "type": "object",
           "properties": {
             "git_url": {
@@ -1598,7 +1598,7 @@
           ]
         },
         {
-          "description": "Pull the library into the daemon's checkout now; owners only. Answered with `applied`\nonce pulled; `skills_status` follows with the new head, or the pull's error.",
+          "description": "Pull the library into the daemon's checkout now; owners only. Answered with `applied`\nonce pulled; `skills_status` follows with the new head, or the pull's error. Refused\nwith `not_found` while the library has no repository.",
           "type": "object",
           "properties": {
             "type": {

@@ -1870,6 +1870,7 @@ impl Actor {
                 .session_started(
                     &session.session_id,
                     &session.provider,
+                    &session.account_id,
                     Path::new(&session.worktree),
                 )
                 .await;

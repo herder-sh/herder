@@ -1,9 +1,11 @@
 import Herder
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Skills: the skill library, its checkout on each machine, every skill with the providers it
-/// reaches and a switch per machine, and the project skills of a session's repository. Owners
-/// set the library up, pull it, and add, import, edit and delete skills; members only look.
+/// reaches and a switch per machine, the skills in each account's own folder, and the project
+/// skills of a session's repository. Owners add, import, edit and delete skills, and sync the
+/// library through a git repository; members only look.
 struct SkillsView: View {
     let fleet: Fleet
     /// The session open beside the screen, whose project's skills it lists first.
@@ -21,13 +23,16 @@ struct SkillsView: View {
             VStack(alignment: .leading, spacing: 22) {
                 if library.checkouts.isEmpty {
                     Text("No machine yet.").font(.footnote).foregroundStyle(Theme.tertiary)
-                } else if let repo = library.repo {
-                    header(library, repo: repo)
-                    checkouts(library)
-                    skills(library)
                 } else {
-                    setup(library)
+                    header(library)
+                    skills(library)
+                    if library.repo == nil {
+                        setup(library)
+                    } else {
+                        checkouts(library)
+                    }
                 }
+                accountSkills
                 projectSkills
                 ForEach(failures, id: \.self) { failure in
                     Text(failure).font(.footnote).foregroundStyle(Theme.failure)
@@ -55,12 +60,12 @@ struct SkillsView: View {
         }
     }
 
-    /// First run: no machine has a library yet.
+    /// While each machine keeps its own library: syncing it through a git repository.
     @ViewBuilder private func setup(_ library: SkillLibrary) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Set up the skill library").font(.headline).foregroundStyle(Theme.text)
-                Text("A git repository with one folder per skill, each with a SKILL.md. Every machine keeps a checkout and hands its skills to the provider CLIs.")
+                Text("Sync with a git repository").font(.headline).foregroundStyle(Theme.text)
+                Text("One folder per skill, each with a SKILL.md. Every machine keeps a checkout, pulls what another pushed, and hands the skills to the provider CLIs. The skills each machine has now are pushed to it.")
                     .font(.subheadline).foregroundStyle(Theme.secondary)
                 if let setter = library.setter {
                     HStack(spacing: 10) {
@@ -75,7 +80,7 @@ struct SkillsView: View {
                     Text("Each machine clones it with its own git access, as it pushes checkpoints.")
                         .font(.footnote).foregroundStyle(Theme.tertiary)
                 } else {
-                    Label("Only a machine's owners can set up its library.", systemImage: "lock")
+                    Label("Only a machine's owners can sync its library.", systemImage: "lock")
                         .font(.footnote).foregroundStyle(Theme.tertiary)
                 }
             }
@@ -83,13 +88,19 @@ struct SkillsView: View {
     }
 
     /// The repository, and the buttons that change the library.
-    private func header(_ library: SkillLibrary, repo: String) -> some View {
+    private func header(_ library: SkillLibrary) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(repo).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                .textSelection(.enabled)
+            if let repo = library.repo {
+                Text(repo).font(Theme.mono).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
+            } else {
+                Text("Kept on each of your machines; not synced.").font(.subheadline).foregroundStyle(Theme.secondary)
+            }
             FlowLayout(spacing: 8) {
-                control("Pull", symbol: "arrow.down.circle") { failures = await fleet.pullSkills() }
-                    .disabled(library.pullable.isEmpty)
+                if library.repo != nil {
+                    control("Pull", symbol: "arrow.down.circle") { failures = await fleet.pullSkills() }
+                        .disabled(library.pullable.isEmpty)
+                }
                 if library.writer != nil {
                     control("New Skill", symbol: "plus") { editing = .new }
                     control("Import", symbol: "square.and.arrow.down") { importing = true }
@@ -145,6 +156,22 @@ struct SkillsView: View {
         }
     }
 
+    /// The skills in each account's own folder, which its CLI loads; read-only here.
+    @ViewBuilder private var accountSkills: some View {
+        let lists = AccountSkillList.all(fleet.machines)
+        if !lists.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeading(title: "Account Skills", count: lists.map(\.skills.count).reduce(0, +))
+                ForEach(lists) { list in
+                    Text(list.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    ForEach(list.skills, id: \.self) { SourcedSkillRow(skill: $0) }
+                }
+                Text("In each account's own skills folder, such as ~/.claude/skills, with the skills Claude syncs from claude.ai; change them there.")
+                    .font(.footnote).foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
     /// The project skills of one project: the open session's, or one picked.
     @ViewBuilder private var projectSkills: some View {
         let projects = ProjectSkills.all(fleet.machines)
@@ -174,7 +201,7 @@ struct SkillsView: View {
                 if projects.count == 1 {
                     Text(shown.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                 }
-                ForEach(shown.skills, id: \.self) { ProjectSkillRow(skill: $0) }
+                ForEach(shown.skills, id: \.self) { SourcedSkillRow(skill: $0) }
                 Text("Checked in to the repository; change them there.")
                     .font(.footnote).foregroundStyle(Theme.tertiary)
             } else {
@@ -185,8 +212,7 @@ struct SkillsView: View {
     }
 
     private func delete(_ name: String) {
-        guard let writer = SkillLibrary(fleet.machines).writer else { return }
-        Task { await run { try await fleet.deleteSkill(name, on: writer) } }
+        Task { await run { try await fleet.deleteSkill(name) } }
     }
 
     private func run(_ action: () async throws -> Void) async {
@@ -298,8 +324,8 @@ private struct LibrarySkillRow: View {
     }
 }
 
-/// A project skill, read-only, labelled with where it is checked in.
-private struct ProjectSkillRow: View {
+/// A project or account skill, read-only, labelled with where it is.
+private struct SourcedSkillRow: View {
     let skill: SessionSkill
 
     var body: some View {
@@ -309,7 +335,7 @@ private struct ProjectSkillRow: View {
                 if !skill.description.isEmpty {
                     Text(skill.description).font(.subheadline).foregroundStyle(Theme.secondary)
                 }
-                Chip(symbol: "folder", text: "Project · \(skill.path ?? skill.name)")
+                Chip(symbol: "folder", text: "\(skill.sourceLabel) · \(skill.path ?? skill.name)")
             }
         }
     }
@@ -335,7 +361,7 @@ struct SkillEditorSheet: View {
 
     var body: some View {
         SheetScaffold(title: isNew ? "New Skill" : "Edit \(document.name)",
-                      subtitle: "Saved to the library and pulled on every machine") {
+                      subtitle: "Saved to the library on your machines") {
             Field(label: "Name", hint: "Lowercase letters, digits and hyphens; the skill's folder. Agents use it as `$name`.") {
                 InputBox(placeholder: "review-pr", text: $document.name, mono: true)
                     .disabled(!isNew)
@@ -370,12 +396,8 @@ struct SkillEditorSheet: View {
     }
 
     private func save() async {
-        guard let writer = SkillLibrary(fleet.machines).writer else {
-            error = "No machine you own with the library is connected."
-            return
-        }
         do {
-            try await fleet.putSkill(document, on: writer)
+            try await fleet.putSkill(document.name, files: document.files)
             dismiss()
         } catch {
             self.error = describe(error)
@@ -383,23 +405,60 @@ struct SkillEditorSheet: View {
     }
 }
 
-/// Imports a skill folder from another git repository.
+/// Imports a skill: a folder picked on this device, or one in a git repository.
 struct SkillImportSheet: View {
+    enum Source: Hashable { case folder, git }
+
     let fleet: Fleet
+    @State private var source = Source.folder
+    @State private var choosing = false
+    @State private var folder: URL?
+    @State private var files: [SkillFile] = []
+    @State private var name = ""
     @State private var url = ""
     @State private var path = ""
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        SheetScaffold(title: "Import Skill", subtitle: "Copied into the library from another repository", height: 420) {
-            Field(label: "Repository", hint: "Cloned by the machine, with its own git access.") {
-                InputBox(placeholder: "https://github.com/you/skills.git", text: $url, mono: true)
-                    .accessibilityIdentifier("skill-import-url")
-            }
-            Field(label: "Folder", hint: "The skill's folder in the repository, which names it; leave it empty when the skill is the whole repository.") {
-                InputBox(placeholder: "skills/review-pr", text: $path, mono: true)
-                    .accessibilityIdentifier("skill-import-path")
+        SheetScaffold(title: "Import Skill", subtitle: "Copied into the library on your machines", height: 480) {
+            ChoiceChips(options: [(Source.folder, "Folder", "On this device"), (.git, "Git", "From a repository")],
+                        selection: $source)
+            switch source {
+            case .folder:
+                Field(label: "Folder", hint: "A skill folder with a SKILL.md at its top; every file in it is copied.") {
+                    Button { choosing = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder")
+                            Text(folder.map { "\($0.lastPathComponent) · \(files.count) file\(files.count == 1 ? "" : "s")" }
+                                 ?? "Choose a Folder…")
+                            Spacer()
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.text)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(Theme.raised, in: .rect(cornerRadius: Theme.corner))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("skill-import-folder")
+                }
+                if folder != nil {
+                    Field(label: "Name", hint: "Lowercase letters, digits and hyphens. Agents use it as `$name`.") {
+                        InputBox(placeholder: "review-pr", text: $name, mono: true)
+                            .accessibilityIdentifier("skill-import-name")
+                    }
+                }
+            case .git:
+                Field(label: "Repository", hint: "Cloned by the machine, with its own git access.") {
+                    InputBox(placeholder: "https://github.com/you/skills.git", text: $url, mono: true)
+                        .accessibilityIdentifier("skill-import-url")
+                }
+                Field(label: "Folder", hint: "The skill's folder in the repository, which names it; leave it empty when the skill is the whole repository.") {
+                    InputBox(placeholder: "skills/review-pr", text: $path, mono: true)
+                        .accessibilityIdentifier("skill-import-path")
+                }
             }
             if let error {
                 Text(error).font(.footnote).foregroundStyle(Theme.failure)
@@ -408,18 +467,43 @@ struct SkillImportSheet: View {
             Spacer()
             ActionButton(title: "Import", style: .primary) { await importSkill() }
                 .frame(maxWidth: 200)
-                .disabled(url.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!ready)
+        }
+        .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
+            pick(result)
+        }
+    }
+
+    private var ready: Bool {
+        switch source {
+        case .folder: !files.isEmpty && SkillDocument.isValidName(name)
+        case .git: !url.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
+    private func pick(_ result: Result<URL, Error>) {
+        do {
+            let picked = try result.get()
+            files = try SkillFolder.files(at: picked)
+            folder = picked
+            name = SkillFolder.name(of: picked.lastPathComponent)
+            error = nil
+        } catch {
+            folder = nil
+            files = []
+            self.error = describe(error)
         }
     }
 
     private func importSkill() async {
-        guard let writer = SkillLibrary(fleet.machines).writer else {
-            error = "No machine you own with the library is connected."
-            return
-        }
         do {
-            try await fleet.importSkill(gitURL: url.trimmingCharacters(in: .whitespaces),
-                                        path: path.trimmingCharacters(in: .whitespaces), on: writer)
+            switch source {
+            case .folder:
+                try await fleet.putSkill(name, files: files)
+            case .git:
+                try await fleet.importSkill(gitURL: url.trimmingCharacters(in: .whitespaces),
+                                            path: path.trimmingCharacters(in: .whitespaces))
+            }
             dismiss()
         } catch {
             self.error = describe(error)

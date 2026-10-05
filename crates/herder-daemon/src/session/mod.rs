@@ -1207,7 +1207,52 @@ impl SessionManager {
         self.inner
             .skills
             .set(skills)
-            .map_err(|_| anyhow::anyhow!("skills are delivered already"))
+            .map_err(|_| anyhow::anyhow!("skills are delivered already"))?;
+        self.skill_accounts();
+        Ok(())
+    }
+
+    /// Hands the skills every account's config dir, where its CLI reads the user's skills.
+    fn skill_accounts(&self) {
+        let Some(skills) = self.inner.skills.get() else {
+            return;
+        };
+        let env: BTreeMap<String, String> = std::env::vars().collect();
+        let accounts = self
+            .inner
+            .accounts_lock()
+            .iter()
+            .filter_map(|(account_id, account)| {
+                herder_adapters::transcript::config_dir(
+                    &account.provider,
+                    account.config_dir.as_deref(),
+                    &env,
+                )
+                .map(|dir| (account_id.clone(), dir))
+            })
+            .collect();
+        skills.set_accounts(accounts);
+    }
+
+    /// Sends the skills of every session not archived, as the daemon starts, before any of
+    /// their CLIs does.
+    pub async fn list_skills(&self) -> anyhow::Result<()> {
+        let Some(skills) = self.inner.skills.get() else {
+            return Ok(());
+        };
+        for session in self.inner.journal.sessions().await? {
+            if session.status != herder_protocol::SessionStatus::Archived {
+                skills
+                    .session_started(
+                        &session.session_id,
+                        &session.provider,
+                        &session.account_id,
+                        Path::new(&session.worktree),
+                    )
+                    .await;
+            }
+        }
+        Ok(())
     }
 
     /// Pulls the skill library in the background, as when a client opens; the change arrives
@@ -1506,6 +1551,8 @@ impl SessionManager {
             .insert(account_id.clone(), account);
         inner.journal.sink().accounts_changed(&self.accounts());
         inner.refresh_usage.stale();
+        self.skill_accounts();
+        self.refresh_skills();
         Ok(())
     }
 
@@ -1525,6 +1572,8 @@ impl SessionManager {
         }
         inner.journal.sink().accounts_changed(&self.accounts());
         inner.refresh_usage.stale();
+        self.skill_accounts();
+        self.refresh_skills();
         true
     }
 
@@ -1764,6 +1813,7 @@ impl SessionManager {
             )
             .await
             .map_err(worktree_error)?;
+        let account_id = request.account_id.clone();
         let body = EventBody::SessionCreated {
             repo: request.repo,
             worktree: worktree.path.to_string_lossy().into_owned(),
@@ -1788,6 +1838,12 @@ impl SessionManager {
             && worktree.branch.is_some()
         {
             prs.install(&session_id, &worktree.path).await;
+        }
+        // So `$` lists them before the first prompt starts the CLI.
+        if let Some(skills) = inner.skills.get() {
+            skills
+                .session_started(&session_id, &account.provider, &account_id, &worktree.path)
+                .await;
         }
         // Before the reply, so the session's first prompt queues behind the setup. A session
         // in the folder itself has no new worktree to set up.

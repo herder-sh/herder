@@ -56,8 +56,8 @@ pub use settings::{
     ProviderBinary, ResourceSettings, TaskSettings, TitleSettings,
 };
 pub use skills::{
-    LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload, SessionSkill, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, is_valid_skill_name,
+    AccountSkills, LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload,
+    SessionSkill, SkillFile, SkillReload, SkillSource, SkillsStatus, is_valid_skill_name,
 };
 pub use types::{PermissionMode, Provider, clean_title};
 pub use usage::{TurnUsage, UsagePeriod, UsageTotal};

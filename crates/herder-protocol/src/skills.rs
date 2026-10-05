@@ -1,17 +1,19 @@
 //! Skills: folders of instructions, each with a `SKILL.md` (the Agent Skills format), that the
 //! provider CLIs load.
 //!
-//! The skill library is a git repository the owner picks, one folder per skill. Each daemon
-//! keeps one checkout of it in its data dir, outside any worktree, and links the enabled skills
-//! where each provider CLI looks for skills. A write (`put_skill`, `delete_skill`,
-//! `import_skill`) commits and pushes through the one daemon it is sent to; the client then
-//! sends `pull_skills` to its other machines. Whether a skill is enabled is kept per machine.
-//! Sessions also see the project skills checked in to their worktree.
+//! The skill library is one folder per skill in each daemon's data dir, outside any worktree;
+//! the daemon links the enabled skills where each provider CLI looks for skills. Until the
+//! owner picks a git repository for it, the library is the machine's own: a write (`put_skill`,
+//! `delete_skill`, `import_skill`) commits there and goes nowhere else. Once a repository is
+//! set, the library is a checkout of it: a write commits and pushes through the one daemon it
+//! is sent to, and the client then sends `pull_skills` to its other machines. Whether a skill
+//! is enabled is kept per machine. Sessions also see the project skills checked in to their
+//! worktree and the skills in their account's own config dir.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{Bytes, Provider, Timestamp};
+use crate::{AccountId, Bytes, Provider, Timestamp};
 
 /// Most characters a skill name may have.
 pub const MAX_SKILL_NAME_CHARS: usize = 64;
@@ -50,7 +52,7 @@ pub struct SkillFile {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SkillsStatus {
     /// The library's git URL, as `set_skills_repo` set it, without any credentials it held;
-    /// absent until one is set.
+    /// absent while the library is the machine's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
     /// The commit the daemon's checkout is at; absent until it has one.
@@ -66,6 +68,19 @@ pub struct SkillsStatus {
     pub skills: Vec<LibrarySkill>,
     /// When each provider CLI on this machine picks up a change to the skills.
     pub reload: Vec<ProviderReload>,
+    /// The skills each account's CLI loads from the account's own config dir, such as
+    /// `~/.claude/skills`, for the accounts that have any, ordered by account.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<AccountSkills>,
+}
+
+/// The skills an account's CLI loads from the account's own config dir.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AccountSkills {
+    /// The account.
+    pub account_id: AccountId,
+    /// Its skills, each with `source` `account`, ordered by name, then by path.
+    pub skills: Vec<SessionSkill>,
 }
 
 /// A skill of the library.
@@ -113,7 +128,8 @@ pub struct SessionSkill {
     /// Where the skill comes from.
     pub source: SkillSource,
     /// A project skill's folder, relative to the worktree, e.g. `.claude/skills/deploy` or
-    /// `web/.agents/skills/deploy`; absent for a library skill.
+    /// `web/.agents/skills/deploy`; an account skill's, relative to the account's config dir,
+    /// e.g. `skills/pdf`; absent for a library skill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
@@ -126,4 +142,7 @@ pub enum SkillSource {
     Library,
     /// The project: checked in to the session's worktree, where its provider looks for skills.
     Project,
+    /// The account: in the `skills` dir of the account's own config dir, where its CLI looks
+    /// for the user's skills.
+    Account,
 }

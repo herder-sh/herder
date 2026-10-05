@@ -159,6 +159,7 @@ impl Fake {
             pull_error: None,
             skills: Vec::new(),
             reload: Vec::new(),
+            accounts: Vec::new(),
         }
     }
 

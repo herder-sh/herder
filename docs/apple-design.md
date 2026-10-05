@@ -170,15 +170,21 @@ Machines; on iPhone it is the Usage tab. Screenshots are still to come, in `docs
 
 ### 4.6 Skills (`SkillsView`)
 
-The skill library (`SkillLibrary`, from each machine's `skills_status`). First run, when no
-machine has a library, is one card asking for its git URL (`set_skills_repo`, through one
-machine the user owns; the client sets it on the rest). Then the repository, with **Pull**,
-**New Skill** and **Import**; one row per machine with its commit, when it last pulled, and why a
-pull failed; and one card per skill: name, description, the providers it reaches, its menu
-(Edit, Delete) and a switch per machine (`set_skill_enabled`). **New Skill** and **Edit** write
-one `SKILL.md` (`SkillEditorSheet`: name, description, instructions); editing replaces the
-skill's folder, since the app cannot read a skill's files. **Import** takes a git URL and a
-folder (`SkillImportSheet`). Last, **Project Skills**: the skills checked in to the repository
+The skill library (`SkillLibrary`, from each machine's `skills_status`). At the top, the
+repository, or "Kept on each of your machines" until one is set, with **Pull** (with a
+repository), **New Skill** and **Import**. Then one card per skill: name, description, the
+providers it reaches, its menu (Edit, Delete) and a switch per machine (`set_skill_enabled`).
+Without a repository, a write goes to every connected machine the user owns, each keeping its
+own library, and a card offers to sync through a git URL (`set_skills_repo`, through one
+machine the user owns; the client sets it on the rest, and each pushes the skills it has).
+With one, a write goes through one machine and the others pull, and one row per machine shows
+its commit, when it last pulled, and why a pull failed. **New Skill** and **Edit** write one
+`SKILL.md` (`SkillEditorSheet`: name, description, instructions); editing replaces the skill's
+folder, since the app cannot read a skill's files. **Import** (`SkillImportSheet`) takes a
+folder picked on the device, every file in it but the hidden ones, named after it
+(`SkillFolder`), or a git URL and a folder in it. **Account Skills** lists, read-only, the
+skills in each account's own folder (`~/.claude/skills`, with those Claude syncs from
+claude.ai), per account and machine. Last, **Project Skills**: the skills checked in to the repository
 of the session open beside the screen, or of a project picked from a menu, read-only and
 labelled with their folder. Members see everything and change nothing: the write controls are
 hidden and the switches disabled. It fills the width on the Mac; on iPhone it opens from the
@@ -270,8 +276,9 @@ answer. An approval stays a line across the transcript.
 - Read-only sessions (moved, or on an offline host) show a lock line in its place.
 - **Skill mentions:** `$` starting the prompt's last word opens a picker (`SkillPicker`) at the
   top of the box with the session's skills (`session_skills`; a draft offers the machine's enabled
-  library skills), names starting with what follows the `$` first, each with its description and
-  Library or Project. A click or Return picks one; it goes in as `$name `, the text the agent
+  library skills and its account's own), names starting with what follows the `$` first, each
+  with its description and Library, Project or Account. A bare `$` with no skills to pick says
+  so, pointing to Skills. A click or Return picks one; it goes in as `$name `, the text the agent
   gets, which the adapters rewrite per provider. A mention shows as a chip with its description:
   inline on the Mac (`PromptEditor`, as images and pastes), and above the text on iOS
   (`SkillStrip`), whose text view keeps the mention as typed.

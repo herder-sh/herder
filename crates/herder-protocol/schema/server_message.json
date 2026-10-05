@@ -458,6 +458,27 @@
       "description": "Identifies a provider account on a host; the name its owner gave it, opaque to receivers.",
       "type": "string"
     },
+    "AccountSkills": {
+      "description": "The skills an account's CLI loads from the account's own config dir.",
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "description": "The account.",
+          "$ref": "#/$defs/AccountId"
+        },
+        "skills": {
+          "description": "Its skills, each with `source` `account`, ordered by name, then by path.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionSkill"
+          }
+        }
+      },
+      "required": [
+        "account_id",
+        "skills"
+      ]
+    },
     "AgentMessage": {
       "description": "Durable provenance for a message sent by another session on this host.",
       "type": "object",
@@ -3320,7 +3341,7 @@
           "type": "string"
         },
         "path": {
-          "description": "A project skill's folder, relative to the worktree, e.g. `.claude/skills/deploy` or\n`web/.agents/skills/deploy`; absent for a library skill.",
+          "description": "A project skill's folder, relative to the worktree, e.g. `.claude/skills/deploy` or\n`web/.agents/skills/deploy`; an account skill's, relative to the account's config dir,\ne.g. `skills/pdf`; absent for a library skill.",
           "type": [
             "string",
             "null"
@@ -3445,6 +3466,11 @@
           "description": "The project: checked in to the session's worktree, where its provider looks for skills.",
           "type": "string",
           "const": "project"
+        },
+        {
+          "description": "The account: in the `skills` dir of the account's own config dir, where its CLI looks\nfor the user's skills.",
+          "type": "string",
+          "const": "account"
         }
       ]
     },
@@ -3452,6 +3478,13 @@
       "description": "The skill library as one daemon has it, and how its skills reach the provider CLIs there.",
       "type": "object",
       "properties": {
+        "accounts": {
+          "description": "The skills each account's CLI loads from the account's own config dir, such as\n`~/.claude/skills`, for the accounts that have any, ordered by account.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AccountSkills"
+          }
+        },
         "head": {
           "description": "The commit the daemon's checkout is at; absent until it has one.",
           "type": [
@@ -3482,7 +3515,7 @@
           }
         },
         "repo": {
-          "description": "The library's git URL, as `set_skills_repo` set it, without any credentials it held;\nabsent until one is set.",
+          "description": "The library's git URL, as `set_skills_repo` set it, without any credentials it held;\nabsent while the library is the machine's own.",
           "type": [
             "string",
             "null"

@@ -1267,6 +1267,7 @@ async fn skills_stay_current_while_connected() {
         pull_error: None,
         skills: Vec::new(),
         reload: Vec::new(),
+        accounts: Vec::new(),
     };
     // A status from before the client connects reaches it after hello.
     daemon.hub.skills_status(status("a1"));

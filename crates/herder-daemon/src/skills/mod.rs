@@ -1,14 +1,20 @@
-//! The skill library ([`herder_protocol::SkillsStatus`]): one checkout of the owner's skills
-//! repository at `<data_dir>/skills`, and the links that hand its enabled skills to each CLI.
+//! The skill library ([`herder_protocol::SkillsStatus`]): a git repository of skills at
+//! `<data_dir>/skills`, and the links that hand its enabled skills to each CLI.
 //!
 //! # The checkout
 //!
-//! `set_skills_repo` clones the repository in place of the checkout. The daemon pulls when it
-//! starts, when a client connects and on `pull_skills`: it fetches and resets the checkout to
-//! its upstream, so the checkout is always what was last pushed. `put_skill`, `delete_skill`
-//! and `import_skill` pull, change the skill's folder, commit as herder and push, with the git
-//! access the daemon's user has, as checkpoints push; a commit that cannot be pushed is reset
-//! away and fails the command. Project repositories and worktrees are never touched.
+//! Until the owner picks a repository, the library is this machine's own: the first
+//! `put_skill` or `import_skill` makes `<data_dir>/skills` a repository with no remote, and
+//! each change commits there and goes nowhere else.
+//!
+//! `set_skills_repo` clones the owner's repository in place of the checkout, after committing
+//! and pushing to it the skills of a library that was the machine's own and that it lacks. The
+//! daemon pulls when it starts, when a client connects and on `pull_skills`: it fetches and
+//! resets the checkout to its upstream, so the checkout is always what was last pushed.
+//! `put_skill`, `delete_skill` and `import_skill` pull, change the skill's folder, commit as
+//! herder and push, with the git access the daemon's user has, as checkpoints push; a commit
+//! that cannot be pushed is reset away and fails the command. Project repositories and
+//! worktrees are never touched.
 //!
 //! Which skills are disabled is this machine's own, kept in `<data_dir>/skills.json`.
 //!
@@ -34,12 +40,16 @@
 //!
 //! # A session's skills
 //!
-//! A session's skills (`session_skills`) are the enabled library skills its CLI loads and the
-//! project skills checked in to its worktree: every `<name>/SKILL.md` in a `.claude/skills` or
-//! `.agents/skills` dir, at the top of the worktree or in a nested dir such as
-//! `web/.claude/skills`, where the session's CLI looks: Claude in `.claude`, Codex in
-//! `.agents`, Cursor and OpenCode in both. They are sent when the session's CLI starts, and
-//! again whenever the library changes.
+//! A session's skills (`session_skills`) are the enabled library skills its CLI loads, the
+//! project skills checked in to its worktree, and its account's skills. Project skills are
+//! every `<name>/SKILL.md` in a `.claude/skills` or `.agents/skills` dir, at the top of the
+//! worktree or in a nested dir such as `web/.claude/skills`, where the session's CLI looks:
+//! Claude in `.claude`, Codex in `.agents`, Cursor and OpenCode in both. Account skills are
+//! every `SKILL.md` in the `skills` dir of a Claude or Codex account's config dir, or in a
+//! folder within it, such as the skills Claude syncs from claude.ai, but none in a hidden
+//! folder or in herder's own library. They are sent when the daemon starts for every session
+//! not archived, when a session's CLI starts, and again whenever the library changes or a
+//! client connects.
 
 #[cfg(test)]
 mod tests;
@@ -53,9 +63,9 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use herder_protocol::{
-    CommandBody, CommandResult, ErrorCode, ErrorInfo, LibrarySkill, MAX_SKILL_BYTES, Provider,
-    ProviderReload, SessionId, SessionSkill, SkillFile, SkillReload, SkillSource, SkillsStatus,
-    Timestamp, is_valid_skill_name,
+    AccountId, AccountSkills, CommandBody, CommandResult, ErrorCode, ErrorInfo, LibrarySkill,
+    MAX_SKILL_BYTES, Provider, ProviderReload, SessionId, SessionSkill, SkillFile, SkillReload,
+    SkillSource, SkillsStatus, Timestamp, is_valid_skill_name,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -108,8 +118,20 @@ pub struct Skills {
     /// The enabled library skills as names and descriptions, as last published; read at every
     /// CLI start, so it never waits for a pull or a push.
     enabled: std::sync::Mutex<Vec<(String, String)>>,
-    /// Sessions whose skills were sent: their CLI's provider and project skills.
-    sessions: std::sync::Mutex<HashMap<SessionId, (Provider, Vec<SessionSkill>)>>,
+    /// Sessions whose skills were sent.
+    sessions: std::sync::Mutex<HashMap<SessionId, Listed>>,
+    /// Each account with the config dir its CLI reads skills from, as last set.
+    accounts: std::sync::Mutex<Vec<(AccountId, PathBuf)>>,
+    /// Each account's skills, as last published.
+    account_skills: std::sync::Mutex<HashMap<AccountId, Vec<SessionSkill>>>,
+}
+
+/// What a session's skills are made of: its CLI's provider, its account and its project
+/// skills.
+struct Listed {
+    provider: Provider,
+    account_id: AccountId,
+    project: Vec<SessionSkill>,
 }
 
 #[derive(Debug, Default)]
@@ -157,6 +179,8 @@ impl Skills {
             }),
             enabled: std::sync::Mutex::new(Vec::new()),
             sessions: std::sync::Mutex::new(HashMap::new()),
+            accounts: std::sync::Mutex::new(Vec::new()),
+            account_skills: std::sync::Mutex::new(HashMap::new()),
             links,
         };
         for dir in skills.link_dirs() {
@@ -175,16 +199,23 @@ impl Skills {
         Ok(skills)
     }
 
-    /// Pulls the library, if one is set, and publishes it; for the daemon's start and each
-    /// client that connects. Skipped while another change runs, which publishes when done.
+    /// Pulls the library, if it has a repository, and publishes it; for the daemon's start
+    /// and each client that connects. Skipped while another change runs, which publishes when
+    /// done.
     pub async fn pull(&self) {
         let Ok(mut state) = self.state.try_lock() else {
             return;
         };
-        if self.has_checkout() {
+        if self.has_remote().await {
             self.pull_locked(&mut state).await;
         }
         self.publish(&state).await;
+    }
+
+    /// Sets the accounts whose skills sessions see: each with the config dir its CLI reads
+    /// skills from. They are read at the next publish.
+    pub fn set_accounts(&self, accounts: Vec<(AccountId, PathBuf)>) {
+        *self.accounts.lock().unwrap_or_else(PoisonError::into_inner) = accounts;
     }
 
     /// Answers the six skill library commands.
@@ -215,7 +246,12 @@ impl Skills {
                 self.import(&mut state, &git_url, path.as_deref()).await?;
             }
             CommandBody::PullSkills => {
-                self.require_checkout()?;
+                if !self.has_remote().await {
+                    return Err(error(
+                        ErrorCode::NotFound,
+                        "the skill library has no repository to pull",
+                    ));
+                }
                 self.pull_locked(&mut state).await;
             }
             CommandBody::SetSkillEnabled { name, enabled } => {
@@ -273,12 +309,14 @@ impl Skills {
         }
     }
 
-    /// A session's CLI started, as `provider`'s in `worktree`: finds its project skills and
-    /// sends its skills, and sends them again whenever the library changes.
+    /// A session runs, or its CLI started, as `provider`'s on `account_id` in `worktree`:
+    /// finds its project skills and sends its skills, and sends them again whenever the
+    /// library changes.
     pub async fn session_started(
         &self,
         session_id: &SessionId,
         provider: &Provider,
+        account_id: &AccountId,
         worktree: &Path,
     ) {
         let worktree = worktree.to_owned();
@@ -290,9 +328,13 @@ impl Skills {
             warn!(%session_id, "finding the project's skills panicked: {err}");
             Vec::new()
         });
-        let skills = self.session_list(provider, &project);
-        self.sessions_lock()
-            .insert(session_id.clone(), (provider.clone(), project));
+        let listed = Listed {
+            provider: provider.clone(),
+            account_id: account_id.clone(),
+            project,
+        };
+        let skills = self.session_list(&listed);
+        self.sessions_lock().insert(session_id.clone(), listed);
         self.sink.session_skills(session_id, skills);
     }
 
@@ -303,17 +345,16 @@ impl Skills {
         }
     }
 
-    fn sessions_lock(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<SessionId, (Provider, Vec<SessionSkill>)>> {
+    fn sessions_lock(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, Listed>> {
         // Every update is one insert or remove, so a poisoned map is consistent.
         self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The skills of a session of `provider` whose project skills are `project`.
-    fn session_list(&self, provider: &Provider, project: &[SessionSkill]) -> Vec<SessionSkill> {
+    /// The skills of a session: the enabled library skills its provider gets, its project
+    /// skills and its account's skills.
+    fn session_list(&self, listed: &Listed) -> Vec<SessionSkill> {
         let mut skills = Vec::new();
-        if self.providers.contains(provider) {
+        if self.providers.contains(&listed.provider) {
             let enabled = self.enabled.lock().unwrap_or_else(PoisonError::into_inner);
             skills.extend(enabled.iter().map(|(name, description)| SessionSkill {
                 name: name.clone(),
@@ -322,7 +363,21 @@ impl Skills {
                 path: None,
             }));
         }
-        skills.extend(project.iter().cloned());
+        skills.extend(listed.project.iter().cloned());
+        let accounts = self
+            .account_skills
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        skills.extend(
+            accounts
+                .get(&listed.account_id)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        skills.sort_by(|a, b| {
+            (&a.name, a.source as u8, &a.path).cmp(&(&b.name, b.source as u8, &b.path))
+        });
         skills
     }
 
@@ -338,12 +393,21 @@ impl Skills {
         self.checkout.join(".git").exists()
     }
 
-    fn require_checkout(&self) -> Result<(), ErrorInfo> {
-        if self.has_checkout() {
-            Ok(())
-        } else {
-            Err(error(ErrorCode::NotFound, "no skill library is set"))
-        }
+    /// Whether the library is a checkout of a repository, rather than the machine's own.
+    async fn has_remote(&self) -> bool {
+        self.has_checkout()
+            && git(&self.checkout, ["remote", "get-url", "origin"])
+                .await
+                .is_ok()
+    }
+
+    /// Makes the checkout a repository of the machine's own, with no remote.
+    async fn init(&self) -> Result<(), ErrorInfo> {
+        fs::create_dir_all(&self.checkout).map_err(internal)?;
+        git(&self.checkout, ["init", "--quiet"])
+            .await
+            .map_err(|err| error(ErrorCode::Internal, err.to_string()))?;
+        Ok(())
     }
 
     /// Clones `url` in place of the checkout.
@@ -371,10 +435,35 @@ impl Skills {
                 format!("cannot clone {}: {}", redact(url), redact_in(&err, url)),
             ));
         }
+        if let Err(err) = self.carry_own_skills(&clone).await {
+            let _ = remove_dir(&clone);
+            return Err(err);
+        }
         remove_dir(&self.checkout).map_err(internal)?;
         fs::rename(&clone, &self.checkout).map_err(internal)?;
         state.last_pull = Some(Timestamp::now());
         state.pull_error = None;
+        Ok(())
+    }
+
+    /// Copies the skills of a library that is the machine's own into `clone`, a fresh clone of
+    /// the repository that replaces it, all but those it has already, then commits and pushes
+    /// them there.
+    async fn carry_own_skills(&self, clone: &Path) -> Result<(), ErrorInfo> {
+        if !self.has_checkout() || self.has_remote().await {
+            return Ok(());
+        }
+        let mut carried = false;
+        for (name, _) in library(&self.checkout) {
+            let target = clone.join(&name);
+            if !target.exists() {
+                copy_dir(&self.checkout.join(&name), &target).map_err(internal)?;
+                carried = true;
+            }
+        }
+        if carried && commit(clone, ".", "Add this machine's skills").await? {
+            push(clone).await?;
+        }
         Ok(())
     }
 
@@ -437,8 +526,9 @@ impl Skills {
         .is_ok()
     }
 
-    /// Pulls, applies `apply` to skill `name`'s folder, then commits and pushes what changed
-    /// as `message`; resets the change away when it cannot be pushed.
+    /// Pulls, applies `apply` to skill `name`'s folder, then commits what changed as
+    /// `message` and pushes it; resets the change away when it cannot be pushed. A library of
+    /// the machine's own, made on its first change, is neither pulled nor pushed.
     async fn change(
         &self,
         state: &mut State,
@@ -446,64 +536,55 @@ impl Skills {
         message: &str,
         apply: impl FnOnce(&Path) -> Result<(), ErrorInfo>,
     ) -> Result<(), ErrorInfo> {
-        self.require_checkout()?;
-        self.pull_locked(state).await;
-        if let Some(err) = &state.pull_error {
-            return Err(error(
-                ErrorCode::Internal,
-                format!("cannot pull the skill library: {err}"),
-            ));
+        if !self.has_checkout() {
+            self.init().await?;
+        }
+        let remote = self.has_remote().await;
+        if remote {
+            self.pull_locked(state).await;
+            if let Some(err) = &state.pull_error {
+                return Err(error(
+                    ErrorCode::Internal,
+                    format!("cannot pull the skill library: {err}"),
+                ));
+            }
         }
         let applied = async {
             apply(&self.checkout.join(name))?;
-            self.commit_and_push(name, message).await
+            if commit(&self.checkout, name, message).await? && remote {
+                push(&self.checkout).await?;
+            }
+            Ok(())
         }
         .await;
         if applied.is_err()
-            && let Err(err) = self.reset().await
+            && let Err(err) = self.discard(remote).await
         {
             warn!("cannot reset the skill library after a failed change: {err}");
         }
         applied
     }
 
-    async fn commit_and_push(&self, name: &str, message: &str) -> Result<(), ErrorInfo> {
-        let dir = &self.checkout;
-        let git_error = |err: crate::worktree::Error| error(ErrorCode::Internal, err.to_string());
-        git(dir, ["add", "--all", "--", name])
-            .await
-            .map_err(git_error)?;
-        if git(dir, ["diff", "--cached", "--quiet"]).await.is_ok() {
-            return Ok(());
+    /// Puts the checkout back as it was before a change: at its upstream, or at its last
+    /// commit when it has no remote.
+    async fn discard(&self, remote: bool) -> Result<(), String> {
+        if remote {
+            return self.reset().await;
         }
-        git(
-            dir,
-            [
-                "-c",
-                "user.name=herder",
-                "-c",
-                "user.email=herder@localhost",
-                "commit",
-                "--quiet",
-                "--no-gpg-sign",
-                "--no-verify",
-                "-m",
-                message,
-            ],
-        )
-        .await
-        .map_err(git_error)?;
-        network(git(
-            dir,
-            ["push", "--quiet", "--set-upstream", "origin", "HEAD"],
-        ))
-        .await
-        .map_err(|err| {
-            error(
-                ErrorCode::Internal,
-                format!("cannot push the skill library: {err}"),
-            )
-        })
+        let dir = &self.checkout;
+        let back = if git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"])
+            .await
+            .is_ok()
+        {
+            git(dir, ["reset", "--quiet", "--hard"]).await
+        } else {
+            git(dir, ["read-tree", "--empty"]).await
+        };
+        back.map_err(|err| err.to_string())?;
+        git(dir, ["clean", "--quiet", "-fd"])
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(())
     }
 
     /// Copies the skill folder `path` of the repository `url` into the library.
@@ -513,7 +594,6 @@ impl Skills {
         url: &str,
         path: Option<&str>,
     ) -> Result<(), ErrorInfo> {
-        self.require_checkout()?;
         let path = path
             .map(|path| path.trim_matches('/'))
             .filter(|path| !path.is_empty());
@@ -582,6 +662,39 @@ impl Skills {
         imported
     }
 
+    /// Reads each account's skills afresh, keeps them for the sessions' lists, and returns
+    /// those of the accounts that have any.
+    async fn scan_accounts(&self) -> Vec<AccountSkills> {
+        let accounts = self
+            .accounts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let links = self.links.clone();
+        let scanned = tokio::task::spawn_blocking(move || {
+            accounts
+                .into_iter()
+                .map(|(account_id, dir)| (account_id, account_skills(&dir, &links)))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_else(|err| {
+            warn!("finding the accounts' skills panicked: {err}");
+            Vec::new()
+        });
+        *self
+            .account_skills
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = scanned.iter().cloned().collect();
+        let mut listed: Vec<AccountSkills> = scanned
+            .into_iter()
+            .filter(|(_, skills)| !skills.is_empty())
+            .map(|(account_id, skills)| AccountSkills { account_id, skills })
+            .collect();
+        listed.sort_by(|a, b| a.account_id.cmp(&b.account_id));
+        listed
+    }
+
     /// Brings the links in line with the library, then publishes the library and every
     /// session's skills.
     async fn publish(&self, state: &State) {
@@ -597,6 +710,7 @@ impl Skills {
             }
         }
         *self.enabled.lock().unwrap_or_else(PoisonError::into_inner) = enabled;
+        let accounts = self.scan_accounts().await;
         let dir = &self.checkout;
         let (repo, head) = if self.has_checkout() {
             let repo = git(dir, ["remote", "get-url", "origin"]).await.ok();
@@ -636,19 +750,63 @@ impl Skills {
                     reload: *reload,
                 })
                 .collect(),
+            accounts,
         };
         self.sink.skills_status(status);
         let sessions: Vec<_> = self
             .sessions_lock()
             .iter()
-            .map(|(session_id, (provider, project))| {
-                (session_id.clone(), self.session_list(provider, project))
-            })
+            .map(|(session_id, listed)| (session_id.clone(), self.session_list(listed)))
             .collect();
         for (session_id, skills) in sessions {
             self.sink.session_skills(&session_id, skills);
         }
     }
+}
+
+/// Commits what changed at `path` in the repository `dir` as herder, with `message`; whether
+/// anything did.
+async fn commit(dir: &Path, path: &str, message: &str) -> Result<bool, ErrorInfo> {
+    let git_error = |err: crate::worktree::Error| error(ErrorCode::Internal, err.to_string());
+    git(dir, ["add", "--all", "--", path])
+        .await
+        .map_err(git_error)?;
+    if git(dir, ["diff", "--cached", "--quiet"]).await.is_ok() {
+        return Ok(false);
+    }
+    git(
+        dir,
+        [
+            "-c",
+            "user.name=herder",
+            "-c",
+            "user.email=herder@localhost",
+            "commit",
+            "--quiet",
+            "--no-gpg-sign",
+            "--no-verify",
+            "-m",
+            message,
+        ],
+    )
+    .await
+    .map_err(git_error)?;
+    Ok(true)
+}
+
+/// Pushes the repository `dir`'s branch to `origin`, tracking it there.
+async fn push(dir: &Path) -> Result<(), ErrorInfo> {
+    network(git(
+        dir,
+        ["push", "--quiet", "--set-upstream", "origin", "HEAD"],
+    ))
+    .await
+    .map_err(|err| {
+        error(
+            ErrorCode::Internal,
+            format!("cannot push the skill library: {err}"),
+        )
+    })
 }
 
 /// Runs a git command that may reach a remote, giving up after [`NETWORK_TIMEOUT`].
@@ -764,21 +922,26 @@ fn library(checkout: &Path) -> Vec<(String, String)> {
     skills
 }
 
-/// The `description` in the front matter of a `SKILL.md`; empty when it has none. Takes a
-/// plain, quoted, folded (`>`) or literal (`|`) value, the last two joined into one line.
+/// The `description` in the front matter of a `SKILL.md`; empty when it has none.
 fn description(skill_md: &str) -> String {
+    front_matter(skill_md, "description")
+}
+
+/// The value of `key` in the front matter of a `SKILL.md`; empty when it has none. Takes a
+/// plain, quoted, folded (`>`) or literal (`|`) value, the last two joined into one line.
+fn front_matter(skill_md: &str, key: &str) -> String {
     let mut lines = skill_md.lines();
     if lines.next().map(str::trim_end) != Some("---") {
         return String::new();
     }
     let front: Vec<&str> = lines.take_while(|line| line.trim_end() != "---").collect();
-    let Some(at) = front
-        .iter()
-        .position(|line| line.starts_with("description:"))
-    else {
+    let Some(at) = front.iter().position(|line| {
+        line.strip_prefix(key)
+            .is_some_and(|rest| rest.starts_with(':'))
+    }) else {
         return String::new();
     };
-    let value = front[at]["description:".len()..].trim();
+    let value = front[at][key.len() + 1..].trim();
     let block = value.is_empty() || value.starts_with(['>', '|']);
     if !block {
         return unquote(value).to_owned();
@@ -917,6 +1080,64 @@ fn find_project_skills(
         let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
         if is_dir && !name.starts_with('.') && !SKIPPED_DIRS.contains(&name.as_str()) {
             find_project_skills(worktree, &relative.join(&name), kinds, depth + 1, skills);
+        }
+    }
+}
+
+/// How deep below an account's `skills` dir its skills are looked for: deep enough for the
+/// skills Claude syncs from claude.ai, `skills/synced/<bucket>/<name>`.
+const MAX_ACCOUNT_DEPTH: usize = 4;
+
+/// The skills in the `skills` dir of the account config dir `config_dir`, ordered by name,
+/// then by path: every folder with a `SKILL.md`, named by its front matter's `name`, else by
+/// the folder, but none in a hidden folder or within `links`, herder's own layout of the
+/// library, which Codex's config dir links to.
+fn account_skills(config_dir: &Path, links: &Path) -> Vec<SessionSkill> {
+    let links = links.canonicalize().unwrap_or_else(|_| links.to_owned());
+    let mut skills = Vec::new();
+    find_account_skills(config_dir, Path::new("skills"), &links, 0, &mut skills);
+    skills.sort_by(|a, b| (&a.name, &a.path).cmp(&(&b.name, &b.path)));
+    skills
+}
+
+fn find_account_skills(
+    config_dir: &Path,
+    relative: &Path,
+    links: &Path,
+    depth: usize,
+    skills: &mut Vec<SessionSkill>,
+) {
+    let Ok(entries) = fs::read_dir(config_dir.join(relative)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let path = entry.path();
+        if name.starts_with('.')
+            || !path.is_dir()
+            || path
+                .canonicalize()
+                .is_ok_and(|real| real.starts_with(links))
+        {
+            continue;
+        }
+        let found = relative.join(&name);
+        match fs::read_to_string(path.join("SKILL.md")) {
+            Ok(text) => {
+                let named = front_matter(&text, "name");
+                skills.push(SessionSkill {
+                    name: if named.is_empty() { name } else { named },
+                    description: description(&text),
+                    source: SkillSource::Account,
+                    path: Some(found.to_string_lossy().into_owned()),
+                });
+            }
+            Err(_) if depth < MAX_ACCOUNT_DEPTH => {
+                find_account_skills(config_dir, &found, links, depth + 1, skills);
+            }
+            Err(_) => {}
         }
     }
 }
