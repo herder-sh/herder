@@ -38,6 +38,18 @@
 //! enforces its own limits, so asking the user before each `status` or `wait_for` would only
 //! get in the way, and `dontAsk` would refuse them outright.
 //!
+//! # Steering delegation to `spawn`
+//!
+//! With herder's server comes a PreToolUse hook, passed inline as `--settings`, which adds to
+//! the user's own settings and hooks rather than replacing them. It runs the herder binary
+//! (the server's own command) as `herder hook claude-pre-tool-use` on every `Agent` call, and
+//! [`pre_tool_use`] denies those with `isolation: "worktree"`: such a subagent builds inside
+//! this session's memory limit, and its work and pull requests never show in herder. The
+//! reason tells the model to call `mcp__herder__spawn` instead, or, in a child session, where
+//! spawn is refused, to do the work itself. Other `Agent` calls, such as read-only `Explore`
+//! lookups, are left alone. Child sessions get the same server and hook: the adapter cannot
+//! tell them apart, and a worktree subagent of a child has the same problems.
+//!
 //! # Permission modes
 //!
 //! | herder        | `--permission-mode` | What Claude Code does                                  |
@@ -165,6 +177,7 @@
 //! the per-model ones in `model_scoped` are named the same way, `seven_day_fable` for Fable.
 //! The CLI reads its own login to answer; herder sees only the numbers.
 
+mod hooks;
 mod session;
 mod usage;
 mod wire;
@@ -173,6 +186,8 @@ use std::path::{Path, PathBuf};
 
 use herder_protocol::{ErrorClass, PermissionMode, TurnError, UsageWindow};
 use tokio::process::Command;
+
+pub use hooks::{PRE_TOOL_USE_ARGS, pre_tool_use};
 
 use crate::transport::Transport;
 use crate::{Adapter, McpServer, StartFuture, StartRequest};
@@ -281,7 +296,9 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
         command
             .arg("--mcp-config")
             .arg(mcp_config(mcp).to_string())
-            .args(["--allowedTools", "mcp__herder"]);
+            .args(["--allowedTools", "mcp__herder"])
+            .arg("--settings")
+            .arg(hooks::settings(mcp).to_string());
     }
     command
 }
@@ -578,6 +595,8 @@ mod tests {
         let command = command(Path::new("claude"), &request);
         let envs: Vec<_> = command.as_std().get_envs().collect();
         assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
+        // Without herder's server there is no spawn to steer to, so no hook either.
+        assert!(!command.as_std().get_args().any(|arg| arg == "--settings"));
     }
 
     #[test]
@@ -618,7 +637,25 @@ mod tests {
                 }
             })
         );
-        assert_eq!(&args[at + 2..], ["--allowedTools", "mcp__herder"]);
+        assert_eq!(&args[at + 2..at + 4], ["--allowedTools", "mcp__herder"]);
+        assert_eq!(args[at + 4], "--settings");
+        let settings: serde_json::Value = serde_json::from_str(args[at + 5]).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": "Agent",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/usr/bin/herder",
+                            "args": ["hook", "claude-pre-tool-use"],
+                        }]
+                    }]
+                }
+            })
+        );
+        assert_eq!(args.len(), at + 6);
     }
 
     #[test]
