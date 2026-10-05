@@ -7,11 +7,11 @@ import XCTest
 ///
 /// A screen that cannot be reached is skipped with the view tree attached, so one run shows
 /// every screen that works and why the others did not; the test then fails.
+@MainActor
 final class ScreenshotTests: XCTestCase {
     private let app = XCUIApplication()
     private var missed: [String] = []
 
-    @MainActor
     func testScreenshots() throws {
         let link = try XCTUnwrap(
             ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
@@ -79,7 +79,6 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(missed.isEmpty, "could not reach: \(missed.joined(separator: ", "))")
     }
 
-    @MainActor
     private func pair(_ link: String) throws {
         let add = app.buttons["Add Machine"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 15), app.debugDescription)
@@ -97,7 +96,6 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Opens the session titled `title` from the list on screen, going Home first.
-    @MainActor
     private func open(_ title: String) -> Bool {
         #if os(iOS)
         // Back to the list the session is in.
@@ -113,7 +111,6 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Switches to the section named `name`: a tab on the iPhone, a sidebar row on the Mac.
-    @MainActor
     private func section(_ name: String) -> Bool {
         #if os(iOS)
         let tab = app.tabBars.buttons[name].firstMatch

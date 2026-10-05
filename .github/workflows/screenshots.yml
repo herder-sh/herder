@@ -61,36 +61,54 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
-      - name: Screenshot the iOS app
-        timeout-minutes: 30
+      - name: Pick and boot a simulator
         run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices[][] | select(.name | test("^iPhone [0-9]+ Pro$"))] | last | .udid')
+          echo "device=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+      # Built before the demo starts: its pairing codes expire 10 minutes after it mints them.
+      - name: Build the apps and the screenshot tests
+        run: |
+          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            -scheme herder-iOS-Screenshots -destination "platform=iOS Simulator,id=$device" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            -scheme herder-macOS-Screenshots -destination "platform=macOS,arch=arm64" \
+            COMPILER_INDEX_STORE_ENABLE=NO CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO
+      - name: Screenshot the iOS app
+        timeout-minutes: 20
+        run: |
+          xcrun simctl bootstatus "$device"
+          xcrun simctl status_bar "$device" override --time 9:41 --dataNetwork wifi --wifiBars 3 \
+            --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
           # A demo fleet per app: a pairing link works once. It runs until stdin closes.
           (sleep 3600 | target/debug/examples/fake_daemon --demo > "$RUNNER_TEMP/ios-demo.out" &)
           for _ in $(seq 120); do [ -s "$RUNNER_TEMP/ios-demo.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/ios-demo.out" ] || { echo "the demo did not start"; exit 1; }
-          device=$(xcrun simctl list devices available -j |
-            jq -r '[.devices[][] | select(.name | test("^iPhone [0-9]+ Pro$"))] | last | .udid')
-          xcrun simctl boot "$device"
-          xcrun simctl bootstatus "$device"
-          xcrun simctl status_bar "$device" override --time 9:41 --dataNetwork wifi --wifiBars 3 \
-            --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/ios-demo.out") \
-            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
             -scheme herder-iOS-Screenshots -destination "platform=iOS Simulator,id=$device" \
-            -resultBundlePath "$RUNNER_TEMP/ios.xcresult" COMPILER_INDEX_STORE_ENABLE=NO
+            -resultBundlePath "$RUNNER_TEMP/ios.xcresult"
       - name: Screenshot the macOS app
         if: success() || failure()
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: |
-          system_profiler SPDisplaysDataType | grep -i resolution || true
           (sleep 3600 | target/debug/examples/fake_daemon --demo > "$RUNNER_TEMP/mac-demo.out" &)
           for _ in $(seq 120); do [ -s "$RUNNER_TEMP/mac-demo.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/mac-demo.out" ] || { echo "the demo did not start"; exit 1; }
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/mac-demo.out") \
-            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
+            xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj \
             -scheme herder-macOS-Screenshots -destination "platform=macOS,arch=arm64" \
-            -resultBundlePath "$RUNNER_TEMP/mac.xcresult" COMPILER_INDEX_STORE_ENABLE=NO \
-            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO
+            -resultBundlePath "$RUNNER_TEMP/mac.xcresult"
+      - name: Print the failures
+        if: failure()
+        run: |
+          for bundle in "$RUNNER_TEMP"/*.xcresult; do
+            [ -d "$bundle" ] || continue
+            xcrun xcresulttool get test-results summary --path "$bundle" |
+              jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+          done
       - name: Export the screenshots
         if: success() || failure()
         run: |
