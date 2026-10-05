@@ -156,21 +156,16 @@ fn same(url: &str, reported: &str) -> bool {
     url == reported || without_credentials(url) == reported
 }
 
-/// `url` without the user info of an `http(s)` URL, or the password of any other.
+/// `url` without the user info of a `scheme://` URL, as the daemon reports it.
 fn without_credentials(url: &str) -> String {
-    let Ok(mut parsed) = url::Url::parse(url) else {
+    let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();
     };
-    let web = matches!(parsed.scheme(), "http" | "https");
-    if parsed.password().is_none() && !(web && !parsed.username().is_empty()) {
-        return url.to_owned();
+    let end = rest.find('/').unwrap_or(rest.len());
+    match rest[..end].rsplit_once('@') {
+        Some((_, host)) => format!("{scheme}://{host}{}", &rest[end..]),
+        None => url.to_owned(),
     }
-    // Both fail only for a URL without a host, which has no user info to strip.
-    let _ = parsed.set_password(None);
-    if web {
-        let _ = parsed.set_username("");
-    }
-    parsed.to_string()
 }
 
 #[cfg(test)]
@@ -191,7 +186,7 @@ mod tests {
         );
         assert_eq!(
             without_credentials("ssh://git@github.com/you/skills.git"),
-            "ssh://git@github.com/you/skills.git"
+            "ssh://github.com/you/skills.git"
         );
         assert_eq!(
             without_credentials("git@github.com:you/skills.git"),
