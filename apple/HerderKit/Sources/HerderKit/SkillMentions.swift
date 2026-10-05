@@ -113,8 +113,6 @@ struct SkillPicker: View {
             }
         }
         .padding(6)
-        // A container of its own: without it the identifier replaces each option's.
-        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("skill-picker")
     }
 }
