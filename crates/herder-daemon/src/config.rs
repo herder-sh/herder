@@ -110,10 +110,11 @@
 //! setup_command = "make bootstrap" # run in each new worktree
 //! icon = "design/mark.svg"         # the project's icon, relative to its clone; found in the
 //!                                  # repository when absent or missing
+//! icon_background = "#ffffff"      # drawn behind the icon, for one that needs it
 //! ```
 //!
 //! Owners add `[[project]]` entries and change their `default_permission_mode`,
-//! `default_account` and `setup_command` from a client too ([`add_project`],
+//! `default_account`, `setup_command` and `icon_background` from a client too ([`add_project`],
 //! [`set_project_settings`]), and remove projects ([`remove_project`]): a removed project's
 //! clones leave every entry's `paths` and go into `exclude`; the rest of the file is kept as
 //! written.
@@ -416,6 +417,7 @@ struct ProjectFile {
     default_permission_mode: Option<PermissionMode>,
     setup_command: Option<String>,
     icon: Option<PathBuf>,
+    icon_background: Option<String>,
 }
 
 /// One `[[accounts]]` entry as written.
@@ -733,6 +735,12 @@ fn resolve_projects(
                     "{which}: icon must be relative to the project's clone"
                 );
             }
+            if let Some(colour) = &entry.icon_background {
+                ensure!(
+                    is_rgb_hex(colour),
+                    "{which}: icon_background {colour:?} is not a #rrggbb colour"
+                );
+            }
             Ok(ProjectEntry {
                 name: entry.name,
                 remotes,
@@ -741,6 +749,7 @@ fn resolve_projects(
                 default_permission_mode: entry.default_permission_mode,
                 setup_command: entry.setup_command,
                 icon: entry.icon,
+                icon_background: entry.icon_background,
             })
         })
         .collect::<Result<_>>()?;
@@ -965,6 +974,12 @@ pub fn remove_project(path: &Path, clones: &[PathBuf]) -> Result<ProjectsConfig>
     })
 }
 
+/// Whether `text` is a colour as `#rrggbb`, in either case.
+pub fn is_rgb_hex(text: &str) -> bool {
+    text.strip_prefix('#')
+        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// Whether the path string `value` of the config file names `path`, once resolved.
 fn names(value: &toml_edit::Value, path: &Path, env: &dyn Fn(&str) -> Option<OsString>) -> bool {
     value
@@ -982,6 +997,8 @@ pub struct ProjectSettings {
     pub default_account: Option<AccountId>,
     /// Shell command run in each new worktree.
     pub setup_command: Option<String>,
+    /// Colour drawn behind the project's icon, as `#rrggbb`.
+    pub icon_background: Option<String>,
 }
 
 /// Replaces the settings of the `[[project]]` entry `entry` of the config file at `path`,
@@ -1016,6 +1033,7 @@ pub fn set_project_settings(
             ("default_permission_mode", mode),
             ("default_account", account),
             ("setup_command", settings.setup_command.as_deref()),
+            ("icon_background", settings.icon_background.as_deref()),
         ] {
             match value {
                 Some(value) => {
@@ -2230,7 +2248,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let config = load(
             home.path(),
-            r#"
+            r##"
             [[accounts]]
             id = "claude-main"
             provider = "claude"
@@ -2248,10 +2266,11 @@ mod tests {
             default_permission_mode = "auto_edit"
             setup_command = "make bootstrap"
             icon = "design/mark.svg"
+            icon_background = "#FFFFFF"
 
             [[project]]
             paths = ["/srv/scratch"]
-            "#,
+            "##,
         )
         .unwrap();
         assert_eq!(
@@ -2272,6 +2291,7 @@ mod tests {
                         default_permission_mode: Some(PermissionMode::AutoEdit),
                         setup_command: Some("make bootstrap".to_owned()),
                         icon: Some(PathBuf::from("design/mark.svg")),
+                        icon_background: Some("#FFFFFF".to_owned()),
                     },
                     ProjectEntry {
                         paths: vec![PathBuf::from("/srv/scratch")],
@@ -2315,6 +2335,14 @@ mod tests {
                 "[[project]]\npaths = [\"/a\"]\nicon = \"/etc/logo.png\"\n",
                 "icon must be relative to the project's clone",
             ),
+            (
+                "[[project]]\npaths = [\"/a\"]\nicon_background = \"white\"\n",
+                "icon_background \"white\" is not a #rrggbb colour",
+            ),
+            (
+                "[[project]]\npaths = [\"/a\"]\nicon_background = \"#fff\"\n",
+                "is not a #rrggbb colour",
+            ),
             ("[projects]\nroots = [\"rel\"]\n", "projects.roots"),
             ("[projects]\ndepth = 2\n", "unknown field `depth`"),
             (
@@ -2350,6 +2378,7 @@ mod tests {
             default_permission_mode: Some(PermissionMode::FullAccess),
             default_account: Some(AccountId::new("main")),
             setup_command: Some("make \"setup\"".into()),
+            icon_background: Some("#1a1a1a".into()),
         };
         set_project_settings(&path, Some(1), Path::new("/src/app"), &settings).unwrap();
         let projects = set_project_settings(&path, None, Path::new("/src/new"), &settings).unwrap();
@@ -2358,12 +2387,14 @@ mod tests {
                 (
                     entry.default_permission_mode,
                     entry.default_account.clone(),
-                    entry.setup_command.as_deref()
+                    entry.setup_command.as_deref(),
+                    entry.icon_background.as_deref()
                 ),
                 (
                     Some(PermissionMode::FullAccess),
                     Some(AccountId::new("main")),
-                    Some("make \"setup\"")
+                    Some("make \"setup\""),
+                    Some("#1a1a1a")
                 )
             );
         }
@@ -2376,9 +2407,10 @@ mod tests {
             (
                 projects.entries[1].default_permission_mode,
                 &projects.entries[1].default_account,
-                &projects.entries[1].setup_command
+                &projects.entries[1].setup_command,
+                &projects.entries[1].icon_background
             ),
-            (None, &None, &None)
+            (None, &None, &None, &None)
         );
 
         let text = std::fs::read_to_string(&path).unwrap();

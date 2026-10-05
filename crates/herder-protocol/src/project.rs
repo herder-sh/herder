@@ -123,4 +123,8 @@ pub struct Project {
     /// `set_project_icon` without an image clears the upload.
     #[serde(default)]
     pub icon_uploaded: bool,
+    /// Colour drawn behind the project's icon, as `#rrggbb`; absent when none is configured,
+    /// so a transparent icon shows through to the client's own background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_background: Option<String>,
 }

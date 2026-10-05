@@ -23,6 +23,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         setup_command: None,
         icon: None,
         icon_uploaded: false,
+        icon_background: None,
     }
 }
 
@@ -497,28 +498,35 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     // Adding it again changes nothing.
     assert_eq!(handle(add).await, Ok(added));
 
-    let set = |default_account: &str| herder_protocol::CommandBody::SetProjectSettings {
-        project_id: ProjectId::new("github.com/org/app"),
-        default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
-        default_account: Some(AccountId::new(default_account)),
-        setup_command: Some("make setup".into()),
+    let set = |default_account: &str, icon_background: &str| {
+        herder_protocol::CommandBody::SetProjectSettings {
+            project_id: ProjectId::new("github.com/org/app"),
+            default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
+            default_account: Some(AccountId::new(default_account)),
+            setup_command: Some("make setup".into()),
+            icon_background: Some(icon_background.into()),
+        }
     };
-    let error = handle(set("nobody")).await.unwrap_err();
+    let error = handle(set("nobody", "#ffffff")).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
+    let error = handle(set("main", "white")).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
     assert_eq!(
-        handle(set("main")).await,
+        handle(set("main", "#ffffff")).await,
         Ok(herder_protocol::CommandResult::Applied)
     );
     let mut expected = project("github.com/org/app", "app", &[&path]);
     expected.default_permission_mode = Some(herder_protocol::PermissionMode::AutoEdit);
     expected.default_account = Some(AccountId::new("main"));
     expected.setup_command = Some("make setup".into());
+    expected.icon_background = Some("#ffffff".into());
     assert_eq!(next_projects(&outbox).await, [expected]);
     let unknown = herder_protocol::CommandBody::SetProjectSettings {
         project_id: ProjectId::new("github.com/org/other"),
         default_permission_mode: None,
         default_account: None,
         setup_command: None,
+        icon_background: None,
     };
     let error = handle(unknown).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
@@ -534,6 +542,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
             default_account: Some(AccountId::new("main")),
             default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
             setup_command: Some("make setup".into()),
+            icon_background: Some("#ffffff".into()),
             ..ProjectEntry::default()
         }]
     );
@@ -838,6 +847,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
         default_permission_mode: None,
         default_account: None,
         setup_command: Some("true".into()),
+        icon_background: None,
     };
     assert_eq!(
         sessions.handle(member.clone(), set).await,

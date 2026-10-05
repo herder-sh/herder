@@ -251,6 +251,7 @@ impl HostDaemon {
                         setup_command: None,
                         icon: None,
                         icon_uploaded: false,
+                        icon_background: None,
                     }])
                     .await;
                 let me = herder_daemon::ws::Host {

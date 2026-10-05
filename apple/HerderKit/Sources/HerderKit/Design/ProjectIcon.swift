@@ -7,6 +7,12 @@ import UIKit
 import AppKit
 #endif
 
+/// A project's icon file and the colour its machine draws behind it, as `#rrggbb`.
+struct ProjectIconImage: Equatable {
+    var data: Data
+    var background: String?
+}
+
 /// A project's small rounded tile: its own icon when there is one, else its initial on a
 /// colour that stays the same for the project everywhere.
 struct ProjectIcon: View {
@@ -15,14 +21,15 @@ struct ProjectIcon: View {
     /// The name the initial comes from; the id's last component when not given.
     var name: String?
     /// The project's icon image, when known.
-    var image: Data?
+    var image: ProjectIconImage?
     var size: CGFloat = 20
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
         Group {
-            if let image = image.flatMap(Self.platformImage) {
-                image.resizable().interpolation(.high).scaledToFill()
+            if let image, let picture = Self.platformImage(image.data) {
+                picture.resizable().interpolation(.high).scaledToFill()
+                    .background(image.background.flatMap(Self.colour) ?? .clear)
             } else if let projectId {
                 let tint = Self.tint(projectId)
                 Text(Self.initial(name ?? projectId))
@@ -72,6 +79,14 @@ struct ProjectIcon: View {
     static func initial(_ name: String) -> String {
         let last = name.split(whereSeparator: { $0 == "/" || $0 == ":" }).last.map(String.init) ?? name
         return last.first { $0.isLetter || $0.isNumber }.map { String($0).uppercased() } ?? "#"
+    }
+
+    /// The colour `#rrggbb` names, if it is one.
+    static func colour(_ hex: String) -> Color? {
+        let digits = hex.dropFirst()
+        guard hex.first == "#", digits.count == 6, digits.allSatisfy(\.isHexDigit),
+              let rgb = UInt32(digits, radix: 16) else { return nil }
+        return Color(light: rgb, dark: rgb)
     }
 
     private static func platformImage(_ data: Data) -> Image? {

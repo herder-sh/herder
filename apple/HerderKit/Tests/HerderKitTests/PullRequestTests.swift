@@ -276,11 +276,24 @@ struct ProjectIconLookupTests {
                            defaultAccount: nil, setupCommand: nil, icon: nil)
         var iconed = bare
         iconed.icon = "abc"
-        let machines = [machine("a", name: "alpha", sessions: [], projects: [bare]),
+        iconed.iconBackground = "#ffffff"
+        var backed = bare
+        backed.iconBackground = "#000000"
+        let machines = [machine("a", name: "alpha", sessions: [], projects: [backed]),
                         machine("b", name: "beta", sessions: [], projects: [iconed])]
         #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: [:]) == nil)
-        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": Data([1])]) == Data([1]))
+        // The background comes from the machine whose icon is shown.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": Data([1])])
+                == ProjectIconImage(data: Data([1]), background: "#ffffff"))
         #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": Data([1])]) == nil)
+    }
+
+    @Test func anIconBackgroundIsAColourOnlyAsRrggbb() {
+        #expect(ProjectIcon.colour("#ffffff") != nil)
+        #expect(ProjectIcon.colour("#1A2b3C") != nil)
+        #expect(ProjectIcon.colour("ffffff") == nil)
+        #expect(ProjectIcon.colour("#fff") == nil)
+        #expect(ProjectIcon.colour("#gggggg") == nil)
     }
 }
 

@@ -281,15 +281,21 @@ public final class Fleet {
     }
 
     /// A project's icon, once fetched from a machine that has one.
-    func projectIcon(_ projectId: ProjectId?) -> Data? {
+    func projectIcon(_ projectId: ProjectId?) -> ProjectIconImage? {
         Self.icon(of: projectId, on: machines, fetched: projectIcons)
     }
 
-    /// The first fetched icon any machine lists for the project.
-    nonisolated static func icon(of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]) -> Data? {
+    /// The first fetched icon any machine lists for the project, with that machine's
+    /// background for it.
+    nonisolated static func icon(
+        of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]
+    ) -> ProjectIconImage? {
         guard let projectId else { return nil }
-        return machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId }?.icon }
-            .compactMap { fetched[$0] }.first
+        return machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId } }
+            .compactMap { project in
+                project.icon.flatMap { fetched[$0] }.map { ProjectIconImage(data: $0, background: project.iconBackground) }
+            }
+            .first
     }
 
     /// Fetches each icon the machines list and this app has not got, once per hash.
@@ -325,10 +331,12 @@ public final class Fleet {
 
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
-        _ projectId: ProjectId, on hostId: HostId, mode: PermissionMode?, account: AccountId?, setupCommand: String?
+        _ projectId: ProjectId, on hostId: HostId, mode: PermissionMode?, account: AccountId?, setupCommand: String?,
+        iconBackground: String?
     ) async throws {
         _ = try await client.send(hostId: hostId, command: .setProjectSettings(
-            projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand))
+            projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand,
+            iconBackground: iconBackground))
     }
 
     /// Uploads a PNG as a project's icon on a machine, or clears the upload when `png` is nil
