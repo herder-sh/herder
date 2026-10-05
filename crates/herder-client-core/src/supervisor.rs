@@ -480,9 +480,9 @@ impl Supervisor {
         }
     }
 
-    /// Sends `body`, an `open_terminal` or `add_account`, and streams the terminal it opens,
-    /// once a connection is up. An open lost to a dropped connection is resent with the same
-    /// id, so it opens one terminal.
+    /// Sends `body`, an `open_terminal`, `add_account` or `log_in_account`, and streams the
+    /// terminal it opens, once a connection is up. An open lost to a dropped connection is
+    /// resent with the same id, so it opens one terminal.
     pub(crate) async fn open_terminal(
         self: &Arc<Self>,
         body: CommandBody,
@@ -1451,7 +1451,8 @@ fn answered(
     if let (Some(events), Ok(CommandResult::TerminalOpened { terminal_id })) = (open, &result) {
         let size = match command.body {
             CommandBody::OpenTerminal { cols, rows, .. }
-            | CommandBody::AddAccount { cols, rows, .. } => Some((cols, rows)),
+            | CommandBody::AddAccount { cols, rows, .. }
+            | CommandBody::LogInAccount { cols, rows, .. } => Some((cols, rows)),
             _ => None,
         };
         let early = early.remove(terminal_id).unwrap_or_default();

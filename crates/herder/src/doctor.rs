@@ -291,7 +291,12 @@ fn account_check(
             format!("make sure {provider} is logged in in {location}"),
         );
     };
-    let relogin = || format!("log in again, run: {}", login_command(login, dir));
+    let relogin = || {
+        format!(
+            "log in again from a herder client (log in again on the account), or run: {}",
+            login_command(login, dir)
+        )
+    };
     if let Some(dir) = dir
         && !dir.is_dir()
     {
@@ -685,7 +690,8 @@ binary = "{dir}/no-codex"
             checks[3].hint.as_deref(),
             Some(
                 format!(
-                    "log in again, run: CLAUDE_CONFIG_DIR={} {claude}",
+                    "log in again from a herder client (log in again on the account), or run: \
+                     CLAUDE_CONFIG_DIR={} {claude}",
                     out.display()
                 )
                 .as_str()

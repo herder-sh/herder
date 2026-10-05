@@ -716,7 +716,7 @@
           ]
         },
         {
-          "description": "A terminal was opened, by `open_terminal` or `add_account`, and this connection\nattached to it.",
+          "description": "A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this\nconnection attached to it.",
           "type": "object",
           "properties": {
             "terminal_id": {
@@ -3438,11 +3438,11 @@
           ]
         },
         {
-          "description": "A provider's own login for an account being added.",
+          "description": "A provider's own login for an account being added or logged in again.",
           "type": "object",
           "properties": {
             "account_id": {
-              "description": "The account being added.",
+              "description": "The account being added or logged in again.",
               "$ref": "#/$defs/AccountId"
             },
             "type": {

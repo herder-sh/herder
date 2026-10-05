@@ -3042,6 +3042,34 @@ async fn idle_accounts_are_probed_at_once_and_again_on_refresh() {
     daemon.stop().await;
 }
 
+#[tokio::test]
+async fn an_account_logged_in_again_is_probed_at_once_however_lately_it_was_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let probe: Arc<dyn Probe> = Arc::new(Counting {
+        requests: requests.clone(),
+    });
+    daemon
+        .manager
+        .track_usage(usage::Config {
+            probes: Probes::from([(fake(), probe)]),
+            dir: dir.path().join("usage"),
+            interval: Duration::from_secs(3600),
+            fresh: Duration::from_secs(3600),
+        })
+        .unwrap();
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts[0].usage[0].used_percent, 1.0);
+    // Read just now, the account is not probed again on refresh, but is once logged in again.
+    daemon.manager.refresh_usage();
+    daemon.manager.logged_in_again(&account());
+    let accounts = daemon.next_accounts().await;
+    assert_eq!(accounts[0].usage[0].used_percent, 2.0);
+    assert_eq!(requests.lock().unwrap().len(), 2);
+    daemon.stop().await;
+}
+
 const GIB: u64 = 1024 * 1024 * 1024;
 
 /// A host whose readings the test sets.
@@ -3652,6 +3680,43 @@ async fn a_logged_out_account_is_passed_over() {
         "{lines:?}"
     );
     assert_eq!(claude.starts().len(), 2);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn an_account_logged_in_again_takes_part_in_failover_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&[
+        "failover_logged_out.jsonl",
+        "failover_limit_after_login.jsonl",
+        "failover_retry_after_login.jsonl",
+    ]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let first = daemon.create("claude-a").await;
+    daemon.send(&first, "Refactor the parser.").await;
+    daemon.settled(&first, SessionStatus::NeedsYou).await;
+
+    // claude-a was logged in again from a client: the next limit rotates to it.
+    daemon.manager.logged_in_again(&AccountId::new("claude-a"));
+    let second = daemon.create("claude-b").await;
+    daemon.send(&second, "Add tests.").await;
+    let journal = daemon.settled(&second, SessionStatus::Idle).await;
+    let lines = from_first_turn(&journal);
+    assert!(
+        lines.contains(&"-: account_switched claude-a".to_owned()),
+        "{lines:?}"
+    );
+    assert_eq!(lines[lines.len() - 2], "-: turn_completed turn-3");
+    assert_eq!(claude.starts().len(), 3);
     daemon.shutdown.cancel();
 }
 

@@ -1109,6 +1109,40 @@
           ]
         },
         {
+          "description": "Log an existing account in again: run the provider's own login in the account's\nconfig dir, or the CLI's default one when it has none, in a login terminal this\nconnection is attached to; owners only. It never creates or removes the dir nor changes\nthe daemon's config. Once the provider reports the dir logged in, failover may choose\nthe account again and its usage is read afresh. Refused with `bad_request` for an\nunknown account and `unsupported` for a provider herder cannot log in to.",
+          "type": "object",
+          "properties": {
+            "account_id": {
+              "description": "Account to log in again.",
+              "$ref": "#/$defs/AccountId"
+            },
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "log_in_account"
+            }
+          },
+          "required": [
+            "type",
+            "account_id",
+            "cols",
+            "rows"
+          ]
+        },
+        {
           "description": "Update an existing account's label and config directory; owners only. The id and\nprovider stay fixed. Directory changes require all sessions on this daemon archived.\nOmit config_dir to use the provider's default login. Answered with applied and accounts.",
           "type": "object",
           "properties": {

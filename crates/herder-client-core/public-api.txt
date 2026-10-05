@@ -189,6 +189,16 @@ impl Client {
 }
 
 impl Client {
+    pub async fn log_in_account(
+        &self,
+        host_id: HostId,
+        account_id: AccountId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
     pub async fn attach_terminal(
         &self,
         host_id: HostId,

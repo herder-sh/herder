@@ -132,12 +132,15 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             .as_ref()
             .is_some_and(|screen| screen.adding.is_none()) =>
         {
-            vec![
-                hint("j/k", "move"),
-                tap("n", "add account", char('n')),
+            let mut hints = vec![hint("j/k", "move"), tap("n", "add account", char('n'))];
+            if app.on_account() {
+                hints.push(tap("l", "log in again", char('l')));
+            }
+            hints.extend([
                 tap("r", "reconnect", char('r')),
                 tap("esc", "back", KeyCode::Esc),
-            ]
+            ]);
+            hints
         }
         // A dialog shows its own keys; this is its tap to close.
         None => vec![tap("esc", "close", KeyCode::Esc)],

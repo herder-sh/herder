@@ -377,6 +377,22 @@ impl Client {
         Ok(self.terminal(stream))
     }
 
+    /// Logs an existing account in again in a login terminal; owners only.
+    pub async fn log_in_account(
+        &self,
+        host_id: HostId,
+        account_id: AccountId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<TerminalStream>, HerderError> {
+        let client = self.inner.clone();
+        let stream = call(&self.handle, async move {
+            client.log_in_account(host_id, account_id, cols, rows).await
+        })
+        .await?;
+        Ok(self.terminal(stream))
+    }
+
     /// Attaches to an open terminal; owners only, one stream per terminal per client.
     pub async fn attach_terminal(
         &self,

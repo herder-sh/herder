@@ -10,13 +10,14 @@
 //!   connects, each account whose provider has a [`Probe`] is read by a short-lived CLI run
 //!   under its config dir. Claude answers `get_usage`, Codex `account/rateLimits/read`; neither
 //!   runs a turn. Probes run one at a time, and an on-demand one only for an account not read
-//!   in the last [`FRESH`]. A probe that fails is retried at the next interval.
+//!   in the last [`FRESH`], or one just logged in again, however lately it was read. A probe
+//!   that fails is retried at the next interval.
 //!
 //! A report replaces the windows it names and keeps the others, since a session's report covers
 //! only some of them. Usage is not stored: a restarted daemon starts empty and probes at once.
 //! herder sees only the numbers; the CLI reads its own login to get them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -86,6 +87,39 @@ pub struct Config {
 /// Every account's windows, by account.
 pub(crate) type Windows = BTreeMap<AccountId, Vec<UsageWindow>>;
 
+/// Asks the poller, once started, for fresh usage.
+#[derive(Debug, Default)]
+pub(crate) struct Refresh {
+    wake: Notify,
+    /// Accounts to read on the next round, however lately they were read.
+    now: Mutex<HashSet<AccountId>>,
+}
+
+impl Refresh {
+    /// Every account not read within [`Config::fresh`].
+    pub(crate) fn stale(&self) {
+        self.wake.notify_one();
+    }
+
+    /// `account_id` at once, however lately it was read, as its login changed; and every
+    /// account not read lately.
+    pub(crate) fn account(&self, account_id: &AccountId) {
+        self.lock().insert(account_id.clone());
+        self.wake.notify_one();
+    }
+
+    fn take(&self) -> HashSet<AccountId> {
+        std::mem::take(&mut *self.lock())
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashSet<AccountId>> {
+        // Every update is a single insert or take, so a poisoned set is consistent.
+        self.now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// The windows last reported for each account.
 #[derive(Debug, Default)]
 pub(crate) struct Usage {
@@ -123,17 +157,21 @@ impl Usage {
 }
 
 /// Probes every account `accounts` lists, as it is on each round, until `shutdown`: each one at once, then every [`Config::interval`], and
-/// those not read within [`Config::fresh`] whenever `wake` is notified. Each answer goes to `report`.
+/// those not read within [`Config::fresh`] whenever `refresh` asks, and those it names for at
+/// once. Each answer goes to `report`.
 pub(crate) async fn poll(
     config: Config,
     accounts: impl Fn() -> Accounts,
-    wake: Arc<Notify>,
+    refresh: Arc<Refresh>,
     report: impl Fn(&AccountId, Vec<UsageWindow>),
     shutdown: CancellationToken,
 ) {
     let mut probed: HashMap<AccountId, Instant> = HashMap::new();
     let mut max_age = config.interval;
     loop {
+        for account_id in refresh.take() {
+            probed.remove(&account_id);
+        }
         for (account_id, account) in &accounts() {
             let Some(probe) = config.probes.get(&account.provider) else {
                 continue;
@@ -168,7 +206,7 @@ pub(crate) async fn poll(
         max_age = tokio::select! {
             () = shutdown.cancelled() => return,
             () = tokio::time::sleep(TICK.min(config.interval)) => config.interval,
-            () = wake.notified() => config.fresh,
+            () = refresh.wake.notified() => config.fresh,
         };
     }
 }

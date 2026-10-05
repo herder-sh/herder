@@ -96,7 +96,12 @@ fn buttons(app: &App) -> Vec<Button> {
         .as_ref()
         .is_some_and(|screen| screen.adding.is_none())
     {
-        return vec![button("n", "add", char('n')), esc()];
+        let mut buttons = vec![button("n", "add", char('n'))];
+        if app.on_account() {
+            buttons.push(button("l", "log in", char('l')));
+        }
+        buttons.push(esc());
+        return buttons;
     }
     if app.dialog_open() {
         return vec![button("⏎", "ok", enter()), esc()];

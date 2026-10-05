@@ -425,6 +425,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::PullSkills
         | CommandBody::SetSkillEnabled { .. }
         | CommandBody::AddAccount { .. }
+        | CommandBody::LogInAccount { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }
         | CommandBody::ResizeTerminal { .. }

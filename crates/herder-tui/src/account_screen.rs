@@ -1,5 +1,6 @@
-//! The accounts screen: every machine's accounts with their usage windows, and the
-//! add-account dialog for the selected machine.
+//! The accounts screen: every machine's accounts with their usage windows, the add-account
+//! dialog for the selected machine, and logging the selected account in again once its login
+//! expired, in a login terminal like adding one.
 //!
 //! Usage is what the daemon last heard from each provider. Every account takes part in
 //! failover; pinning is set in each daemon's own config, and the screen shows it as the daemon
@@ -86,6 +87,8 @@ pub enum Input {
     Bottom,
     /// Open the add-account dialog for the selected row's machine.
     Add,
+    /// Log the selected account in again.
+    LogInAgain,
     /// Input to the add-account dialog.
     Dialog(crate::machines::Input),
 }
@@ -104,6 +107,7 @@ pub fn for_key(key: KeyEvent, screen: &AccountScreen) -> Option<Action> {
         KeyCode::Char('g') | KeyCode::Home | KeyCode::PageUp => Input::Top,
         KeyCode::Char('G') | KeyCode::End | KeyCode::PageDown => Input::Bottom,
         KeyCode::Char('n') => Input::Add,
+        KeyCode::Char('l') => Input::LogInAgain,
         KeyCode::Char('r') => return Some(Action::Reconnect),
         KeyCode::Char('?') => return Some(Action::ToggleHelp),
         _ => return None,
@@ -154,9 +158,34 @@ impl App {
                     None => screen.adding = Some(AddAccount::new(host_id)),
                 }
             }
+            Input::LogInAgain => {
+                let Some(Pick::Account(host_id, account_id)) = at.map(|at| rows[at].clone()) else {
+                    self.notice = Some("select an account to log in again".to_owned());
+                    return Vec::new();
+                };
+                match terminal::refusal(&self.machines, &host_id) {
+                    Some(refusal) => self.notice = Some(format!("logging in again: {refusal}")),
+                    None => {
+                        return vec![Effect::AttachTerminal {
+                            host_id,
+                            target: Target::LogInAgain(account_id),
+                        }];
+                    }
+                }
+            }
             Input::Dialog(_) => {}
         }
         Vec::new()
+    }
+
+    /// Whether the accounts screen is open on an account, which can be logged in again.
+    pub(crate) fn on_account(&self) -> bool {
+        self.account_screen.as_ref().is_some_and(|screen| {
+            let rows = rows(&self.machines);
+            screen
+                .selected(&rows)
+                .is_some_and(|at| matches!(rows[at], Pick::Account(..)))
+        })
     }
 
     /// Pasted text for the add-account dialog of the accounts screen; returns whether it took
@@ -307,6 +336,45 @@ mod tests {
         // The screen stays, to show the account once its login succeeds.
         assert_eq!(adding(&app), None);
         assert!(app.account_screen.is_some());
+    }
+
+    #[test]
+    fn l_logs_the_selected_account_in_again() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(app.on_account());
+        assert_eq!(
+            press(&mut app, KeyCode::Char('l')),
+            [Effect::AttachTerminal {
+                host_id: HostId::new("h1"),
+                target: Target::LogInAgain(AccountId::new("claude-work")),
+            }]
+        );
+        assert!(app.account_screen.is_some());
+        // A machine's row has no account to log in.
+        press(&mut app, KeyCode::Char('g'));
+        assert!(!app.on_account());
+        assert_eq!(press(&mut app, KeyCode::Char('l')), []);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("select an account to log in again")
+        );
+    }
+
+    #[test]
+    fn members_cannot_log_accounts_in_again() {
+        let mut app = App::default();
+        let mut member = machine("h1", "box", &[]);
+        member.role = Some(herder_protocol::Role::Member);
+        member.accounts = vec![fake::account("claude-main", "Main")];
+        app.update(Msg::Machines(vec![member]));
+        press(&mut app, KeyCode::Char('A'));
+        assert_eq!(press(&mut app, KeyCode::Char('l')), []);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("logging in again: terminals are owner-only")
+        );
     }
 
     #[test]

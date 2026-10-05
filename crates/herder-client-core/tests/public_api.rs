@@ -89,6 +89,7 @@ fn the_objects_and_their_futures_are_send() {
             80,
             24,
         ));
+        future(client.log_in_account(host.clone(), herder_protocol::AccountId::new("a"), 80, 24));
         future(client.attach_terminal(host, TerminalId::new("t")));
         future(session.next());
         future(terminal.next());

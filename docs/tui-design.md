@@ -497,7 +497,7 @@ the client: there is no command for it (§10).
  ─────────────────────── │
  + new            ≡ menu │
 ─────────────────────────┴──────────────────────────────────────────────────────────────────────────
- NAVIGATE  j/k move  n add account  esc back                                     ● box ● m2 ◌ vault
+ NAVIGATE  j/k move  n add account  l log in again  esc back                     ● box ● m2 ◌ vault
 ```
 
 ```text
@@ -514,8 +514,12 @@ the client: there is no command for it (§10).
    claude-home  claude
      5h   ###----------------- 17% 13:40
 
- n add  < back
+ n add  l log in  < back
 ```
+
+`l` on an account (owners only) logs it in again once its login expired: the provider's own
+login runs in the account's config dir in a login terminal, as adding one does. The key and
+its button show only while an account is selected.
 
 ### 2.6 Fleet
 

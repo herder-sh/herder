@@ -17,8 +17,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use herder_protocol::{
-    Account, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo, Event, HostId,
-    Role, Seq, SessionHead, SessionId, TerminalPurpose, UserId,
+    Account, AccountId, CommandBody, CommandId, CommandResult, DeviceId, ErrorCode, ErrorInfo,
+    Event, HostId, Role, Seq, SessionHead, SessionId, TerminalPurpose, UserId,
 };
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -36,7 +36,7 @@ use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
-use crate::login::{Logins, NewAccount};
+use crate::login::{Login, Logins, NewAccount};
 use crate::session::SessionManager;
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, Terminals};
@@ -194,29 +194,22 @@ impl<B: Backend> Shared<B> {
                 cols,
                 rows,
             } => {
-                let logging_in: Vec<_> = terminals
-                    .list()
-                    .into_iter()
-                    .filter_map(|terminal| match terminal.purpose {
-                        TerminalPurpose::Login { account_id } => Some(account_id),
-                        TerminalPurpose::Shell { .. } => None,
-                    })
-                    .collect();
                 let account = NewAccount {
                     account_id: &account_id,
                     provider: &provider,
                     label: label.as_deref(),
                     config_dir: config_dir.as_deref(),
                 };
-                let login = self.logins.start(&account, &logging_in)?;
-                let pending = login.pending;
-                let hooks = LoginHooks {
-                    done: Box::new(pending.check()),
-                    on_exit: Box::new(move |exit_code| pending.finish(exit_code)),
-                };
-                let terminal_id =
-                    terminals.open_login(account_id, login.command, cols, rows, outbox, hooks)?;
-                return Ok(CommandResult::TerminalOpened { terminal_id });
+                let login = self.logins.start(&account, &logging_in(terminals))?;
+                return open_login(terminals, account_id, login, cols, rows, outbox);
+            }
+            CommandBody::LogInAccount {
+                account_id,
+                cols,
+                rows,
+            } => {
+                let login = self.logins.again(&account_id, &logging_in(terminals))?;
+                return open_login(terminals, account_id, login, cols, rows, outbox);
             }
             CommandBody::SetAccountSettings {
                 account_id,
@@ -289,6 +282,36 @@ impl<B: Backend> Shared<B> {
             expires_at: pairing.expires_at,
         })
     }
+}
+
+/// The accounts with a login running in `terminals`.
+fn logging_in(terminals: &Terminals) -> Vec<AccountId> {
+    terminals
+        .list()
+        .into_iter()
+        .filter_map(|terminal| match terminal.purpose {
+            TerminalPurpose::Login { account_id } => Some(account_id),
+            TerminalPurpose::Shell { .. } => None,
+        })
+        .collect()
+}
+
+/// Runs `login`, of `account_id`, in a login terminal of `cols` by `rows` attached to `outbox`.
+fn open_login(
+    terminals: &Terminals,
+    account_id: AccountId,
+    login: Login,
+    cols: u16,
+    rows: u16,
+    outbox: &Arc<Outbox>,
+) -> Result<CommandResult, ErrorInfo> {
+    let pending = login.pending;
+    let hooks = LoginHooks {
+        done: Box::new(pending.check()),
+        on_exit: Box::new(move |exit_code| pending.finish(exit_code)),
+    };
+    let terminal_id = terminals.open_login(account_id, login.command, cols, rows, outbox, hooks)?;
+    Ok(CommandResult::TerminalOpened { terminal_id })
 }
 
 impl<B: Backend> Server<B> {

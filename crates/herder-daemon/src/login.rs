@@ -1,4 +1,5 @@
-//! Logins: adding an account by running its provider's own login in a login terminal.
+//! Logins: adding an account by running its provider's own login in a login terminal, or
+//! logging an existing one in again the same way.
 //!
 //! Each login runs in the account's config dir, a new one herder creates, or one the owner names:
 //! empty, or already holding a login, but no other account's. The dir is handed to the
@@ -28,6 +29,14 @@
 //! fails, or that the check finds logged out, adds nothing, and removes the config dir if
 //! herder created it. Either way the outcome is the terminal's last line.
 //!
+//! Logging an account in again, once its login expired, runs the same login in the account's
+//! own config dir, or with the CLI's default one when it has none; herder never creates or
+//! removes that dir and never changes the config file. Once the status check says logged in,
+//! failover may choose the account again and its usage is read at once
+//! ([`SessionManager::logged_in_again`]). The login is hung up only once the check has seen it
+//! logged out and then in: a stale login the CLI still reports as one is left to the owner to
+//! log in again and exit.
+//!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
 
 use std::collections::HashMap;
@@ -37,6 +46,7 @@ use std::io::Read;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -169,11 +179,51 @@ pub(crate) struct Login {
 pub(crate) struct Pending {
     inner: Arc<Inner>,
     account_id: AccountId,
-    account: AccountConfig,
+    provider: Provider,
     /// The login, whose status check tells whether it succeeded.
     program: LoginProgram,
-    /// Whether herder created the config dir, and so may remove it.
-    created: bool,
+    place: Place,
+    purpose: Purpose,
+}
+
+/// Where a login runs; its status check looks at the same config dir.
+struct Place {
+    /// The config dir handed to the CLI; `None` leaves it at its default one.
+    config_dir: Option<PathBuf>,
+    /// The working directory: the config dir, else the home directory.
+    cwd: PathBuf,
+}
+
+impl Place {
+    /// The variables pointing `program` at the config dir, if there is one.
+    fn env<'a>(&'a self, program: &'a LoginProgram) -> impl Iterator<Item = (&'a str, &'a Path)> {
+        self.config_dir.iter().flat_map(|dir| {
+            program
+                .config_env
+                .iter()
+                .map(move |var| (var.as_str(), dir.as_path()))
+        })
+    }
+
+    /// The config dir, as the terminal's last line names it.
+    fn describe(&self) -> String {
+        self.config_dir.as_ref().map_or_else(
+            || "its default config dir".to_owned(),
+            |dir| dir.display().to_string(),
+        )
+    }
+}
+
+/// What a login is for.
+enum Purpose {
+    /// Adding an account labelled `label`, saved once logged in.
+    Add {
+        label: String,
+        /// Whether herder created the config dir, and so may remove it.
+        created: bool,
+    },
+    /// Logging an existing account in again.
+    Again,
 }
 
 impl Logins {
@@ -289,71 +339,194 @@ impl Logins {
             ));
         }
         let created = make_dir(&dir)?;
-        let mut command = CommandBuilder::new(&program.program);
-        command.args(&program.args);
-        command.cwd(&dir);
-        for var in &program.config_env {
-            command.env(var, &dir);
-        }
-        let account = AccountConfig {
-            provider: (*provider).clone(),
-            label: label.map_or_else(|| account_id.to_string(), str::to_owned),
-            config_dir: Some(dir),
+        let place = Place {
+            config_dir: Some(dir.clone()),
+            cwd: dir,
         };
-        Ok(Login {
-            command,
-            pending: Pending {
-                inner: Arc::clone(inner),
-                account_id: (*account_id).clone(),
-                account,
-                program: program.clone(),
-                created,
-            },
-        })
+        let purpose = Purpose::Add {
+            label: label.map_or_else(|| account_id.to_string(), str::to_owned),
+            created,
+        };
+        Ok(login(inner, account_id, provider, program, place, purpose))
+    }
+
+    /// The login of the existing account `account_id`, again, in its own config dir, or the
+    /// CLI's default one when it has none; `logging_in` are the accounts with a login running,
+    /// which it must not be one of.
+    pub(crate) fn again(
+        &self,
+        account_id: &AccountId,
+        logging_in: &[AccountId],
+    ) -> Result<Login, ErrorInfo> {
+        self.again_with_env(account_id, logging_in, |key| std::env::var_os(key))
+    }
+
+    fn again_with_env(
+        &self,
+        account_id: &AccountId,
+        logging_in: &[AccountId],
+        env: impl Fn(&str) -> Option<OsString>,
+    ) -> Result<Login, ErrorInfo> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                "this daemon logs no accounts in".into(),
+            )
+        })?;
+        let account = inner.sessions.account(account_id).ok_or_else(|| {
+            error(
+                ErrorCode::BadRequest,
+                format!("account {account_id} does not exist"),
+            )
+        })?;
+        if logging_in.contains(account_id) {
+            return Err(error(
+                ErrorCode::Conflict,
+                format!("account {account_id} is logging in already"),
+            ));
+        }
+        let program = inner.programs.get(&account.provider).ok_or_else(|| {
+            error(
+                ErrorCode::Unsupported,
+                format!(
+                    "herder cannot log {} accounts in; log in with its CLI on the host",
+                    account.provider.as_str()
+                ),
+            )
+        })?;
+        let cwd = match &account.config_dir {
+            Some(dir) if dir.is_dir() => dir.clone(),
+            Some(dir) => {
+                return Err(error(
+                    ErrorCode::BadRequest,
+                    format!(
+                        "the config dir of account {account_id}, {}, does not exist",
+                        dir.display()
+                    ),
+                ));
+            }
+            None => env("HOME")
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or_else(|| {
+                    error(
+                        ErrorCode::BadRequest,
+                        "the login has nowhere to run: $HOME is not set".into(),
+                    )
+                })?,
+        };
+        let place = Place {
+            config_dir: account.config_dir,
+            cwd,
+        };
+        Ok(login(
+            inner,
+            account_id,
+            &account.provider,
+            program,
+            place,
+            Purpose::Again,
+        ))
+    }
+}
+
+/// `program`, the login of `account_id`, to run at `place` for `purpose`.
+fn login(
+    inner: &Arc<Inner>,
+    account_id: &AccountId,
+    provider: &Provider,
+    program: &LoginProgram,
+    place: Place,
+    purpose: Purpose,
+) -> Login {
+    let mut command = CommandBuilder::new(&program.program);
+    command.args(&program.args);
+    command.cwd(&place.cwd);
+    for (var, dir) in place.env(program) {
+        command.env(var, dir);
+    }
+    Login {
+        command,
+        pending: Pending {
+            inner: Arc::clone(inner),
+            account_id: account_id.clone(),
+            provider: provider.clone(),
+            program: program.clone(),
+            place,
+            purpose,
+        },
     }
 }
 
 impl Pending {
-    /// Whether the provider reports the config dir logged in, so the login can be hung up. Runs
-    /// the status check, so it blocks.
+    /// Whether the login can be hung up, as the provider reports the config dir logged in; when
+    /// logging in again, only once it has reported it logged out before. Runs the status check,
+    /// so it blocks.
     pub(crate) fn check(&self) -> impl Fn() -> bool + Send + 'static {
         let program = self.program.clone();
-        let dir = self.account.config_dir.clone().unwrap_or_default();
-        move || logged_in(&program, Some(&dir)) == Ok(true)
+        let dir = self.place.config_dir.clone();
+        let seen_logged_out = AtomicBool::new(matches!(self.purpose, Purpose::Add { .. }));
+        move || {
+            let now = logged_in(&program, dir.as_deref()) == Ok(true);
+            if !now {
+                seen_logged_out.store(true, Ordering::Relaxed);
+            }
+            now && seen_logged_out.load(Ordering::Relaxed)
+        }
     }
 
-    /// Adds the account if the provider reports the config dir logged in, however the login
-    /// ended; returns the outcome, as a line for the login terminal. Runs the status check, so
-    /// it blocks.
+    /// Adds the account, or marks it logged in again, if the provider reports the config dir
+    /// logged in, however the login ended; returns the outcome, as a line for the login
+    /// terminal. Runs the status check, so it blocks.
     pub(crate) fn finish(self, exit_code: Option<i32>) -> String {
         let Pending {
             inner,
             account_id,
-            account,
+            provider,
             program,
-            created,
+            place,
+            purpose,
         } = self;
-        let dir = account.config_dir.clone().unwrap_or_default();
         let exited = match exit_code {
             Some(0) => "the login exited".to_owned(),
             Some(code) => format!("the login exited with {code}"),
             None => "the login ended".to_owned(),
         };
-        let failure = match logged_in(&program, Some(&dir)) {
+        let failure = match logged_in(&program, place.config_dir.as_deref()) {
             Ok(true) => None,
             Ok(false) => Some(format!(
                 "{exited}, but {} reports no login in {}",
-                account.provider.as_str(),
-                dir.display()
+                provider.as_str(),
+                place.describe()
             )),
             Err(err) => Some(format!("{exited}, but {err}")),
         };
-        if let Some(failure) = failure {
-            if created && let Err(err) = std::fs::remove_dir_all(&dir) {
-                warn!(%account_id, "cannot remove {}: {err}", dir.display());
+        let label = match purpose {
+            Purpose::Again => {
+                if let Some(failure) = failure {
+                    return line(&format!(
+                        "{failure}; account {account_id} was not logged in again"
+                    ));
+                }
+                inner.sessions.logged_in_again(&account_id);
+                info!(%account_id, "account logged in again");
+                return line(&format!("logged account {account_id} in again"));
             }
-            return line(&format!("{failure}; account {account_id} was not added"));
-        }
+            Purpose::Add { label, created } => {
+                if let Some(failure) = failure {
+                    if created && let Err(err) = std::fs::remove_dir_all(&place.cwd) {
+                        warn!(%account_id, "cannot remove {}: {err}", place.cwd.display());
+                    }
+                    return line(&format!("{failure}; account {account_id} was not added"));
+                }
+                label
+            }
+        };
+        let account = AccountConfig {
+            provider,
+            label,
+            config_dir: place.config_dir,
+        };
         let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(err) = config::append_account(&inner.config_file, &account_id, &account) {
             warn!(%account_id, "cannot save the account: {err:#}");
@@ -551,6 +724,130 @@ mod tests {
                     (key == "HOME").then(|| home.clone())
                 })
         }
+
+        fn again(&self, id: &str) -> Result<Login, ErrorInfo> {
+            let home = self.home.path().as_os_str().to_owned();
+            let logging_in = [AccountId::new("busy")];
+            self.logins
+                .again_with_env(&AccountId::new(id), &logging_in, move |key| {
+                    (key == "HOME").then(|| home.clone())
+                })
+        }
+
+        /// Adds the account `id` of `provider` with the config dir `dir`, as the config holds it.
+        fn account(&self, id: &str, provider: Provider, dir: Option<PathBuf>) {
+            assert!(self.sessions.add_account(
+                AccountId::new(id),
+                AccountConfig {
+                    provider,
+                    label: id.into(),
+                    config_dir: dir,
+                },
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn logging_in_again_runs_in_the_accounts_own_dir_and_changes_no_config() {
+        let f = fixture().await;
+        let dir = f.home.path().join("work");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), "{}").unwrap();
+        f.account("work", Provider::Codex, Some(dir.clone()));
+        let config = f.home.path().join("daemon.toml");
+        let saved = "[[accounts]]\nid = 'work'\nprovider = 'codex'\nconfig_dir = '~/work'\n";
+        std::fs::write(&config, saved).unwrap();
+        let accounts = f.sessions.accounts();
+
+        let login = f.again("work").unwrap();
+        assert_eq!(
+            login.command.get_argv(),
+            &["/bin/sh", "login", "--device-auth"]
+        );
+        assert_eq!(login.command.get_env("CODEX_HOME"), Some(dir.as_os_str()));
+        assert_eq!(login.command.get_cwd(), Some(&dir.as_os_str().to_owned()));
+        // A login that fails leaves the dir as it was.
+        let line = login.pending.finish(Some(1));
+        assert_eq!(
+            line,
+            format!(
+                "\r\nherder: the login exited with 1, but codex reports no login in {}; \
+                 account work was not logged in again\r\n",
+                dir.display()
+            )
+        );
+        assert!(dir.join("settings.json").exists());
+
+        let login = f.again("work").unwrap();
+        std::fs::write(dir.join("logged-in"), "").unwrap();
+        let line = login.pending.finish(Some(0));
+        assert_eq!(line, "\r\nherder: logged account work in again\r\n");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), saved);
+        assert_eq!(f.sessions.accounts(), accounts);
+        assert!(dir.join("settings.json").exists());
+    }
+
+    #[tokio::test]
+    async fn logging_in_again_without_a_config_dir_uses_the_clis_default() {
+        let f = fixture().await;
+        let login = f.again("codex").unwrap();
+        // The daemon's own environment stays, as it does for the account's sessions.
+        assert_eq!(
+            login.command.get_env("CODEX_HOME"),
+            std::env::var_os("CODEX_HOME").as_deref()
+        );
+        assert_eq!(
+            login.command.get_cwd(),
+            Some(&f.home.path().as_os_str().to_owned())
+        );
+        assert_eq!(login.pending.place.describe(), "its default config dir");
+    }
+
+    #[tokio::test]
+    async fn logging_in_again_needs_an_existing_account_its_provider_can_log_in() {
+        let f = fixture().await;
+        let gone = f.home.path().join("gone");
+        f.account("gone", Provider::Codex, Some(gone.clone()));
+        f.account("busy", Provider::Codex, None);
+        f.account("grok", Provider::Grok, None);
+        let cases = [
+            ("missing", ErrorCode::BadRequest),
+            ("gone", ErrorCode::BadRequest),
+            ("busy", ErrorCode::Conflict),
+            ("grok", ErrorCode::Unsupported),
+        ];
+        for (id, code) in cases {
+            let err = f
+                .again(id)
+                .err()
+                .unwrap_or_else(|| panic!("{id} was accepted"));
+            assert_eq!(err.code, code, "{id}: {}", err.message);
+        }
+        // The dir is never created.
+        assert!(!gone.exists());
+        let err = Logins::default()
+            .again(&AccountId::new("codex"), &[])
+            .err()
+            .unwrap();
+        assert_eq!(err.code, ErrorCode::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn logging_in_again_hangs_up_only_once_it_saw_the_account_logged_out() {
+        let f = fixture().await;
+        let dir = f.home.path().join("work");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("logged-in"), "").unwrap();
+        f.account("work", Provider::Claude, Some(dir.clone()));
+        // A stale login the CLI still reports is left for the owner to replace.
+        let login = f.again("work").unwrap();
+        let done = login.pending.check();
+        assert!(!done());
+        assert!(!done());
+        std::fs::remove_file(dir.join("logged-in")).unwrap();
+        assert!(!done());
+        std::fs::write(dir.join("logged-in"), "").unwrap();
+        assert!(done());
     }
 
     #[test]

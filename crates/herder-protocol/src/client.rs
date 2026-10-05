@@ -361,6 +361,20 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
+    /// Log an existing account in again: run the provider's own login in the account's
+    /// config dir, or the CLI's default one when it has none, in a login terminal this
+    /// connection is attached to; owners only. It never creates or removes the dir nor changes
+    /// the daemon's config. Once the provider reports the dir logged in, failover may choose
+    /// the account again and its usage is read afresh. Refused with `bad_request` for an
+    /// unknown account and `unsupported` for a provider herder cannot log in to.
+    LogInAccount {
+        /// Account to log in again.
+        account_id: AccountId,
+        /// Width in columns.
+        cols: u16,
+        /// Height in rows.
+        rows: u16,
+    },
     /// Update an existing account's label and config directory; owners only. The id and
     /// provider stay fixed. Directory changes require all sessions on this daemon archived.
     /// Omit config_dir to use the provider's default login. Answered with applied and accounts.
