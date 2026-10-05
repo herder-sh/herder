@@ -198,6 +198,12 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::GetProjectIcon {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
         }),
+        command(CommandBody::SetProjectOrder {
+            project_ids: vec![
+                ProjectId::new("github.com/herder-sh/herder"),
+                ProjectId::new("github.com/herder-sh/site"),
+            ],
+        }),
         command(CommandBody::GetVaultLink),
         command(CommandBody::LinkVault {
             addresses: vec!["vault.lan:7447".into(), "10.0.0.9:7447".into()],
@@ -1204,6 +1210,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     ),
                     icon_uploaded: true,
                     icon_background: Some("#ffffff".into()),
+                    position: None,
                 },
                 Project {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
@@ -1215,6 +1222,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     icon: None,
                     icon_uploaded: false,
                     icon_background: None,
+                    position: None,
                 },
             ],
         },
@@ -2116,6 +2124,31 @@ fn project_optional_fields_may_be_absent() {
         serde_json::to_value(&icon).unwrap(),
         json!({ "type": "project_icon", "icon": "ab12", "media_type": "image/png", "data": "cG5n" })
     );
+}
+
+#[test]
+fn project_order_has_its_wire_form() {
+    let order = CommandBody::SetProjectOrder {
+        project_ids: vec![ProjectId::new("github.com/org/b"), ProjectId::new("github.com/org/a")],
+    };
+    let wire = json!({
+        "type": "set_project_order",
+        "project_ids": ["github.com/org/b", "github.com/org/a"]
+    });
+    assert_eq!(serde_json::to_value(&order).unwrap(), wire);
+    assert_eq!(serde_json::from_value::<CommandBody>(wire).unwrap(), order);
+
+    let project = json!({
+        "project_id": "github.com/org/a", "name": "a", "paths": ["/src/a"], "position": 1
+    });
+    let parsed: Project = serde_json::from_value(project.clone()).unwrap();
+    assert_eq!(parsed.position, Some(1));
+    assert_eq!(serde_json::to_value(&parsed).unwrap()["position"], json!(1));
+    let mut unordered = project;
+    unordered.as_object_mut().unwrap().remove("position");
+    let parsed: Project = serde_json::from_value(unordered).unwrap();
+    assert_eq!(parsed.position, None);
+    assert!(serde_json::to_value(&parsed).unwrap().get("position").is_none());
 }
 
 #[test]
