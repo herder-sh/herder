@@ -56,6 +56,9 @@ pub(super) struct System {
     /// The CLI's id for the session.
     #[serde(default, rename = "session_id")]
     pub session_id: Option<String>,
+    /// The skills the session can invoke, on `init`.
+    #[serde(default)]
+    pub skills: Option<Vec<String>>,
 }
 
 /// A finished content block of the main agent or a subagent.
@@ -267,6 +270,20 @@ pub(super) struct ControlResponse {
     /// The answer, on `success`.
     #[serde(default)]
     pub response: Option<Value>,
+}
+
+/// The answer to `initialize`; only its commands are used.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct Initialized {
+    /// Everything invocable as `/name`: skills and the CLI's own commands, which it does not
+    /// tell apart here.
+    #[serde(default)]
+    pub commands: Vec<Command>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct Command {
+    pub name: String,
 }
 
 // ---- Into the CLI ----

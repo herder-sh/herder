@@ -34,6 +34,10 @@
 //!   [`AgentProfile::images`] until an agent started, then what the latest one advertised. A
 //!   session whose agent turns out to take none still runs a prompt that carries images: each
 //!   becomes a line of text naming it, so the agent knows one was attached.
+//! - A `$name` mention of one of the agent's commands, as its latest
+//!   `available_commands_update` listed them, is rewritten as the profile's
+//!   [`AgentProfile::skill_mention`] says; ACP lists skills as commands. In the recordings
+//!   OpenCode sends that update only after the first prompt, whose mentions then stay as typed.
 //! - [`StartRequest::seed`] is rendered as a transcript in front of the first prompt; ACP has
 //!   no way to insert history.
 //!
@@ -68,7 +72,7 @@ use crate::fixture::Fixture;
 use crate::transport::Transport;
 use crate::{Adapter, StartFuture, StartRequest};
 
-pub use profile::AgentProfile;
+pub use profile::{AgentProfile, SkillMention};
 
 #[cfg(doc)]
 use crate::{AdapterCommand, AdapterEvent, Capabilities};

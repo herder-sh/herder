@@ -9,6 +9,10 @@
 //! Images is what each agent advertised as `promptCapabilities.image` in the recordings, and
 //! for Cursor, unverified, no.
 //!
+//! A `$name` skill mention is rewritten the way T3 Code does: `/name` for Cursor, plain text
+//! naming the skill for OpenCode, which picks skills itself. Grok's is left as typed, as no
+//! way to invoke a Grok skill from a prompt is known.
+//!
 //! Each agent must ask before every write or command, so the adapter can apply the session's
 //! permission mode: OpenCode is launched with `OPENCODE_PERMISSION={"*":"ask"}`, as by default
 //! it runs most tools unasked; Grok and Cursor ask by default over ACP.
@@ -21,6 +25,7 @@
 //! the account has a config dir those variables are removed, so the account's own login is the
 //! only one the agent can use.
 
+use std::collections::HashSet;
 use std::process::Stdio;
 
 use herder_protocol::Provider;
@@ -51,6 +56,32 @@ pub struct AgentProfile {
     /// Whether the agent is known to take images with a prompt, which it advertises in
     /// `initialize`; what the adapter says until an agent started and told it.
     pub images: bool,
+    /// How a `$name` mention of one of the agent's skills is written for it.
+    pub skill_mention: SkillMention,
+}
+
+/// How an agent is told to use a skill a prompt mentions as `$name`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkillMention {
+    /// `/name`, which the agent expands like a typed command.
+    Slash,
+    /// Plain text naming the skill, for an agent that picks skills itself.
+    Named,
+    /// `$name`, as typed.
+    AsTyped,
+}
+
+impl SkillMention {
+    /// `text` with each `$name` mention of a skill in `skills` written this way.
+    pub(super) fn rewrite(self, text: &str, skills: &HashSet<String>) -> String {
+        match self {
+            Self::Slash => crate::rewrite_skill_mentions(text, skills, |name| format!("/{name}")),
+            Self::Named => {
+                crate::rewrite_skill_mentions(text, skills, |name| format!("the {name} skill"))
+            }
+            Self::AsTyped => text.to_owned(),
+        }
+    }
 }
 
 fn strings(values: &[&str]) -> Vec<String> {
@@ -74,6 +105,7 @@ impl AgentProfile {
             launch_env: vec![("OPENCODE_PERMISSION".into(), r#"{"*":"ask"}"#.into())],
             login_env: Vec::new(),
             images: true,
+            skill_mention: SkillMention::Named,
         }
     }
 
@@ -93,6 +125,7 @@ impl AgentProfile {
             launch_env: Vec::new(),
             login_env: strings(&["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
             images: false,
+            skill_mention: SkillMention::AsTyped,
         }
     }
 
@@ -112,6 +145,7 @@ impl AgentProfile {
             launch_env: Vec::new(),
             login_env: Vec::new(),
             images: false,
+            skill_mention: SkillMention::Slash,
         }
     }
 

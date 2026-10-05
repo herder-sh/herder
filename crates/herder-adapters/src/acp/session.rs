@@ -1,6 +1,6 @@
 //! Starting an ACP session and running it: commands in, `session/update`s out as events.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::classify::classify;
-use super::profile::AgentProfile;
+use super::profile::{AgentProfile, SkillMention};
 use super::rpc::{Incoming, Rpc};
 use super::schema::{
     self, ConfigOption, ConfigOptionsResponse, ContentBlock, Error, InitializeResponse,
@@ -192,6 +192,8 @@ pub(super) async fn start(
         model_config,
         model,
         images,
+        skill_mention: profile.skill_mention,
+        skills: HashSet::new(),
         seed: render_seed(&request.seed),
         turn: None,
         approvals: HashMap::new(),
@@ -286,6 +288,10 @@ struct Session {
     model: Option<String>,
     /// Whether the agent takes images, as it said in `initialize`.
     images: bool,
+    /// How a `$name` mention of a skill is written for this agent.
+    skill_mention: SkillMention,
+    /// The agent's commands, as its latest `available_commands_update` listed them.
+    skills: HashSet<String>,
     /// Transcript for the first prompt; taken by it.
     seed: Option<String>,
     turn: Option<Turn>,
@@ -428,6 +434,7 @@ impl Session {
                 images,
                 agent_sender,
             } => {
+                let text = self.skill_mention.rewrite(&text, &self.skills);
                 self.prompt(
                     turn_id,
                     crate::agent_prompt(&text, agent_sender.as_ref()),
@@ -638,6 +645,12 @@ impl Session {
                     self.emit(AdapterEvent::ModelChanged { model: current })
                         .await;
                 }
+            }
+            SessionUpdate::AvailableCommandsUpdate { available_commands } => {
+                self.skills = available_commands
+                    .into_iter()
+                    .map(|command| command.name)
+                    .collect();
             }
             SessionUpdate::UsageUpdate { cost: Some(cost) } if cost.currency == "USD" => {
                 self.reported_usd = Some(cost.amount);

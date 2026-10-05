@@ -65,6 +65,7 @@ pub(super) async fn start(
         model: None,
         native_id: None,
         spent_usd: 0.0,
+        skills: HashSet::new(),
         mode: request.permission_mode,
         next_request: 0,
         pending: HashMap::new(),
@@ -98,6 +99,15 @@ pub(super) async fn start(
                 if let Some(error) = response.error.filter(|_| response.subtype == "error") {
                     return Err(fatal(format!("claude refused initialize: {error}")));
                 }
+                let initialized = response
+                    .response
+                    .and_then(|answer| serde_json::from_value::<wire::Initialized>(answer).ok())
+                    .unwrap_or_default();
+                session.skills = initialized
+                    .commands
+                    .into_iter()
+                    .map(|command| command.name)
+                    .collect();
                 break;
             }
             incoming => session.handle(incoming).await,
@@ -214,6 +224,9 @@ struct Session {
     native_id: Option<String>,
     /// The last `result`'s `total_cost_usd`, which adds up over the life of the process.
     spent_usd: f64,
+    /// Names a `$name` mention in a prompt is rewritten to `/name` for: the skills the last
+    /// `init` listed, and before the first one every command `initialize` listed.
+    skills: HashSet<String>,
     /// The permission mode last reported or started with.
     mode: PermissionMode,
     next_request: u64,
@@ -363,6 +376,7 @@ impl Session {
             images,
             agent_sender,
         } = prompt;
+        let text = crate::rewrite_skill_mentions(&text, &self.skills, |name| format!("/{name}"));
         let text = crate::agent_prompt(&text, agent_sender.as_ref());
         self.turn = Some(OpenTurn {
             id: turn_id.clone(),
@@ -397,6 +411,9 @@ impl Session {
                     self.native_id = Some(id.clone());
                     self.emit(AdapterEvent::SessionIdentified { native_id: id })
                         .await;
+                }
+                if let Some(skills) = system.skills {
+                    self.skills = skills.into_iter().collect();
                 }
                 if let Some(model) = system.model {
                     self.model_known(model).await;
