@@ -3,8 +3,8 @@ name: apple
 # Builds and tests the iOS and macOS apps in apple/ on the client core's Swift bindings, and
 # uploads the macOS app as an artifact. Runs only when the apps or what they build on change.
 # The bindings, xcframework and fake daemon build once and are cached by the Rust sources they
-# come from, so a change to the apps alone skips the Rust build; the iOS and macOS jobs then
-# run side by side on them.
+# come from and this workflow, so a change to the apps alone skips the Rust build; the iOS and
+# macOS jobs then run side by side on them.
 
 on:
   pull_request:
@@ -47,9 +47,11 @@ jobs:
       - id: key
         run: >-
           echo "key=apple-ffi-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**',
-          'apple/scripts/build-ffi.sh') }}" >> "$GITHUB_OUTPUT"
+          'apple/scripts/build-ffi.sh', '.github/workflows/apple.yml') }}" >> "$GITHUB_OUTPUT"
+      # Restored here and saved by its own step below, not by actions/cache's post step:
+      # rust-cache's post step, which runs first, cleans target/ of the fake daemon.
       - id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -69,11 +71,20 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         timeout-minutes: 5
         run: swift run --package-path crates/herder-ffi/swift herder-sample "$PWD/target/debug/examples/fake_daemon"
+      - name: Save the bindings, the xcframework and the fake daemon
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            crates/herder-ffi/swift/build
+            target/debug/examples/fake_daemon
+          key: ${{ steps.key.outputs.key }}
 
   ios:
     name: ios
     needs: bindings
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache/restore@v4
@@ -90,16 +101,27 @@ jobs:
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
       - name: Test the iOS app on a simulator against the fake daemons
+        # A UI test that loses its way can leave xcodebuild waiting forever.
+        timeout-minutes: 30
         run: |
           # Two daemons and the link a device paired with both shares. They run until stdin
           # closes, so keep it open for the job.
           (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
-          until [ -s "$RUNNER_TEMP/fake_daemon.out" ]; do sleep 1; done
+          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_daemon.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/fake_daemon.out" ] || { echo "the fake daemons did not start"; exit 1; }
           device=$(xcrun simctl list devices available -j |
             jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
             xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
-            -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
+            -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+      # -quiet prints a failing UI test's name but not its assertion; the result bundle has both.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-tests-xcresult
+          path: ${{ runner.temp }}/ios-tests.xcresult
+          if-no-files-found: ignore
       - name: Build the iOS app for devices
         run: >-
           xcodebuild build -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS
@@ -109,6 +131,7 @@ jobs:
     name: macos
     needs: bindings
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache/restore@v4
