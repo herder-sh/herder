@@ -27,7 +27,11 @@ final class PairingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["All 2 machines connected"].waitForExistence(timeout: 15))
 
         // The tab bar reaches every section the Mac sidebar has.
-        app.tabBars.buttons["PRs"].tap()
+        // The Board, and Pull Requests from it.
+        app.tabBars.buttons["Board"].tap()
+        let prs = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Pull Requests'")).firstMatch
+        XCTAssertTrue(prs.waitForExistence(timeout: 5), "the Board did not lead to Pull Requests")
+        prs.tap()
         XCTAssertTrue(app.staticTexts["No open pull requests."].waitForExistence(timeout: 5))
     }
 }
