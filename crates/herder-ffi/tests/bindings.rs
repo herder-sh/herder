@@ -18,9 +18,9 @@ use herder_ffi::{
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
-    Provider, Role, SessionStatus, UsagePeriod, UsageTotal,
+    Provider, Role, SessionSkill, SessionStatus, SkillSource, UsagePeriod, UsageTotal,
 };
-use support::{ACCOUNT, FakeDaemon};
+use support::{ACCOUNT, DEMO_SKILLS, FakeDaemon, IMPORTED_SKILL, PROJECT_SKILL};
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -218,24 +218,53 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     assert_eq!(info.code, herder_protocol::ErrorCode::NotFound);
     assert!(info.message.contains("gone"), "{}", info.message);
 
-    // The skill commands pass through; this daemon has no library yet.
-    assert_eq!(machine.skills, None);
-    let refused = block_on(client.send(
+    // The daemon serves its demo library, and the session sees the project skill checked in
+    // to the repository; the skill commands pass through.
+    let skills = machine.skills.clone().expect("the daemon has a library");
+    assert!(skills.repo.is_some() && skills.head.is_some() && skills.last_pull.is_some());
+    assert_eq!(skills.pull_error, None);
+    assert_eq!(
+        skills
+            .skills
+            .iter()
+            .map(|skill| (
+                skill.name.as_str(),
+                skill.description.as_str(),
+                skill.enabled
+            ))
+            .collect::<Vec<_>>(),
+        DEMO_SKILLS
+            .iter()
+            .map(|(name, description)| (*name, *description, true))
+            .collect::<Vec<_>>()
+    );
+    let listed = machine.session_skills.values().next().cloned();
+    assert_eq!(
+        listed,
+        Some(vec![SessionSkill {
+            name: PROJECT_SKILL.0.into(),
+            description: PROJECT_SKILL.1.into(),
+            source: SkillSource::Project,
+            path: Some(".claude/skills/deploy".into()),
+        }])
+    );
+    let imported = block_on(client.send(
         host.clone(),
-        CommandBody::PutSkill {
-            name: "deploy".into(),
-            files: vec![herder_protocol::SkillFile {
-                path: "SKILL.md".into(),
-                data: herder_protocol::Bytes(b"---".to_vec()),
-                executable: false,
-            }],
+        CommandBody::ImportSkill {
+            git_url: daemon.skill_source.clone(),
+            path: Some(IMPORTED_SKILL.0.into()),
         },
     ))
-    .unwrap_err();
-    let HerderError::Rejected { info } = refused else {
-        panic!("expected a refusal, got {refused:?}");
-    };
-    assert_eq!(info.code, herder_protocol::ErrorCode::Unsupported);
+    .unwrap();
+    assert_eq!(imported, CommandResult::Applied);
+    while !client.machines()[0].skills.as_ref().is_some_and(|skills| {
+        skills
+            .skills
+            .iter()
+            .any(|skill| skill.name == IMPORTED_SKILL.0)
+    }) {
+        assert!(block_on(changes.next()));
+    }
 
     // Backgrounded and back, the client syncs again.
     client.suspend();

@@ -14,6 +14,8 @@ final class FakeDaemon {
     let holdAccount: String
     /// Pairs a device as a member, where `link` pairs it as the owner.
     let memberLink: String
+    /// A repository with a skill to import, `changelog`, in a folder of its name.
+    let skillSource: String
     private let process = Process()
     private let stdin = Pipe()
 
@@ -26,8 +28,9 @@ final class FakeDaemon {
         process.standardInput = stdin
         process.standardOutput = stdout
         try process.run()
-        let lines = try Self.readLines(5, from: stdout.fileHandleForReading)
-        (link, repo, account, holdAccount, memberLink) = (lines[0], lines[1], lines[2], lines[3], lines[4])
+        let lines = try Self.readLines(6, from: stdout.fileHandleForReading)
+        (link, repo, account, holdAccount, memberLink, skillSource) = (lines[0], lines[1], lines[2], lines[3], lines[4],
+                                                                       lines[5])
     }
 
     deinit {

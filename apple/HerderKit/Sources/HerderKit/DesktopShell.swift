@@ -80,6 +80,12 @@ struct DesktopShell: View {
             } actions: {
                 EmptyView()
             }
+        case .skills:
+            Pane(title: "Skills", subtitle: "The skill library and project skills", switcher: switcher) {
+                SkillsView(fleet: fleet, session: session)
+            } actions: {
+                EmptyView()
+            }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
@@ -250,6 +256,7 @@ struct Switcher {
         Button("Home", systemImage: "tray.full") { go(.home) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Usage", systemImage: "chart.bar") { go(.usage) }
+        Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
         if !fleet.vaults.isEmpty { Button("Vault", systemImage: "archivebox") { go(.vault) } }
         Divider()
@@ -332,6 +339,7 @@ struct Sidebar: View {
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
             SidebarRow(title: "Usage", symbol: "chart.bar", selected: item == .usage) { select(.usage) }
+            SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
             if !fleet.vaults.isEmpty {
@@ -412,6 +420,7 @@ private struct SidebarRail: View {
             rail("tray.full", "Home", .home, badge: lists.requests.count)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("chart.bar", "Usage", .usage, badge: 0)
+            rail("book.closed", "Skills", .skills, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
             if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in

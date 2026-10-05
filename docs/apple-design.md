@@ -19,8 +19,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 
 ## 1. Decisions at a glance
 
-1. **One information architecture everywhere.** Home, Projects, Pull Requests, Usage, Machines
-   (with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
+1. **One information architecture everywhere.** Home, Projects, Pull Requests, Usage, Skills,
+   Machines (with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
    horizontal size class; `ListAndSession` picks list-beside-session from the pane's width.
@@ -35,7 +35,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 4. **Nothing is ever wider than the screen.** No fixed width over 320 pt on iOS outside a
    regular-width branch; content columns cap at 760 pt and centre (§5.2).
 5. **Lists put live work first.** Needs you, then running, then idle; archived sessions go in a
-   collapsed **Archived** group at the end; children sit under their parent (§4.6).
+   collapsed **Archived** group at the end; children sit under their parent (§4.7).
 6. **State is a glyph plus a colour, never colour alone** (`StatusGlyph`), the same set on every
    row, header and card, as in the TUI.
 7. **Touch is first-class on iOS.** 44 pt hit areas on iOS and iPadOS; the Mac keeps its
@@ -55,6 +55,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Pull Requests** | PRs linked to sessions, by project | prs view | `PullRequestsView` |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
+| **Skills** | the skill library on every machine, and a session's project skills | — | `SkillsView` |
 | **Machines** | each paired machine: connection, load, accounts and usage | fleet + accounts | `MachinesView`, `MachineCard` |
 | Vault | a vault's hosts and their sessions | fleet, host grouping | `VaultView` |
 | **Session** | one session: transcript, request, composer | session pane, chat tab | `SessionView` |
@@ -97,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) lists Home, Pull Requests, Usage, Machines, Vault (when
+- **The sidebar** (`Sidebar`, `SidebarRail`) lists Home, Pull Requests, Usage, Skills, Machines, Vault (when
   a vault is paired), then the projects, then each machine's connection at the bottom. It starts
   collapsed to the rail (`sidebarCollapsed`), which leaves the width to the session; ⇧⌘\
   toggles it. The window's traffic lights sit in its top bar (`Sidebar.topBar`, 52 pt on the
@@ -108,7 +109,7 @@ Rules:
   one-line subtitle, the pane's actions on the right (`PaneButton`, `IconButton`), then a
   search field where the pane lists sessions.
 - **The tab bar** on compact width has the same sections as the sidebar: Home (badged with the
-  needs-you count), Projects, PRs, Usage, Machines. A vault shows inside Machines. Each tab is its own
+  needs-you count), Projects, PRs, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own
   `NavigationStack` (`homePath`, `projectsPath`, `prsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
@@ -136,7 +137,7 @@ Home never lists archived sessions. On iPhone, a connection line ("1 machine con
 
 One group per project, sorted by name, "No project yet" last. The group header is the
 project's tile (`ProjectIcon`), name, machines, and its New Session and settings buttons. Inside:
-the live sessions as task trees, then **Archived** (§4.6).
+the live sessions as task trees, then **Archived** (§4.7).
 
 ### 4.3 Pull Requests (`PullRequestsView`)
 
@@ -162,7 +163,23 @@ plan's session and weekly windows with their reset (`UsageBar`, the windows Mach
 Last, a by-model table of turns, tokens and dollars. It fills the width on the Mac, like
 Machines; on iPhone it is the Usage tab. Screenshots are still to come, in `docs/screenshots/p11-4`.
 
-### 4.6 List rules (every session list)
+### 4.6 Skills (`SkillsView`)
+
+The skill library (`SkillLibrary`, from each machine's `skills_status`). First run, when no
+machine has a library, is one card asking for its git URL (`set_skills_repo`, through one
+machine the user owns; the client sets it on the rest). Then the repository, with **Pull**,
+**New Skill** and **Import**; one row per machine with its commit, when it last pulled, and why a
+pull failed; and one card per skill: name, description, the providers it reaches, its menu
+(Edit, Delete) and a switch per machine (`set_skill_enabled`). **New Skill** and **Edit** write
+one `SKILL.md` (`SkillEditorSheet`: name, description, instructions); editing replaces the
+skill's folder, since the app cannot read a skill's files. **Import** takes a git URL and a
+folder (`SkillImportSheet`). Last, **Project Skills**: the skills checked in to the repository
+of the session open beside the screen, or of a project picked from a menu, read-only and
+labelled with their folder. Members see everything and change nothing: the write controls are
+hidden and the switches disabled. It fills the width on the Mac; on iPhone it opens from the
+top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
+
+### 4.7 List rules (every session list)
 
 - **Order:** a session that needs you, then running and waiting, then idle and failed; newest
   activity first within each, except Active, which holds creation order (above).
@@ -360,7 +377,7 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
 | `StatusGlyph` | `Design/StatusGlyph.swift` | the state set: running (pulsing blue dot), needs you (accent `!`), waiting (dashed ring), idle (ring), error (`✕`), archived (box), moved (`→`); same order and meaning as the TUI's §3.2 |
 | `PRBadge` | `Design/StatusGlyph.swift` | number coloured by PR state, CI mark, `!` for conflicts or changes requested |
 | `UsageBar` | `Design/StatusGlyph.swift` | neutral under 70%, accent from 70%, failure from 90%, as the TUI |
-| `SessionRow` | `Design/SessionRow.swift` | the one session row (§4.6) |
+| `SessionRow` | `Design/SessionRow.swift` | the one session row (§4.7) |
 | `RequestCard`, `ActionButton` | `Design/RequestCard.swift` | approvals and questions; 48 pt buttons |
 | `SheetScaffold`, `Field`, `InputBox`, `ChoiceChips`, `DetailRow` | `Design/Sheet.swift` | every sheet and form |
 | `Card`, `Chip`, `SectionHeading` | `Design/Theme.swift` | surfaces and headings |
