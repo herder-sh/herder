@@ -161,6 +161,59 @@ struct ListsTests {
         #expect(lists.machines.first?.hosts.map(\.sessions) == [1])
     }
 
+    /// Three projects on one machine: "Alpha" active first, "Beta" active last, "Idle" with no
+    /// sessions, and a session no project holds yet.
+    private func threeProjects() -> Lists {
+        var alpha = Script("01A")
+        var beta = Script("01B")
+        var loose = Script("01C")
+        var other = Script("01D")
+        let projects = [
+            Project(projectId: "github.com/acme/alpha", name: "Alpha", paths: ["/src/alpha"], defaultPermissionMode: nil,
+                    defaultAccount: nil, setupCommand: nil),
+            Project(projectId: "github.com/acme/beta", name: "Beta", paths: ["/src/beta-repo"], defaultPermissionMode: nil,
+                    defaultAccount: nil, setupCommand: nil),
+            Project(projectId: "github.com/acme/idle", name: "Idle", paths: ["/src/idle"], defaultPermissionMode: nil,
+                    defaultAccount: nil, setupCommand: nil),
+        ]
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"], projects: projects)
+        host.sessions[0].projectId = "github.com/acme/alpha"
+        host.sessions[1].projectId = "github.com/acme/beta"
+        host.sessions[3].projectId = "github.com/acme/alpha"
+        // Beta's session has the latest event of all.
+        return Lists(machines: [host], sessions: [
+            alpha.key: alpha.model([created(task: "Fix the login page")]),
+            beta.key: beta.model([created(task: "Tidy"), .turnStarted(turnId: "t"), .turnStarted(turnId: "u")]),
+            loose.key: loose.model([created(task: "Waiting")]),
+            other.key: other.model([created(task: "Write docs")]),
+        ])
+    }
+
+    @Test func projectsListMostRecentlyActiveFirstWithTheUnassignedLast() {
+        let lists = threeProjects()
+        // The sidebar keeps its alphabetical order.
+        #expect(lists.projects.map(\.name) == ["Alpha", "Beta", "Idle", "No project yet"])
+        #expect(ProjectGroup.found(lists.projects, query: "").map(\.name) == ["Beta", "Alpha", "Idle", "No project yet"])
+        #expect(lists.projects.first { $0.name == "Idle" }?.age == "")
+        #expect(lists.projects.first { $0.name == "Beta" }?.paths == ["/src/beta-repo"])
+    }
+
+    @Test func aSearchFindsProjectsByNameOrPathAndByTheirSessions() {
+        let projects = threeProjects().projects
+        func found(_ query: String) -> [String] { ProjectGroup.found(projects, query: query).map(\.name) }
+        #expect(found("ALPHA") == ["Alpha"])
+        #expect(found("  beta-repo ") == ["Beta"])
+        #expect(found("acme/idle") == ["Idle"])
+        #expect(found("nothing like it").isEmpty)
+        // A project found by its name keeps all its sessions.
+        #expect(ProjectGroup.found(projects, query: "alpha").first?.live.map(\.title) == ["Write docs", "Fix the login page"])
+        // One found through a session keeps just the sessions that match.
+        let login = ProjectGroup.found(projects, query: "login")
+        #expect(login.map(\.name) == ["Alpha"])
+        #expect(login.first?.live.map(\.title) == ["Fix the login page"])
+        #expect(login.first?.matches("login") == false)
+    }
+
     @Test func usageWindowsAreLabelledAsInTheTUI() {
         #expect(Lists.usageLabel("five_hour") == "Session")
         #expect(Lists.usageLabel("seven_day") == "Weekly")

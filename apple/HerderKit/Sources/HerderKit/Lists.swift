@@ -9,14 +9,47 @@ struct ProjectGroup: Hashable, Identifiable {
     let projectId: String?
     let name: String
     let machines: [String]
-    let live: [SessionSummary]
-    let archived: [SessionSummary]
+    var live: [SessionSummary]
+    var archived: [SessionSummary]
+    /// Where its machines keep its clones.
+    var paths: [String] = []
+    /// How long since any of its sessions last did something; empty without sessions.
+    var age = ""
+    /// Its place among the projects by when a session in it last did something, 0 the most
+    /// recent. A rank rather than the time itself, so the lists change when the order does,
+    /// not on every event a session streams.
+    var recency = 0
 
     var sessions: [SessionSummary] { live + archived }
 
     /// What its sidebar row and header show: its live sessions' states rolled up, as the TUI
     /// rolls up a project; `nil` without any.
     var state: SessionState? { SessionState.rollup(live.map(\.state)) }
+
+    /// Whether the project itself matches a search: its name, id or a clone's path.
+    func matches(_ query: String) -> Bool {
+        let query = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return true }
+        return ([name] + [projectId ?? ""] + paths).contains { $0.lowercased().contains(query) }
+    }
+
+    /// The projects a search finds, most recently active first, the sessions waiting for a
+    /// project last. A project that matches keeps all its sessions; one that matches only
+    /// through some of its sessions keeps just those.
+    static func found(_ projects: [ProjectGroup], query: String) -> [ProjectGroup] {
+        projects
+            .compactMap { project -> ProjectGroup? in
+                if project.matches(query) { return project }
+                var found = project
+                found.live = project.live.filter { $0.matches(query) }
+                found.archived = project.archived.filter { $0.matches(query) }
+                return found.sessions.isEmpty ? nil : found
+            }
+            .sorted { a, b in
+                if (a.projectId == nil) != (b.projectId == nil) { return b.projectId == nil }
+                return a.recency < b.recency
+            }
+    }
 }
 
 /// What the lists show, built from the machines and their sessions' folded state the way the
@@ -106,7 +139,7 @@ struct Lists: Equatable {
         for project in machines.flatMap(\.projects) where grouped[project.projectId] == nil {
             grouped[project.projectId] = []
         }
-        return grouped.map { projectId, members in
+        let groups = grouped.map { projectId, members -> (ProjectGroup, Date?) in
             let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
             let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
             // A child whose parent is in the other group leads a tree of its own in its group.
@@ -123,11 +156,22 @@ struct Lists: Equatable {
             for entry in members where !machineNames.contains(entry.machineName) {
                 machineNames.append(entry.machineName)
             }
-            return ProjectGroup(
+            var paths: [String] = []
+            for project in machines.flatMap(\.projects) where project.projectId == projectId {
+                for path in project.paths where !paths.contains(path) { paths.append(path) }
+            }
+            let lastActive = members.compactMap(\.model.updatedAt).max()
+            let group = ProjectGroup(
                 projectId: projectId, name: name, machines: machineNames,
-                live: tree(archived: false), archived: tree(archived: true))
+                live: tree(archived: false), archived: tree(archived: true), paths: paths,
+                age: Timestamp.age(lastActive, now: now))
+            return (group, lastActive)
         }
-        .sorted { a, b in
+        var ranked = groups.sorted { a, b in
+            (a.1 ?? .distantPast, b.0.name.lowercased(), b.0.id) > (b.1 ?? .distantPast, a.0.name.lowercased(), a.0.id)
+        }.map(\.0)
+        for index in ranked.indices { ranked[index].recency = index }
+        return ranked.sorted { a, b in
             if (a.projectId == nil) != (b.projectId == nil) { return b.projectId == nil }
             return (a.name.lowercased(), a.id) < (b.name.lowercased(), b.id)
         }
