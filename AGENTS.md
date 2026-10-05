@@ -10,6 +10,8 @@ repo in parallel; these rules keep that safe. Follow them exactly.
 - PR title starts with the todo code: `P1.6 · Claude adapter`.
 - PR body links the Basecamp todo URL and restates its "Done when", with how you verified it.
 - Branch from the latest `origin/main`, using `git worktree add`. Rebase before you push.
+- Once the PR is merged or closed, remove its worktree with `git worktree remove`. The branch
+  stays; each worktree's `target/` holds 10-25 GB.
 
 ## Stay in your lane
 
