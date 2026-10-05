@@ -1,17 +1,16 @@
 import XCTest
 
-/// Drives the app against the fake daemons whose shared pairing link is in `HERDER_PAIR_LINK`
-/// (`fake_daemon --share` prints it; pass it to `xcodebuild test` as
-/// `TEST_RUNNER_HERDER_PAIR_LINK`).
+/// Pairs the app with the fake daemons from the link they share (`XCUIApplication.pairLink`).
 final class PairingUITests: XCTestCase {
     @MainActor
     func testPairingWithASharedLinkPairsEveryMachine() throws {
-        let link = try XCTUnwrap(
-            ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        let link = try XCUIApplication.pairLink()
         let app = XCUIApplication()
         app.launch()
 
-        app.buttons["Add Machine"].firstMatch.tap()
+        let add = app.buttons["Add Machine"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 30), "the app did not open on an empty Home")
+        add.tap()
         let field = app.descendants(matching: .any)["pairing-link"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()

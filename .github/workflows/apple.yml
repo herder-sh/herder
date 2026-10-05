@@ -100,22 +100,44 @@ jobs:
         run: |
           brew install xcodegen
           xcodegen generate --spec apple/project.yml
+      - name: Pick and boot a simulator
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
+          echo "device=$device" >> "$GITHUB_ENV"
+          # Booted while the app builds, so the first test does not wait out a cold boot.
+          xcrun simctl boot "$device"
+      - name: Build the iOS app and its UI tests
+        run: >-
+          xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj
+          -scheme herder-iOS -destination "platform=iOS Simulator,id=$device" COMPILER_INDEX_STORE_ENABLE=NO
       - name: Test the iOS app on a simulator against the fake daemons
         # A UI test that loses its way can leave xcodebuild waiting forever.
-        timeout-minutes: 30
+        timeout-minutes: 20
         run: |
-          # Two daemons and the link a device paired with both shares. They run until stdin
-          # closes, so keep it open for the job.
+          xcrun simctl bootstatus "$device"
+          # Two daemons and the link a device paired with both shares. They start only now, after
+          # the build: the link's codes expire 10 minutes after the daemons mint them. They run
+          # until stdin closes, so keep it open for the job.
           (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_daemon.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_daemon.out" ] || { echo "the fake daemons did not start"; exit 1; }
-          device=$(xcrun simctl list devices available -j |
-            jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
-            xcodebuild test -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
-            -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
-            COMPILER_INDEX_STORE_ENABLE=NO
-      # -quiet prints a failing UI test's name but not its assertion; the result bundle has both.
+            xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
+            -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
+      # -quiet prints a failing UI test's name but not its assertion; the result bundle has both,
+      # and the accessibility hierarchy at each failure.
+      - name: Print the failing UI tests' assertions
+        if: failure()
+        run: |
+          bundle="$RUNNER_TEMP/ios-tests.xcresult"
+          [ -d "$bundle" ] || exit 0
+          xcrun xcresulttool get test-results summary --path "$bundle" |
+            jq -r '.testFailures[]? | "\(.testIdentifierString): \(.failureText)"'
+          xcrun xcresulttool export attachments --path "$bundle" --output-path "$RUNNER_TEMP/attachments" || true
+          for file in "$RUNNER_TEMP"/attachments/*.txt; do
+            if [ -f "$file" ]; then echo "::group::$(basename "$file")"; cat "$file"; echo "::endgroup::"; fi
+          done
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
