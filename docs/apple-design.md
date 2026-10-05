@@ -250,6 +250,11 @@ The oldest approval, else the oldest question, pins above the composer as a `Req
 TUI pins its request panel. It never replaces the composer: a question can also be answered by
 typing.
 
+In the transcript, each question is a `QuestionRecord` card where it was asked: its text,
+rendered as Markdown, with "Waiting for you" (accent border) until it is answered. After that,
+the card lists the choices with what each means and checks the one picked, or shows the typed
+answer. An approval stays a line across the transcript.
+
 ### 5.4 Composer and its toolbar (`ComposerBox`)
 
 - A rounded box (22 pt corners, `Theme.surface`): the prompt on top (2–12 lines on iOS;
