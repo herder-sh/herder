@@ -227,6 +227,23 @@ struct ListsTests {
         #expect(login.first?.matches("login") == false)
     }
 
+    @Test func manySessionsBuildQuickly() {
+        // The lists are rebuilt as sessions stream; finding children over every session for
+        // each one took seconds with a few thousand and froze the app on launch.
+        let ids = (0..<3000).map { String(format: "01%05d", $0) }
+        var sessions: [SessionKey: SessionModel] = [:]
+        for id in ids {
+            var script = Script(id)
+            sessions[script.key] = script.model([created(task: id, parent: id == ids[0] ? nil : ids[0])])
+        }
+        let machines = [machine("host-a", name: "a", sessions: ids)]
+        let start = ContinuousClock.now
+        let lists = Lists(machines: machines, sessions: sessions)
+        #expect(ContinuousClock.now - start < .seconds(1))
+        #expect(lists.home.first?.children == 2999)
+        #expect(lists.projects.flatMap(\.sessions).count == 3000)
+    }
+
     @Test func usageWindowsAreLabelledAsInTheTUI() {
         #expect(Lists.usageLabel("five_hour") == "Session")
         #expect(Lists.usageLabel("seven_day") == "Weekly")
