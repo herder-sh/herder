@@ -1,12 +1,15 @@
 import Herder
 import SwiftUI
 
-/// The machines: connection, load, each account's usage, and on compact width a vault's hosts.
+/// The machines: connection, load, each account's usage, and on compact width the way to Skills
+/// and a vault's hosts.
 struct MachinesView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     /// Shows each paired vault under the machines, where it has no section of its own.
     var showsVaults = false
+    /// Leads to Skills, where it has no section of its own.
+    var showsSkills = false
     @State private var renaming: MachineSummary?
     @State private var forgetting: MachineSummary?
     @State private var error: String?
@@ -14,6 +17,7 @@ struct MachinesView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+                if showsSkills { skillsLink }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 14, alignment: .top)], spacing: 14) {
                     ForEach(fleet.lists.machines) { machine in
                         MachineCard(machine: machine, since: fleet.connectionLog[machine.hostId]?.last?.at) {
@@ -66,6 +70,27 @@ struct MachinesView: View {
         } message: {
             Text("Pair again to get it back.")
         }
+    }
+
+    private var skillsLink: some View {
+        NavigationLink { SkillsView(fleet: fleet) } label: {
+            Card(padding: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "book.closed").foregroundStyle(Theme.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Skills").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        let count = SkillLibrary(fleet.machines).skills.count
+                        Text(count == 1 ? "1 skill in the library" : "\(count) skills in the library")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                }
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("skills-link")
     }
 
     private func perform(_ action: () throws -> Void) {

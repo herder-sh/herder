@@ -304,6 +304,7 @@ struct CompactTabTests {
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.pullRequests) == .pullRequests)
         #expect(CompactTab(.usage) == .usage)
+        #expect(CompactTab(.skills) == .machines)
         #expect(CompactTab(.machines) == .machines)
         // A vault has no tab of its own: it shows inside Machines.
         #expect(CompactTab(.vault) == .machines)
