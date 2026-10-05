@@ -25,8 +25,8 @@
 //! - `ApprovalRequested` follows the `ItemCompleted` of the tool call it names.
 //! - `QuestionAsked` blocks the turn until the daemon sends `AnswerQuestion`. An adapter whose
 //!   CLI cannot ask never sends it, and so never receives `AnswerQuestion`.
-//! - `UsageReported`, `ModelChanged`, `PermissionModeChanged` and `SessionIdentified` may come
-//!   at any time.
+//! - `UsageReported`, `ModelChanged`, `PermissionModeChanged`, `SessionIdentified`,
+//!   `BackgroundAgents` and `BackgroundCommands` may come at any time.
 //! - `Exited` is the last event, always sent, after which the channel closes. A turn still open
 //!   when the process dies is first closed with `TurnFailed`.
 //!
@@ -309,6 +309,13 @@ pub enum AdapterEvent {
     /// They outlive the turn that started them, but not the CLI: none run after `Exited`.
     BackgroundAgents {
         /// Background agents still working.
+        running: u32,
+    },
+    /// How many other tasks the provider runs in the background, such as shell commands, sent
+    /// whenever the number changes. Unlike agents they do not keep the session `running`, as
+    /// a dev server runs for as long as the session; they too end with the CLI.
+    BackgroundCommands {
+        /// Background commands still running.
         running: u32,
     },
     /// The CLI reported its own id for this session, the one [`StartRequest::resume`] takes;

@@ -34,7 +34,8 @@ use tokio_util::sync::CancellationToken;
 /// A provider whose agent answers every prompt `Done: <prompt>` after a moment, never ends a
 /// turn on `Hang.`, and fails the turn on `Fail.`. It blocks on a request until it is answered: on `Ask.` it asks a
 /// question with choices A and B, on `Write <path>.` it asks to write the file, and on
-/// `Run <command>.` to run the command.
+/// `Run <command>.` to run the command. `Background.` leaves a command running in the
+/// background past its turn, and `Finish.` ends it before its turn does.
 struct Echo;
 
 impl Adapter for Echo {
@@ -93,6 +94,15 @@ impl Adapter for Echo {
                             }
                             if text == "Hang." {
                                 continue;
+                            }
+                            let commands = match text.as_str() {
+                                "Background." => Some(1),
+                                "Finish." => Some(0),
+                                _ => None,
+                            };
+                            if let Some(running) = commands {
+                                let running = AdapterEvent::BackgroundCommands { running };
+                                let _ = events.send(running).await;
                             }
                             if text == "Fail." {
                                 let error = TurnError {
@@ -953,6 +963,72 @@ async fn children_that_have_not_finished_cleanly_and_primaries_stay_live() {
         .await;
     assert_eq!(daemon.status(&primary).await, SessionStatus::Idle);
     assert!(daemon.worktree(&primary).await.is_dir());
+}
+
+#[tokio::test]
+async fn a_finished_child_whose_worktree_is_gone_is_archived() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+
+    // Each child blocks on a question while its worktree goes: one entirely, the other leaving
+    // build output behind that is no checkout.
+    let mut children = Vec::new();
+    for _ in 0..2 {
+        let child = id(&tools
+            .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+            .await["child"]);
+        let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+        assert_eq!(request["kind"], "request");
+        children.push(child);
+    }
+    let gone = daemon.worktree(&children[0]).await;
+    std::fs::remove_dir_all(&gone).unwrap();
+    let left = daemon.worktree(&children[1]).await;
+    std::fs::remove_dir_all(&left).unwrap();
+    std::fs::create_dir_all(left.join("target/debug")).unwrap();
+
+    for child in &children {
+        let answer = json!({ "child": child.as_str(), "question_id": "question-1", "choice": 0 });
+        tools.ok("answer", answer).await;
+        let wait = json!({ "child": child.as_str(), "timeout_secs": 10 });
+        let report = tools.ok("wait_for", wait).await;
+        assert_eq!(report["status"], "archived", "{report}");
+        assert_eq!(daemon.status(child).await, SessionStatus::Archived);
+    }
+    assert!(!gone.exists());
+    // What was left is not git's to remove.
+    assert!(left.join("target/debug").is_dir());
+}
+
+#[tokio::test]
+async fn a_finished_child_is_not_archived_under_its_background_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Background." }))
+        .await["child"]);
+    let wait = json!({ "child": child.as_str(), "timeout_secs": 10 });
+
+    // Its turn ends while a command it started still runs in its worktree: it stays idle, its
+    // worktree with it, and its report says why.
+    let report = tools.ok("wait_for", wait.clone()).await;
+    assert_eq!(report["status"], "idle", "{report}");
+    let summary = report["summary"].as_str().unwrap();
+    assert!(summary.starts_with("Done: Background."), "{summary}");
+    assert!(summary.contains("in the background still run"), "{summary}");
+    let worktree = daemon.worktree(&child).await;
+    assert!(worktree.join(".git").exists());
+
+    // Once they are done, its next clean turn archives it.
+    let send = json!({ "child": child.as_str(), "text": "Finish." });
+    assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
+    let report = tools.ok("wait_for", wait).await;
+    assert_eq!(report["status"], "archived", "{report}");
+    assert!(!worktree.exists());
 }
 
 #[tokio::test]
