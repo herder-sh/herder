@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
     CommandId, CommandResult, Event, EventBody, HostId, JournalRecord, Project, ProjectId,
-    PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UserId,
+    PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UsageTotal,
+    UserId,
 };
 use herder_store::{NativeSession, NewEvent, QueuedPrompt, Session, Store};
 
@@ -86,6 +87,19 @@ impl Journal {
         let projects = self.projects.clone();
         self.with_store(move |store| {
             let stored = store.append(event)?;
+            // Usage is recorded here and not on import: a forked history's turns ran, and
+            // were counted, on the host it came from.
+            if let EventBody::TurnCompleted {
+                turn_id,
+                usage: Some(usage),
+            } = &stored.body
+            {
+                if let Err(err) =
+                    store.record_turn_usage(&stored.session_id, turn_id, usage, stored.at)
+                {
+                    tracing::warn!(%turn_id, "cannot record a turn's usage: {err:#}");
+                }
+            }
             sink.event(&stored);
             if lists {
                 let projects = projects.read().unwrap_or_else(PoisonError::into_inner);
@@ -203,6 +217,12 @@ impl Journal {
     /// Every child session of `parent`'s task, ordered by session id.
     pub(crate) async fn children(&self, parent: SessionId) -> Result<Vec<Session>> {
         self.with_store(move |store| store.children(&parent)).await
+    }
+
+    /// The usage of the turns completed since `since`, per account and model.
+    pub(super) async fn usage_totals(&self, since: Timestamp) -> Result<Vec<UsageTotal>> {
+        self.with_store(move |store| store.usage_totals(since))
+            .await
     }
 
     pub(crate) async fn sessions(&self) -> Result<Vec<Session>> {
