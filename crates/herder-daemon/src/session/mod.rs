@@ -45,10 +45,14 @@
 //! Creating a session adds its worktree and branch ([`crate::worktree`]). Every other branch
 //! checked out in the worktree is journaled as `branch_checked_out` when a turn ends and before
 //! the worktree is removed, so the session keeps owning it once the worktree, and the reflog it
-//! was read from, are gone. `archive_session` ([`SessionManager::archive`]) removes the
-//! worktree, keeps its branches and journals the `archived` status; an archived session takes
-//! no further commands but `unarchive_session`, which adds the worktree back at the path it had,
-//! on the session's own branch, and journals the `idle` status.
+//! was read from, are gone. `archive_session` ([`SessionManager::archive`]) stops the session
+//! and journals the `archived` status, leaving the worktree as it is: archiving runs no git, so
+//! nothing in the worktree can stop it. [`SessionManager::remove_archived_worktrees`], run
+//! every [`SWEEP_INTERVAL`], removes the worktree of each session archived for
+//! [`KEEP_ARCHIVED_WORKTREE`], whatever it holds, keeping its branches. An archived session
+//! takes no further commands but `unarchive_session`, which goes on in the worktree when it is
+//! still there, else adds it back at the path it had, on the session's own branch, and
+//! journals the `idle` status.
 //!
 //! # Images
 //!
@@ -237,6 +241,7 @@ use herder_protocol::{
     TitleSource, TurnId, UsageWindow, UserId, clean_title,
 };
 use herder_store::{Session, Store};
+use jiff::SignedDuration;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -258,6 +263,12 @@ use crate::resources::{Admission, Docker, Scopes};
 use crate::skills::Skills;
 use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees, checkpoint};
+
+/// How long an archived session's worktree is kept before it is removed.
+pub const KEEP_ARCHIVED_WORKTREE: SignedDuration = SignedDuration::from_hours(3 * 24);
+
+/// How often archived sessions' worktrees are checked for removal.
+pub const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 /// Where a session manager publishes what clients should see. Calls for one session arrive in
 /// order; implementations must not block.
@@ -697,8 +708,8 @@ impl SessionManager {
                     answer,
                 },
             ),
-            CommandBody::ArchiveSession { session_id, force } => {
-                return self.archive(by, session_id, force).await;
+            CommandBody::ArchiveSession { session_id } => {
+                return self.archive(by, session_id).await;
             }
             CommandBody::RenameSession { session_id, title } => {
                 return self.rename(by, session_id, &title).await;
@@ -1222,17 +1233,74 @@ impl SessionManager {
         })
     }
 
-    /// Archives `session_id` for `by`: removes its worktree, keeping its branches, and makes it
-    /// read-only. Refuses while a turn runs, and while the worktree has uncommitted or untracked
-    /// changes unless `force`.
+    /// Archives `session_id` for `by`: stops it and makes it read-only, leaving its worktree
+    /// for [`Self::remove_archived_worktrees`]. Refuses while a turn or the setup command runs.
     pub async fn archive(
         &self,
         by: UserId,
         session_id: SessionId,
-        force: bool,
     ) -> Result<CommandResult, ErrorInfo> {
-        self.send(session_id, Some(by), Request::Archive { force })
-            .await
+        self.send(session_id, Some(by), Request::Archive).await
+    }
+
+    /// Removes the worktree of every session archived at least `after` ago whose worktree is
+    /// still there, keeping its branches. A failure is logged; the next sweep tries again.
+    pub async fn remove_archived_worktrees(&self, after: SignedDuration) -> anyhow::Result<()> {
+        let journal = &self.inner.journal;
+        let now = Timestamp::now();
+        for session in journal.sessions().await? {
+            // A session without a branch works in the user's own folder: nothing to remove.
+            if session.status != SessionStatus::Archived
+                || session.branch.is_none()
+                || !Path::new(&session.worktree).exists()
+            {
+                continue;
+            }
+            let archived_at = journal
+                .all(session.session_id.clone())
+                .await?
+                .into_iter()
+                .rev()
+                .find_map(|event| {
+                    matches!(
+                        event.body,
+                        EventBody::SessionStatusChanged {
+                            status: SessionStatus::Archived,
+                            ..
+                        }
+                    )
+                    .then_some(event.at)
+                });
+            if !archived_at.is_some_and(|at| now.duration_since(at) >= after) {
+                continue;
+            }
+            let session_id = session.session_id;
+            match self
+                .send(session_id.clone(), None, Request::RemoveWorktree)
+                .await
+            {
+                Ok(_) => info!(%session_id, "removed the archived session's worktree"),
+                Err(err) => {
+                    warn!(%session_id, "cannot remove the archived worktree: {}", err.message)
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs [`Self::remove_archived_worktrees`] now and every [`SWEEP_INTERVAL`] until
+    /// `shutdown`.
+    pub async fn sweep_archived_worktrees(self, shutdown: CancellationToken) {
+        let mut every = tokio::time::interval(SWEEP_INTERVAL);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                _ = every.tick() => {}
+            }
+            if let Err(err) = self.remove_archived_worktrees(KEEP_ARCHIVED_WORKTREE).await {
+                warn!("cannot sweep archived worktrees: {err:#}");
+            }
+        }
     }
 
     /// Sets the title of `session_id` as `by` chose it.

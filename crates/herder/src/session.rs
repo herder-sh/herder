@@ -127,13 +127,11 @@ enum Command {
     },
     /// List the machine's sessions with their status and linked pull requests.
     List,
-    /// Archive a session: remove its worktree, keep its branches, make it read-only.
+    /// Archive a session: stop it and make it read-only; its worktree is removed three days
+    /// later, its branches kept.
     Archive {
         /// The session id.
         session: String,
-        /// Remove the worktree even with uncommitted or untracked changes.
-        #[arg(long)]
-        force: bool,
     },
     /// Bring an archived session back: its worktree again, on its branch, and writable.
     Unarchive {
@@ -399,11 +397,10 @@ impl Cli {
                 self.print(&view, || view.describe())?;
             }
             Command::List => self.list().await?,
-            Command::Archive { session, force } => {
+            Command::Archive { session } => {
                 let session_id = SessionId::new(session);
                 self.send(CommandBody::ArchiveSession {
                     session_id: session_id.clone(),
-                    force,
                 })
                 .await?;
                 if self.json {

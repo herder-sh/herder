@@ -25,6 +25,7 @@ use herder_protocol::{
 };
 use herder_store::Store;
 use herder_tasktools::CallToolResult;
+use jiff::SignedDuration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
 use tokio::sync::mpsc;
@@ -584,8 +585,8 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
     };
     let branch = branch.as_ref().unwrap();
     assert_eq!(repo, daemon.repo.to_str().unwrap());
-    // Archived: the worktree is gone, the branch kept.
-    assert!(!Path::new(worktree).exists());
+    // Archived: the worktree stays until the sweep days later, the branch kept.
+    assert!(Path::new(worktree).is_dir());
     let kept = format!("refs/heads/{branch}");
     git(&daemon.repo, &["show-ref", "--verify", "--quiet", &kept]);
     assert_eq!(branch, a["branch"].as_str().unwrap());
@@ -886,6 +887,12 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
     assert_eq!(second["summary"], "Done: Second.");
     assert_eq!(second["status"], "archived");
     let worktree = daemon.worktree(&child).await;
+    assert!(worktree.is_dir());
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
     assert!(!worktree.exists());
 
     // A finished child is unarchived, back on its branch, and starts at once.
@@ -1029,7 +1036,8 @@ async fn a_finished_child_is_not_archived_under_its_background_commands() {
     assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
     let report = tools.ok("wait_for", wait).await;
     assert_eq!(report["status"], "archived", "{report}");
-    assert!(!worktree.exists());
+    // The worktree stays until the sweep days later.
+    assert!(worktree.join(".git").exists());
 }
 
 #[tokio::test]
@@ -1960,7 +1968,6 @@ async fn agent_delivery_receipts_survive_archive_and_scope_keys_by_sender() {
     daemon
         .user_answers(CommandBody::ArchiveSession {
             session_id: b.clone(),
-            force: true,
         })
         .await;
     drop(daemon);

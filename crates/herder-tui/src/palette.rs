@@ -3,7 +3,7 @@
 //!
 //! Enter runs the command under the cursor. A command that takes an argument completes to
 //! `name ` first, so the argument is typed after it; the line typed then runs as the prompt
-//! runs `/name args`, so `model opus`, `mode ask` and `archive!` work as the old `:` palette's
+//! runs `/name args`, so `model opus` and `mode ask` work as the old `:` palette's
 //! words did. Commands on a session apply to the selected one in the session list, else the
 //! open one.
 
@@ -65,11 +65,10 @@ fn text(command: &Command) -> String {
     format!("{} {}", command.name, command.does)
 }
 
-/// The command `name` names; the old palette's `interrupt` and `archive!` too.
+/// The command `name` names; the old palette's `interrupt` too.
 pub fn find(name: &str) -> Option<&'static Command> {
     let name = match name {
         "interrupt" => "stop",
-        "archive!" => "archive",
         name => name,
     };
     COMMANDS.iter().find(|command| command.name == name)

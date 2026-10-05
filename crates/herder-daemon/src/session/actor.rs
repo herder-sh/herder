@@ -105,10 +105,12 @@ pub(super) enum Request {
         act: PrimaryAct,
         done: oneshot::Sender<Result<(), ToolError>>,
     },
-    /// Removes the worktree, keeping its branches, and makes the session read-only.
-    Archive {
-        force: bool,
-    },
+    /// Stops the session and makes it read-only, leaving the worktree for
+    /// [`Request::RemoveWorktree`].
+    Archive,
+    /// Removes an archived session's worktree, keeping its branches; does nothing once the
+    /// session is not archived.
+    RemoveWorktree,
     /// Adds an archived session's worktree back and makes the session writable again.
     Unarchive,
     /// Moves the session to another account between turns, replaying its transcript.
@@ -458,6 +460,10 @@ impl Actor {
             self.unarchive(by).await?;
             return Ok(CommandResult::Applied);
         }
+        if let Request::RemoveWorktree = request {
+            self.remove_worktree().await?;
+            return Ok(CommandResult::Applied);
+        }
         if self.session.status == SessionStatus::Archived {
             return Err(error(
                 ErrorCode::Conflict,
@@ -683,14 +689,14 @@ impl Actor {
                     .await
                     .map_err(super::internal)?;
             }
-            Request::Archive { force } => self.archive(by, force).await?,
+            Request::Archive => self.archive(by).await?,
             Request::Switch { account_id, to } => {
                 self.switch(by, account_id, to).await?;
                 self.cancel_retry(true).await;
             }
             Request::SetUp { command, timeout } => self.set_up(command, timeout).await,
             Request::MovedAway => self.moved_away().await,
-            Request::FromPrimary { .. } | Request::Unarchive => {}
+            Request::FromPrimary { .. } | Request::Unarchive | Request::RemoveWorktree => {}
         }
         Ok(CommandResult::Applied)
     }
@@ -1090,7 +1096,7 @@ impl Actor {
         self.tool_calls.clear();
     }
 
-    async fn archive(&mut self, by: Option<UserId>, force: bool) -> Result<(), ErrorInfo> {
+    async fn archive(&mut self, by: Option<UserId>) -> Result<(), ErrorInfo> {
         if self.turn.is_some() {
             return Err(error(
                 ErrorCode::Conflict,
@@ -1103,18 +1109,7 @@ impl Actor {
                 "the setup command is running; interrupt it before archiving",
             ));
         }
-        // The reflog goes with the worktree: journal what it knows first.
         self.record_branches().await;
-        let session = &self.session;
-        self.inner
-            .worktrees
-            .remove(
-                Path::new(&session.repo),
-                Path::new(&session.worktree),
-                force,
-            )
-            .await
-            .map_err(super::worktree_error)?;
         if let Some(prs) = self.inner.prs.get()
             && self.session.branch.is_some()
         {
@@ -1258,8 +1253,24 @@ impl Actor {
         attachments::save(&self.inner.attachments, &self.session.session_id, images).await
     }
 
-    /// Adds the worktree of an archived session back, at the path it had, on the session's own
-    /// branch as archive kept it, and makes the session writable again.
+    /// Removes the worktree of a session still archived, keeping its branches.
+    async fn remove_worktree(&mut self) -> Result<(), ErrorInfo> {
+        if self.session.status != SessionStatus::Archived {
+            return Ok(());
+        }
+        // The reflog goes with the worktree: journal what it knows first.
+        self.record_branches().await;
+        let session = &self.session;
+        self.inner
+            .worktrees
+            .remove(Path::new(&session.repo), Path::new(&session.worktree))
+            .await
+            .map_err(super::worktree_error)
+    }
+
+    /// Brings an archived session back: its worktree as archive left it, or, once removed,
+    /// added back at the path it had on the session's own branch; and makes the session
+    /// writable again.
     async fn unarchive(&mut self, by: Option<UserId>) -> Result<(), ErrorInfo> {
         match self.session.status {
             SessionStatus::Archived => {}
@@ -2483,7 +2494,7 @@ impl Actor {
         if let Err(err) = self.inner.journal.record(parent.clone(), None, body).await {
             warn!(session_id = %child, "cannot journal a report to {parent}: {err:#}");
         }
-        if archive && let Err(err) = self.archive(None, false).await {
+        if archive && let Err(err) = self.archive(None).await {
             warn!(session_id = %child, "cannot archive the finished child: {}", err.message);
         }
         let output = WaitForOutput::Report {

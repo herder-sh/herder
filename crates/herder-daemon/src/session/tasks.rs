@@ -19,8 +19,8 @@
 //! `wait_for` took, which stay in the primary's journal and in `status`.
 //!
 //! A child that completes a turn with nothing queued, its worktree clean, is archived right
-//! after its report is journaled and before `wait_for` hears of it: its worktree is removed,
-//! its branch kept, and it no longer counts toward `max_children`. A child whose worktree has
+//! after its report is journaled and before `wait_for` hears of it: its worktree is removed
+//! days later, its branch kept, and it no longer counts toward `max_children`. A child whose worktree has
 //! changes stays idle, and its report says why. A failed or interrupted turn, and a primary,
 //! never archive a session. `send` to an archived child unarchives it before the prompt.
 //!

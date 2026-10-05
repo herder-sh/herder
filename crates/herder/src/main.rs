@@ -308,7 +308,7 @@ mod tests {
             &[
                 "herder", "session", "send", "01J", "--answer", "q1", "SQLite",
             ],
-            &["herder", "session", "archive", "01J", "--force"],
+            &["herder", "session", "archive", "01J"],
         ] {
             assert!(Cli::try_parse_from(args).is_ok(), "{args:?}");
         }

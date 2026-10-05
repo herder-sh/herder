@@ -658,7 +658,6 @@ async fn a_client_of_the_vault_sees_host_sessions_read_only() {
     );
     let archive = CommandBody::ArchiveSession {
         session_id: SessionId::new("s2"),
-        force: true,
     };
     assert!(matches!(
         client.send(vault_id.clone(), archive).await,

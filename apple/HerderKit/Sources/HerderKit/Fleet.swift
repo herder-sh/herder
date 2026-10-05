@@ -390,20 +390,18 @@ public final class Fleet {
     }
 
     /// Archives a session, showing it as archiving until the machine is done. A refusal, such
-    /// as uncommitted changes in the worktree, goes to `archiveRefusal` to decide on.
-    func archive(_ key: SessionKey, force: Bool = false) async {
+    /// as a running turn, goes to `archiveRefusal` to show.
+    func archive(_ key: SessionKey) async {
         guard !archiving.contains(key) else { return }
         let title = sessions[key]?.title ?? "Session"
         archiving.insert(key)
         defer { archiving.remove(key) }
         do {
-            _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId, force: force))
+            _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId))
             refusals[key] = nil
             toast = Toast(text: "Archived “\(title)”", undo: key)
         } catch {
-            var canForce = false
-            if case .Rejected(let info)? = error as? HerderError, info.code == .conflict, !force { canForce = true }
-            archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error), canForce: canForce)
+            archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error))
         }
     }
 
@@ -540,13 +538,11 @@ extension Fleet {
     }
 }
 
-/// An archive the machine refused: why, and whether forcing it could go ahead.
+/// An archive the machine refused, and why.
 struct ArchiveRefusal: Identifiable {
     let key: SessionKey
     let title: String
     let reason: String
-    /// A conflict, such as uncommitted changes, that archiving anyway overrides.
-    let canForce: Bool
     var id: SessionKey { key }
 }
 

@@ -30,8 +30,9 @@
 //!
 //! # Removal
 //!
-//! [`Worktrees::remove`] removes the worktree and keeps its branches, refusing while the
-//! worktree has uncommitted or untracked changes unless forced.
+//! [`Worktrees::remove`] removes the worktree, whatever it holds, and keeps its branches. A
+//! worktree git no longer knows, such as one whose `.git` link is gone, is deleted as a folder.
+//! Archive does not remove it: the session manager does, days later ([`crate::session`]).
 
 pub mod checkpoint;
 
@@ -210,9 +211,14 @@ impl Worktrees {
         })
     }
 
-    /// Adds a worktree of `repo` back at `path`, where [`Self::remove`] removed it, on the
-    /// existing branch `branch`. Refuses when the branch is gone or the path is taken.
+    /// Makes `path` a worktree of `repo` again: left as it is while it still is one, else
+    /// added back on the existing branch `branch`, where [`Self::remove`] removed it. What is
+    /// left at a path in this directory that is no worktree is deleted first. Refuses when the
+    /// branch is gone or a path outside this directory is taken.
     pub async fn reopen(&self, repo: &Path, path: &Path, branch: &str) -> Result<(), Error> {
+        if is_worktree(path).await {
+            return Ok(());
+        }
         if !is_branch(repo, branch).await? {
             return Err(Error::Conflict(format!(
                 "branch {branch} no longer exists in {}",
@@ -220,10 +226,13 @@ impl Worktrees {
             )));
         }
         if path.exists() {
-            return Err(Error::Conflict(format!(
-                "{} already exists",
-                path.display()
-            )));
+            if !self.holds(path) {
+                return Err(Error::Conflict(format!(
+                    "{} already exists",
+                    path.display()
+                )));
+            }
+            delete(path).await?;
         }
         if let Some(parent) = path.parent() {
             // One mkdir; not worth a blocking-pool hop.
@@ -245,38 +254,61 @@ impl Worktrees {
         Ok(())
     }
 
-    /// Removes the worktree at `path` of `repo`, keeping every branch. Refuses while it has
-    /// uncommitted or untracked changes, unless `force`. A worktree that is already gone, or no
-    /// longer a checkout, is pruned and whatever is left at `path` stays; a path outside this directory, such as the repository itself, is left alone.
-    pub async fn remove(&self, repo: &Path, path: &Path, force: bool) -> Result<(), Error> {
-        if path == self.root || !path.starts_with(&self.root) {
+    /// Removes the worktree at `path` of `repo` with whatever it holds, keeping every branch.
+    /// When git cannot, as for a worktree whose `.git` link is gone, the folder is deleted and
+    /// git forgets it. A path outside this directory, such as the repository itself, is left
+    /// alone.
+    pub async fn remove(&self, repo: &Path, path: &Path) -> Result<(), Error> {
+        if !self.holds(path) {
             return Ok(());
         }
-        if !is_checkout(path) {
-            // Gone, or only files left behind, such as build output written after it went:
-            // git forgets it, and what is left is not git's to remove.
-            git(repo, ["worktree", "prune"]).await?;
-            return Ok(());
+        if path.exists() {
+            // `--force`: uncommitted, untracked and ignored files go too.
+            let removed = git(
+                repo,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("remove"),
+                    OsStr::new("--force"),
+                    path.as_os_str(),
+                ],
+            )
+            .await;
+            if removed.is_err() {
+                delete(path).await?;
+            }
         }
-        if !force && dirty(path).await? {
-            return Err(Error::Conflict(format!(
-                "{} has uncommitted or untracked changes; commit or discard them, or force",
-                path.display()
-            )));
-        }
-        // `--force` once the check passed or the user asked: it also removes ignored files.
-        git(
-            repo,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("remove"),
-                OsStr::new("--force"),
-                path.as_os_str(),
-            ],
-        )
-        .await?;
+        // The repository may be gone too; then there is nothing to forget.
+        let _ = git(repo, ["worktree", "prune"]).await;
         Ok(())
     }
+
+    /// Whether `path` is in this directory, where only worktrees live.
+    fn holds(&self, path: &Path) -> bool {
+        path != self.root && path.starts_with(&self.root)
+    }
+}
+
+/// Whether `path` is the top of a git worktree.
+async fn is_worktree(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(toplevel) = git(path, ["rev-parse", "--show-toplevel"]).await else {
+        return false;
+    };
+    // A folder git cannot read finds an enclosing repository's top instead.
+    match (Path::new(&toplevel).canonicalize(), path.canonicalize()) {
+        (Ok(toplevel), Ok(path)) => toplevel == path,
+        _ => false,
+    }
+}
+
+/// Deletes the folder at `path` and everything in it.
+async fn delete(path: &Path) -> Result<(), Error> {
+    tokio::fs::remove_dir_all(path)
+        .await
+        .map_err(|err| Error::Git(format!("deleting {}: {err}", path.display())))
 }
 
 /// Whether sessions of the folder `repo` work in it directly: it is not in a git repository,

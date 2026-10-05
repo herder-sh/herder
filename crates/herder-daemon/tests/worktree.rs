@@ -136,8 +136,8 @@ async fn a_folder_without_a_commit_is_worked_in_itself() {
             .unwrap_err();
         assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
         assert!(branches(folder, None).await.unwrap().is_empty());
-        // Archiving leaves the folder alone.
-        worktrees.remove(folder, folder, false).await.unwrap();
+        // Removing leaves the folder alone.
+        worktrees.remove(folder, folder).await.unwrap();
         assert!(folder.is_dir());
     }
     assert!(!tmp.path().join("data/worktrees").exists());
@@ -224,22 +224,51 @@ async fn branches_records_every_branch_checked_out_in_the_worktree() {
 }
 
 #[tokio::test]
-async fn remove_refuses_a_dirty_worktree_unless_forced_and_keeps_the_branch() {
+async fn remove_takes_a_dirty_worktree_and_keeps_the_branches() {
     let (_tmp, repo, worktrees) = setup();
     let worktree = worktrees.create(&repo, "s1", None).await.unwrap();
     let path = &worktree.path;
     run(path, &["checkout", "--quiet", "-b", "side"]);
     std::fs::write(path.join("notes.txt"), "draft").unwrap();
 
-    let err = worktrees.remove(&repo, path, false).await.unwrap_err();
-    assert!(matches!(err, Error::Conflict(_)), "{err:?}");
-    assert!(path.is_dir());
-
-    worktrees.remove(&repo, path, true).await.unwrap();
+    worktrees.remove(&repo, path).await.unwrap();
     assert!(!path.exists());
     assert_eq!(run(&repo, &["worktree", "list"]).lines().count(), 1);
     assert!(branch_exists(&repo, "herder/s1"));
     assert!(branch_exists(&repo, "side"));
+}
+
+#[tokio::test]
+async fn remove_deletes_a_worktree_git_no_longer_knows() {
+    let (_tmp, repo, worktrees) = setup();
+    let worktree = worktrees.create(&repo, "s1", None).await.unwrap();
+    let path = &worktree.path;
+    // As a worktree left behind with only build output, its `.git` link gone.
+    std::fs::remove_file(path.join(".git")).unwrap();
+    std::fs::create_dir_all(path.join("apple/build")).unwrap();
+
+    worktrees.remove(&repo, path).await.unwrap();
+    assert!(!path.exists());
+    assert_eq!(run(&repo, &["worktree", "list"]).lines().count(), 1);
+    assert!(branch_exists(&repo, "herder/s1"));
+}
+
+#[tokio::test]
+async fn reopen_keeps_a_worktree_still_there_and_replaces_a_broken_one() {
+    let (_tmp, repo, worktrees) = setup();
+    let worktree = worktrees.create(&repo, "s1", None).await.unwrap();
+    let path = &worktree.path;
+    std::fs::write(path.join("notes.txt"), "draft").unwrap();
+    worktrees.reopen(&repo, path, "herder/s1").await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("notes.txt")).unwrap(),
+        "draft"
+    );
+
+    std::fs::remove_file(path.join(".git")).unwrap();
+    worktrees.reopen(&repo, path, "herder/s1").await.unwrap();
+    assert!(!path.join("notes.txt").exists());
+    assert_eq!(run(path, &["branch", "--show-current"]), "herder/s1");
 }
 
 #[tokio::test]
@@ -250,16 +279,13 @@ async fn remove_takes_a_clean_worktree_and_tolerates_a_missing_one() {
     std::fs::write(worktree.path.join(".gitignore"), "build.log\n").unwrap();
     run(&worktree.path, &["add", ".gitignore"]);
     run(&worktree.path, &["commit", "--quiet", "-m", "ignore logs"]);
-    worktrees
-        .remove(&repo, &worktree.path, false)
-        .await
-        .unwrap();
+    worktrees.remove(&repo, &worktree.path).await.unwrap();
     assert!(!worktree.path.exists());
     assert!(branch_exists(&repo, "herder/s1"));
 
     let other = worktrees.create(&repo, "s2", None).await.unwrap();
     std::fs::remove_dir_all(&other.path).unwrap();
-    worktrees.remove(&repo, &other.path, false).await.unwrap();
+    worktrees.remove(&repo, &other.path).await.unwrap();
     assert_eq!(run(&repo, &["worktree", "list"]).lines().count(), 1);
     assert_eq!(
         branches(&other.path, other.branch.as_deref())
@@ -272,6 +298,6 @@ async fn remove_takes_a_clean_worktree_and_tolerates_a_missing_one() {
 #[tokio::test]
 async fn remove_leaves_paths_outside_the_worktrees_dir_alone() {
     let (_tmp, repo, worktrees) = setup();
-    worktrees.remove(&repo, &repo, true).await.unwrap();
+    worktrees.remove(&repo, &repo).await.unwrap();
     assert!(repo.join(".git").is_dir());
 }

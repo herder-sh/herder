@@ -45,7 +45,7 @@ pub const COMMANDS: &[Command] = &[
         "",
         "ask AI to title the session from its conversation",
     ),
-    command("archive", "", "archive the session (archive! forces)"),
+    command("archive", "", "archive the session"),
     command("unarchive", "", "bring an archived session back"),
     command("pr", "<n|url>", "link a pull request"),
     command("unpr", "[n]", "unlink a pull request"),
@@ -507,7 +507,7 @@ impl App {
                 Ok(vec![send(key, command)])
             }
             ("stop", []) => self.session_command(session()?, "interrupt", &[]),
-            ("model" | "mode" | "archive" | "archive!" | "unarchive" | "down", args) => {
+            ("model" | "mode" | "archive" | "unarchive" | "down", args) => {
                 self.session_command(session()?, name, args)
             }
             _ => match COMMANDS.iter().find(|command| command.name == name) {

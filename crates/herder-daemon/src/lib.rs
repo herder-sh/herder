@@ -142,6 +142,7 @@ pub async fn serve(
         config.projects.clone(),
     ));
     sessions.manage_projects(host.id.clone(), Arc::clone(&projects))?;
+    tokio::spawn(sessions.clone().sweep_archived_worktrees(shutdown.clone()));
     sessions.checkpoint_turns(worktree::checkpoint::Config {
         dir: data_dir.root().join("checkpoints"),
         keep: worktree::checkpoint::KEEP,

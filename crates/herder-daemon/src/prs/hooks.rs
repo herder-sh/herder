@@ -207,9 +207,10 @@ pub(crate) async fn uninstall(
     Ok(())
 }
 
-/// Whether the main worktree or any linked one still has a `config.worktree`.
+/// Whether the main worktree or any linked one still sets anything in its `config.worktree`.
+/// An archived session's worktree stays for days with the file emptied of its hooks path.
 fn worktree_configs_left(common: &Path) -> Result<bool> {
-    if common.join("config.worktree").exists() {
+    if sets_anything(&common.join("config.worktree")) {
         return Ok(true);
     }
     let linked = match fs::read_dir(common.join("worktrees")) {
@@ -218,11 +219,22 @@ fn worktree_configs_left(common: &Path) -> Result<bool> {
         Err(err) => return Err(err).context("listing worktrees"),
     };
     for entry in linked {
-        if entry?.path().join("config.worktree").exists() {
+        if sets_anything(&entry?.path().join("config.worktree")) {
             return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether the git config file at `path` exists and holds a setting, not only section headers
+/// and comments.
+fn sets_anything(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|config| {
+        config
+            .lines()
+            .map(str::trim)
+            .any(|line| !line.is_empty() && !line.starts_with(['[', '#', ';']))
+    })
 }
 
 fn write_scripts(dir: &Path, scripts: &[(&str, String)]) -> Result<()> {
