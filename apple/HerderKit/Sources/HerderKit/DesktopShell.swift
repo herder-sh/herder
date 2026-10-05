@@ -74,6 +74,12 @@ struct DesktopShell: View {
                     EmptyView()
                 }
             }
+        case .usage:
+            Pane(title: "Usage", subtitle: "Tokens and API-equivalent cost", switcher: switcher) {
+                UsageView(fleet: fleet)
+            } actions: {
+                EmptyView()
+            }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
@@ -243,6 +249,7 @@ struct Switcher {
     @MainActor @ViewBuilder var items: some View {
         Button("Home", systemImage: "tray.full") { go(.home) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
+        Button("Usage", systemImage: "chart.bar") { go(.usage) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
         if !fleet.vaults.isEmpty { Button("Vault", systemImage: "archivebox") { go(.vault) } }
         Divider()
@@ -324,6 +331,7 @@ struct Sidebar: View {
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
+            SidebarRow(title: "Usage", symbol: "chart.bar", selected: item == .usage) { select(.usage) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
             if !fleet.vaults.isEmpty {
@@ -403,6 +411,7 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("tray.full", "Home", .home, badge: lists.requests.count)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
+            rail("chart.bar", "Usage", .usage, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
             if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
             ForEach(lists.projects) { project in

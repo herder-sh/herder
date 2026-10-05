@@ -2,7 +2,8 @@
 //! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
 //! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on.
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
-//! owner may change that limit.
+//! owner may change that limit. Its owner, [`OWNER`], is set up before anyone pairs, so a member
+//! can pair too.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result, ensure};
 use herder_adapters::fake::FakeAdapter;
 use herder_client_core::PairingUri;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::auth::{Auth, PAIRING_TTL, User};
 use herder_daemon::login::Logins;
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
@@ -21,7 +22,7 @@ use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Config, Hub, session};
-use herder_protocol::{AccountId, HostId, Provider, TurnId};
+use herder_protocol::{AccountId, HostId, Provider, Role, Timestamp, TurnId, UserId};
 use herder_store::Store;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -36,6 +37,9 @@ pub const HOLD_ACCOUNT: &str = "hold";
 
 /// An account whose turn waits on an approval, for the apps to show a request.
 pub const APPROVAL_ACCOUNT: &str = "approval";
+
+/// The daemon's owner, whom [`FakeDaemon::link`] pairs as.
+pub const OWNER: &str = "sample";
 
 /// Turns the daemon runs at once until an owner changes it.
 pub const MAX_TURNS: u32 = 4;
@@ -57,8 +61,10 @@ impl ReadHost for Roomy {
 
 /// A running daemon; [`FakeDaemon::stop`] stops it and removes everything it created.
 pub struct FakeDaemon {
-    /// A pairing link with a fresh code, for user `sample`, who becomes the owner.
+    /// A pairing link with a fresh code, for the owner, [`OWNER`].
     pub link: String,
+    /// A pairing link with a fresh code, for a member, `guest`.
+    pub member_link: String,
     /// Absolute path of a git repository with one commit.
     pub repo: String,
     shutdown: CancellationToken,
@@ -73,6 +79,7 @@ impl FakeDaemon {
         let dir = tmp.path().join("daemon");
         let repo = repo(&tmp.path().join("app"))?;
         std::fs::create_dir_all(dir.join("tls"))?;
+        owner(&dir)?;
 
         let tls = Tls::load_or_create(&dir.join("tls"), name)?;
         let auth = Arc::new(Auth::open(&dir)?);
@@ -136,11 +143,15 @@ impl FakeDaemon {
             async move { admission.run(&hub, shutdown).await }
         });
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-        let link = PairingUri {
-            hosts: vec![listener.local_addr()?.to_string()],
-            fingerprint: tls.fingerprint().to_owned(),
-            code: auth.mint("sample", None, PAIRING_TTL)?.code,
+        let link = |user: &str, role: Option<Role>| -> Result<String> {
+            let uri = PairingUri {
+                hosts: vec![listener.local_addr()?.to_string()],
+                fingerprint: tls.fingerprint().to_owned(),
+                code: auth.mint(user, role, PAIRING_TTL)?.code,
+            };
+            Ok(uri.to_string())
         };
+        let (link, member_link) = (link(OWNER, None)?, link("guest", Some(Role::Member))?);
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
         let logins = Logins::new(HashMap::new(), dir.join("daemon.toml"), sessions.clone());
         let host = Host {
@@ -155,7 +166,8 @@ impl FakeDaemon {
         server.manage_settings(settings)?;
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
-            link: link.to_string(),
+            link,
+            member_link,
             repo,
             shutdown,
             server,
@@ -168,6 +180,24 @@ impl FakeDaemon {
         self.shutdown.cancel();
         Ok(self.server.await?)
     }
+}
+
+/// Writes the users file the daemon opens with [`OWNER`] as its owner, as though they had
+/// paired, so a member's code can be minted before they do. The file's shape is the daemon's
+/// own (`herder_daemon::auth`).
+fn owner(dir: &Path) -> Result<()> {
+    let users = serde_json::json!({
+        "version": 1,
+        "users": [User {
+            user_id: UserId::new("owner"),
+            name: OWNER.into(),
+            role: Role::Owner,
+            created_at: Timestamp::now(),
+        }],
+        "devices": [],
+    });
+    std::fs::write(dir.join("auth.json"), serde_json::to_vec(&users)?)?;
+    Ok(())
 }
 
 /// A git repository with one commit, for the session to work on.

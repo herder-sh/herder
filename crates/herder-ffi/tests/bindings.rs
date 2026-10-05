@@ -18,7 +18,7 @@ use herder_ffi::{
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
-    SessionStatus,
+    Provider, Role, SessionStatus, UsagePeriod, UsageTotal,
 };
 use support::{ACCOUNT, FakeDaemon};
 
@@ -134,6 +134,49 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
         )),
         "{events:?}"
     );
+
+    // The turn's usage adds up on the daemon, for its owner and for a member alike.
+    let summary = |client: &Client| match block_on(client.send(
+        host.clone(),
+        CommandBody::GetUsageSummary {
+            period: UsagePeriod::Day,
+        },
+    ))
+    .unwrap()
+    {
+        CommandResult::UsageSummary { totals, .. } => totals,
+        other => panic!("expected a usage summary, got {other:?}"),
+    };
+    let totals = summary(&client);
+    assert_eq!(
+        totals,
+        [UsageTotal {
+            account_id: AccountId::new(ACCOUNT),
+            provider: Provider::Other(ACCOUNT.into()),
+            model: String::new(),
+            turns: 1,
+            input: 1_200,
+            output: 340,
+            cache_read: 18_000,
+            cache_write: 2_048,
+            cost_usd: 0.0425,
+            cost_estimated: false,
+        }]
+    );
+    let guest_config = tempfile::tempdir().unwrap();
+    let guest = Client::open(
+        guest_config.path().display().to_string(),
+        "herder-ffi-test/0".into(),
+    )
+    .unwrap();
+    let paired = block_on(guest.pair(daemon.member_link.clone())).unwrap();
+    assert!(
+        matches!(&paired[..], [PairResult::Paired { .. }]),
+        "{paired:?}"
+    );
+    block_on(guest.synced(host.clone())).unwrap();
+    assert_eq!(guest.machines()[0].role, Some(Role::Member));
+    assert_eq!(summary(&guest), totals);
 
     // A query's answer comes back as the command's result.
     let repo = std::path::Path::new(&daemon.repo);
