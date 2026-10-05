@@ -47,7 +47,9 @@ pub(crate) struct Limits(Mutex<HashMap<AccountId, Timestamp>>);
 
 impl Limits {
     /// `account_id` hit its limit at `now`: it is passed over until the latest reset of its
-    /// windows at 100%, or for [`UNKNOWN_RESET`] when none says.
+    /// windows at 100%, or for [`UNKNOWN_RESET`] when none says. A hit only ever extends the
+    /// wait: one without a reset time must not cut short a known later one, such as a weekly
+    /// window's.
     pub(crate) fn hit(&self, account_id: &AccountId, windows: &[UsageWindow], now: Timestamp) {
         let until = windows
             .iter()
@@ -56,7 +58,9 @@ impl Limits {
             .filter(|resets_at| *resets_at > now)
             .max()
             .unwrap_or_else(|| now + UNKNOWN_RESET);
-        self.lock().insert(account_id.clone(), until);
+        let mut limits = self.lock();
+        let entry = limits.entry(account_id.clone()).or_insert(until);
+        *entry = (*entry).max(until);
     }
 
     /// Whether `account_id` hit a limit that has not reset by `now`.
@@ -273,6 +277,20 @@ mod tests {
         assert_eq!(case.next("c").as_deref(), Some("a"));
         assert_eq!(case.next("a").as_deref(), Some("c"));
         case.now = at("2026-10-02T14:00:01Z");
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_later_hit_never_shortens_the_wait() {
+        let mut case = Case::new(&[("a", Provider::Claude), ("b", Provider::Claude)]);
+        let weekly = [window(100.0, "2026-10-08T12:00:00Z")];
+        case.limits.hit(&AccountId::new("b"), &weekly, case.now);
+        // A hit without a reset time keeps the weekly wait, not thirty minutes.
+        case.now = at("2026-10-02T13:00:00Z");
+        case.limits.hit(&AccountId::new("b"), &[], case.now);
+        case.now = at("2026-10-02T14:00:00Z");
+        assert_eq!(case.next("a"), None);
+        case.now = at("2026-10-08T12:00:01Z");
         assert_eq!(case.next("a").as_deref(), Some("b"));
     }
 }
