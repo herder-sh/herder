@@ -1,7 +1,7 @@
 //! The daemon the Swift and Kotlin samples connect to, as a sidecar process: see
 //! `tests/support`. Prints a pairing link, the repository's path, the account to run on, the
-//! account whose turns run until interrupted and a member's pairing link, one per line, then
-//! runs until its stdin closes.
+//! account whose turns run until interrupted, a member's pairing link and a repository to
+//! import a skill from, one per line, then runs until its stdin closes.
 //!
 //! `fake_daemon [NAME]` names the host (`fake-host` by default), to run several side by side.
 //! `fake_daemon --share` runs two, `fake-host-1` and `fake-host-2`, and prints instead the link
@@ -36,11 +36,12 @@ async fn main() -> Result<()> {
         }
     };
     println!(
-        "{link}\n{}\n{}\n{}\n{}",
+        "{link}\n{}\n{}\n{}\n{}\n{}",
         daemons[0].repo,
         support::ACCOUNT,
         support::HOLD_ACCOUNT,
-        daemons[0].member_link
+        daemons[0].member_link,
+        daemons[0].skill_source
     );
     tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
     for daemon in daemons {

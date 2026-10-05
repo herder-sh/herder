@@ -1,6 +1,8 @@
 //! A daemon for the bindings' tests and samples: in-process, on localhost, with one account
 //! on the fake adapter replaying `fixtures/hello.jsonl`, another replaying `fixtures/hold.jsonl`,
-//! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on.
+//! a third replaying `fixtures/approval.jsonl`, and a git repository to create a session on,
+//! with a project skill. Its skill library is a bare repository of its own with
+//! [`DEMO_SKILLS`], and [`FakeDaemon::skill_source`] is a repository to import a skill from.
 //! It admits [`MAX_TURNS`] turns at once on a host that always has room otherwise, and an
 //! owner may change that limit. Its owner, [`OWNER`], is set up before anyone pairs, so a member
 //! can pair too.
@@ -18,11 +20,12 @@ use herder_daemon::login::Logins;
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::settings::Settings;
+use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Config, Hub, session};
-use herder_protocol::{AccountId, HostId, Provider, Role, Timestamp, TurnId, UserId};
+use herder_protocol::{AccountId, CommandBody, HostId, Provider, Role, Timestamp, TurnId, UserId};
 use herder_store::Store;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -43,6 +46,24 @@ pub const OWNER: &str = "sample";
 
 /// Turns the daemon runs at once until an owner changes it.
 pub const MAX_TURNS: u32 = 4;
+
+/// The skills the library starts with, as names and descriptions.
+pub const DEMO_SKILLS: [(&str, &str); 2] = [
+    (
+        "release-notes",
+        "Write release notes from the commits since the last tag.",
+    ),
+    (
+        "review-pr",
+        "Review a pull request for correctness, tests and style.",
+    ),
+];
+
+/// The project skill checked in to the repository, at `.claude/skills/deploy`.
+pub const PROJECT_SKILL: (&str, &str) = ("deploy", "Deploy the app to staging.");
+
+/// The skill [`FakeDaemon::skill_source`] holds, in a folder of that name.
+pub const IMPORTED_SKILL: (&str, &str) = ("changelog", "Keep CHANGELOG.md up to date.");
 
 /// A host with room for every turn: 8 cores, 16 GiB, half of it available.
 struct Roomy;
@@ -65,8 +86,10 @@ pub struct FakeDaemon {
     pub link: String,
     /// A pairing link with a fresh code, for a member, `guest`.
     pub member_link: String,
-    /// Absolute path of a git repository with one commit.
+    /// Absolute path of a git repository with one commit, holding [`PROJECT_SKILL`].
     pub repo: String,
+    /// Absolute path of a git repository with [`IMPORTED_SKILL`] in a folder of its name.
+    pub skill_source: String,
     shutdown: CancellationToken,
     server: JoinHandle<()>,
     _tmp: TempDir,
@@ -77,7 +100,9 @@ impl FakeDaemon {
     pub async fn start(name: &str) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("daemon");
-        let repo = repo(&tmp.path().join("app"))?;
+        let app = repo(&tmp.path().join("app"), &[PROJECT_SKILL], ".claude/skills/")?;
+        let library = library(tmp.path())?;
+        let skill_source = repo(&tmp.path().join("imports"), &[IMPORTED_SKILL], "")?;
         std::fs::create_dir_all(dir.join("tls"))?;
         owner(&dir)?;
 
@@ -127,6 +152,16 @@ impl FakeDaemon {
         };
         let admission = Arc::new(Admission::new(resources.budget(8), Box::new(Roomy)));
         sessions.admit_turns(Arc::clone(&admission))?;
+        let skills = Arc::new(Skills::open(
+            &dir,
+            &sessions.providers(),
+            Arc::clone(&hub) as Arc<dyn SkillsSink>,
+        )?);
+        skills
+            .command(CommandBody::SetSkillsRepo { url: library })
+            .await
+            .map_err(|err| anyhow::anyhow!("cannot set the skill library: {}", err.message))?;
+        sessions.deliver_skills(skills)?;
         // The config file holds the turn limit, so the app can change it and the settings.
         let config_file = dir.join("daemon.toml");
         std::fs::write(
@@ -168,7 +203,8 @@ impl FakeDaemon {
         Ok(Self {
             link,
             member_link,
-            repo,
+            repo: app,
+            skill_source,
             shutdown,
             server,
             _tmp: tmp,
@@ -200,29 +236,52 @@ fn owner(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// A git repository with one commit, for the session to work on.
-fn repo(dir: &Path) -> Result<String> {
+/// A git repository with one commit holding `skills`, each a `SKILL.md` in `<prefix><name>`.
+fn repo(dir: &Path, skills: &[(&str, &str)], prefix: &str) -> Result<String> {
     std::fs::create_dir(dir)?;
-    for args in [
-        &["init", "--quiet", "--initial-branch=main"][..],
-        &["commit", "--quiet", "--allow-empty", "-m", "init"],
-    ] {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "user.name=herder",
-                "-c",
-                "user.email=herder@example.com",
-            ])
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .status()?;
-        ensure!(status.success(), "git {args:?} failed");
+    git(dir, &["init", "--quiet", "--initial-branch=main"])?;
+    for (name, description) in skills {
+        let folder = dir.join(format!("{prefix}{name}"));
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(
+            folder.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n{description}\n"),
+        )?;
     }
+    git(dir, &["add", "--all"])?;
+    git(dir, &["commit", "--quiet", "--allow-empty", "-m", "init"])?;
     dir.to_str()
         .map(str::to_owned)
         .context("the repository path is not UTF-8")
+}
+
+/// A bare repository in `tmp` with [`DEMO_SKILLS`], for the skill library to push to.
+fn library(tmp: &Path) -> Result<String> {
+    let work = repo(&tmp.join("skills-work"), &DEMO_SKILLS, "")?;
+    let bare = tmp.join("skills.git");
+    git(
+        tmp,
+        &["clone", "--quiet", "--bare", &work, &bare.to_string_lossy()],
+    )?;
+    bare.to_str()
+        .map(str::to_owned)
+        .context("the library path is not UTF-8")
+}
+
+fn git(dir: &Path, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=herder",
+            "-c",
+            "user.email=herder@example.com",
+        ])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .status()?;
+    ensure!(status.success(), "git {args:?} failed");
+    Ok(())
 }
