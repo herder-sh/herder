@@ -48,6 +48,8 @@ struct ProjectIconRow: View {
     let fleet: Fleet
     let machine: Machine
     let project: Project
+    /// The background the form holds, shown before the machine lists it.
+    let background: String?
     @Binding var error: String?
     @State private var choosingFile = false
     @State private var busy = false
@@ -60,7 +62,9 @@ struct ProjectIconRow: View {
             HStack(spacing: 10) {
                 if busy { ProgressView().controlSize(.small) }
                 ProjectIcon(projectId: project.projectId, name: project.name,
-                            image: fleet.projectIcon(project.projectId), size: 32)
+                            image: ProjectIconImage(data: fleet.projectIcon(project.projectId)?.data,
+                                                    background: background),
+                            size: 32)
                 if project.iconUploaded {
                     button("Reset") { await upload(nil) }
                 }

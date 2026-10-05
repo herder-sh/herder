@@ -281,11 +281,22 @@ struct ProjectIconLookupTests {
         backed.iconBackground = "#000000"
         let machines = [machine("a", name: "alpha", sessions: [], projects: [backed]),
                         machine("b", name: "beta", sessions: [], projects: [iconed])]
-        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: [:]) == nil)
+        // Without a fetched icon, the initial shows on a machine's background.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: [:])
+                == ProjectIconImage(data: nil, background: "#000000"))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [machine("a", name: "alpha", sessions: [], projects: [bare])],
+                           fetched: [:]) == nil)
         // The background comes from the machine whose icon is shown.
         #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": Data([1])])
                 == ProjectIconImage(data: Data([1]), background: "#ffffff"))
         #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": Data([1])]) == nil)
+    }
+
+    @Test func theInitialIsDarkOnALightBackgroundAndWhiteOnADarkOne() {
+        #expect(ProjectIcon.isLight(0xFFFFFF))
+        #expect(ProjectIcon.isLight(0xE5E5E5))
+        #expect(!ProjectIcon.isLight(0x2A2A2A))
+        #expect(!ProjectIcon.isLight(0x000000))
     }
 
     @Test func anIconBackgroundIsAColourOnlyAsRrggbb() {

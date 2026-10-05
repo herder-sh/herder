@@ -64,14 +64,17 @@ struct Lists: Equatable {
 
     init() {}
 
-    /// `done` holds the sessions that finished a turn since this device last opened them.
-    init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [], now: Date = .now) {
+    /// `done` holds the sessions that finished a turn since this device last opened them;
+    /// `archiving` the ones a machine is archiving, shown archived already.
+    init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [],
+         archiving: Set<SessionKey> = [], now: Date = .now) {
         var entries: [Entry] = []
         for machine in machines {
             for head in machine.sessions {
                 let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
-                entries.append(Entry(machine: machine, head: head, model: sessions[key] ?? SessionModel(key: key),
-                                     done: done.contains(key)))
+                var model = sessions[key] ?? SessionModel(key: key)
+                if archiving.contains(key) { model.status = .archived }
+                entries.append(Entry(machine: machine, head: head, model: model, done: done.contains(key)))
             }
         }
 

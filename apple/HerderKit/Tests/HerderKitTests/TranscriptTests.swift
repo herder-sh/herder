@@ -97,7 +97,29 @@ struct TranscriptTests {
         let notices = Transcript.blocks(model).compactMap { block -> String? in
             if case .notice(let notice) = block { notice.text } else { nil }
         }
-        #expect(notices == ["Question: Which?", "Answered: Blue", "Turn failed: boom"])
+        #expect(notices == ["Turn failed: boom"])
+    }
+
+    @Test func aQuestionIsOneBlockItsAnswerFillsIn() {
+        var script = Script()
+        let asked: [EventBody] = [
+            created(), .turnStarted(turnId: "t1"),
+            .questionAsked(questionId: "q", turnId: "t1", text: "Which?\n\n- **Red**: warm", choices: ["Red", "Blue"],
+                           routedTo: .user, reason: nil),
+        ]
+        let waiting = Transcript.blocks(script.model(asked)).compactMap { block -> AskedQuestion? in
+            if case .question(let question) = block { question } else { nil }
+        }
+        #expect(waiting.map(\.answer) == [nil])
+
+        script = Script()
+        let answered = Transcript.blocks(script.model(asked + [
+            .questionAnswered(questionId: "q", answer: .choice(index: 1), answeredBy: .user),
+        ])).compactMap { block -> AskedQuestion? in
+            if case .question(let question) = block { question } else { nil }
+        }
+        #expect(answered.map(\.picked) == [1])
+        #expect(answered.map(\.answeredBy) == [.user])
     }
 
     @Test func switchesBecomeHandoffsFromWhatTheSessionRanOn() {
