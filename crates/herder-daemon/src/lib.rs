@@ -16,6 +16,7 @@ pub mod prs;
 pub mod resources;
 pub mod session;
 pub mod settings;
+pub mod skills;
 pub mod terminal;
 pub mod usage;
 pub mod vault;
@@ -233,6 +234,13 @@ pub async fn serve(
         interval: usage::INTERVAL,
         fresh: usage::FRESH,
     })?;
+    let skills = Arc::new(skills::Skills::open(
+        data_dir.root(),
+        &sessions.providers(),
+        Arc::clone(&hub) as Arc<dyn skills::SkillsSink>,
+    )?);
+    sessions.deliver_skills(Arc::clone(&skills))?;
+    tokio::spawn(async move { skills.pull().await });
     sessions.resume().await?;
     let listeners = listen::bind(&config.listen).await?;
     let listen = listen::local_addrs(&listeners)?;

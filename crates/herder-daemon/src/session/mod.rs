@@ -96,6 +96,13 @@
 //! token for herder's MCP server ([`crate::mcp`]) and registers that server with the CLI;
 //! archive withdraws it.
 //!
+//! # Skills
+//!
+//! Once [`SessionManager::deliver_skills`] runs, the skill library commands go to the library
+//! ([`crate::skills`]), each start of a session's CLI hands it the enabled library skills
+//! ([`herder_adapters::StartRequest::skills`]) and sends the session's skills, and archive
+//! clears them.
+//!
 //! # Tasks
 //!
 //! Through the MCP server's task tools a session becomes a task's primary and spawns child
@@ -248,6 +255,7 @@ use crate::mcp::{self, Mcp};
 use crate::projects::{self, Overrides};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Docker, Scopes};
+use crate::skills::Skills;
 use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees, checkpoint};
 
@@ -383,6 +391,8 @@ struct Inner {
     projects: OnceLock<(HostId, Arc<Overrides>)>,
     /// Where turn-end checkpoints go, once set.
     checkpoints: OnceLock<checkpoint::Config>,
+    /// The skill library CLIs get, once set.
+    skills: OnceLock<Arc<Skills>>,
     /// What generates session titles, once set.
     titler: OnceLock<Titler>,
     /// Held while a title is checked and journaled, so renames and generated titles apply one
@@ -499,6 +509,7 @@ impl SessionManager {
                 limits: Limits::default(),
                 projects: OnceLock::new(),
                 checkpoints: OnceLock::new(),
+                skills: OnceLock::new(),
                 titler: OnceLock::new(),
                 titling: Mutex::new(()),
                 forks: std::sync::RwLock::new(None),
@@ -738,17 +749,16 @@ impl SessionManager {
                     "this daemon cannot back up to a vault",
                 ));
             }
-            // P11.6 gives the daemon its skill library.
-            CommandBody::SetSkillsRepo { .. }
+            command @ (CommandBody::SetSkillsRepo { .. }
             | CommandBody::PutSkill { .. }
             | CommandBody::DeleteSkill { .. }
             | CommandBody::ImportSkill { .. }
             | CommandBody::PullSkills
-            | CommandBody::SetSkillEnabled { .. } => {
-                return Err(error(
-                    ErrorCode::Unsupported,
-                    "this daemon has no skill library yet",
-                ));
+            | CommandBody::SetSkillEnabled { .. }) => {
+                let skills = self.inner.skills.get().ok_or_else(|| {
+                    error(ErrorCode::Unsupported, "this daemon has no skill library")
+                })?;
+                return skills.command(command).await;
             }
             CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
                 return Err(error(
@@ -1108,6 +1118,30 @@ impl SessionManager {
             .checkpoints
             .set(config)
             .map_err(|_| anyhow::anyhow!("checkpoints are configured already"))
+    }
+
+    /// Hands `skills`' enabled skills to every session's CLI from its next start, and answers
+    /// the skill library commands with it; once per manager. Without it, they are
+    /// unsupported.
+    pub fn deliver_skills(&self, skills: Arc<Skills>) -> anyhow::Result<()> {
+        self.inner
+            .skills
+            .set(skills)
+            .map_err(|_| anyhow::anyhow!("skills are delivered already"))
+    }
+
+    /// Pulls the skill library in the background, as when a client opens; the change arrives
+    /// as a `skills_status`.
+    pub fn refresh_skills(&self) {
+        if let Some(skills) = self.inner.skills.get() {
+            let skills = Arc::clone(skills);
+            tokio::spawn(async move { skills.pull().await });
+        }
+    }
+
+    /// The providers this manager runs sessions of.
+    pub fn providers(&self) -> Vec<Provider> {
+        self.inner.adapters.0.keys().cloned().collect()
     }
 
     /// Announces every child request that goes to the user instead of its primary session to

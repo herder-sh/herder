@@ -234,7 +234,10 @@ fn opencode_config(existing: Option<&String>, dir: &Path) -> String {
             })
             .or_insert_with(|| serde_json::json!({}));
         if let Some(skills) = skills.as_object_mut() {
-            match skills.get_mut("paths").and_then(serde_json::Value::as_array_mut) {
+            match skills
+                .get_mut("paths")
+                .and_then(serde_json::Value::as_array_mut)
+            {
                 Some(paths) => paths.push(dir),
                 None => {
                     skills.insert("paths".into(), serde_json::json!([dir]));

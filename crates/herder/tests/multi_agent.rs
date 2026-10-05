@@ -287,7 +287,7 @@ impl Client {
                 .unwrap();
             if let Message::Text(text) = frame {
                 let message: ServerMessage = serde_json::from_str(&text).unwrap();
-                if resources(&message) {
+                if background(&message) {
                     continue;
                 }
                 if let ServerMessage::Event(event) = &message {
@@ -690,10 +690,15 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
     assert!(sudo_journal.starts_with(&client.events[&sudo]));
 }
 
-/// Whether `message` is a host's or session's resource figures.
-fn resources(message: &ServerMessage) -> bool {
+/// Whether `message` is one the daemon sends whenever it has news, whatever the client does:
+/// a host's or session's resource figures, or the skill library and a session's skills,
+/// which follow every pull.
+fn background(message: &ServerMessage) -> bool {
     matches!(
         message,
-        ServerMessage::HostResources(_) | ServerMessage::SessionResources { .. }
+        ServerMessage::HostResources(_)
+            | ServerMessage::SessionResources { .. }
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::SessionSkills { .. }
     )
 }
