@@ -19,8 +19,8 @@ use herder_protocol::{
     ProviderReload, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
     Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile,
     SkillReload, SkillSource, SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
-    VaultVolume,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
+    UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
