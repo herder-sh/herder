@@ -259,7 +259,7 @@ struct NativeAgentTests {
             .turnStarted(turnId: "t0"),
             nestedItem("old", .toolCall(name: "Agent", input: #"{"description":"Earlier review"}"#), turn: "t0"),
             nestedItem("old-result", .toolResult(callId: "old", output: "Done before", isError: false), turn: "t0"),
-            .turnCompleted(turnId: "t0"), .turnStarted(turnId: "t1"),
+            .turnCompleted(turnId: "t0", usage: nil), .turnStarted(turnId: "t1"),
             nestedItem("a", .toolCall(name: "Agent", input: agentInput), turn: "t1"),
             nestedItem("b", .toolCall(name: "Task", input: #"{"description":"Review colors"}"#), turn: "t1"),
             nestedItem("c", .toolCall(name: "Agent", input: #"{"description":"Background scan"}"#), turn: "t1"),
@@ -277,7 +277,7 @@ struct NativeAgentTests {
 
         // The turn ends; the session keeps running for the background agent alone.
         model.apply(script.event(nestedItem("b-result", .toolResult(callId: "b", output: "Contrast fine", isError: false))))
-        model.apply(script.event(.turnCompleted(turnId: "t1")))
+        model.apply(script.event(.turnCompleted(turnId: "t1", usage: nil)))
         #expect(NativeAgent.listed(in: model).map(\.title) == ["Review accounts", "Review colors", "Background scan"])
 
         model.apply(script.event(.sessionStatusChanged(status: .idle, retryAt: nil)))
