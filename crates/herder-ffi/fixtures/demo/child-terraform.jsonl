@@ -1,9 +1,8 @@
-# A child that finishes with changes in its worktree, so it reports and stays listed.
+# A child that finishes its work and reports back.
 {"emit": {"type": "turn_started", "turn_id": "$turn"}}
 {"emit": {"type": "model_changed", "model": "claude-opus-5-5"}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-1", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Edit", "input": {"file_path": "terraform/modules/logs/main.tf", "old_string": "      days = 90\n", "new_string": "      days = 30\n    }\n    noncurrent_version_expiration {\n      noncurrent_days = 7\n"}}}}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-2", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-1", "output": "Edited terraform/modules/logs/main.tf", "is_error": false}}}}
-{"write": {"path": "terraform/modules/logs/main.tf", "text": "resource \"aws_s3_bucket_lifecycle_configuration\" \"logs\" {\n  bucket = aws_s3_bucket.logs.id\n\n  rule {\n    id     = \"expire\"\n    status = \"Enabled\"\n    expiration {\n      days = 30\n    }\n    noncurrent_version_expiration {\n      noncurrent_days = 7\n    }\n  }\n}\n"}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-3", "turn_id": "$turn", "body": {"type": "tool_call", "name": "Bash", "input": {"command": "terraform -chdir=terraform/envs/production plan -target=module.logs"}}}}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-4", "turn_id": "$turn", "body": {"type": "tool_result", "call_id": "$turn-3", "output": "Plan: 0 to add, 1 to change, 0 to destroy.", "is_error": false}}}}
 {"emit": {"type": "item_completed", "item": {"id": "$turn-5", "turn_id": "$turn", "body": {"type": "assistant_message", "text": "The log bucket now expires objects after 30 days and old versions after 7. The production plan changes one resource, the lifecycle configuration, and nothing else."}}}}
