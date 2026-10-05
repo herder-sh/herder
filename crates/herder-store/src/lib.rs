@@ -373,6 +373,8 @@ impl Store {
                 url: row.get(1)?,
                 title: row.get(2)?,
                 head_branch: row.get(7)?,
+                head_sha: None,
+                unresolved_threads: None,
                 state: get_tag(row, 3)?,
                 ci: get_tag(row, 4)?,
                 review: get_tag(row, 5)?,

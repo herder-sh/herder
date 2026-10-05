@@ -110,6 +110,7 @@ impl Adapter for Agent {
                     }
                     let reply = Item {
                         agent_message: None,
+                        follow_up: None,
                         parent_call_id: None,
                         id: ItemId::new(format!("reply-{turn_id}")),
                         turn_id: turn_id.clone(),

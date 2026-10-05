@@ -26,6 +26,7 @@ fn event(seq: Seq, by: Option<&str>, body: EventBody) -> ServerMessage {
 fn item(body: ItemBody) -> Item {
     Item {
         agent_message: None,
+        follow_up: None,
         parent_call_id: None,
         id: ItemId::new("01J9ITEM"),
         turn_id: TurnId::new("01J9TURN"),
@@ -39,6 +40,8 @@ fn pr(state: PrState, ci: CiStatus, review: ReviewStatus, mergeable: Mergeable) 
         url: "https://github.com/herder-sh/herder/pull/42".into(),
         title: "Add protocol".into(),
         head_branch: Some("p0-2-protocol".into()),
+        head_sha: None,
+        unresolved_threads: None,
         state,
         ci,
         review,
@@ -992,6 +995,41 @@ fn server_fixtures() -> Vec<ServerMessage> {
     for pr in pr_states {
         messages.push(event(20, None, EventBody::PrUpdated { pr }));
     }
+    messages.push(event(
+        20,
+        None,
+        EventBody::PrUpdated {
+            pr: PullRequest {
+                head_sha: Some("4b825dc642cb6eb9a060e54bf8d69288fbee4904".into()),
+                unresolved_threads: Some(2),
+                ..pr(
+                    PrState::Open,
+                    CiStatus::Failing,
+                    ReviewStatus::ChangesRequested,
+                    Mergeable::Clean,
+                )
+            },
+        },
+    ));
+    for reason in [
+        FollowUpReason::CiFailed,
+        FollowUpReason::CiPassed,
+        FollowUpReason::Conflicting,
+        FollowUpReason::ChangesRequested,
+        FollowUpReason::Stalled,
+    ] {
+        let about_pr = reason != FollowUpReason::Stalled;
+        let mut prompt = item(ItemBody::UserMessage {
+            text: "Your pull request needs you.".into(),
+            attachments: vec![],
+        });
+        prompt.follow_up = Some(FollowUp {
+            reason,
+            pr: about_pr.then_some(42),
+            head_sha: about_pr.then(|| "4b825dc642cb6eb9a060e54bf8d69288fbee4904".into()),
+        });
+        messages.push(event(21, None, EventBody::ItemAdded { item: prompt }));
+    }
     messages.push(ServerMessage::Accounts {
         accounts: [
             Provider::Claude,
@@ -1649,6 +1687,7 @@ fn unknown_tags_decode_to_unknown() {
         EventBody::ItemAdded {
             item: Item {
                 agent_message: None,
+                follow_up: None,
                 parent_call_id: None,
                 id: ItemId::new("i"),
                 turn_id: TurnId::new("t"),
@@ -1734,6 +1773,8 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
     }))
     .unwrap();
     assert_eq!(pr.head_branch, None);
+    assert_eq!(pr.head_sha, None);
+    assert_eq!(pr.unresolved_threads, None);
 
     let body: EventBody = serde_json::from_value(json!({
         "type": "approval_requested",
@@ -2782,6 +2823,51 @@ fn agent_provenance_is_optional_and_round_trips_with_the_item() {
 }
 
 #[test]
+fn follow_up_provenance_is_optional_and_round_trips_with_the_item() {
+    let mut prompt = item(ItemBody::UserMessage {
+        text: "CI failed".into(),
+        attachments: vec![],
+    });
+    assert!(
+        serde_json::to_value(&prompt)
+            .unwrap()
+            .get("follow_up")
+            .is_none()
+    );
+    prompt.follow_up = Some(FollowUp {
+        reason: FollowUpReason::CiFailed,
+        pr: Some(7),
+        head_sha: Some("abc".into()),
+    });
+    let json = serde_json::to_value(&prompt).unwrap();
+    assert_eq!(
+        json["follow_up"],
+        json!({ "reason": "ci_failed", "pr": 7, "head_sha": "abc" })
+    );
+    assert_eq!(serde_json::from_value::<Item>(json).unwrap(), prompt);
+
+    let stalled: FollowUp = serde_json::from_value(json!({ "reason": "stalled" })).unwrap();
+    assert_eq!((stalled.pr, stalled.head_sha), (None, None));
+    let future: FollowUp = serde_json::from_value(json!({ "reason": "deployed" })).unwrap();
+    assert_eq!(future.reason, FollowUpReason::Unknown);
+}
+
+#[test]
+fn settings_without_follow_ups_decode_with_their_defaults() {
+    let mut json = serde_json::to_value(settings()).unwrap();
+    json.as_object_mut().unwrap().remove("follow_ups");
+    let decoded: DaemonSettings = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        decoded.follow_ups,
+        FollowUpSettings {
+            pr_events: true,
+            stall_after_secs: 0,
+            max_stall_nudges: 2,
+        }
+    );
+}
+
+#[test]
 fn queue_edits_and_queues_have_their_wire_form() {
     let session_id = SessionId::new("s1");
     let prompt_id = PromptId::new("p1");
@@ -2894,6 +2980,11 @@ fn settings() -> DaemonSettings {
             attachments: true,
             attachments_cap: 2 << 30,
             archive_retention_days: 30,
+        },
+        follow_ups: FollowUpSettings {
+            pr_events: false,
+            stall_after_secs: 1800,
+            max_stall_nudges: 3,
         },
     }
 }

@@ -830,6 +830,7 @@ impl Session {
         );
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -875,6 +876,7 @@ impl Session {
     async fn emit_item(&mut self, id: ItemId, turn_id: TurnId, body: ItemBody) {
         let item = Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id,
             turn_id,
@@ -1190,6 +1192,7 @@ mod tests {
         let turn = TurnId::new("turn-1");
         let item = |body| Item {
             agent_message: None,
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("i"),
             turn_id: turn.clone(),
@@ -1237,6 +1240,7 @@ mod tests {
                 hop_count: 1,
                 permission_ceiling: PermissionMode::Ask,
             }),
+            follow_up: None,
             parent_call_id: None,
             id: ItemId::new("prompt"),
             turn_id: TurnId::new("turn"),

@@ -1148,6 +1148,15 @@
           "description": "How sessions fail over when their account hits a limit.",
           "$ref": "#/$defs/FailoverSettings"
         },
+        "follow_ups": {
+          "description": "When the daemon prompts an idle agent on its own; the defaults from daemons before it.",
+          "$ref": "#/$defs/FollowUpSettings",
+          "default": {
+            "max_stall_nudges": 2,
+            "pr_events": true,
+            "stall_after_secs": 0
+          }
+        },
         "listen": {
           "description": "Addresses the daemon listens on, as `ip:port`, at least one and none twice; each an IP\nof this machine, or `0.0.0.0` or `[::]` for all of them.",
           "type": "array",
@@ -2128,6 +2137,92 @@
         "last_seen"
       ]
     },
+    "FollowUp": {
+      "description": "Why the daemon prompted an idle agent on its own: a follow-up.",
+      "type": "object",
+      "properties": {
+        "head_sha": {
+          "description": "That pull request's head commit when the follow-up was sent, if it is about one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pr": {
+          "description": "Number of the pull request it is about, if any.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "reason": {
+          "description": "What prompted it.",
+          "$ref": "#/$defs/FollowUpReason"
+        }
+      },
+      "required": [
+        "reason"
+      ]
+    },
+    "FollowUpReason": {
+      "description": "What prompted a follow-up.",
+      "oneOf": [
+        {
+          "description": "The pull request's checks failed.",
+          "type": "string",
+          "const": "ci_failed"
+        },
+        {
+          "description": "The pull request's checks passed.",
+          "type": "string",
+          "const": "ci_passed"
+        },
+        {
+          "description": "The pull request no longer merges cleanly.",
+          "type": "string",
+          "const": "conflicting"
+        },
+        {
+          "description": "A reviewer requested changes on the pull request.",
+          "type": "string",
+          "const": "changes_requested"
+        },
+        {
+          "description": "The agent stopped with its work unfinished.",
+          "type": "string",
+          "const": "stalled"
+        }
+      ]
+    },
+    "FollowUpSettings": {
+      "description": "The `[follow_ups]` table: when the daemon prompts an idle agent on its own.",
+      "type": "object",
+      "properties": {
+        "max_stall_nudges": {
+          "description": "Most times a stalled agent is prompted before it is left to a user.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "pr_events": {
+          "description": "Whether an agent is prompted when its pull request's checks fail or pass, it stops\nmerging cleanly, or a reviewer requests changes.",
+          "type": "boolean"
+        },
+        "stall_after_secs": {
+          "description": "Seconds an agent may sit idle with its work unfinished before it is prompted to go on;\n0 never prompts it.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pr_events",
+        "stall_after_secs",
+        "max_stall_nudges"
+      ]
+    },
     "HostId": {
       "description": "Identifies a host running a daemon; a ULID string, opaque to receivers.",
       "type": "string"
@@ -2309,6 +2404,17 @@
         "body": {
           "description": "The item's content.",
           "$ref": "#/$defs/ItemBody"
+        },
+        "follow_up": {
+          "description": "Why the daemon sent this `user_message` on its own. Only the daemon sets this; absent\nfor prompts users and agents send.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FollowUp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "id": {
           "description": "The item.",
@@ -2816,6 +2922,13 @@
             "null"
           ]
         },
+        "head_sha": {
+          "description": "Commit the pull request's branch points at; absent from events journaled before herder\nrecorded it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mergeable": {
           "description": "Whether it can merge cleanly.",
           "$ref": "#/$defs/Mergeable"
@@ -2837,6 +2950,15 @@
         "title": {
           "description": "Title.",
           "type": "string"
+        },
+        "unresolved_threads": {
+          "description": "Review threads not yet resolved; absent from events journaled before herder recorded\nit.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
         },
         "url": {
           "description": "Web URL.",

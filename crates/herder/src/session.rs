@@ -1019,6 +1019,8 @@ mod tests {
             url: format!("https://github.com/o/r/pull/{number}"),
             title: "Fix it".into(),
             head_branch: None,
+            head_sha: None,
+            unresolved_threads: None,
             state,
             ci,
             review: ReviewStatus::None,

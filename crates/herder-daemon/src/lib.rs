@@ -314,6 +314,7 @@ mod tests {
             tasks: session::TaskLimits::default(),
             failover: Default::default(),
             titles: Default::default(),
+            follow_ups: Default::default(),
             resources: Default::default(),
             projects: Default::default(),
             mode: config::Mode::Host,
