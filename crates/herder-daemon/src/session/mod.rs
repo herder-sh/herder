@@ -231,7 +231,7 @@ use anyhow::Context;
 use herder_adapters::Adapter;
 use herder_protocol::{
     Account, AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult,
-    ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord,
+    ErrorClass, ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemId, JournalRecord,
     MAX_PROJECT_ICON_BYTES, MAX_TITLE_CHARS, PROJECT_ICON_MEDIA_TYPES, PermissionMode, Project,
     ProjectId, Provider, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
     TitleSource, TurnId, UsageWindow, UserId, clean_title,
@@ -408,7 +408,9 @@ struct Inner {
 impl Inner {
     /// Merges `windows` into the account's usage and, when that changed it, publishes every
     /// account.
+    /// An account reporting its usage is logged in.
     pub(super) fn report_usage(&self, account_id: &AccountId, windows: Vec<UsageWindow>) {
+        self.limits.worked(account_id);
         if let Some(usage) = self.usage.report(account_id, windows) {
             let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
             self.journal.sink().accounts_changed(&accounts);
@@ -420,6 +422,22 @@ impl Inner {
         let usage = self.usage.all();
         let windows = usage.get(account_id).map_or(&[][..], Vec::as_slice);
         self.limits.hit(account_id, windows, Timestamp::now());
+    }
+
+    /// Notes what the turn that ended with `end` on `account_id` says about the account: a
+    /// completed turn means it works, a failed login that failover passes it over until it
+    /// does again, a spent limit that it waits for its reset.
+    pub(super) fn turn_ended_on(&self, account_id: &AccountId, end: &EventBody) {
+        match end {
+            EventBody::TurnCompleted { .. } => self.limits.worked(account_id),
+            EventBody::TurnFailed { error, .. } if error.class == ErrorClass::Auth => {
+                self.limits.logged_out(account_id);
+            }
+            EventBody::TurnFailed { error, .. } if error.class == ErrorClass::LimitReached => {
+                self.limit_hit(account_id);
+            }
+            _ => {}
+        }
     }
 
     /// Latest future reset among exhausted windows; unknown reset times need user action.

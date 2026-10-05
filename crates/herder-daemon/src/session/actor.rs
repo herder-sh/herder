@@ -2161,11 +2161,7 @@ impl Actor {
     /// and fails over from there.
     async fn cli_turn_ended(&mut self, end: EventBody) {
         let turn_id = self.cli_turn.take();
-        if let EventBody::TurnFailed { error, .. } = &end
-            && error.class == ErrorClass::LimitReached
-        {
-            self.inner.limit_hit(&self.session.account_id);
-        }
+        self.inner.turn_ended_on(&self.session.account_id, &end);
         self.void_requests().await;
         self.log(end).await;
         if let Some(turn_id) = turn_id {
@@ -2188,6 +2184,7 @@ impl Actor {
         mut summary: String,
     ) {
         let completed = matches!(body, EventBody::TurnCompleted { .. });
+        self.inner.turn_ended_on(&self.session.account_id, &body);
         self.void_requests().await;
         self.log(body).await;
         self.record_branches().await;

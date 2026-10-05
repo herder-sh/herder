@@ -3614,6 +3614,44 @@ async fn an_account_that_hit_its_limit_is_passed_over_and_with_none_left_the_ses
 }
 
 #[tokio::test]
+async fn a_logged_out_account_is_passed_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&[
+        "failover_logged_out.jsonl",
+        "failover_limit_after_logout.jsonl",
+    ]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let first = daemon.create("claude-a").await;
+    daemon.send(&first, "Refactor the parser.").await;
+    daemon.settled(&first, SessionStatus::NeedsYou).await;
+
+    // claude-a, whose login failed, is not chosen until it works again.
+    let second = daemon.create("claude-b").await;
+    daemon.send(&second, "Add tests.").await;
+    let journal = daemon.settled(&second, SessionStatus::NeedsYou).await;
+    let lines = from_first_turn(&journal);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        ["-: turn_failed turn-2 LimitReached", "-: status NeedsYou"]
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("switched")),
+        "{lines:?}"
+    );
+    assert_eq!(claude.starts().len(), 2);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
 async fn a_retry_that_hits_a_limit_too_is_not_retried_again() {
     let dir = tempfile::tempdir().unwrap();
     let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry_limit.jsonl"]);
