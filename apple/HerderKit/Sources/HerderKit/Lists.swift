@@ -78,9 +78,12 @@ struct Lists: Equatable {
             }
         }
 
+        // Each session's children, found once: the lists are rebuilt as sessions stream, so
+        // looking them up per session, over every session, would grow with the square of them.
+        let children = Self.children(entries)
         projects = Self.projects(entries, machines: machines, now: now)
-        let flat = entries.map { $0.summary(now: now, children: entries) }
-        home = Self.home(entries, now: now)
+        let flat = entries.map { $0.summary(now: now, children: children) }
+        home = Self.home(entries, children: children, now: now)
 
         requests = zip(entries, flat).flatMap { entry, summary in
             entry.model.forUser.map { pending in
@@ -111,11 +114,11 @@ struct Lists: Equatable {
     /// Home's task trees, newest first by when the top session was created: the top session
     /// leads, its working children under it. Idle children are left to their parent, so they
     /// never crowd Home; archived and moved sessions are left out.
-    private static func home(_ entries: [Entry], now: Date) -> [SessionSummary] {
+    private static func home(_ entries: [Entry], children: [SessionKey: [Entry]], now: Date) -> [SessionSummary] {
         func isWorking(_ entry: Entry) -> Bool { [.running, .waiting, .needsYou].contains(entry.model.state) }
         func descendants(_ entry: Entry, depth: Int = 0) -> [Entry] {
             guard depth < 8 else { return [] }
-            return entries.filter { $0.isChild(of: entry) }.sorted { $0.key.sessionId < $1.key.sessionId }
+            return (children[entry.key] ?? []).sorted { $0.key.sessionId < $1.key.sessionId }
                 .flatMap { [$0] + descendants($0, depth: depth + 1) }
         }
         return forest(entries).filter { $0.1 == 0 }.map(\.0)
@@ -123,8 +126,8 @@ struct Lists: Equatable {
             // Session ids are ULIDs, which sort by creation time.
             .sorted { ($0.key.sessionId, $0.key.hostId) > ($1.key.sessionId, $1.key.hostId) }
             .flatMap { top in
-                [top.summary(now: now, children: entries)] + descendants(top).filter(isWorking).map { child in
-                    var summary = child.summary(now: now, children: entries)
+                [top.summary(now: now, children: children)] + descendants(top).filter(isWorking).map { child in
+                    var summary = child.summary(now: now, children: children)
                     summary.depth = 1
                     return summary
                 }
@@ -145,10 +148,12 @@ struct Lists: Equatable {
         let groups = grouped.map { projectId, members -> (ProjectGroup, Date?) in
             let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
             let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
+            // A session counts only the children in its own project.
+            let children = Self.children(members)
             // A child whose parent is in the other group leads a tree of its own in its group.
             func tree(archived: Bool) -> [SessionSummary] {
                 forest(sorted.filter { ($0.model.state == .archived) == archived }).map { entry, depth in
-                    var summary = entry.summary(now: now, children: members)
+                    var summary = entry.summary(now: now, children: children)
                     summary.depth = depth
                     return summary
                 }
@@ -190,15 +195,16 @@ struct Lists: Equatable {
     /// whose parent is not listed is top-level.
     static func forest(_ entries: [Entry]) -> [(Entry, Int)] {
         let keys = Set(entries.map(\.key))
+        let children = children(entries)
         func isTop(_ entry: Entry) -> Bool {
-            guard let parent = entry.model.parent else { return true }
-            return !keys.contains(SessionKey(hostId: entry.key.hostId, sessionId: parent))
+            guard let parent = entry.parentKey else { return true }
+            return !keys.contains(parent)
         }
         var ordered: [(Entry, Int)] = []
         func visit(_ entry: Entry, depth: Int) {
             ordered.append((entry, depth))
             guard depth < 8 else { return }
-            for child in entries where child.isChild(of: entry) {
+            for child in children[entry.key] ?? [] {
                 visit(child, depth: depth + 1)
             }
         }
@@ -206,6 +212,15 @@ struct Lists: Equatable {
             visit(top, depth: 0)
         }
         return ordered
+    }
+
+    /// Each session's children among `entries`, in their order, by the parent's key.
+    static func children(_ entries: [Entry]) -> [SessionKey: [Entry]] {
+        var children: [SessionKey: [Entry]] = [:]
+        for entry in entries {
+            if let parent = entry.parentKey { children[parent, default: []].append(entry) }
+        }
+        return children
     }
 
     private static func summary(_ machine: Machine, entries: [Entry], now: Date) -> MachineSummary {
@@ -281,12 +296,14 @@ struct Lists: Equatable {
 
         var machineName: String { host?.hostName ?? machine.name }
 
-        func isChild(of parent: Entry) -> Bool {
-            key.hostId == parent.key.hostId && model.parent == parent.key.sessionId
+        /// Its parent's key; a parent is always on the same machine.
+        var parentKey: SessionKey? {
+            model.parent.map { SessionKey(hostId: key.hostId, sessionId: $0) }
         }
 
-        func summary(now: Date, children: [Entry]) -> SessionSummary {
-            let kids = children.filter { $0.isChild(of: self) }
+        /// `children` holds each session's children by the parent's key; see `Lists.children`.
+        func summary(now: Date, children: [SessionKey: [Entry]]) -> SessionSummary {
+            let kids = children[key] ?? []
             return SessionSummary(
                 // The list's title stands in until the session's own events have loaded.
                 key: key, title: model.titled ?? head.title ?? model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
