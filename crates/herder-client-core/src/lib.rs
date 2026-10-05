@@ -719,6 +719,12 @@ impl Client {
             body: command,
         };
         let body = command.body.clone();
+        if let CommandBody::SetSkillsRepo { url } = &body {
+            let connection = machine.connections();
+            self.inner
+                .library
+                .setting(&host_id, connection, url.clone());
+        }
         let result = machine
             .send(command)
             .await?

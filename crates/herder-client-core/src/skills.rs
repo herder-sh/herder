@@ -31,21 +31,25 @@ struct State {
     repo: Option<String>,
     /// Each machine's repository as its daemon last reported it, and on which connection.
     reported: HashMap<HostId, (u32, Option<String>)>,
-    /// The connection each machine was last sent `set_skills_repo` on, and the URL.
-    sent: HashMap<HostId, (u32, String)>,
+    /// Every URL this client set on each machine's current connection, and which connection
+    /// that is; a report of one of them is this client's doing, however late it arrives.
+    sent: HashMap<HostId, (u32, Vec<String>)>,
     /// Machines that missed a write and are to pull.
     behind: HashSet<HostId>,
 }
 
 impl Library {
+    /// `machine` is being sent `set_skills_repo` with `url` on its connection `connection`, so
+    /// the repository it reports next is this client's doing, not another device's.
+    pub(crate) fn setting(&self, machine: &HostId, connection: u32, url: String) {
+        self.lock().sent_on(machine, connection, url);
+    }
+
     /// `machine` accepted `set_skills_repo` with `url` on its connection `connection`: the
     /// library is `url` from now on.
     pub(crate) fn repo_set(&self, machine: &HostId, connection: u32, url: String) {
         let mut state = self.lock();
-        state.sent.clear();
-        state
-            .sent
-            .insert(machine.clone(), (connection, url.clone()));
+        state.sent_on(machine, connection, url.clone());
         state.repo = Some(url);
     }
 
@@ -73,11 +77,13 @@ impl Library {
             // Set from another device while connected, or the first library this client sees.
             let changed =
                 matches!(&previous, Some((c, p)) if c == connection && p.as_ref() != Some(repo));
-            let ours = state.repo.as_deref().is_some_and(|url| same(url, repo));
-            if state.repo.is_none() || (changed && !ours) {
+            let ours = state.repo.iter().any(|url| same(url, repo))
+                || state.sent.get(host_id).is_some_and(|(c, urls)| {
+                    c == connection && urls.iter().any(|url| same(url, repo))
+                });
+            if (state.repo.is_none() || changed) && !ours {
                 debug!(%repo, "the skill library is now the one {host_id} uses");
                 state.repo = Some(repo.clone());
-                state.sent.clear();
             }
         }
         let Some(url) = state.repo.clone() else {
@@ -91,11 +97,9 @@ impl Library {
                 }
                 continue;
             }
-            let sending = (connection, url.clone());
-            if state.sent.get(host_id) == Some(&sending) {
+            if state.sent_on(host_id, connection, url.clone()) {
                 continue;
             }
-            state.sent.insert(host_id.clone(), sending);
             // A fresh clone holds every write.
             state.behind.remove(host_id);
             send(machine, CommandBody::SetSkillsRepo { url: url.clone() });
@@ -105,6 +109,26 @@ impl Library {
     fn lock(&self) -> MutexGuard<'_, State> {
         // Every update is a few inserts and removals, so a poisoned state is consistent.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl State {
+    /// Records that `machine` was set to `url` on its connection `connection`; `true` if it
+    /// already was.
+    fn sent_on(&mut self, machine: &HostId, connection: u32, url: String) -> bool {
+        let (on, urls) = self
+            .sent
+            .entry(machine.clone())
+            .or_insert_with(|| (connection, Vec::new()));
+        if *on != connection {
+            *on = connection;
+            urls.clear();
+        }
+        if urls.contains(&url) {
+            return true;
+        }
+        urls.push(url);
+        false
     }
 }
 

@@ -486,7 +486,7 @@ async fn the_skill_library_stays_the_same_on_every_owned_machine() {
     for fake in [&a, &b, &c, &fresh, &moved] {
         wait(&client, "settling", || connected(&client, fake)).await;
     }
-    assert_eq!(a.count(is_set), 1);
+    assert_eq!(a.count(is_set), 1, "a: {:?}", a.commands());
     for fake in [&b, &c, &fresh, &moved] {
         assert_eq!(fake.count(is_set), 2, "{}: {:?}", fake.id, fake.commands());
     }
