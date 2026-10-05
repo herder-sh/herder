@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "spawn",
-      "description": "Start a child session to work on part of your task in parallel. The child is a separate agent with its own git worktree and branch of this repository, and it does not see your conversation, so `prompt` must say everything it needs. Returns at once with the child's id and branch while the child works in the background; call wait_for to get its report. Children cannot spawn children, and a task has a limit on live children (5 unless the user changed it). A child that completes a turn with nothing queued and a clean worktree is archived automatically right after it reports: its worktree is removed, its branch kept, and it stops counting toward the limit. When this machine is too loaded for another agent, fails with `host_busy` and `retry_after_secs`: keep working or call wait_for, then retry.",
+      "description": "Start a child session to work on part of your task in parallel. The child is a separate agent with its own git worktree and branch of this repository (in a folder that is not a git repository with a commit, it shares the folder with you and has no branch), and it does not see your conversation, so `prompt` must say everything it needs. Returns at once with the child's id and branch while the child works in the background; call wait_for to get its report. Children cannot spawn children, and a task has a limit on live children (5 unless the user changed it). A child that completes a turn with nothing queued and a clean worktree is archived automatically right after it reports: its worktree is removed, its branch kept, and it stops counting toward the limit. When this machine is too loaded for another agent, fails with `host_busy` and `retry_after_secs`: keep working or call wait_for, then retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -66,7 +66,7 @@
         "type": "object",
         "properties": {
           "branch": {
-            "description": "Branch the child works on, in this repository.",
+            "description": "Branch the child works on, in this repository; absent when this folder is not a git repository with a commit, so the child works in the folder itself, as you do.",
             "type": "string"
           },
           "child": {
@@ -75,8 +75,7 @@
           }
         },
         "required": [
-          "child",
-          "branch"
+          "child"
         ]
       }
     },
@@ -186,7 +185,7 @@
               "type": "object",
               "properties": {
                 "branch": {
-                  "description": "Branch the child works on, in this repository.",
+                  "description": "Branch the child works on, in this repository; absent when this folder is not a git repository with a commit, so the child works in the folder itself, as you do.",
                   "type": "string"
                 },
                 "child": {
@@ -308,7 +307,6 @@
               "required": [
                 "child",
                 "task",
-                "branch",
                 "status",
                 "open_questions"
               ]

@@ -86,12 +86,13 @@ pub struct NewEvent {
 pub struct Session {
     /// The session.
     pub session_id: SessionId,
-    /// Absolute path of the repository on the host.
+    /// Absolute path of the repository, or folder, on the host.
     pub repo: String,
-    /// Absolute path of the session's worktree on the host.
+    /// Absolute path of the session's worktree on the host; `repo` itself when it has no
+    /// branch.
     pub worktree: String,
-    /// Branch the session owns.
-    pub branch: String,
+    /// Branch the session was created on; `None` for a session that works in `repo` itself.
+    pub branch: Option<String>,
     /// Current provider.
     pub provider: Provider,
     /// Current account.

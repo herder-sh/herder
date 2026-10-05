@@ -33,7 +33,11 @@ pub fn run(args: Args) -> Result<()> {
                 "forked {} from {} of {} on account {}",
                 forked.session_id, forked.forked_from, forked.from_host_id, forked.account_id
             );
-            println!("worktree {} on {}", forked.worktree, forked.branch);
+            let Some(branch) = &forked.branch else {
+                println!("works in {} itself, without a branch", forked.worktree);
+                return Ok(());
+            };
+            println!("worktree {} on {branch}", forked.worktree);
             match &forked.checkpoint {
                 Some(checkpoint) => println!("files restored from {checkpoint}"),
                 None => println!(

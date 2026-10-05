@@ -138,7 +138,7 @@ private struct MomentRow: View {
     var body: some View {
         switch moment.kind {
         case .created(let branch):
-            line("sparkles", Theme.tertiary) { Text("Created on \(branch)").foregroundStyle(Theme.secondary) }
+            line("sparkles", Theme.tertiary) { Text(branch.map { "Created on \($0)" } ?? "Created in the folder").foregroundStyle(Theme.secondary) }
         case .prompt(let text, let from):
             line(from == nil ? "person.fill" : "person.2.fill", from == nil ? Theme.running : Theme.merged) {
                 Text(text).foregroundStyle(Theme.text).lineLimit(3)

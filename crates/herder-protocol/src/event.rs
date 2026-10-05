@@ -33,14 +33,17 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventBody {
-    /// The session exists: one repo, one worktree and branch, on this host.
+    /// The session exists: one repo, one worktree and branch, on this host; or, for a folder
+    /// that is not a git repository with a commit, the folder itself and no branch.
     SessionCreated {
-        /// Absolute path of the repository on the host.
+        /// Absolute path of the repository, or folder, on the host.
         repo: String,
-        /// Absolute path of the session's worktree on the host.
+        /// Absolute path of the session's worktree on the host; `repo` itself when it has no
+        /// branch.
         worktree: String,
-        /// Branch the session owns.
-        branch: String,
+        /// Branch the session owns; absent for a session that works in `repo` itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
         /// Provider of the starting account.
         provider: Provider,
         /// Starting account.
