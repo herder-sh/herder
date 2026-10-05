@@ -165,17 +165,6 @@ struct SkillDocument: Equatable {
     }
 }
 
-extension SkillReload {
-    /// When a CLI picks up a change, as the Skills screen says it.
-    var label: String {
-        switch self {
-        case .live: "at once"
-        case .nextTurn: "at its next turn"
-        case .nextSession: "in new sessions"
-        }
-    }
-}
-
 extension Fleet {
     /// Makes the git repository at `url` the skill library, through `hostId`; the client sets
     /// it on every other machine the user owns.

@@ -27,7 +27,7 @@ struct SkillLibraryTests {
         let review = library.skills[1]
         #expect(review.machines.map(\.hostId) == ["desk", "laptop"])
         #expect(review.machines.map(\.enabled) == [true, false])
-        #expect(review.machines.allSatisfy(\.changeable))
+        #expect(review.machines.allSatisfy { $0.changeable })
         // A disabled skill reaches no CLI on its machine; the providers are every machine's.
         #expect(review.providers == ["claude"])
         #expect(library.skills[0].providers == ["claude", "codex"])
