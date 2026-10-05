@@ -76,7 +76,6 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity)
                 .padding(16)
                 .overlay(alignment: .bottom) { Color.clear.frame(height: 1).id(TranscriptScroll.end) }
-                .onAppear { if let top = scroll.land() { proxy.scrollTo(top, anchor: .top) } }
             }
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
@@ -84,6 +83,18 @@ struct SessionView: View {
             .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top))
             .id(key)
             .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
+            .task(id: model?.loaded == true) {
+                guard model?.loaded == true else { return }
+                // Once laid out, land where it was left, else at the end. The bottom anchor alone
+                // lands where the lazy rows' estimated heights put the end, which in a long
+                // transcript can be past every row drawn: blank until something scrolls it.
+                await Task.yield()
+                if let top = scroll.land() {
+                    proxy.scrollTo(top, anchor: .top)
+                } else {
+                    proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
+                }
+            }
             .overlay(alignment: .leading) {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
