@@ -90,11 +90,12 @@ struct Wordmark: View {
     }
 
     /// Each pixel run: its left edge, row and width, from the site's wordmark path.
-    private static let runs: [(CGFloat, CGFloat, CGFloat)] = path.matches(of: /M(\d+) (\d+)h(\d+)/).compactMap {
-        guard let x = Double($0.output.1), let y = Double($0.output.2), let width = Double($0.output.3) else {
+    private static let runs: [(CGFloat, CGFloat, CGFloat)] = path.matches(of: /M(\d+) (\d+)h(\d+)/)
+        .compactMap { match -> (CGFloat, CGFloat, CGFloat)? in
+        guard let x = Double(match.output.1), let y = Double(match.output.2), let width = Double(match.output.3) else {
             return nil
         }
-        return (x, y, width)
+        return (CGFloat(x), CGFloat(y), CGFloat(width))
     }
 
     // site/index.html's `.wordmark` path.
