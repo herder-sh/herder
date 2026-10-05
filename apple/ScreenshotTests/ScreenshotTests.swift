@@ -110,14 +110,6 @@ final class ScreenshotTests: XCTestCase {
 
     /// Opens the session titled `title` from Home, scrolling its row into view.
     private func open(_ title: String) -> Bool {
-        #if os(iOS)
-        // Back from a session to the list, with the edge swipe.
-        for _ in 0..<3 where app.descendants(matching: .any)["composer"].exists {
-            let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-            edge.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
-            settle()
-        }
-        #endif
         _ = section("Home")
         let row = row(title)
         guard wait(row, title) else { return false }
@@ -141,16 +133,23 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Switches to the section named `name`: a tab on the iPhone, a sidebar row on the Mac, found
-    /// by its symbol, as the rail's labels change with what it holds.
+    /// by its symbol in the rail, or by its label, with a count after it, in the sidebar.
     private func section(_ name: String) -> Bool {
         #if os(iOS)
+        // Back from a session to the list, with the edge swipe: a session hides the tab bar.
+        for _ in 0..<3 where app.descendants(matching: .any)["composer"].exists {
+            let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            edge.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+            settle()
+        }
         let tab = app.tabBars.buttons[name].firstMatch
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
         #else
         let symbols = ["Home": "tray", "Board": "checklist", "Machines": "server.rack"]
         let symbol = symbols[name] ?? name
-        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", symbol)).firstMatch
+        let row = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ OR label == %@ OR label BEGINSWITH %@", symbol, name, "\(name), ")).firstMatch
         guard wait(row, "\(name) in the sidebar") else { return false }
         row.click()
         #endif
