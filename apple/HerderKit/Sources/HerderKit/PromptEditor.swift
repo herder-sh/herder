@@ -1,8 +1,13 @@
-#if os(macOS)
-import AppKit
 import Herder
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import GameController
+import UIKit
+#endif
 
+#if os(macOS)
 /// The composer's text view on the Mac: plain text whose markers ([`PromptText`]) draw as chips,
 /// each opening what it stands for. It grows from two lines to twelve, then scrolls.
 struct PromptEditor: NSViewRepresentable {
@@ -385,5 +390,137 @@ struct ChipDetail: View {
 
 extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+#else
+/// The composer's text view on iPhone and iPad: plain text, its markers ([`PromptText`]) as
+/// typed, that takes pasted images and long pastes as the Mac's does. A SwiftUI text field
+/// offers Paste only for text, so an image on the clipboard could not go in. It grows from two
+/// lines to twelve, then scrolls.
+struct PromptEditor: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    /// Attaches pasted images; returns their markers, to go in at the caret.
+    let addImages: ([Herder.Image]) -> String
+    /// Takes long pasted text; returns its marker, to go in at the caret.
+    let addPaste: (String) -> String
+    /// Return on a hardware keyboard, without Shift.
+    let submit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> PasteTextView {
+        let view = PasteTextView()
+        view.coordinator = context.coordinator
+        view.delegate = context.coordinator
+        view.font = UIFont.preferredFont(forTextStyle: .body)
+        view.adjustsFontForContentSizeCategory = true
+        view.textColor = UIColor(Theme.text)
+        view.backgroundColor = .clear
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.accessibilityIdentifier = "composer"
+        view.text = text
+        return view
+    }
+
+    func updateUIView(_ view: PasteTextView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        if view.text != text { coordinator.show(text, in: view) }
+        if focused, !view.isFirstResponder {
+            DispatchQueue.main.async { view.becomeFirstResponder() }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: PasteTextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        let line = (uiView.font ?? UIFont.preferredFont(forTextStyle: .body)).lineHeight
+        let used = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        return CGSize(width: width, height: min(max(used, line * 2), line * 12).rounded(.up))
+    }
+
+    @MainActor final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: PromptEditor
+
+        init(_ parent: PromptEditor) { self.parent = parent }
+
+        /// Shows `text`, keeping the caret where it was, or at the end if it was there (as when
+        /// dictation adds to the text).
+        func show(_ text: String, in view: UITextView) {
+            let caret = view.selectedRange
+            let wasAtEnd = caret.location >= ((view.text ?? "") as NSString).length
+            view.text = text
+            let end = (text as NSString).length
+            view.selectedRange = NSRange(location: wasAtEnd ? end : min(caret.location, end), length: 0)
+        }
+
+        /// Inserts text with markers at the caret, as typing would, so Undo takes it back.
+        func insert(_ text: String, in view: UITextView) {
+            guard !text.isEmpty else { return }
+            view.insertText(text)
+            parent.text = view.text ?? ""
+        }
+
+        func textViewDidChange(_ textView: UITextView) { parent.text = textView.text ?? "" }
+        func textViewDidBeginEditing(_ textView: UITextView) { parent.focused = true }
+        func textViewDidEndEditing(_ textView: UITextView) { parent.focused = false }
+
+        /// Return: with a hardware keyboard it sends, and Shift-Return makes a new line; on the
+        /// on-screen keyboard it makes a new line, the send button being right there. A new line
+        /// at the end continues a list.
+        func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            guard text == "\n", textView.markedTextRange == nil else { return true }
+            if let keyboard = GCKeyboard.coalesced?.keyboardInput {
+                let shift = keyboard.button(forKeyCode: .leftShift)?.isPressed == true
+                    || keyboard.button(forKeyCode: .rightShift)?.isPressed == true
+                if !shift {
+                    parent.submit()
+                    return false
+                }
+            }
+            let before = textView.text ?? ""
+            guard range.length == 0, range.location == (before as NSString).length else { return true }
+            let after = ListContinuation.newline(after: before)
+            if after == before + "\n" { return true }
+            if after.hasPrefix(before) {
+                textView.insertText(String(after.dropFirst(before.count)))
+            } else if let start = textView.position(
+                from: textView.endOfDocument, offset: -(before.utf16.count - after.utf16.count)),
+                let tail = textView.textRange(from: start, to: textView.endOfDocument) {
+                // An empty item ends the list: its marker, plain text at the end, goes.
+                textView.replace(tail, withText: "")
+            }
+            parent.text = textView.text ?? ""
+            return false
+        }
+    }
+}
+
+/// The text view: pasted images become `[Image #N]` markers, as do long pastes of text.
+final class PasteTextView: UITextView {
+    weak var coordinator: PromptEditor.Coordinator?
+
+    /// A plain text view offers Paste only for text; images paste here too.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(paste(_:)), isEditable, UIPasteboard.general.hasImages { return true }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard let coordinator else { return super.paste(sender) }
+        let board = UIPasteboard.general
+        if board.hasImages {
+            let images = ImageAttachment.from(board)
+            if !images.isEmpty {
+                coordinator.insert(coordinator.parent.addImages(images), in: self)
+                return
+            }
+        }
+        if board.hasStrings, let pasted = board.string, PromptText.isLong(pasted) {
+            coordinator.insert(coordinator.parent.addPaste(pasted), in: self)
+            return
+        }
+        super.paste(sender)
+    }
 }
 #endif

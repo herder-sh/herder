@@ -619,6 +619,13 @@ struct DraftSessionView: View {
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /// A phone's width: the chat sits closer to the edges and the footer says less.
+    private var compact: Bool { sizeClass == .compact }
+    #else
+    private let compact = false
+    #endif
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
     /// Machines the draft can run on: the connected ones with the project, or any for a path.
@@ -661,7 +668,7 @@ struct DraftSessionView: View {
                 ))
             } else {
                 Text("What should we build in \(machine?.name ?? "")/\(place)?")
-                    .font(.system(size: 30, weight: .medium))
+                    .font(.system(size: compact ? 24 : 30, weight: .medium))
                     .foregroundStyle(Theme.text)
                     .multilineTextAlignment(.center)
                     .transition(.opacity)
@@ -685,9 +692,12 @@ struct DraftSessionView: View {
                 FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
                 FooterMenu(section: accountSection, text: account?.label ?? "No account",
                            help: "The account it signs in with")
-                Label("New worktree", systemImage: "folder.badge.plus")
+                Label("New worktree", systemImage: "folder.badge.plus").lineLimit(1).fixedSize()
                 Spacer()
-                Label("From the default branch", systemImage: "arrow.triangle.branch")
+                // Where it branches from goes without saying on a phone, which has no room for it.
+                if !compact {
+                    Label("From the default branch", systemImage: "arrow.triangle.branch").lineLimit(1)
+                }
             }
             .frame(maxWidth: 760)
             .disabled(starting != nil)
@@ -698,7 +708,7 @@ struct DraftSessionView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, compact ? 12 : 24)
         .padding(.bottom, starting == nil ? 0 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)

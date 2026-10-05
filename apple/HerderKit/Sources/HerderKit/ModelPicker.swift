@@ -26,7 +26,9 @@ struct ModelPicker: View {
             .hitTarget()
         }
         .buttonStyle(.plain)
-        .fixedSize()
+        // The model's name truncates last, once the permission menu has dropped its label,
+        // rather than widening the composer past a phone's width.
+        .fixedSize(horizontal: false, vertical: true)
         .onHover { hovering = $0 }
         .help(sections.isEmpty ? "Model" : "Model, account and machine")
         .accessibilityIdentifier("model-picker")
