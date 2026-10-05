@@ -475,6 +475,7 @@ struct ProjectSettingsForm: View {
     @State private var mode: PermissionMode?
     @State private var account: AccountId?
     @State private var setup = ""
+    @State private var iconBackground: String?
     @State private var loaded = false
     @State private var error: String?
     @State private var confirmingRemove = false
@@ -529,6 +530,29 @@ struct ProjectSettingsForm: View {
             .font(.subheadline)
             .foregroundStyle(Theme.secondary)
             .disabled(!owner)
+            SettingsGroup(title: "Icon") {
+                SettingRow(label: "Background", detail: "Drawn behind an icon that needs one") {
+                    HStack(spacing: 10) {
+                        ProjectIcon(projectId: project.projectId, name: project.name,
+                                    image: fleet.projectIcon(project.projectId).map {
+                                        ProjectIconImage(data: $0.data, background: iconBackground)
+                                    },
+                                    size: 28)
+                        FooterItem(symbol: "paintpalette", text: Self.backgroundLabel(iconBackground)) {
+                            Picker("Background", selection: $iconBackground) {
+                                ForEach(Self.backgrounds, id: \.colour) { Text($0.label).tag($0.colour) }
+                                if let iconBackground, !Self.backgrounds.contains(where: { $0.colour == iconBackground }) {
+                                    Text(iconBackground).tag(Optional(iconBackground))
+                                }
+                            }
+                            .pickerStyle(.inline)
+                        }
+                    }
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(Theme.secondary)
+            .disabled(!owner)
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
             }
@@ -572,11 +596,22 @@ struct ProjectSettingsForm: View {
             mode = project.defaultPermissionMode
             account = project.defaultAccount
             setup = project.setupCommand ?? ""
+            iconBackground = project.iconBackground
             loaded = true
         }
         .onChange(of: mode) { if loaded { Task { await save() } } }
+        .onChange(of: iconBackground) { if loaded { Task { await save() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
+    }
+
+    /// The icon backgrounds to choose from; any other `#rrggbb` comes from the config file.
+    static let backgrounds: [(label: String, colour: String?)] = [
+        ("None", nil), ("White", "#ffffff"), ("Light grey", "#e5e5e5"), ("Dark grey", "#2a2a2a"), ("Black", "#000000"),
+    ]
+
+    static func backgroundLabel(_ colour: String?) -> String {
+        backgrounds.first { $0.colour == colour }?.label ?? colour ?? "None"
     }
 
     /// Sessions of the project on the machine that are not archived, which block removing it.
@@ -599,10 +634,12 @@ struct ProjectSettingsForm: View {
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
         guard mode != project.defaultPermissionMode || account != project.defaultAccount
-                || (command.isEmpty ? nil : command) != project.setupCommand else { return }
+                || (command.isEmpty ? nil : command) != project.setupCommand
+                || iconBackground != project.iconBackground else { return }
         do {
             try await fleet.setProjectSettings(project.projectId, on: machine.hostId, mode: mode, account: account,
-                                               setupCommand: command.isEmpty ? nil : command)
+                                               setupCommand: command.isEmpty ? nil : command,
+                                               iconBackground: iconBackground)
             error = nil
         } catch {
             self.error = describe(error)

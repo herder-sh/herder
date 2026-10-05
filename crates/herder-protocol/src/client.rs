@@ -423,6 +423,9 @@ pub enum CommandBody {
         /// Shell command run in each new worktree of the project before its session starts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         setup_command: Option<String>,
+        /// Colour drawn behind the project's icon, as `#rrggbb`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon_background: Option<String>,
     },
     /// Stop managing a project on this host; owners only. Answered with `applied`; the
     /// project list without it follows. Its clones leave the daemon's `[[project]]` entries

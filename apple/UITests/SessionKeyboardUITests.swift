@@ -33,8 +33,9 @@ final class SessionKeyboardUITests: XCTestCase {
 
         app.descendants(matching: .any)["composer"].firstMatch.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "tapping the prompt shows no keyboard")
-        // Down through the keyboard, as a thumb would: it follows the drag and goes.
-        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        // Down through the keyboard, as a thumb would: it follows the drag and goes. The drag
+        // starts on a message, as a fixed point of the transcript can fall under the header.
+        app.staticTexts["Run the tests."].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "dragging the transcript keeps the keyboard")
     }

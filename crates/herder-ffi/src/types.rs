@@ -607,6 +607,7 @@ pub enum CommandBody {
         default_permission_mode: Option<PermissionMode>,
         default_account: Option<AccountId>,
         setup_command: Option<String>,
+        icon_background: Option<String>,
     },
     RemoveProject {
         project_id: ProjectId,
@@ -1081,6 +1082,8 @@ pub struct Project {
     pub icon: Option<String>,
     #[uniffi(default)]
     pub icon_uploaded: bool,
+    #[uniffi(default)]
+    pub icon_background: Option<String>,
 }
 
 // Resources
