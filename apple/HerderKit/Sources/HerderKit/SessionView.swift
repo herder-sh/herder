@@ -752,6 +752,7 @@ struct DraftSessionView: View {
     private var machineSection: SettingsSection {
         SettingsSection(kind: .machine, options: SettingsOption.machines(machines, current: hostId) { _ in nil }) { id in
             hostId = id
+            MachinePreference.remember(id)
             choice = fleet.draftChoice(choice, movedTo: id, projectId: draft.projectId)
         }
     }
@@ -764,6 +765,7 @@ struct DraftSessionView: View {
             return
         }
         ModePreference.remember(mode, for: draft)
+        MachinePreference.remember(hostId)
         let sent = images
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
@@ -785,6 +787,18 @@ struct DraftSessionView: View {
             }
             PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent), for: draft.key)
         }
+    }
+}
+
+/// The machine last picked for a new session, or last started one on, remembered on this
+/// device; new sessions start there when it has their project.
+enum MachinePreference {
+    private static let key = "draftMachine"
+
+    static var last: HostId? { UserDefaults.standard.string(forKey: key) }
+
+    static func remember(_ hostId: HostId) {
+        UserDefaults.standard.set(hostId, forKey: key)
     }
 }
 

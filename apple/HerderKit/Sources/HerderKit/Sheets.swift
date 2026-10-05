@@ -208,17 +208,34 @@ struct Draft: Hashable, Identifiable {
         projectId == nil ? (repo, nil) : (nil, projectId)
     }
 
-    /// A draft in a project, on the first connected machine that has it.
+    /// A draft in a project, on the connected machine that has it that `machine` picks.
     @MainActor
     static func inProject(_ projectId: String, fleet: Fleet) -> Draft? {
-        fleet.machines.first { $0.connection == .connected && $0.projects.contains { $0.projectId == projectId } }
-            .map { Draft(hostId: $0.hostId, projectId: projectId) }
+        let candidates = fleet.machines
+            .filter { $0.connection == .connected && $0.projects.contains { $0.projectId == projectId } }
+        return machine(for: projectId, among: candidates.map(\.hostId), fleet: fleet)
+            .map { Draft(hostId: $0, projectId: projectId) }
+    }
+
+    /// Where a new session in a project starts, of `candidates`: the machine last picked for a
+    /// new session on this device, else the one the project's newest session ran on, else the
+    /// first.
+    @MainActor
+    static func machine(for projectId: String, among candidates: [HostId], fleet: Fleet) -> HostId? {
+        let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
+            .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
+            .max { $0.1 < $1.1 }?.0
+        return machine(among: candidates, last: MachinePreference.last, newest: newest)
+    }
+
+    static func machine(among candidates: [HostId], last: HostId?, newest: HostId?) -> HostId? {
+        [last, newest].compactMap { $0 }.first(where: candidates.contains) ?? candidates.first
     }
 }
 
 /// Picks where a new session runs, as a palette: one row per project, across machines, then a
-/// repository path on a machine for a new project. The chat opens on the machine the project
-/// was used on last; it can change there.
+/// repository path on a machine for a new project. The chat opens on the machine last picked
+/// for a new session, else the one the project was used on last; it can change there.
 struct ProjectPicker: View {
     let fleet: Fleet
     let newProject: Bool
@@ -250,14 +267,6 @@ struct ProjectPicker: View {
         return order.compactMap { id in groups[id].map { (id, $0.name, $0.machines) } }
             .filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
             .sorted { $0.name.lowercased() < $1.name.lowercased() }
-    }
-
-    /// The machine a project's newest session ran on, else the first that has it.
-    private func machine(for projectId: String, among candidates: [Machine]) -> Machine? {
-        let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
-            .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
-            .max { $0.1 < $1.1 }?.0
-        return candidates.first { $0.hostId == newest } ?? candidates.first
     }
 
     var body: some View {
@@ -349,8 +358,8 @@ struct ProjectPicker: View {
     }
 
     private func pick(_ projectId: String, _ candidates: [Machine]) {
-        guard let machine = machine(for: projectId, among: candidates) else { return }
-        picked(Draft(hostId: machine.hostId, projectId: projectId))
+        guard let hostId = Draft.machine(for: projectId, among: candidates.map(\.hostId), fleet: fleet) else { return }
+        picked(Draft(hostId: hostId, projectId: projectId))
         dismiss()
     }
 
