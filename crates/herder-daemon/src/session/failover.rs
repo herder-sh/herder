@@ -5,15 +5,17 @@
 //! prompt there, once ([`super::actor`]). Every account takes part; none opts in. An account is
 //! available when it is of the session's own provider, is not the failing one, has an adapter,
 //! and is not limited: no window of its usage ([`crate::usage`]) is at 100% before it resets,
-//! and it has not hit a limit since its reset time ([`Limits`]). The one with the most quota
-//! left is best, then by id; the session keeps its model, so a failover never changes provider
+//! it has not hit a limit since its reset time, and it has not failed to log in since it last
+//! worked ([`Limits`]). Accounts whose usage is known come before those whose usage is not,
+//! which may be used up or logged out without herder knowing. Among them the one with the most
+//! quota left is best, then by id; the session keeps its model, so a failover never changes provider
 //! or model. A session pinned to its account (created with `failover_pin`, else by
 //! [`FailoverConfig::pin`]) never fails over.
 //!
 //! A `create_session` naming a provider instead of an account starts on its best available
 //! account the same way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -41,9 +43,13 @@ impl FailoverConfig {
     }
 }
 
-/// When each account that hit a limit may be chosen again.
+/// Accounts failover passes over: those that hit a limit, until they may be chosen again, and
+/// those whose CLI is logged out.
 #[derive(Debug, Default)]
-pub(crate) struct Limits(Mutex<HashMap<AccountId, Timestamp>>);
+pub(crate) struct Limits {
+    until: Mutex<HashMap<AccountId, Timestamp>>,
+    logged_out: Mutex<HashSet<AccountId>>,
+}
 
 impl Limits {
     /// `account_id` hit its limit at `now`: it is passed over until the latest reset of its
@@ -58,22 +64,33 @@ impl Limits {
             .filter(|resets_at| *resets_at > now)
             .max()
             .unwrap_or_else(|| now + UNKNOWN_RESET);
-        let mut limits = self.lock();
+        let mut limits = lock(&self.until);
         let entry = limits.entry(account_id.clone()).or_insert(until);
         *entry = (*entry).max(until);
     }
 
-    /// Whether `account_id` hit a limit that has not reset by `now`.
-    fn limited(&self, account_id: &AccountId, now: Timestamp) -> bool {
-        self.lock()
-            .get(account_id)
-            .is_some_and(|until| *until > now)
+    /// `account_id` failed to log in: it is passed over until it works again.
+    pub(crate) fn logged_out(&self, account_id: &AccountId) {
+        lock(&self.logged_out).insert(account_id.clone());
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<AccountId, Timestamp>> {
-        // Every update is a single insert that leaves the map consistent, even mid-panic.
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    /// `account_id` worked: a turn on it completed, or it reported its usage.
+    pub(crate) fn worked(&self, account_id: &AccountId) {
+        lock(&self.logged_out).remove(account_id);
     }
+
+    /// Whether `account_id` is logged out, or hit a limit that has not reset by `now`.
+    fn limited(&self, account_id: &AccountId, now: Timestamp) -> bool {
+        lock(&self.logged_out).contains(account_id)
+            || lock(&self.until)
+                .get(account_id)
+                .is_some_and(|until| *until > now)
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    // Every update is a single insert or remove that leaves it consistent, even mid-panic.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// What an account is picked from.
@@ -85,8 +102,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) now: Timestamp,
 }
 
-/// The available account of `provider` with the most quota left, other than `except`, if
-/// any is available.
+/// The available account of `provider` with known usage and the most quota left, other than
+/// `except`, if any is available.
 pub(crate) fn best(
     choice: &Choice<'_>,
     provider: &Provider,
@@ -101,10 +118,15 @@ pub(crate) fn best(
                 && Some(*id) != except
                 && !choice.limits.limited(id, choice.now)
         })
-        .filter_map(|(id, _)| Some((left(choice.usage.get(id), choice.now)?, id)))
-        // Most quota left first; ids break ties, as the map is ordered by id.
-        .min_by(|(a, _), (b, _)| b.total_cmp(a))
-        .map(|(_, id)| id.clone())
+        .filter_map(|(id, _)| {
+            let usage = choice.usage.get(id);
+            Some((usage.is_none(), left(usage, choice.now)?, id))
+        })
+        // Known usage first, then most quota left; ids break ties, as the map is ordered by id.
+        .min_by(|(a_unknown, a, _), (b_unknown, b, _)| {
+            a_unknown.cmp(b_unknown).then(b.total_cmp(a))
+        })
+        .map(|(_, _, id)| id.clone())
 }
 
 /// Quota left on an account with `windows`: its fullest window's share left, in percent, or
@@ -277,6 +299,32 @@ mod tests {
         assert_eq!(case.next("c").as_deref(), Some("a"));
         assert_eq!(case.next("a").as_deref(), Some("c"));
         case.now = at("2026-10-02T14:00:01Z");
+        assert_eq!(case.next("a").as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn accounts_of_known_usage_come_before_unknown_ones() {
+        let mut case = Case::new(&[
+            ("a", Provider::Claude),
+            ("b", Provider::Claude),
+            ("c", Provider::Claude),
+        ]);
+        // "a" was never read, perhaps because its probe cannot log in; "b" has room left.
+        case.usage("b", vec![window(90.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.next("c").as_deref(), Some("b"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("b"));
+        // Unknown ones still take over when no known one is available.
+        case.usage("b", vec![window(100.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.next("c").as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_logged_out_account_waits_until_it_works_again() {
+        let case = Case::new(&[("a", Provider::Claude), ("b", Provider::Claude)]);
+        case.limits.logged_out(&AccountId::new("b"));
+        assert_eq!(case.next("a"), None);
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
+        case.limits.worked(&AccountId::new("b"));
         assert_eq!(case.next("a").as_deref(), Some("b"));
     }
 

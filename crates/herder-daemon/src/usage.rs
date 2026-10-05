@@ -154,10 +154,13 @@ pub(crate) async fn poll(
                 result = read => result,
             };
             match result {
-                Ok(Ok(windows)) if windows.is_empty() => {
-                    debug!(%account_id, "the account reports no limit windows");
+                // An answer, even without windows, shows the account is logged in.
+                Ok(Ok(windows)) => {
+                    if windows.is_empty() {
+                        debug!(%account_id, "the account reports no limit windows");
+                    }
+                    report(account_id, windows);
                 }
-                Ok(Ok(windows)) => report(account_id, windows),
                 Ok(Err(error)) => warn!(%account_id, "cannot read usage: {}", error.message),
                 Err(_) => warn!(%account_id, "reading usage timed out"),
             }
