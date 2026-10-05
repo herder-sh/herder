@@ -200,7 +200,10 @@ public final class Fleet {
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
         if !prompt.isEmpty || !images.isEmpty {
-            await send(.sendPrompt(sessionId: sessionId, text: prompt, images: images), about: key)
+            // Through the outbox, as any prompt: the machine journals the first one only once
+            // its CLI is up, and till then the new session would show no turns.
+            sessions[key] = sessions[key] ?? SessionModel(key: key)
+            await submit(prompt, images: images, to: key)
         }
         return key
     }
