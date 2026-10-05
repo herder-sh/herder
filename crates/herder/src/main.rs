@@ -2,6 +2,7 @@
 
 mod connect;
 mod dev;
+mod doctor;
 mod fork;
 mod hook;
 mod pair;
@@ -57,6 +58,12 @@ enum Command {
     Service {
         #[command(subcommand)]
         action: service::Action,
+    },
+    /// Check that this machine is ready to run herder, with how to fix what is not.
+    Doctor {
+        /// Config file [default: $XDG_CONFIG_HOME/herder/daemon.toml].
+        #[arg(long, value_name = "PATH", env = "HERDER_CONFIG")]
+        config: Option<PathBuf>,
     },
     /// Replace this binary with a herder release.
     Update {
@@ -117,6 +124,7 @@ fn main() -> ExitCode {
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
         Some(Command::Vault { command }) => vault::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
+        Some(Command::Doctor { config }) => Ok(doctor::run(config)),
         Some(Command::Update {
             version,
             yes,
@@ -196,6 +204,15 @@ mod tests {
             Cli::try_parse_from(["herder", "daemon", "--config", "/etc/herder.toml"]).unwrap();
         let Some(Command::Daemon { config, .. }) = cli.command else {
             panic!("expected daemon");
+        };
+        assert_eq!(config, Some(PathBuf::from("/etc/herder.toml")));
+    }
+
+    #[test]
+    fn parses_doctor_config_flag() {
+        let cli = Cli::try_parse_from(["herder", "doctor", "--config", "/etc/herder.toml"]);
+        let Some(Command::Doctor { config }) = cli.unwrap().command else {
+            panic!("expected doctor");
         };
         assert_eq!(config, Some(PathBuf::from("/etc/herder.toml")));
     }

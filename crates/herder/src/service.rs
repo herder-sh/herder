@@ -2,7 +2,7 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
@@ -150,6 +150,42 @@ pub fn is_active() -> bool {
         .args(["--user", "is-active", "--quiet", UNIT])
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// What systemd says of the herder service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct State {
+    /// The unit file `herder service install` writes exists.
+    pub installed: bool,
+    /// The unit starts at boot.
+    pub enabled: bool,
+    /// The service is running right now.
+    pub active: bool,
+}
+
+/// The herder service's state; `None` on a machine without systemd to ask.
+pub fn state() -> Option<State> {
+    Command::new("systemctl")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .ok()?;
+    let installed = unit_path(
+        std::env::var_os("XDG_CONFIG_HOME").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+    .is_ok_and(|path| path.is_file());
+    let enabled = Command::new("systemctl")
+        .args(["--user", "is-enabled", "--quiet", UNIT])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    Some(State {
+        installed,
+        enabled,
+        active: is_active(),
+    })
 }
 
 fn systemctl(args: &[&str]) -> Result<()> {
