@@ -39,7 +39,8 @@ says what exists, why, and how it maps to foreign languages.
   `SetSkillEnabled` commands, and the `SkillsStatus` (`LibrarySkill`, `ProviderReload`,
   `SkillReload`) and `SessionSkills` (`SessionSkill`, `SkillSource`) messages. P11.1 added,
   compatibly, `TurnCompleted.usage` (`TurnUsage`) and the `GetUsageSummary` command with its
-  `UsageSummary` result (`UsagePeriod`, `UsageTotal`).
+  `UsageSummary` result (`UsagePeriod`, `UsageTotal`). `Project.icon_background` and the `icon_background` of
+  `SetProjectSettings` were added compatibly too.
 
 ## Shape, and how it maps to UniFFI
 
@@ -86,7 +87,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
 | Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
-| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon, to cache it by, and `icon_uploaded`, whether an owner uploaded it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
+| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |

@@ -603,11 +603,13 @@ impl SessionManager {
                 default_permission_mode,
                 default_account,
                 setup_command,
+                icon_background,
             } => {
                 let settings = ProjectSettings {
                     default_permission_mode,
                     default_account,
                     setup_command,
+                    icon_background,
                 };
                 return self.set_project_settings(&project_id, settings).await;
             }
@@ -971,6 +973,14 @@ impl SessionManager {
             return Err(error(
                 ErrorCode::NotFound,
                 format!("account {account_id} does not exist"),
+            ));
+        }
+        if let Some(colour) = &settings.icon_background
+            && !crate::config::is_rgb_hex(colour)
+        {
+            return Err(error(
+                ErrorCode::BadRequest,
+                format!("icon_background {colour:?} is not a #rrggbb colour"),
             ));
         }
         tokio::task::spawn_blocking(move || overrides.set(&project, &settings).map_err(internal))

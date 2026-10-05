@@ -1264,6 +1264,13 @@
                 }
               ]
             },
+            "icon_background": {
+              "description": "Colour drawn behind the project's icon, as `#rrggbb`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "project_id": {
               "description": "The project, one of this daemon's.",
               "$ref": "#/$defs/ProjectId"

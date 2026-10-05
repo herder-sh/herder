@@ -1142,6 +1142,7 @@ async fn browsing_folders_is_for_owners_only_and_never_remembered() {
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
+            icon_background: None,
         },
         CommandBody::RemoveProject {
             project_id: herder_protocol::ProjectId::new("github.com/org/app"),

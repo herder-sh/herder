@@ -172,12 +172,14 @@ fn client_fixtures() -> Vec<ClientMessage> {
             default_permission_mode: Some(PermissionMode::AutoEdit),
             default_account: Some(AccountId::new("01J9ACCOUNT")),
             setup_command: Some("cargo fetch".into()),
+            icon_background: Some("#ffffff".into()),
         }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
+            icon_background: None,
         }),
         command(CommandBody::RemoveProject {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
@@ -1198,6 +1200,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                         "5f1d5c3b2a7e9e0c4b1f8a6d3e2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a0".into(),
                     ),
                     icon_uploaded: true,
+                    icon_background: Some("#ffffff".into()),
                 },
                 Project {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
@@ -1208,6 +1211,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     setup_command: None,
                     icon: None,
                     icon_uploaded: false,
+                    icon_background: None,
                 },
             ],
         },
@@ -2041,9 +2045,10 @@ fn project_optional_fields_may_be_absent() {
             project.default_account,
             project.setup_command,
             project.icon,
-            project.icon_uploaded
+            project.icon_uploaded,
+            project.icon_background
         ),
-        (None, None, None, None, false)
+        (None, None, None, None, false, None)
     );
 
     let command: CommandBody = serde_json::from_value(json!({
@@ -2058,6 +2063,7 @@ fn project_optional_fields_may_be_absent() {
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
+            icon_background: None,
         }
     );
 

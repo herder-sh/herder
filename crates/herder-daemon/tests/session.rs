@@ -1345,6 +1345,7 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         setup_command: None,
         icon: None,
         icon_uploaded: false,
+        icon_background: None,
     };
     let create = |repo: Option<String>, project_id: Option<&str>| CommandBody::CreateSession {
         repo,
@@ -4467,6 +4468,7 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
             setup_command: None,
             icon: None,
             icon_uploaded: false,
+            icon_background: None,
         }])
         .await;
     for (given, started) in [

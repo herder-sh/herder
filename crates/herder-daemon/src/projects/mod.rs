@@ -92,6 +92,8 @@ pub struct ProjectEntry {
     pub setup_command: Option<String>,
     /// The project's icon, relative to each clone; tried before the files [`icon`] looks for.
     pub icon: Option<PathBuf>,
+    /// Colour drawn behind the project's icon, as `#rrggbb`.
+    pub icon_background: Option<String>,
 }
 
 /// The `[projects]` table and `[[project]]` entries as they are now: what the daemon started
@@ -316,6 +318,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                 setup_command: entry.and_then(|e| e.setup_command.clone()),
                 icon: None,
                 icon_uploaded: false,
+                icon_background: entry.and_then(|e| e.icon_background.clone()),
                 project_id,
             }
         })

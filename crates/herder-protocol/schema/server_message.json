@@ -2671,6 +2671,13 @@
             "null"
           ]
         },
+        "icon_background": {
+          "description": "Colour drawn behind the project's icon, as `#rrggbb`; absent when none is configured,\nso a transparent icon shows through to the client's own background.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "icon_uploaded": {
           "description": "Whether `icon` is an uploaded image rather than one found in the clone;\n`set_project_icon` without an image clears the upload.",
           "type": "boolean",
