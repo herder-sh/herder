@@ -175,6 +175,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         };
         let adapter = adapters.get(&account.provider).unwrap();
         // The stand-in exits at once, so the start fails; only its environment matters.

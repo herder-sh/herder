@@ -6,6 +6,10 @@
 //! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | no     | 1.0.46 logged out, config and sessions move |
 //! | Cursor   | `agent acp`        | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | no     | no: from Cursor's docs, CLI not available |
 //!
+//! herder's skill library reaches Cursor as a plugin, `--plugin-dir <dir>`, and OpenCode as one
+//! of its `skills.paths`, set through `OPENCODE_CONFIG_CONTENT`, which OpenCode merges over its
+//! other config. Grok takes no extra skills.
+//!
 //! Images is what each agent advertised as `promptCapabilities.image` in the recordings, and
 //! for Cursor, unverified, no.
 //!
@@ -26,6 +30,7 @@
 //! only one the agent can use.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::process::Stdio;
 
 use herder_protocol::Provider;
@@ -53,6 +58,8 @@ pub struct AgentProfile {
     pub launch_env: Vec<(String, String)>,
     /// Variables that hold a login outside the config dir, removed when the account has one.
     pub login_env: Vec<String>,
+    /// How the agent is given herder's skill library ([`StartRequest::skills`]).
+    pub skills: SkillsLaunch,
     /// Whether the agent is known to take images with a prompt, which it advertises in
     /// `initialize`; what the adapter says until an agent started and told it.
     pub images: bool,
@@ -84,6 +91,17 @@ impl SkillMention {
     }
 }
 
+/// How an ACP agent is given herder's skill library.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkillsLaunch {
+    /// It takes none.
+    None,
+    /// As the value of this flag, before the trailing arguments.
+    Flag(String),
+    /// As one of `skills.paths` in `OPENCODE_CONFIG_CONTENT`.
+    OpencodeConfig,
+}
+
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }
@@ -104,6 +122,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["XDG_DATA_HOME"]),
             launch_env: vec![("OPENCODE_PERMISSION".into(), r#"{"*":"ask"}"#.into())],
             login_env: Vec::new(),
+            skills: SkillsLaunch::OpencodeConfig,
             images: true,
             skill_mention: SkillMention::Named,
         }
@@ -124,6 +143,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["GROK_HOME"]),
             launch_env: Vec::new(),
             login_env: strings(&["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
+            skills: SkillsLaunch::None,
             images: false,
             skill_mention: SkillMention::AsTyped,
         }
@@ -144,6 +164,7 @@ impl AgentProfile {
             config_dir_vars: strings(&["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"]),
             launch_env: Vec::new(),
             login_env: Vec::new(),
+            skills: SkillsLaunch::Flag("--plugin-dir".into()),
             images: false,
             skill_mention: SkillMention::Slash,
         }
@@ -156,12 +177,15 @@ impl AgentProfile {
 
     /// The command that runs the agent for `request`: its environment is exactly the request's,
     /// plus the config dir variables and minus the login variables when the account has a
-    /// config dir, and the launch variables. Stderr is discarded.
+    /// config dir, and the launch variables, with herder's skill library. Stderr is discarded.
     pub fn command(&self, request: &StartRequest) -> Command {
         let mut command = request.command(&self.program);
         command.args(&self.args);
         if let (Some(flag), Some(model)) = (&self.model_flag, &request.model) {
             command.args([flag, model]);
+        }
+        if let (SkillsLaunch::Flag(flag), Some(dir)) = (&self.skills, &request.skills) {
+            command.arg(flag).arg(dir);
         }
         command
             .args(&self.trailing_args)
@@ -181,8 +205,47 @@ impl AgentProfile {
                 command.env_remove(var);
             }
         }
+        if let (SkillsLaunch::OpencodeConfig, Some(dir)) = (&self.skills, &request.skills) {
+            let config = opencode_config(request.env.get(OPENCODE_CONFIG_CONTENT), dir);
+            command.env(OPENCODE_CONFIG_CONTENT, config);
+        }
         command
     }
+}
+
+const OPENCODE_CONFIG_CONTENT: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// `OPENCODE_CONFIG_CONTENT` with `dir` added to its `skills.paths`, keeping whatever config
+/// `existing`, the variable as the environment had it, held; an `existing` that is not a JSON
+/// object is replaced.
+fn opencode_config(existing: Option<&String>, dir: &Path) -> String {
+    let mut config = existing
+        .and_then(|config| serde_json::from_str::<serde_json::Value>(config).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let dir = serde_json::Value::from(dir.to_string_lossy());
+    if let Some(config) = config.as_object_mut() {
+        let skills = config
+            .entry("skills")
+            .and_modify(|skills| {
+                if !skills.is_object() {
+                    *skills = serde_json::json!({});
+                }
+            })
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(skills) = skills.as_object_mut() {
+            match skills
+                .get_mut("paths")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                Some(paths) => paths.push(dir),
+                None => {
+                    skills.insert("paths".into(), serde_json::json!([dir]));
+                }
+            }
+        }
+    }
+    config.to_string()
 }
 
 #[cfg(test)]
@@ -206,6 +269,7 @@ mod tests {
             resume: None,
             mcp: None,
             launcher: Vec::new(),
+            skills: None,
         }
     }
 
@@ -301,6 +365,57 @@ mod tests {
         let mut vars: Vec<_> = env(&command).into_iter().map(|(var, _)| var).collect();
         vars.sort();
         assert_eq!(vars, ["GROK_CODE_XAI_API_KEY", "PATH", "XAI_API_KEY"]);
+    }
+
+    #[test]
+    fn skills_reach_cursor_as_a_plugin_and_opencode_through_its_config() {
+        let with_skills = |env: BTreeMap<String, String>| StartRequest {
+            env,
+            skills: Some(PathBuf::from("/data/skill-links/cursor")),
+            ..request(Some("gpt-5"))
+        };
+        let path = || BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
+        let cursor = AgentProfile::cursor().command(&with_skills(path()));
+        assert_eq!(
+            args(&cursor),
+            [
+                "--model",
+                "gpt-5",
+                "--plugin-dir",
+                "/data/skill-links/cursor",
+                "acp"
+            ]
+        );
+        let config = |command: &Command| -> serde_json::Value {
+            let value = env(command)
+                .into_iter()
+                .find(|(var, _)| *var == "OPENCODE_CONFIG_CONTENT")
+                .and_then(|(_, value)| value)
+                .unwrap();
+            serde_json::from_str(value.to_str().unwrap()).unwrap()
+        };
+        let opencode = AgentProfile::opencode();
+        let command = opencode.command(&with_skills(path()));
+        assert_eq!(args(&command), ["acp"]);
+        assert_eq!(
+            config(&command),
+            serde_json::json!({"skills": {"paths": ["/data/skill-links/cursor"]}})
+        );
+        // Config the user set through the variable is kept.
+        let mut env = path();
+        env.insert(
+            "OPENCODE_CONFIG_CONTENT".into(),
+            r#"{"theme":"dark","skills":{"paths":["/mine"]}}"#.into(),
+        );
+        assert_eq!(
+            config(&opencode.command(&with_skills(env))),
+            serde_json::json!({
+                "theme": "dark",
+                "skills": {"paths": ["/mine", "/data/skill-links/cursor"]}
+            })
+        );
+        let grok = AgentProfile::grok().command(&with_skills(path()));
+        assert_eq!(args(&grok), ["agent", "-m", "gpt-5", "stdio"]);
     }
 
     #[test]

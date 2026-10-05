@@ -20,6 +20,7 @@ use herder_daemon::session::{
     TaskLimits, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::settings::Settings;
+use herder_daemon::skills::{Skills, SkillsSink};
 use herder_daemon::usage::{self, Probe, ProbeFuture, Probes};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
@@ -1715,6 +1716,11 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
     };
     let shutdown = CancellationToken::new();
     let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
+    let data_dir = dir.path().join("data");
+    std::fs::create_dir(&data_dir).unwrap();
+    let skills_sink: Arc<dyn SkillsSink> = Arc::new(NoSkills);
+    let skills = Skills::open(&data_dir, &manager.providers(), skills_sink).unwrap();
+    manager.deliver_skills(Arc::new(skills)).unwrap();
     let repo = dir.path().join("app");
     std::fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "--quiet", "--initial-branch=main"]);
@@ -1781,8 +1787,19 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
             .map(|start| start.config_dir.clone())
             .collect()
     };
-    assert_eq!(config_dirs(&codex_starts), [Some(codex_home)]);
+    assert_eq!(config_dirs(&codex_starts), [Some(codex_home.clone())]);
     assert_eq!(config_dirs(&claude_starts), [None]);
+    // The skill library reaches Claude as an added dir, Codex through a link in its config dir.
+    let links = data_dir.join("skill-links");
+    assert_eq!(
+        claude_starts.lock().unwrap()[0].skills,
+        Some(links.join("claude"))
+    );
+    assert_eq!(codex_starts.lock().unwrap()[0].skills, None);
+    assert_eq!(
+        std::fs::read_link(codex_home.join("skills/herder")).unwrap(),
+        links.join("enabled")
+    );
     shutdown.cancel();
 }
 
@@ -2961,6 +2978,14 @@ async fn usage_a_session_reports_reaches_clients_with_its_account() {
     assert_eq!(daemon.manager.accounts(), accounts);
     daemon.until_status(SessionStatus::Idle).await;
     daemon.stop().await;
+}
+
+/// A skill library sink for tests that do not look at what it publishes.
+struct NoSkills;
+
+impl SkillsSink for NoSkills {
+    fn skills_status(&self, _: herder_protocol::SkillsStatus) {}
+    fn session_skills(&self, _: &SessionId, _: Vec<herder_protocol::SessionSkill>) {}
 }
 
 /// A probe answering with how many times it ran, as the five-hour window's percentage.

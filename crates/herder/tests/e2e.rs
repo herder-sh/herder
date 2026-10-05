@@ -221,7 +221,7 @@ impl Client {
                 .unwrap();
             if let Message::Text(text) = frame {
                 let message = serde_json::from_str(&text).unwrap();
-                if resources(&message) {
+                if background(&message) {
                     continue;
                 }
                 self.view.apply(&message);
@@ -525,10 +525,15 @@ fn assistant_reply(events: &[Event]) -> (ItemId, String) {
         .expect("no assistant reply")
 }
 
-/// Whether `message` is a host's or session's resource figures.
-fn resources(message: &ServerMessage) -> bool {
+/// Whether `message` is one the daemon sends whenever it has news, whatever the client does:
+/// a host's or session's resource figures, or the skill library and a session's skills,
+/// which follow every pull.
+fn background(message: &ServerMessage) -> bool {
     matches!(
         message,
-        ServerMessage::HostResources(_) | ServerMessage::SessionResources { .. }
+        ServerMessage::HostResources(_)
+            | ServerMessage::SessionResources { .. }
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::SessionSkills { .. }
     )
 }

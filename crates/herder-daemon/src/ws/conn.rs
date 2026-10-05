@@ -171,6 +171,7 @@ async fn read<B: Backend>(
         .hub
         .initial_accounts(outbox, shared.backend.accounts());
     shared.backend.refresh_usage();
+    shared.backend.refresh_skills();
     shared
         .hub
         .initial_terminals(outbox, shared.terminals.list());

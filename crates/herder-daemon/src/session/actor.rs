@@ -1130,6 +1130,9 @@ impl Actor {
         if let Some(mcp) = self.inner.mcp.get() {
             mcp.revoke(&self.session.session_id);
         }
+        if let Some(skills) = self.inner.skills.get() {
+            skills.session_archived(&self.session.session_id);
+        }
         let status = SessionStatus::Archived;
         self.record(
             by,
@@ -1791,6 +1794,15 @@ impl Actor {
         if let Some(prs) = self.inner.prs.get() {
             prs.add_hooks_to_env(&mut env, &session.session_id);
         }
+        if let Some(skills) = self.inner.skills.get() {
+            skills
+                .session_started(
+                    &session.session_id,
+                    &session.provider,
+                    Path::new(&session.worktree),
+                )
+                .await;
+        }
         if let Some(native_id) = self.carry_over(account.config_dir.as_deref(), &env).await {
             let request = self.start_request(&account, env.clone(), Vec::new(), Some(native_id))?;
             match adapter.start(request).await {
@@ -1895,6 +1907,11 @@ impl Actor {
             }
             None => Vec::new(),
         };
+        let skills = self.inner.skills.get().and_then(|skills| {
+            let config_dir =
+                transcript::config_dir(&session.provider, account.config_dir.as_deref(), &env);
+            skills.launch(&session.provider, config_dir.as_deref())
+        });
         Ok(StartRequest {
             config_dir: account.config_dir.clone(),
             env,
@@ -1905,6 +1922,7 @@ impl Actor {
             resume,
             mcp,
             launcher,
+            skills,
         })
     }
 

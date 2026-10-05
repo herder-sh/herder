@@ -41,6 +41,7 @@ fn request(mode: PermissionMode) -> StartRequest {
         resume: None,
         mcp: None,
         launcher: Vec::new(),
+        skills: None,
     }
 }
 

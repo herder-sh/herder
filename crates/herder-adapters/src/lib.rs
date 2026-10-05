@@ -111,6 +111,11 @@ pub struct StartRequest {
     /// CLI's own program and arguments follow it. Empty runs the CLI directly. A replayed
     /// fixture ignores it.
     pub launcher: Vec<OsString>,
+    /// herder's skill library, laid out for this CLI by the daemon: the adapter hands it to
+    /// the CLI where it takes extra skills (Claude `--add-dir`, Cursor `--plugin-dir`,
+    /// OpenCode `skills.paths`). Absent when the daemon delivers none this way, as for Codex,
+    /// which it reaches through a link in the config dir instead.
+    pub skills: Option<PathBuf>,
 }
 
 impl StartRequest {

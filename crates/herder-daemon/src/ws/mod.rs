@@ -65,6 +65,9 @@ pub trait Backend: Send + Sync + 'static {
     /// Asks for fresh account usage, as a client opened; changes go out through the hub.
     fn refresh_usage(&self);
 
+    /// Pulls the skill library, as a client opened; changes go out through the hub.
+    fn refresh_skills(&self) {}
+
     /// Up to `limit` events of a session after `after_seq`, oldest first; for replay.
     fn read_since(
         &self,
@@ -101,6 +104,10 @@ impl Backend for SessionManager {
 
     fn refresh_usage(&self) {
         SessionManager::refresh_usage(self);
+    }
+
+    fn refresh_skills(&self) {
+        SessionManager::refresh_skills(self);
     }
 
     async fn read_since(

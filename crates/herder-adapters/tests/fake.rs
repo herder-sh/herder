@@ -27,6 +27,7 @@ fn request() -> StartRequest {
         resume: None,
         mcp: None,
         launcher: Vec::new(),
+        skills: None,
     }
 }
 
