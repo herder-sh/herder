@@ -67,6 +67,15 @@ final class ScreenshotTests: XCTestCase {
         if open("Roll out 30-day log retention") { shoot("mac-tasks") }
         #endif
 
+        // Where each session's work stands.
+        if section("Board") {
+            #if os(macOS)
+            shoot("mac-board")
+            #else
+            shoot("ios-board")
+            #endif
+        }
+
         // The fleet.
         if section("Machines") {
             settle()
@@ -139,7 +148,7 @@ final class ScreenshotTests: XCTestCase {
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
         #else
-        let symbols = ["Home": "tray", "Machines": "server.rack"]
+        let symbols = ["Home": "tray", "Board": "checklist", "Machines": "server.rack"]
         let symbol = symbols[name] ?? name
         let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", symbol)).firstMatch
         guard wait(row, "\(name) in the sidebar") else { return false }
