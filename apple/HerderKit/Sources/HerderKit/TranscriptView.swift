@@ -73,6 +73,8 @@ struct TranscriptBlockView: View {
             ChildReportCard(report: report, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
             NoticeLine(notice: notice)
+        case .question(let question):
+            QuestionRecord(question: question)
         case .handoff(let handoff):
             HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [],
                            machineName: { fleet.machineName($0, of: key) })
