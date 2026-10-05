@@ -66,6 +66,14 @@ struct DesktopShell: View {
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
+        case .board:
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+                Pane(title: "Board", subtitle: "Where each session's work stands", switcher: switcher, query: $query) {
+                    BoardView(fleet: fleet, selection: $session, query: query)
+                } actions: {
+                    EmptyView()
+                }
+            }
         case .pullRequests:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
                 Pane(title: "Pull Requests", subtitle: "Linked to sessions", switcher: switcher, query: $query) {
@@ -254,6 +262,7 @@ struct Switcher {
 
     @MainActor @ViewBuilder var items: some View {
         Button("Home", systemImage: "tray.full") { go(.home) }
+        Button("Board", systemImage: "checklist") { go(.board) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Usage", systemImage: "chart.bar") { go(.usage) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
@@ -335,6 +344,7 @@ struct Sidebar: View {
 
             SidebarRow(title: "Home", symbol: "tray.full", badge: lists.requests.count, attention: true,
                        selected: item == .home) { select(.home) }
+            SidebarRow(title: "Board", symbol: "checklist", selected: item == .board) { select(.board) }
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
@@ -418,6 +428,7 @@ private struct SidebarRail: View {
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("tray.full", "Home", .home, badge: lists.requests.count)
+            rail("checklist", "Board", .board, badge: 0)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("chart.bar", "Usage", .usage, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
