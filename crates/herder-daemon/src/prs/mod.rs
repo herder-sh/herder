@@ -186,10 +186,13 @@ impl PrTracker {
         let installer = Arc::clone(&tracker);
         tokio::spawn(async move {
             for session in sessions {
-                if !matches!(
-                    session.status,
-                    SessionStatus::Archived | SessionStatus::Moved
-                ) {
+                // A session without a branch works in the user's own folder: no hooks there.
+                if session.branch.is_some()
+                    && !matches!(
+                        session.status,
+                        SessionStatus::Archived | SessionStatus::Moved
+                    )
+                {
                     installer
                         .install(&session.session_id, Path::new(&session.worktree))
                         .await;
@@ -537,7 +540,7 @@ impl PrTracker {
     async fn owned_branches(&self, session: &Session) -> Result<Vec<String>> {
         let mut owned = self.journal.branches(session.session_id.clone()).await?;
         if let Ok(checked_out) =
-            worktree::branches(Path::new(&session.worktree), &session.branch).await
+            worktree::branches(Path::new(&session.worktree), session.branch.as_deref()).await
         {
             for branch in checked_out {
                 if !owned.contains(&branch) {

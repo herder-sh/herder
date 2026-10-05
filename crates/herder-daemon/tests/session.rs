@@ -1222,6 +1222,7 @@ async fn a_branch_checked_out_during_a_session_is_journaled_when_the_turn_ends()
     else {
         panic!("expected session_created");
     };
+    let branch = branch.as_ref().unwrap();
     let (worktree, branch) = (PathBuf::from(worktree), branch.clone());
     // Seen live before any turn ends, and not journaled yet.
     git(&worktree, &["checkout", "--quiet", "-b", "spike"]);
@@ -1428,6 +1429,7 @@ async fn create_puts_the_session_on_its_own_worktree_and_branch() {
     else {
         panic!("expected session_created, got {:?}", journal[0].body);
     };
+    let branch = branch.as_ref().unwrap();
     assert_eq!(repo, daemon.repo.to_str().unwrap());
     assert_eq!(
         Path::new(worktree),
@@ -1502,6 +1504,7 @@ async fn archive_removes_the_worktree_keeps_the_branches_and_makes_the_session_r
     else {
         panic!("expected session_created");
     };
+    let branch = branch.as_ref().unwrap();
     let worktree = PathBuf::from(worktree);
     git(&worktree, &["checkout", "--quiet", "-b", "side"]);
     std::fs::write(worktree.join("draft.txt"), "wip").unwrap();
@@ -2900,7 +2903,7 @@ async fn a_child_switches_to_any_account_like_its_primary() {
     let created = |account: &str, parent: Option<SessionId>| EventBody::SessionCreated {
         repo: "/nowhere".into(),
         worktree: "/nowhere".into(),
-        branch: "herder/x".into(),
+        branch: Some("herder/x".into()),
         provider: Provider::Claude,
         account_id: AccountId::new(account),
         model: String::new(),
@@ -4540,6 +4543,7 @@ async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_r
     else {
         panic!("expected session_created");
     };
+    let branch = branch.as_ref().unwrap();
     let worktree = PathBuf::from(worktree);
     std::fs::write(worktree.join("work.txt"), "kept").unwrap();
     git(&worktree, &["add", "work.txt"]);
@@ -4590,6 +4594,70 @@ async fn unarchive_brings_the_worktree_back_on_the_kept_branch_and_the_session_r
     git(&daemon.repo, &["branch", "--quiet", "-D", branch]);
     let error = daemon.manager.handle(alice(), unarchive).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict, "{error:?}");
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_session_in_a_folder_that_is_not_a_git_repository_works_in_the_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("app");
+    std::fs::create_dir(&folder).unwrap();
+    std::fs::write(folder.join("notes.txt"), "mine").unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    let journal = daemon.journal(&session).await;
+    let EventBody::SessionCreated {
+        repo,
+        worktree,
+        branch,
+        ..
+    } = &journal[0].body
+    else {
+        panic!("expected session_created, got {:?}", journal[0].body);
+    };
+    assert_eq!(repo, folder.to_str().unwrap());
+    assert_eq!(worktree, repo);
+    assert_eq!(*branch, None);
+    assert!(daemon.manager.branches(&session).await.unwrap().is_empty());
+
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap()[0].cwd, folder);
+
+    // Archiving and unarchiving leave the folder as it is, and never make it a repository.
+    daemon
+        .manager
+        .archive(alice(), session.clone(), false)
+        .await
+        .unwrap();
+    daemon.until_status(SessionStatus::Archived).await;
+    let unarchive = CommandBody::UnarchiveSession {
+        session_id: session.clone(),
+    };
+    let result = daemon.manager.handle(alice(), unarchive).await;
+    assert_eq!(result, Ok(CommandResult::Applied));
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        std::fs::read_to_string(folder.join("notes.txt")).unwrap(),
+        "mine"
+    );
+    assert!(!folder.join(".git").exists());
+    assert!(!dir.path().join("worktrees").exists());
+
+    // There is no branch to name.
+    let named = CommandBody::CreateSession {
+        repo: Some(folder.to_str().unwrap().to_owned()),
+        project_id: None,
+        branch: Some("fix/login".into()),
+        account_id: Some(account()),
+        provider: None,
+        model: None,
+        permission_mode: None,
+        max_children: None,
+        failover_pin: None,
+    };
+    let error = daemon.manager.handle(alice(), named).await.unwrap_err();
+    assert_eq!(error.code, ErrorCode::BadRequest, "{error:?}");
     daemon.stop().await;
 }
 

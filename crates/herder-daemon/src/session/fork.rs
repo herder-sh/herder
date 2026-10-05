@@ -58,8 +58,8 @@ pub struct Forked {
     pub from_host_id: HostId,
     /// Its worktree.
     pub worktree: String,
-    /// The branch checked out there.
-    pub branch: String,
+    /// The branch checked out there; `None` when the fork works in the folder itself.
+    pub branch: Option<String>,
     /// The checkpoint ref the worktree was restored from; `None` when there was none, so the
     /// worktree starts at the default branch.
     pub checkpoint: Option<String>,
@@ -359,25 +359,25 @@ impl SessionManager {
         let account_id =
             self.fork_account(&provider, account_id, current.clone(), default_account)?;
         let repo_path = Path::new(&repo);
-        let checkpoint = match checkpoint::latest(repo_path, &original)
-            .await
-            .map_err(worktree_error)?
-        {
-            Some(local) => Some(local),
-            None => checkpoint::fetch_latest(repo_path, &original, checkpoint::PUSH_TIMEOUT)
+        // A folder without a commit holds no checkpoints: the fork works in it as it is.
+        let checkpoint = if worktree::in_place(repo_path).await {
+            None
+        } else {
+            match checkpoint::latest(repo_path, &original)
                 .await
-                .map_err(worktree_error)?,
+                .map_err(worktree_error)?
+            {
+                Some(local) => Some(local),
+                None => checkpoint::fetch_latest(repo_path, &original, checkpoint::PUSH_TIMEOUT)
+                    .await
+                    .map_err(worktree_error)?,
+            }
         };
         let session_id = SessionId::new(ulid::Ulid::new().to_string());
         let slug = worktree::slug(&session_id);
         let worktree = inner
             .worktrees
-            .restore(
-                repo_path,
-                &slug,
-                format!("herder/{slug}"),
-                checkpoint.as_deref(),
-            )
+            .restore(repo_path, &slug, checkpoint.as_deref())
             .await
             .map_err(worktree_error)?;
         attachments::keep(&inner.attachments, &session_id, source.images).await?;
@@ -452,7 +452,9 @@ impl SessionManager {
                 .await
                 .map_err(internal)?;
         }
-        if let Some(prs) = inner.prs.get() {
+        if let Some(prs) = inner.prs.get()
+            && worktree.branch.is_some()
+        {
             prs.install(&session_id, &worktree.path).await;
         }
         info!(

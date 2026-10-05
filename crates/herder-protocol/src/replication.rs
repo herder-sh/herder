@@ -118,8 +118,10 @@ pub struct SessionSummary {
     pub project_id: ProjectId,
     /// Absolute path of the repository on the host.
     pub repo: String,
-    /// Branch the session's worktree has checked out, or had when it was removed.
-    pub branch: String,
+    /// Branch the session's worktree has checked out, or had when it was removed; absent for
+    /// a session that works in its folder itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
     /// Current status.
     pub status: SessionStatus,
     /// Every pull request tracked for the session.

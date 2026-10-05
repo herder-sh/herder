@@ -37,8 +37,10 @@ pub struct SpawnInput {
 pub struct SpawnOutput {
     /// The new child; pass it to send, status and wait_for.
     pub child: SessionId,
-    /// Branch the child works on, in this repository.
-    pub branch: String,
+    /// Branch the child works on, in this repository; absent when this folder is not a git repository with a commit, so the child works in the folder itself, as you do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    pub branch: Option<String>,
 }
 
 /// Arguments of `send`.
@@ -82,8 +84,10 @@ pub struct ChildStatus {
     pub child: SessionId,
     /// The child's task label.
     pub task: String,
-    /// Branch the child works on, in this repository.
-    pub branch: String,
+    /// Branch the child works on, in this repository; absent when this folder is not a git repository with a commit, so the child works in the folder itself, as you do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
+    pub branch: Option<String>,
     /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when herder archived it after it finished a turn (send unarchives it).
     pub status: SessionStatus,
     /// Summary of its latest finished turn; absent before the first one ends.

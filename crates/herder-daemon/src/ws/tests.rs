@@ -254,7 +254,7 @@ impl Daemon {
             EventBody::SessionCreated {
                 repo: "/repo".into(),
                 worktree: "/repo/wt".into(),
-                branch: "b".into(),
+                branch: Some("b".into()),
                 provider: Provider::Claude,
                 account_id: AccountId::new("a"),
                 model: "m".into(),

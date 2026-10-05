@@ -199,7 +199,7 @@ pub enum EventBody {
     SessionCreated {
         repo: String,
         worktree: String,
-        branch: String,
+        branch: Option<String>,
         provider: Provider,
         account_id: AccountId,
         model: String,

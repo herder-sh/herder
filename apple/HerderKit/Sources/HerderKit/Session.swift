@@ -399,7 +399,7 @@ struct SessionModel {
     static func describe(_ body: EventBody) -> String {
         switch body {
         case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _, _):
-            return "Created on \(branch) · \(provider) \(model) · \(accountId)"
+            return "Created \(branch.map { "on \($0)" } ?? "in the folder") · \(provider) \(model) · \(accountId)"
         case .branchCheckedOut(let branch): return "Checked out \(branch)"
         case .sessionStatusChanged(let status, _): return "Status: \(status)"
         case .turnStarted: return "Turn started"
@@ -809,7 +809,8 @@ struct ModelUse: Hashable {
 /// An event worth a line in the inspector's timeline.
 struct Moment: Hashable, Identifiable {
     enum Kind: Hashable {
-        case created(branch: String)
+        /// Without a branch for a session that works in its folder itself.
+        case created(branch: String?)
         /// A prompt, from an agent when it names the session that sent it.
         case prompt(String, from: SessionId?)
         /// A turn's tool calls by tool.

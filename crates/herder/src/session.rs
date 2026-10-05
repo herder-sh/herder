@@ -617,7 +617,9 @@ struct View {
     retry_at: Option<Timestamp>,
     provider: Option<Provider>,
     repo: String,
-    branch: String,
+    /// Absent for a session that works in its folder itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
     model: String,
     account_id: Option<AccountId>,
     permission_mode: Option<PermissionMode>,
@@ -669,7 +671,7 @@ impl View {
             retry_at: None,
             provider: None,
             repo: String::new(),
-            branch: String::new(),
+            branch: None,
             model: String::new(),
             account_id: None,
             permission_mode: None,
@@ -715,7 +717,7 @@ impl View {
                 self.parent = parent;
                 self.task = task;
             }
-            EventBody::BranchCheckedOut { branch } => self.branch = branch,
+            EventBody::BranchCheckedOut { branch } => self.branch = Some(branch),
             EventBody::SessionStatusChanged { status, retry_at } => {
                 self.status = status;
                 self.retry_at = retry_at;
@@ -872,7 +874,10 @@ impl View {
             ("session", self.session_id.to_string()),
             ("status", self.status_label()),
             ("repo", self.repo.clone()),
-            ("branch", self.branch.clone()),
+            (
+                "branch",
+                self.branch.clone().unwrap_or_else(|| "none".to_owned()),
+            ),
             ("model", self.model.clone()),
         ];
         if let Some(account) = &self.account_id {
@@ -946,7 +951,7 @@ fn table(views: &[View]) -> String {
             [
                 view.session_id.to_string(),
                 view.status_label(),
-                view.branch.clone(),
+                view.branch.clone().unwrap_or_else(|| "-".to_owned()),
                 view.repo.clone(),
                 prs,
             ]

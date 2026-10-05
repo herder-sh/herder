@@ -57,7 +57,7 @@ async fn create_adds_a_worktree_on_a_new_session_branch() {
         worktree.path,
         tmp.path().join("data/worktrees/app-ab12cd34")
     );
-    assert_eq!(worktree.branch, "herder/ab12cd34");
+    assert_eq!(worktree.branch.as_deref(), Some("herder/ab12cd34"));
     assert!(worktree.path.join(".git").is_file());
     assert_eq!(
         run(&worktree.path, &["branch", "--show-current"]),
@@ -84,7 +84,7 @@ async fn create_uses_the_branch_the_command_names() {
         .create(&repo, "ab12cd34", Some("fix/login".into()))
         .await
         .unwrap();
-    assert_eq!(worktree.branch, "fix/login");
+    assert_eq!(worktree.branch.as_deref(), Some("fix/login"));
     assert!(worktree.path.ends_with("app-ab12cd34"));
     assert_eq!(
         run(&worktree.path, &["branch", "--show-current"]),
@@ -94,11 +94,7 @@ async fn create_uses_the_branch_the_command_names() {
 
 #[tokio::test]
 async fn create_rejects_bad_repos_and_branches() {
-    let (tmp, repo, worktrees) = setup();
-    let plain = tmp.path().join("plain");
-    std::fs::create_dir(&plain).unwrap();
-    let err = worktrees.create(&plain, "s1", None).await.unwrap_err();
-    assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+    let (_tmp, repo, worktrees) = setup();
     let err = worktrees
         .create(Path::new("relative"), "s1", None)
         .await
@@ -114,6 +110,38 @@ async fn create_rejects_bad_repos_and_branches() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Conflict(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn a_folder_without_a_commit_is_worked_in_itself() {
+    let (tmp, _repo, worktrees) = setup();
+    let plain = tmp.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let empty = tmp.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    run(&empty, &["init", "--quiet"]);
+    for folder in [&plain, &empty] {
+        let worktree = worktrees.create(folder, "s1", None).await.unwrap();
+        assert_eq!(
+            worktree,
+            herder_daemon::worktree::Worktree {
+                path: folder.clone(),
+                branch: None
+            }
+        );
+        // No branch to name, none to list.
+        let err = worktrees
+            .create(folder, "s1", Some("fix/login".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::BadRequest(_)), "{err:?}");
+        assert!(branches(folder, None).await.unwrap().is_empty());
+        // Archiving leaves the folder alone.
+        worktrees.remove(folder, folder, false).await.unwrap();
+        assert!(folder.is_dir());
+    }
+    assert!(!tmp.path().join("data/worktrees").exists());
+    assert_eq!(run(&empty, &["status", "--porcelain"]), "");
 }
 
 #[tokio::test]
@@ -163,7 +191,7 @@ async fn branches_records_every_branch_checked_out_in_the_worktree() {
     let worktree = worktrees.create(&repo, "s1", None).await.unwrap();
     let path = &worktree.path;
     assert_eq!(
-        branches(path, &worktree.branch).await.unwrap(),
+        branches(path, worktree.branch.as_deref()).await.unwrap(),
         ["herder/s1"]
     );
 
@@ -176,7 +204,7 @@ async fn branches_records_every_branch_checked_out_in_the_worktree() {
     run(path, &["branch", "-m", "feature-renamed"]);
     run(path, &["checkout", "--quiet", "herder/s1"]);
     assert_eq!(
-        branches(path, &worktree.branch).await.unwrap(),
+        branches(path, worktree.branch.as_deref()).await.unwrap(),
         [
             "herder/s1",
             "feature",
@@ -188,7 +216,7 @@ async fn branches_records_every_branch_checked_out_in_the_worktree() {
     // Checkouts in the main worktree are not the session's.
     run(&repo, &["checkout", "--quiet", "-b", "elsewhere"]);
     assert!(
-        !branches(path, &worktree.branch)
+        !branches(path, worktree.branch.as_deref())
             .await
             .unwrap()
             .contains(&"elsewhere".to_owned())
@@ -234,7 +262,9 @@ async fn remove_takes_a_clean_worktree_and_tolerates_a_missing_one() {
     worktrees.remove(&repo, &other.path, false).await.unwrap();
     assert_eq!(run(&repo, &["worktree", "list"]).lines().count(), 1);
     assert_eq!(
-        branches(&other.path, &other.branch).await.unwrap(),
+        branches(&other.path, other.branch.as_deref())
+            .await
+            .unwrap(),
         ["herder/s2"]
     );
 }

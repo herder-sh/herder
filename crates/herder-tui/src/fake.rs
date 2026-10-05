@@ -67,7 +67,7 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
     EventBody::SessionCreated {
         repo: repo.to_owned(),
         worktree: format!("/home/ann/.herder/worktrees/{branch}"),
-        branch: branch.to_owned(),
+        branch: Some(branch.to_owned()),
         provider: Provider::Claude,
         account_id: AccountId::new("claude-main"),
         model: "claude-opus".to_owned(),

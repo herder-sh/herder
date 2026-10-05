@@ -28,7 +28,7 @@ fn created() -> EventBody {
     EventBody::SessionCreated {
         repo: "/src/herder".into(),
         worktree: "/src/herder-wt".into(),
-        branch: "feature".into(),
+        branch: Some("feature".into()),
         provider: Provider::Claude,
         account_id: AccountId::new("acct-1"),
         model: "opus".into(),
@@ -59,7 +59,7 @@ fn child_created(parent: &SessionId, task: &str) -> EventBody {
     EventBody::SessionCreated {
         repo,
         worktree: format!("{worktree}-{task}"),
-        branch: format!("{branch}-{task}"),
+        branch: branch.map(|branch| format!("{branch}-{task}")),
         provider,
         account_id,
         model,
@@ -168,7 +168,7 @@ fn fold(events: &[Event]) -> Projections {
                 last_seq: 0,
                 updated_at: event.at,
             });
-            branches.push(branch.clone());
+            branches.extend(branch.clone());
         }
         let s = session.as_mut().expect("first event creates the session");
         s.last_seq = event.seq;
@@ -298,6 +298,44 @@ fn append_assigns_seqs_and_updates_projections() {
     assert_eq!(store.session_prs(&s).unwrap(), vec![pr(7, PrState::Open)]);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature", "spike"]);
     assert_eq!(store.sessions().unwrap(), vec![session]);
+    assert_projections_match_journal(&store, &s);
+}
+
+#[test]
+fn a_session_in_its_folder_itself_owns_no_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(dir.path().join("herder.db")).unwrap();
+    let s = SessionId::new("s1");
+    let EventBody::SessionCreated {
+        repo,
+        provider,
+        account_id,
+        model,
+        permission_mode,
+        ..
+    } = created()
+    else {
+        unreachable!()
+    };
+    let body = EventBody::SessionCreated {
+        worktree: repo.clone(),
+        repo,
+        branch: None,
+        provider,
+        account_id,
+        model,
+        permission_mode,
+        parent: None,
+        task: None,
+        parent_host: None,
+        max_children: None,
+        failover_pin: None,
+    };
+    store.append(new_event(&s, 0, body)).unwrap();
+    let session = store.session(&s).unwrap().unwrap();
+    assert_eq!(session.branch, None);
+    assert_eq!(session.worktree, session.repo);
+    assert!(store.session_branches(&s).unwrap().is_empty());
     assert_projections_match_journal(&store, &s);
 }
 
@@ -624,11 +662,34 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
 
+    // Back to the v13 schema, where every session had a branch; reopening rebuilds the
+    // sessions table and keeps them.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX sessions_parent;
+             CREATE TABLE sessions_v13 (
+                 session_id TEXT NOT NULL PRIMARY KEY, repo TEXT NOT NULL,
+                 worktree TEXT NOT NULL, branch TEXT NOT NULL, provider TEXT NOT NULL,
+                 account_id TEXT NOT NULL, model TEXT NOT NULL, permission_mode TEXT NOT NULL,
+                 status TEXT NOT NULL, last_seq INTEGER NOT NULL, updated_at TEXT NOT NULL,
+                 parent TEXT, task TEXT, title TEXT, title_source TEXT, parent_host TEXT) STRICT;
+             INSERT INTO sessions_v13 SELECT * FROM sessions;
+             DROP TABLE sessions;
+             ALTER TABLE sessions_v13 RENAME TO sessions;
+             CREATE INDEX sessions_parent ON sessions (parent);
+             PRAGMA user_version = 13;",
+        )
+        .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
+    assert_eq!(
+        store.session(&s).unwrap().unwrap().branch.as_deref(),
+        Some("feature")
+    );
     store
         .append(new_event(
             &s,
@@ -650,7 +711,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
     assert_eq!(store.session(&s).unwrap().unwrap().parent_host, None);
     drop(store);
 
@@ -665,7 +726,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -683,7 +744,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -715,7 +776,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -742,7 +803,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 13);
+    assert_eq!(version(&path), 14);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -763,13 +824,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 14)
+        .pragma_update(None, "user_version", 15)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 14,
-            supported: 13
+            found: 15,
+            supported: 14
         })
     ));
 }

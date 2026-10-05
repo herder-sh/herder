@@ -59,7 +59,7 @@ impl Host {
             session_id: session_id.clone(),
             project_id: ProjectId::new("github.com/herder-sh/herder"),
             repo: "/home/dev/herder".into(),
-            branch: format!("herder/{session_id}"),
+            branch: Some(format!("herder/{session_id}")),
             status: SessionStatus::Running,
             prs: Vec::new(),
             parent: None,

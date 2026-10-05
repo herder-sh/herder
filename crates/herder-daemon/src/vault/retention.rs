@@ -178,7 +178,7 @@ mod tests {
             session_id: SessionId::new(id),
             project_id: ProjectId::new("github.com/org/repo"),
             repo: "/repo".into(),
-            branch: "b".into(),
+            branch: Some("b".into()),
             status,
             prs: Vec::new(),
             parent: None,
