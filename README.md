@@ -24,6 +24,23 @@ herder update            # replace herder with the latest release
 The script installs a static binary to `~/.local/bin/herder` after checking its sha256.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
+## Keeping accounts safe
+
+herder logs each account in with the vendor's own CLI, on the machine that runs it, so the
+provider sees that machine's network. Providers may flag or suspend subscription accounts
+whose traffic looks unusual. To lower the risk:
+
+- Run herder on machines with a residential connection, such as spare PCs at home, rather
+  than VPSs or other datacenter addresses.
+- Don't log in or run sessions through a VPN or proxy service.
+- Don't log the same account in on many machines that work at once. Spread your accounts
+  across machines instead.
+- Don't use a subscription in third-party tools or proxies alongside herder. herder only
+  ever runs it through the vendor's CLI.
+
+herder can't make an account safe from suspension. Check each provider's terms for what
+your plan allows.
+
 ## Using herder from a phone
 
 Run bare `herder` over SSH or mosh from a phone SSH app. Below 65 columns the TUI shows one
