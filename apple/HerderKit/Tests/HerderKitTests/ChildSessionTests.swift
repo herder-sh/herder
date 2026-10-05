@@ -8,8 +8,8 @@ struct ChildSessionTests {
         var script = Script("01P")
         let model = script.model([
             created(task: "Lead"), .turnStarted(turnId: "t1"),
-            .childSpawned(childSessionId: "01C", task: "Write tests"),
-            .childSpawned(childSessionId: "01D", task: "Fix docs"),
+            .childSpawned(childSessionId: "01C", hostId: nil, task: "Write tests"),
+            .childSpawned(childSessionId: "01D", hostId: nil, task: "Fix docs"),
             .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: "a", turnId: "t1", body: .assistantMessage(text: "Waiting."))),
             .childReported(childSessionId: "01D", turnId: "c1", summary: "## Docs\n\nFixed the typos.\n- README"),
             .childReported(childSessionId: "01C", turnId: "c1", summary: "Tests pass."),

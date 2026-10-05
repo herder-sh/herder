@@ -522,6 +522,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
             EventBody::ChildSpawned {
                 child_session_id,
                 task,
+                ..
             } => Some((child_session_id.clone(), task.clone())),
             _ => None,
         })

@@ -514,6 +514,7 @@ impl Session {
             EventBody::ChildSpawned {
                 child_session_id,
                 task,
+                ..
             } => Some(Entry::Child {
                 session_id: child_session_id,
                 task,

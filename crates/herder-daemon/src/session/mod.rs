@@ -1573,6 +1573,7 @@ impl SessionManager {
             model: request.model.unwrap_or_default(),
             permission_mode: request.permission_mode,
             parent: request.parent,
+            parent_host: None,
             task: request.task,
             max_children: request.max_children,
             failover_pin: request.failover_pin,

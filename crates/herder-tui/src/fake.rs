@@ -18,6 +18,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         head_seq: 0,
         status: SessionStatus::Idle,
         parent: None,
+        parent_host: None,
         task: None,
         title: None,
         project_id: project.map(herder_protocol::ProjectId::new),
@@ -72,6 +73,7 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         model: "claude-opus".to_owned(),
         permission_mode: PermissionMode::Ask,
         parent: parent.map(SessionId::new),
+        parent_host: None,
         task: task.map(str::to_owned),
         max_children: None,
         failover_pin: None,
@@ -773,6 +775,7 @@ pub fn chat() -> App {
             120,
             vec![EventBody::ChildSpawned {
                 child_session_id: SessionId::new("s3"),
+                host_id: None,
                 task: "write tests".into(),
             }],
         ),

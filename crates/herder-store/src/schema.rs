@@ -5,7 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -139,6 +139,9 @@ const V11: &str = "
 ALTER TABLE queued_prompts ADD COLUMN prompt_id TEXT NOT NULL DEFAULT '';
 UPDATE queued_prompts SET prompt_id = lower(hex(randomblob(16)));
 ";
+
+/// Remote parents: the host of a child's primary session when it runs on another machine.
+const V12: &str = "ALTER TABLE sessions ADD COLUMN parent_host TEXT;";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {

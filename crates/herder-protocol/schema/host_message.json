@@ -458,6 +458,17 @@
             }
           ]
         },
+        "parent_host": {
+          "description": "Host the parent runs on when it lives on another machine; absent when the parent, if\nany, is a session of the same host.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "project_id": {
           "description": "Project of the session's repository, as resolved under the host's current config.",
           "$ref": "#/$defs/ProjectId"

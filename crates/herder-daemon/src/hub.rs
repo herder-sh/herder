@@ -996,6 +996,7 @@ mod tests {
                 head_seq: seq,
                 status: herder_protocol::SessionStatus::Idle,
                 parent: None,
+                parent_host: None,
                 task: None,
                 title: None,
                 project_id: None,

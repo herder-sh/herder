@@ -536,6 +536,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             head_seq: 7,
             status: SessionStatus::Idle,
             parent: None,
+            parent_host: None,
             task: None,
             title: None,
             project_id: None,
@@ -2866,6 +2867,7 @@ async fn a_child_switches_to_any_account_like_its_primary() {
         permission_mode: PermissionMode::Ask,
         task: parent.as_ref().map(|_| "help".into()),
         parent,
+        parent_host: None,
         max_children: None,
         failover_pin: None,
     };

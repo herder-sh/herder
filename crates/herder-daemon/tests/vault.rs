@@ -257,6 +257,7 @@ fn seed(dir: &Path, sessions: usize, events: usize) {
                 model: "m0".into(),
                 permission_mode: PermissionMode::Ask,
                 parent: None,
+                parent_host: None,
                 task: None,
                 max_children: None,
                 failover_pin: None,

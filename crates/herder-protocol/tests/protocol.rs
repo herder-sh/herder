@@ -415,6 +415,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     head_seq: 12,
                     status: SessionStatus::Running,
                     parent: None,
+                    parent_host: None,
                     task: None,
                     title: Some("Flaky auth tests".into()),
                     project_id: Some(ProjectId::new("github.com/herder-sh/herder")),
@@ -448,6 +449,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     head_seq: 4,
                     status: SessionStatus::NeedsYou,
                     parent: Some(session_id()),
+                    parent_host: None,
                     task: Some("Fix the flaky auth tests".into()),
                     title: None,
                     project_id: None,
@@ -628,6 +630,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 model: "opus".into(),
                 permission_mode: PermissionMode::Ask,
                 parent: None,
+                parent_host: None,
                 task: None,
                 max_children: Some(3),
                 failover_pin: Some(false),
@@ -1208,6 +1211,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 model: "opus".into(),
                 permission_mode: PermissionMode::AutoEdit,
                 parent: Some(primary()),
+                parent_host: None,
                 task: Some("Store migration".into()),
                 max_children: None,
                 failover_pin: None,
@@ -1217,9 +1221,38 @@ fn task_fixtures() -> Vec<ServerMessage> {
             4,
             EventBody::ChildSpawned {
                 child_session_id: child(),
+                host_id: None,
                 task: "Store migration".into(),
             },
         ),
+        in_primary(
+            5,
+            EventBody::ChildSpawned {
+                child_session_id: SessionId::new("01J9REMOTE"),
+                host_id: Some(HostId::new("01J9MAC")),
+                task: "Build the Mac app".into(),
+            },
+        ),
+        ServerMessage::Event(Event {
+            session_id: SessionId::new("01J9REMOTE"),
+            seq: 1,
+            at: at(),
+            by: Some(UserId::new("01J9PEER")),
+            body: EventBody::SessionCreated {
+                repo: "/Users/dev/herder".into(),
+                worktree: "/Users/dev/herder-mac".into(),
+                branch: "herder/mac".into(),
+                provider: Provider::Claude,
+                account_id: AccountId::new("01J9ACCOUNT"),
+                model: "opus".into(),
+                permission_mode: PermissionMode::Ask,
+                parent: Some(primary()),
+                parent_host: Some(HostId::new("01J9HOST")),
+                task: Some("Build the Mac app".into()),
+                max_children: None,
+                failover_pin: None,
+            },
+        }),
         in_primary(
             9,
             EventBody::ChildReported {
@@ -1518,6 +1551,41 @@ fn unknown_tags_decode_to_unknown() {
 }
 
 #[test]
+fn remote_parent_and_child_host_are_on_the_wire_only_when_set() {
+    let created = |parent_host: Option<HostId>| EventBody::SessionCreated {
+        repo: "/r".into(),
+        worktree: "/w".into(),
+        branch: "b".into(),
+        provider: Provider::Claude,
+        account_id: AccountId::new("a"),
+        model: "opus".into(),
+        permission_mode: PermissionMode::Ask,
+        parent: Some(SessionId::new("p")),
+        parent_host,
+        task: None,
+        max_children: None,
+        failover_pin: None,
+    };
+    let spawned = |host_id: Option<HostId>| EventBody::ChildSpawned {
+        child_session_id: SessionId::new("c"),
+        host_id,
+        task: "t".into(),
+    };
+
+    let remote = created(Some(HostId::new("mac")));
+    assert_eq!(serde_json::to_value(&remote).unwrap()["parent_host"], "mac");
+    assert_round_trips(&remote);
+    let local = serde_json::to_value(created(None)).unwrap();
+    assert!(local.get("parent_host").is_none(), "{local}");
+
+    let remote = spawned(Some(HostId::new("mac")));
+    assert_eq!(serde_json::to_value(&remote).unwrap()["host_id"], "mac");
+    assert_round_trips(&remote);
+    let local = serde_json::to_value(spawned(None)).unwrap();
+    assert!(local.get("host_id").is_none(), "{local}");
+}
+
+#[test]
 fn events_without_task_fields_decode_as_top_level_and_user_routed() {
     let body: EventBody = serde_json::from_value(json!({
         "type": "session_created",
@@ -1532,6 +1600,7 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
     .unwrap();
     let EventBody::SessionCreated {
         parent,
+        parent_host,
         task,
         max_children,
         failover_pin,
@@ -1540,7 +1609,7 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
     else {
         panic!("expected session_created");
     };
-    assert_eq!((parent, task), (None, None));
+    assert_eq!((parent, parent_host, task), (None, None, None));
     assert_eq!((max_children, failover_pin), (None, None));
 
     let pr: PullRequest = serde_json::from_value(json!({
@@ -2121,6 +2190,7 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
         status,
         prs,
         parent: None,
+        parent_host: None,
         task: None,
         title: None,
         head_seq: 17,

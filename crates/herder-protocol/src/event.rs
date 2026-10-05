@@ -52,6 +52,10 @@ pub enum EventBody {
         /// Primary session of the task this session is a child of; absent for a top-level session.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent: Option<SessionId>,
+        /// Host the parent runs on when it lives on another machine; absent when the parent,
+        /// if any, is a session of this host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_host: Option<HostId>,
         /// Short label of the session's task, shown in the task tree.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<String>,
@@ -185,6 +189,10 @@ pub enum EventBody {
     ChildSpawned {
         /// The child, whose `session_created` names this session as its parent.
         child_session_id: SessionId,
+        /// Host the child runs on when it is another machine; absent when the child is a
+        /// session of this host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_id: Option<HostId>,
         /// Short label of the child's task.
         task: String,
     },

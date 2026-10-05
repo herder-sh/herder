@@ -182,6 +182,7 @@ mod tests {
             status,
             prs: Vec::new(),
             parent: None,
+            parent_host: None,
             task: None,
             title: None,
             head_seq: 1,

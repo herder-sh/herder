@@ -205,6 +205,7 @@ pub enum EventBody {
         model: String,
         permission_mode: PermissionMode,
         parent: Option<SessionId>,
+        parent_host: Option<HostId>,
         task: Option<String>,
         max_children: Option<u32>,
         failover_pin: Option<bool>,
@@ -270,6 +271,7 @@ pub enum EventBody {
     },
     ChildSpawned {
         child_session_id: SessionId,
+        host_id: Option<HostId>,
         task: String,
     },
     ChildReported {
@@ -903,6 +905,7 @@ pub struct SessionHead {
     pub head_seq: u64,
     pub status: SessionStatus,
     pub parent: Option<SessionId>,
+    pub parent_host: Option<HostId>,
     pub task: Option<String>,
     pub title: Option<String>,
     pub project_id: Option<ProjectId>,
