@@ -60,6 +60,19 @@
 //! are [`Machine::skills`] and [`Machine::session_skills`], the skill library and each
 //! session's skills as the daemon last sent them.
 //!
+//! # Skills
+//!
+//! The client keeps every machine where this device's user is owner on one skill library: the
+//! repository last set with `set_skills_repo` through [`Client::send`], else the one the first
+//! such machine reports. When a connection comes up and the daemon's [`Machine::skills`] names
+//! another repository, or none, as on a machine paired since, the client sends it
+//! `set_skills_repo` once on that connection. A repository set from another device on a
+//! connected machine becomes the library. After one machine accepts a write (`put_skill`,
+//! `delete_skill`, `import_skill`), every other one is sent `pull_skills`, at once if connected,
+//! else once it connects again. Each machine's [`Machine::skills`] says where it stands:
+//! `head`, `last_pull` and `pull_error`. The library is kept in memory only: a new [`Client`]
+//! learns it from its machines, which report it without credentials.
+//!
 //! # Sessions
 //!
 //! The client caches, per session, every durable event it received and the items streaming
@@ -105,6 +118,7 @@ mod fork;
 mod offline;
 mod pairing;
 mod profile;
+mod skills;
 mod supervisor;
 mod terminal;
 
@@ -345,7 +359,8 @@ pub struct Client {
 struct Inner {
     config_dir: PathBuf,
     client: String,
-    machines: Mutex<Vec<Arc<Supervisor>>>,
+    machines: Arc<Mutex<Vec<Arc<Supervisor>>>>,
+    library: Arc<skills::Library>,
     changed: Arc<watch::Sender<u64>>,
     stop: CancellationToken,
 }
@@ -384,11 +399,20 @@ impl Client {
                 )
             })
             .collect::<Result<_, _>>()?;
+        let machines = Arc::new(Mutex::new(machines));
+        let library = Arc::default();
+        tokio::spawn(skills::run(
+            Arc::clone(&library),
+            Arc::downgrade(&machines),
+            changed.subscribe(),
+            stop.child_token(),
+        ));
         Ok(Self {
             inner: Arc::new(Inner {
                 config_dir,
                 client,
-                machines: Mutex::new(machines),
+                machines,
+                library,
                 changed,
                 stop,
             }),
@@ -680,6 +704,10 @@ impl Client {
 
     /// Sends a command to a machine and waits for the daemon's answer, however long it takes
     /// to connect. Dropping the future gives up; a command already sent may still apply.
+    ///
+    /// An accepted `set_skills_repo` makes its URL the skill library of every machine where
+    /// this device's user is owner, and an accepted skill write (`put_skill`, `delete_skill`,
+    /// `import_skill`) has every other such machine pull; see the crate docs, Skills.
     pub async fn send(
         &self,
         host_id: HostId,
@@ -690,10 +718,31 @@ impl Client {
             id: new_command_id(),
             body: command,
         };
-        machine
+        let body = command.body.clone();
+        let result = machine
             .send(command)
             .await?
-            .map_err(|info| Error::Rejected { info })
+            .map_err(|info| Error::Rejected { info })?;
+        match body {
+            CommandBody::SetSkillsRepo { url } => {
+                self.inner
+                    .library
+                    .repo_set(&host_id, machine.connections(), url);
+            }
+            CommandBody::PutSkill { .. }
+            | CommandBody::DeleteSkill { .. }
+            | CommandBody::ImportSkill { .. } => {
+                let machines = self
+                    .lock()
+                    .iter()
+                    .map(|m| m.saved.host_id.clone())
+                    .collect::<Vec<_>>();
+                self.inner.library.wrote(&host_id, machines);
+            }
+            _ => return Ok(result),
+        }
+        self.inner.changed.send_modify(|version| *version += 1);
+        Ok(result)
     }
 
     /// Forks `session_id`, a session `source` lists, onto `destination`, on `account_id` or
