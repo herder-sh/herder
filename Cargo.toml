@@ -70,3 +70,11 @@ ureq = "3"
 uniffi = "0.32"
 url = "2"
 uuid = { version = "1", features = ["v7"] }
+
+# Line tables keep backtraces readable; full debug info would double each worktree's
+# `target/`. Dependencies are rarely stepped into, so they get none.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
