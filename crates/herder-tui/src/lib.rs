@@ -20,6 +20,7 @@ mod attach;
 mod backend;
 mod backup;
 mod bar;
+mod board;
 mod chat;
 mod compose;
 #[cfg(test)]

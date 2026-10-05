@@ -30,6 +30,7 @@
 mod accounts;
 mod add_machine;
 mod backup;
+mod board;
 mod composer;
 mod details;
 mod fork;
@@ -349,7 +350,7 @@ fn phone_frame(
     body
 }
 
-/// The main pane: every session's PRs, the inbox, or the open session's tab under the tab
+/// The main pane: every session's PRs, the inbox, the board, or the open session's tab under the tab
 /// row; `compact` on a phone, which has no tabs. `details` says whether the details panel
 /// shows the session's resources, so the chat need not.
 fn main_pane(
@@ -366,6 +367,10 @@ fn main_pane(
     }
     if app.focus == Focus::Inbox {
         inbox::draw(frame, area, app, compact, hits);
+        return;
+    }
+    if app.focus == Focus::Board {
+        board::draw(frame, area, app, compact, hits);
         return;
     }
     if app.open_session().is_none() {

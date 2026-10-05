@@ -18,6 +18,7 @@ use ratatui::layout::{Position, Rect};
 
 use crate::action::{self, Action};
 use crate::app::{App, Effect, Focus};
+use crate::board::BoardAction;
 use crate::inbox::InboxAction;
 use crate::nav::Tab;
 use crate::prs::PrAction;
@@ -50,6 +51,8 @@ pub enum List {
     Sessions,
     /// The inbox, by [`App::waiting`] index; a second tap opens the request's session.
     Inbox,
+    /// The board, by [`App::board`] index; a second tap opens the session.
+    Board,
     /// The open session's PR strip; a second tap opens the PR.
     Strip,
     /// Every session's PRs, by [`App::all_prs`] index; a second tap opens the PR.
@@ -295,6 +298,12 @@ impl App {
                     return self.act_inbox(InboxAction::OpenSession);
                 }
                 self.select_request(at);
+            }
+            List::Board => {
+                if self.board_index(&self.board()) == at {
+                    return self.act_board(BoardAction::OpenSession);
+                }
+                self.select_card(at);
             }
             List::Strip => {
                 if self.focus == Focus::Prs && self.pr_index() == at {

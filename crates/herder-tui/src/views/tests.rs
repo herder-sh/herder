@@ -1030,6 +1030,16 @@ fn an_approval_on_a_narrow_screen_answers_without_esc() {
     insta::assert_snapshot!(render(&mut app, 45, 40).backend());
 }
 
+/// The P12.4 "Done when": every session's work state, attention first, without the archived
+/// and moved ones.
+#[test]
+fn the_board_on_narrow_and_wide_screens() {
+    let mut app = fake::board();
+    press(&mut app, KeyCode::Char('B'));
+    press(&mut app, KeyCode::Char('j'));
+    at_three_widths("board", &mut app);
+}
+
 #[test]
 fn the_inbox_on_narrow_and_wide_screens() {
     let mut app = fake::escalated();

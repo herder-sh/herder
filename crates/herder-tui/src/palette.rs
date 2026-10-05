@@ -29,6 +29,7 @@ pub fn key_of(command: &Command) -> &'static str {
         "rename" => "E",
         "retitle" => "R",
         "inbox" => "I",
+        "board" => "B",
         "prs" => "P",
         "accounts" => "A",
         "fleet" => "m",
@@ -44,7 +45,7 @@ pub fn key_of(command: &Command) -> &'static str {
 /// The group `command` is listed under.
 fn group_of(command: &Command) -> &'static str {
     match command.name {
-        "inbox" | "prs" | "accounts" | "fleet" => "go to",
+        "inbox" | "board" | "prs" | "accounts" | "fleet" => "go to",
         "add" | "reconnect" => "machines",
         "thinking" | "details" | "glyphs" | "mouse" | "group" => "display",
         "help" | "quit" => "herder",

@@ -16,6 +16,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use herder_protocol::ApprovalDecision;
 
 use crate::app::{App, Focus};
+use crate::board::{self, BoardAction};
 use crate::chat::ChatAct;
 use crate::compose::{self, Act};
 use crate::inbox::{self, InboxAction};
@@ -67,6 +68,8 @@ pub enum Action {
     Terminals,
     /// Something in the inbox.
     Inbox(InboxAction),
+    /// Something on the board.
+    Board(BoardAction),
     /// Fold or unfold the selected task's children.
     Fold,
     /// Show the accounts screen.
@@ -169,6 +172,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if let Some(action) = inbox::for_key(key, app) {
         return Some(Action::Inbox(action));
+    }
+    if let Some(action) = board::for_key(key, app) {
+        return Some(Action::Board(action));
     }
     if let Some(action) = prs::for_key(key, app) {
         return Some(Action::Pr(action));
@@ -284,6 +290,7 @@ pub fn for_leader(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('E') => Action::Rename,
         KeyCode::Char('R') => Action::Retitle,
         KeyCode::Char('I') => Action::Inbox(InboxAction::Toggle),
+        KeyCode::Char('B') => Action::Board(BoardAction::Toggle),
         KeyCode::Char('P') => Action::Pr(PrAction::ToggleAll),
         KeyCode::Char('p') => Action::Pr(PrAction::FocusStrip),
         KeyCode::Char('L') => Action::Pr(PrAction::StartLink),
@@ -373,6 +380,7 @@ pub const HELP: &[(&str, &str)] = &[
         "Enter / l",
         "in the inbox: type an answer / open its session",
     ),
+    ("B", "board: every session's work state, attention first"),
     ("Ctrl-] d", "detach from an attached terminal"),
     ("tap, swipe", "open, press the buttons, scroll"),
     (
