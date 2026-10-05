@@ -665,7 +665,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
 
     // Back to the v13 schema, where every session had a branch; reopening rebuilds the
     // sessions table and keeps them.
@@ -683,12 +683,12 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              DROP TABLE sessions;
              ALTER TABLE sessions_v13 RENAME TO sessions;
              CREATE INDEX sessions_parent ON sessions (parent);
-             PRAGMA user_version = 13;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 13;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     assert_eq!(
         store.session(&s).unwrap().unwrap().branch.as_deref(),
         Some("feature")
@@ -710,11 +710,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN parent_host; DROP TABLE turn_usage;
-             PRAGMA user_version = 11;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 11;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     assert_eq!(store.session(&s).unwrap().unwrap().parent_host, None);
     drop(store);
 
@@ -725,11 +725,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN parent_host;
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -743,11 +743,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
-             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; PRAGMA user_version = 4;",
+             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -775,11 +775,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
-             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; PRAGMA user_version = 2;",
+             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -802,11 +802,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN task;
              ALTER TABLE sessions DROP COLUMN title;
              ALTER TABLE sessions DROP COLUMN title_source;
-             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; PRAGMA user_version = 1;",
+             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 14);
+    assert_eq!(version(&path), 15);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -827,15 +827,59 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 15)
+        .pragma_update(None, "user_version", 16)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 15,
-            supported: 14
+            found: 16,
+            supported: 15
         })
     ));
+}
+
+#[test]
+fn v15_keeps_pull_requests_tracked_before_without_a_head_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let s = SessionId::new("s1");
+    let mut tracked = pr(7, PrState::Open);
+    tracked.head_sha = Some("abc123".into());
+    tracked.unresolved_threads = Some(2);
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.append(new_event(&s, 0, created())).unwrap();
+        store
+            .append(new_event(
+                &s,
+                1,
+                EventBody::PrLinked {
+                    pr: tracked.clone(),
+                },
+            ))
+            .unwrap();
+        assert_eq!(store.session_prs(&s).unwrap(), [tracked.clone()]);
+    }
+    // Back to the v14 schema, as a build before head commits left it.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "ALTER TABLE session_prs DROP COLUMN head_sha;
+             ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 14;",
+        )
+        .unwrap();
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(store.session_prs(&s).unwrap(), [pr(7, PrState::Open)]);
+    store
+        .append(new_event(
+            &s,
+            2,
+            EventBody::PrUpdated {
+                pr: tracked.clone(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(store.session_prs(&s).unwrap(), [tracked]);
 }
 
 #[test]
@@ -850,7 +894,7 @@ fn v13_adds_an_empty_turn_usage_table() {
     // Back to the v12 schema, as a build before turn usage left it.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE turn_usage; PRAGMA user_version = 12;")
+        .execute_batch("DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 12;")
         .unwrap();
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
@@ -1292,7 +1336,7 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
          ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
-         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; PRAGMA user_version = 8;",
+         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 8;",
         )
         .unwrap();
     drop(connection);

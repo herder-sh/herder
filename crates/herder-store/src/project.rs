@@ -85,12 +85,13 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             write_pr(
                 tx,
                 "INSERT INTO session_prs (session_id, number, url, title, state, ci, review,
-                     mergeable, head_branch)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                     mergeable, head_branch, head_sha, unresolved_threads)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT (session_id, number) DO UPDATE SET url = excluded.url,
                      title = excluded.title, state = excluded.state, ci = excluded.ci,
                      review = excluded.review, mergeable = excluded.mergeable,
-                     head_branch = excluded.head_branch",
+                     head_branch = excluded.head_branch, head_sha = excluded.head_sha,
+                     unresolved_threads = excluded.unresolved_threads",
                 id,
                 pr,
             )?;
@@ -101,7 +102,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             write_pr(
                 tx,
                 "UPDATE session_prs SET url = ?3, title = ?4, state = ?5, ci = ?6, review = ?7,
-                     mergeable = ?8, head_branch = ?9
+                     mergeable = ?8, head_branch = ?9, head_sha = ?10, unresolved_threads = ?11
                  WHERE session_id = ?1 AND number = ?2",
                 id,
                 pr,
@@ -153,6 +154,8 @@ fn write_pr(tx: &Transaction<'_>, sql: &str, session_id: &str, pr: &PullRequest)
         tag(&pr.review)?,
         tag(&pr.mergeable)?,
         pr.head_branch,
+        pr.head_sha,
+        pr.unresolved_threads,
     ])?;
     Ok(())
 }

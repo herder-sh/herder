@@ -5,7 +5,9 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
+const MIGRATIONS: &[&str] = &[
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+];
 
 /// Schema version this build writes.
 pub(crate) const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -195,6 +197,13 @@ INSERT INTO sessions_v14 (session_id, repo, worktree, branch, provider, account_
 DROP TABLE sessions;
 ALTER TABLE sessions_v14 RENAME TO sessions;
 CREATE INDEX sessions_parent ON sessions (parent);
+";
+
+/// A tracked pull request's head commit and unresolved review threads; unknown for those
+/// tracked before until they next update.
+const V15: &str = "
+ALTER TABLE session_prs ADD COLUMN head_sha TEXT;
+ALTER TABLE session_prs ADD COLUMN unresolved_threads INTEGER;
 ";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.

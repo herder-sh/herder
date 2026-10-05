@@ -27,7 +27,7 @@
 //!
 //! Each linked pull request is read from GitHub with its head commit's check runs and statuses
 //! and its reviews, and journaled as `pr_updated` whenever any of what [`PullRequest`] holds
-//! changes. A merged pull request is final and no longer read.
+//! changes, its head commit included. A merged pull request is final and no longer read.
 //!
 //! # Polling
 //!

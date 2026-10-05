@@ -258,7 +258,7 @@ pub(crate) fn pull_request(
         url: pull.html_url.clone(),
         title: pull.title.clone(),
         head_branch: pull.head.branch.clone(),
-        head_sha: None,
+        head_sha: Some(pull.head.sha.clone()),
         unresolved_threads: None,
         state: state(pull),
         ci: ci(runs, status),
