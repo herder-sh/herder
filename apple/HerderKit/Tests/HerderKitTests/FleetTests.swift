@@ -110,6 +110,26 @@ struct FleetTests {
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aNewSessionShowsItsFirstPromptAtOnce() async throws {
+        let daemon = try FakeDaemon()
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        let following = Task { await fleet.follow() }
+        defer { following.cancel() }
+        let machine = try await fleet.pair(daemon)
+        try await fleet.client.synced(hostId: machine.hostId)
+        let key = try await fleet.createSession(
+            on: machine.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
+            mode: .fullAccess, prompt: "Say hello.")
+
+        // Before the machine journals it, the session view opens on the prompt, not on no turns.
+        let blocks = Transcript.blocks(try #require(fleet.sessions[key]))
+        #expect(blocks.contains { if case .user(_, "Say hello.", _, _, nil) = $0 { true } else { false } })
+    }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func aShellOpensAndEchoes() async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
