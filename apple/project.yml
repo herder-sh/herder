@@ -30,7 +30,7 @@ targets:
     platform: iOS
     sources:
       - path: App
-        excludes: ["*.entitlements"]
+        excludes: ["*.entitlements", "Info.plist"]
     dependencies:
       - package: HerderKit
     settings:
@@ -38,7 +38,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         # HerderFFI.xcframework has arm64 slices only.
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # The launch screen is the splash's background, so the splash follows it seamlessly.
+        INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: >-
           UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft
@@ -101,7 +102,7 @@ targets:
     platform: macOS
     sources:
       - path: App
-        excludes: ["*.entitlements"]
+        excludes: ["*.entitlements", "Info.plist"]
     dependencies:
       - package: HerderKit
     settings:

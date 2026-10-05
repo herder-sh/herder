@@ -13,6 +13,7 @@ public struct HerderScene: Scene {
             switch profile {
             case .opened(let fleet):
                 FleetView(fleet: fleet)
+                    .overlay { Splash(fleet: fleet) }
                     // Dark only for now; light mode comes later.
                     .preferredColorScheme(.dark)
             case .failed(let message):
