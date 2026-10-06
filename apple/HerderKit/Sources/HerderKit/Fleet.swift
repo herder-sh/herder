@@ -428,6 +428,12 @@ public final class Fleet {
         }
     }
 
+    /// The sessions of `before`, an earlier `archiving`, that the machine has archived since:
+    /// done archiving and not refused.
+    func archived(since before: Set<SessionKey>) -> Set<SessionKey> {
+        before.subtracting(archiving).filter { archiveRefusal?.key != $0 }
+    }
+
     /// Brings an archived session back, from a toast's Undo.
     func unarchive(_ key: SessionKey) async {
         toast = nil
