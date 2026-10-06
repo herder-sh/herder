@@ -177,7 +177,7 @@ struct PRRow: View {
                     .frame(width: 16)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
-                        Text("#\(pr.number)").font(.subheadline.weight(.semibold).monospacedDigit())
+                        Text(verbatim: "#\(pr.number)").font(.subheadline.weight(.semibold).monospacedDigit())
                             .foregroundStyle(pr.state.color)
                         Text(pr.title).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text).lineLimit(1)
                     }
@@ -466,7 +466,7 @@ struct PRLine: View {
                     .font(.caption)
                     .foregroundStyle(pr.state.color)
                     .frame(width: 14)
-                Text("#\(pr.number)").font(.subheadline.weight(.semibold).monospacedDigit())
+                Text(verbatim: "#\(pr.number)").font(.subheadline.weight(.semibold).monospacedDigit())
                     .foregroundStyle(pr.state.color)
                 Text(pr.title).font(.subheadline).foregroundStyle(pr.state.rank == 0 ? Theme.text : Theme.secondary)
                     .lineLimit(1).truncationMode(.tail)
