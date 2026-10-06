@@ -215,7 +215,7 @@ struct MarkdownText: View {
                 case .table(let table):
                     MarkdownTableView(table: table)
                 case .line, .gap, nil:
-                    Text(prose(block, last: index == blocks.count - 1))
+                    LinkText(prose(block, last: index == blocks.count - 1))
                         .font(.body).foregroundStyle(Theme.text).lineSpacing(3)
                 }
             }

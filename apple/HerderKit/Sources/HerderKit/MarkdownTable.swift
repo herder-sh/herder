@@ -94,7 +94,7 @@ struct MarkdownTableView: View {
 
     private func cell(_ text: String, _ column: Int) -> some View {
         WrappingWidth(limit: 320) {
-            Text(MarkdownText.inline(text, prs: prLinks, find: find))
+            LinkText(MarkdownText.inline(text, prs: prLinks, find: find))
                 .multilineTextAlignment(textAlignment(table.alignments[column]))
         }
         .frame(maxWidth: .infinity, alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))
