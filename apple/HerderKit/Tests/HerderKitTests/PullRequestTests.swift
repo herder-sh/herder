@@ -288,6 +288,26 @@ struct ProjectIconLookupTests {
         #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": Data([1])]) == nil)
     }
 
+    @Test func everyDeviceShowsTheSameIconWhateverOrderItPairedTheMachinesIn() {
+        let found = Project(projectId: "github.com/acme/app", name: "app", paths: [], defaultPermissionMode: nil,
+                            defaultAccount: nil, setupCommand: nil, icon: "found")
+        var uploaded = found
+        uploaded.icon = "up"
+        uploaded.iconUploaded = true
+        var other = found
+        other.icon = "other"
+        let fetched = ["found": Data([1]), "up": Data([2]), "other": Data([3])]
+        let a = machine("a", name: "alpha", sessions: [], projects: [found])
+        let b = machine("b", name: "beta", sessions: [], projects: [uploaded])
+        let c = machine("c", name: "gamma", sessions: [], projects: [other])
+        // An uploaded icon wins over those found in clones, in either order.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, b], fetched: fetched)?.data == Data([2]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [b, a], fetched: fetched)?.data == Data([2]))
+        // Between found icons, the machine with the lowest id wins.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [c, a], fetched: fetched)?.data == Data([1]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, c], fetched: fetched)?.data == Data([1]))
+    }
+
     @Test func anIconBackgroundIsAColourOnlyAsRrggbb() {
         #expect(ProjectIcon.colour("#ffffff") != nil)
         #expect(ProjectIcon.colour("#1A2b3C") != nil)

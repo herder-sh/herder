@@ -485,7 +485,7 @@ struct ProjectSettingsForm: View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
             SettingsGroup(title: "Appearance") {
-                ProjectIconRow(fleet: fleet, machine: machine, project: project, error: $error)
+                ProjectIconRow(fleet: fleet, project: project, error: $error)
             }
             .disabled(!owner)
             SettingsGroup(title: "New sessions") {
@@ -600,7 +600,7 @@ struct ProjectSettingsForm: View {
             loaded = true
         }
         .onChange(of: mode) { if loaded { Task { await save() } } }
-        .onChange(of: iconBackground) { if loaded { Task { await save() } } }
+        .onChange(of: iconBackground) { if loaded { Task { await saveBackground() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
     }
@@ -634,12 +634,21 @@ struct ProjectSettingsForm: View {
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
         guard mode != project.defaultPermissionMode || account != project.defaultAccount
-                || (command.isEmpty ? nil : command) != project.setupCommand
-                || iconBackground != project.iconBackground else { return }
+                || (command.isEmpty ? nil : command) != project.setupCommand else { return }
         do {
             try await fleet.setProjectSettings(project.projectId, on: machine.hostId, mode: mode, account: account,
                                                setupCommand: command.isEmpty ? nil : command,
                                                iconBackground: iconBackground)
+            error = nil
+        } catch {
+            self.error = describe(error)
+        }
+    }
+
+    /// The icon background goes to every machine, as the icon does, so all devices show it.
+    private func saveBackground() async {
+        do {
+            try await fleet.setProjectIconBackground(project.projectId, iconBackground)
             error = nil
         } catch {
             self.error = describe(error)
