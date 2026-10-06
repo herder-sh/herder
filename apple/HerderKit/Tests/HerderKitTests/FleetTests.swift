@@ -86,6 +86,7 @@ struct FleetTests {
         #expect(fleet.toast == nil)
 
         await fleet.archive(key)
+        #expect(fleet.archived(since: [key]) == [key])
         #expect(await eventually { fleet.sessions[key]?.state == .archived })
         #expect(fleet.refusals[key] == nil)
     }
@@ -194,6 +195,16 @@ struct FleetTests {
         await fleet.unarchiveAndSubmit("Say hello.", images: [], to: key)
         #expect(fleet.refusals[key] == nil)
         #expect(await eventually { fleet.sessions[key]?.state != .archived })
+    }
+
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aRefusedArchiveLeavesTheSessionOpen() async throws {
+        let (daemon, fleet, following, key) = try await pairedSession()
+        defer { following.cancel(); _ = daemon }
+        let missing = SessionKey(hostId: key.hostId, sessionId: "01NOSUCHSESSION")
+        await fleet.archive(missing)
+        #expect(fleet.archiveRefusal?.key == missing)
+        #expect(fleet.archived(since: [missing]).isEmpty)
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
