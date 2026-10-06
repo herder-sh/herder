@@ -261,6 +261,7 @@ use crate::projects::{self, Overrides};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Docker, Scopes};
 use crate::skills::Skills;
+use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
 use crate::worktree::{self, Worktrees, checkpoint};
 
@@ -378,6 +379,8 @@ struct Inner {
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
     /// Pull request tracking, once started.
     prs: OnceLock<Arc<PrTracker>>,
+    /// Stall watching, once started.
+    stalls: OnceLock<Arc<Stalls>>,
     /// herder's MCP server, once started.
     mcp: OnceLock<Arc<Mcp>>,
     /// Children's reports and requests waiting for their primaries.
@@ -526,6 +529,7 @@ impl SessionManager {
                 attachments: setup.attachments,
                 actors: Mutex::new(HashMap::new()),
                 prs: OnceLock::new(),
+                stalls: OnceLock::new(),
                 mcp: OnceLock::new(),
                 tasks,
                 notifier: OnceLock::new(),
@@ -870,8 +874,38 @@ impl SessionManager {
         if inner.prs.get().is_some() {
             anyhow::bail!("pull requests are tracked already");
         }
-        let manager = Arc::downgrade(inner);
-        let prompter: prs::Prompter = Box::new(move |session_id, text, follow_up| {
+        let tracker = PrTracker::start(
+            inner.journal.clone(),
+            config,
+            self.prompter(),
+            inner.shutdown.clone(),
+        )
+        .await?;
+        let _ = inner.prs.set(Arc::clone(&tracker));
+        Ok(tracker)
+    }
+
+    /// Starts watching every session for stalls ([`crate::stalls`]) until the manager's
+    /// shutdown; once per manager.
+    pub fn watch_stalls(&self, config: stalls::Config) -> anyhow::Result<Arc<Stalls>> {
+        let inner = &self.inner;
+        if inner.stalls.get().is_some() {
+            anyhow::bail!("stalls are watched already");
+        }
+        let watcher = Stalls::start(
+            inner.journal.clone(),
+            config,
+            self.prompter(),
+            inner.shutdown.clone(),
+        );
+        let _ = inner.stalls.set(Arc::clone(&watcher));
+        Ok(watcher)
+    }
+
+    /// Sends follow-up prompts to idle sessions, while the manager lives.
+    fn prompter(&self) -> prs::Prompter {
+        let manager = Arc::downgrade(&self.inner);
+        Box::new(move |session_id, text, follow_up| {
             let manager = manager.upgrade().map(|inner| Self { inner });
             Box::pin(async move {
                 match manager {
@@ -879,16 +913,7 @@ impl SessionManager {
                     None => false,
                 }
             })
-        });
-        let tracker = PrTracker::start(
-            inner.journal.clone(),
-            config,
-            prompter,
-            inner.shutdown.clone(),
-        )
-        .await?;
-        let _ = inner.prs.set(Arc::clone(&tracker));
-        Ok(tracker)
+        })
     }
 
     /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]), enforcing
