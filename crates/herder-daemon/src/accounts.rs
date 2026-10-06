@@ -17,7 +17,7 @@ use herder_adapters::codex::CodexAdapter;
 use herder_protocol::{Account, Provider};
 
 use crate::session::{Accounts, Adapters, TitleCli, TitleClis};
-use crate::usage::{Probe, Probes, Windows};
+use crate::usage::{Known, Probe, Probes};
 
 /// Every provider herder can run sessions on.
 pub const PROVIDERS: [Provider; 5] = [
@@ -131,9 +131,9 @@ pub fn title_clis(binaries: &HashMap<Provider, PathBuf>) -> TitleClis {
     ])
 }
 
-/// `accounts` as clients see them, ordered by id, each with the windows `usage` holds for it;
-/// none until its provider reports one.
-pub(crate) fn list(accounts: &Accounts, usage: &Windows) -> Vec<Account> {
+/// `accounts` as clients see them, ordered by id, each with the email and windows `usage`
+/// holds for it; none until its provider reports them.
+pub(crate) fn list(accounts: &Accounts, usage: &Known) -> Vec<Account> {
     accounts
         .iter()
         .map(|(id, account)| Account {
@@ -144,7 +144,8 @@ pub(crate) fn list(accounts: &Accounts, usage: &Windows) -> Vec<Account> {
             account_id: id.clone(),
             provider: account.provider.clone(),
             label: account.label.clone(),
-            usage: usage.get(id).cloned().unwrap_or_default(),
+            email: usage.emails.get(id).cloned(),
+            usage: usage.windows.get(id).cloned().unwrap_or_default(),
         })
         .collect()
 }
@@ -298,7 +299,10 @@ mod tests {
             used_percent: 9.0,
             resets_at: None,
         };
-        let usage = Windows::from([(AccountId::new("claude-main"), vec![window.clone()])]);
+        let usage = Known {
+            windows: BTreeMap::from([(AccountId::new("claude-main"), vec![window.clone()])]),
+            emails: BTreeMap::from([(AccountId::new("claude-main"), "dev@example.com".into())]),
+        };
         assert_eq!(
             list(&accounts, &usage),
             [
@@ -307,6 +311,7 @@ mod tests {
                     account_id: AccountId::new("claude-main"),
                     provider: Provider::Claude,
                     label: "Label".into(),
+                    email: Some("dev@example.com".into()),
                     usage: vec![window],
                 },
                 Account {
@@ -314,6 +319,7 @@ mod tests {
                     account_id: AccountId::new("codex"),
                     provider: Provider::Codex,
                     label: "Label".into(),
+                    email: None,
                     usage: Vec::new(),
                 }
             ]

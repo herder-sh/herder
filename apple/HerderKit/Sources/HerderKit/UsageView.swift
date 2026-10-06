@@ -160,8 +160,8 @@ private struct UsageTotals: View {
     }
 }
 
-/// One account: its provider, tokens and dollars for the period, and how much of its plan's
-/// session and weekly windows is left.
+/// One login: its email, the accounts signed in to it, tokens and dollars for the period, and
+/// how much of its plan's session and weekly windows is left.
 private struct UsageAccountRow: View {
     let row: UsageReport.AccountRow
     let showsMachine: Bool
@@ -172,9 +172,8 @@ private struct UsageAccountRow: View {
                 HStack(spacing: 10) {
                     ProviderMark(provider: row.provider, size: 16)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(row.label).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                        Text(([ModelCatalog.providerName(row.provider)] + (showsMachine ? [row.machine] : [])).joined(separator: " · "))
-                            .font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+                        Text(row.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        Text(detail).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 2) {
@@ -188,6 +187,14 @@ private struct UsageAccountRow: View {
                 if let weekly = row.weekly { window("Weekly", weekly) }
             }
         }
+    }
+
+    /// The provider, the accounts' labels under an email, and their machines.
+    private var detail: String {
+        var parts = [ModelCatalog.providerName(row.provider)]
+        if row.email != nil { parts.append(row.labels.joined(separator: ", ")) }
+        if showsMachine { parts.append(row.machines.joined(separator: ", ")) }
+        return parts.joined(separator: " · ")
     }
 
     private func window(_ label: String, _ window: WindowLeft) -> some View {
