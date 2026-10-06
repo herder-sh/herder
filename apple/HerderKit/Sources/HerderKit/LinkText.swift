@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Text whose links show the pointing hand on hover. Selectable text keeps the I-beam over its
-/// links, so the links are found in the laid-out text and the pointer set while over one.
+/// Text whose links show the pointing hand on hover on the Mac. Selectable text keeps the I-beam
+/// over its links, so the links are found in the laid-out text and the pointer set while over one.
 struct LinkText: View {
     let string: AttributedString
     @State private var links: [CGRect] = []
@@ -10,6 +10,7 @@ struct LinkText: View {
     init(_ string: AttributedString) { self.string = string }
 
     var body: some View {
+        #if os(macOS)
         Self.text(string)
             .backgroundPreferenceValue(Text.LayoutKey.self) { layouts in
                 GeometryReader { proxy in
@@ -27,6 +28,10 @@ struct LinkText: View {
                 }
             }
             .pointerStyle(overLink ? .link : nil)
+        #else
+        // Touch has no pointer to change.
+        Self.text(string)
+        #endif
     }
 
     private struct Link: TextAttribute {}
