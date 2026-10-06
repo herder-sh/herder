@@ -185,10 +185,13 @@ struct Lists: Equatable {
         }
     }
 
-    /// A project's name as its machine knows it, else the last part of its id.
+    /// A project's name, the same on every device whatever order it paired its machines in: one
+    /// an owner gave it on the lowest-id machine that has one, else the last part of its id.
     static func projectName(_ projectId: String, machines: [Machine]) -> String {
-        machines.lazy.flatMap(\.projects).first { $0.projectId == projectId }?.name
-            ?? String(projectId.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? Substring(projectId))
+        let fallback = String(projectId.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? Substring(projectId))
+        return machines.sorted { $0.hostId < $1.hostId }
+            .compactMap { machine in machine.projects.first { $0.projectId == projectId }?.name }
+            .first { $0 != fallback } ?? fallback
     }
 
     /// Top-level sessions newest first, each followed by its children oldest first. A child
