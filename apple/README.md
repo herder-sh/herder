@@ -29,8 +29,9 @@ much faster.
 
 `apple/scripts/build-mac-release.sh` (after `build-ffi.sh`) builds the macOS app in Release,
 ad-hoc signs it and zips it into `dist/herder-app-<version>-macos-arm64.zip`, with its
-`.sha256`. The `apple` workflow uploads that zip as the `herder-app-macos-arm64` artifact, and
-the `release` workflow attaches it to the GitHub Release of each `v*` tag, next to the CLI.
+`.sha256`. On each push to main, the `apple` workflow uploads that zip as the
+`herder-app-macos-arm64` artifact, and the `release` workflow attaches it to the GitHub Release
+of each `v*` tag, next to the CLI.
 
 The app is not signed with a Developer ID nor notarized yet, so Gatekeeper blocks it on first
 open. To install it on an Apple silicon Mac:
