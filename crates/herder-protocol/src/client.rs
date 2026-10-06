@@ -522,31 +522,33 @@ pub enum CommandBody {
         host_id: HostId,
     },
     /// Use the git repository at `url` as the skill library: the daemon replaces its checkout
-    /// with a clone of it; owners only. Answered with `applied`; `skills_status` follows.
+    /// with a clone of it; owners only. The skills of a library that was the machine's own and
+    /// that the repository lacks are added to it, committed and pushed. Answered with
+    /// `applied`; `skills_status` follows.
     SetSkillsRepo {
         /// The repository's git URL, as `git clone` takes it.
         url: String,
     },
-    /// Add a skill to the library, or replace one, with exactly `files`, committed and pushed;
-    /// owners only. Answered with `applied` once pushed; `skills_status` follows, and the
+    /// Add a skill to the library, or replace one, with exactly `files`, committed, and pushed
+    /// when the library has a repository; owners only. Answered with `applied` once pushed; `skills_status` follows, and the
     /// client sends `pull_skills` to its other machines. Refused with `bad_request` for a name
     /// [`crate::is_valid_skill_name`] refuses, files without a top-level `SKILL.md`, an
-    /// invalid path, or files over [`crate::MAX_SKILL_BYTES`] together; with `not_found` when
-    /// no library is set.
+    /// invalid path, or files over [`crate::MAX_SKILL_BYTES`] together.
     PutSkill {
         /// The skill's name, its folder in the library.
         name: String,
         /// Every file of the skill's folder.
         files: Vec<crate::SkillFile>,
     },
-    /// Remove a skill from the library, committed and pushed; owners only. Answered as
+    /// Remove a skill from the library, committed, and pushed when it has a repository; owners
+    /// only. Answered as
     /// `put_skill` is; refused with `not_found` for a skill the library does not have.
     DeleteSkill {
         /// The skill.
         name: String,
     },
     /// Copy a skill folder out of another git repository into the library, named after the
-    /// folder, committed and pushed; owners only. Answered as `put_skill` is; refused with
+    /// folder, committed, and pushed when the library has a repository; owners only. Answered as `put_skill` is; refused with
     /// `bad_request` when the folder has no `SKILL.md` or its name is not a valid skill name.
     ImportSkill {
         /// The repository to copy it from, as `git clone` takes it.
@@ -556,7 +558,8 @@ pub enum CommandBody {
         path: Option<String>,
     },
     /// Pull the library into the daemon's checkout now; owners only. Answered with `applied`
-    /// once pulled; `skills_status` follows with the new head, or the pull's error.
+    /// once pulled; `skills_status` follows with the new head, or the pull's error. Refused
+    /// with `not_found` while the library has no repository.
     PullSkills,
     /// Enable or disable a library skill on this machine only; owners only. A disabled skill
     /// reaches no provider here. Answered with `applied`; `skills_status` follows. Refused with

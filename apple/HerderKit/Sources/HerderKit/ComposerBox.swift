@@ -51,6 +51,14 @@ struct ComposerBox<Footer: View>: View {
                 if !skillMatches.isEmpty {
                     SkillPicker(skills: Array(skillMatches.prefix(6)), choose: mention)
                     Rectangle().fill(Theme.stroke).frame(height: 1)
+                } else if SkillMention.query(in: text) == "" && skills.isEmpty {
+                    // A bare `$` with nothing to pick says why, rather than nothing at all.
+                    Label("No skills here yet. Add some under Skills.", systemImage: "book.closed")
+                        .font(.footnote).foregroundStyle(Theme.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .accessibilityIdentifier("skill-picker-empty")
+                    Rectangle().fill(Theme.stroke).frame(height: 1)
                 }
                 #if os(macOS)
                 PromptEditor(

@@ -9,19 +9,19 @@ use herder_client_core::{
     SessionUpdate, SharedLink, SkippedMachine, TerminalEvent,
 };
 use herder_protocol::{
-    Account, AccountId, AgentMessage, Answer, Answerer, ApprovalDecision, ApprovalId,
-    ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus, CommandBody,
-    CommandResult, Constraint, Container, ContainerState, DaemonSettings, DirectoryEntry,
-    ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody, FailoverSettings,
-    FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication,
-    HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat,
-    LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project, ProjectDiscovery,
-    ProjectId, PromptId, Provider, ProviderBinary, ProviderReload, PullRequest, QuestionId,
-    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SessionHead, SessionId,
-    SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource, SkillsStatus,
-    TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
-    VaultVolume,
+    Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
+    ApprovalId, ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus,
+    CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings,
+    DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody,
+    FailoverSettings, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
+    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
+    LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project,
+    ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary, ProviderReload, PullRequest,
+    QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SessionHead,
+    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
+    SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings,
+    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
+    VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -888,6 +888,14 @@ pub struct SkillsStatus {
     pub pull_error: Option<String>,
     pub skills: Vec<LibrarySkill>,
     pub reload: Vec<ProviderReload>,
+    #[uniffi(default)]
+    pub accounts: Vec<AccountSkills>,
+}
+
+#[uniffi::remote(Record)]
+pub struct AccountSkills {
+    pub account_id: AccountId,
+    pub skills: Vec<SessionSkill>,
 }
 
 #[uniffi::remote(Record)]
@@ -923,6 +931,7 @@ pub struct SessionSkill {
 pub enum SkillSource {
     Library,
     Project,
+    Account,
 }
 
 #[uniffi::remote(Record)]

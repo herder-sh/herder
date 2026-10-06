@@ -67,6 +67,33 @@ struct SkillLibraryTests {
         #expect(library.skills[0].machines.map(\.changeable) == [false])
     }
 
+    @Test func withoutARepositoryEachMachineIsWrittenToAndNonePulled() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        desk.skills = status(repo: nil, skills: [skill("notes")])
+        var laptop = machine("laptop", name: "laptop", sessions: [])
+        laptop.skills = status(repo: nil, head: nil)
+        let silent = machine("silent", name: "silent", sessions: [])
+        let library = SkillLibrary([desk, laptop, silent])
+        #expect(library.repo == nil)
+        #expect(library.writers == ["desk", "laptop"])
+        #expect(library.pullable.isEmpty)
+
+        // Once a repository is set, a write goes through one machine; the others pull it.
+        desk.skills = status(skills: [skill("notes")])
+        #expect(SkillLibrary([desk, laptop]).writers == ["desk"])
+    }
+
+    @Test func eachAccountsOwnSkillsAreListedWithItsMachine() {
+        var desk = machine("desk", name: "desk", sessions: [])
+        let pdf = SessionSkill(name: "pdf", description: "Read PDFs.", source: .account, path: "skills/pdf")
+        var skills = status(skills: [skill("notes"), skill("off", enabled: false)])
+        skills.accounts = [AccountSkills(accountId: "work", skills: [pdf])]
+        desk.skills = skills
+        let lists = AccountSkillList.all([desk])
+        #expect(lists.map(\.skills) == [[pdf]])
+        #expect(lists.map(\.accountId) == ["work"])
+    }
+
     @Test func aVaultKeepsNoLibrary() {
         let vault = machine("vault", name: "vault", sessions: [],
                             hosts: [FleetHost(hostId: "desk", hostName: "desk", online: true, lastSeen: "")])
@@ -84,6 +111,37 @@ struct SkillLibraryTests {
         let library = SessionSkill(name: "review-pr", description: "Review.", source: .library, path: nil)
         desk.sessionSkills = ["a": [library, deploy], "b": [deploy], "c": [library]]
         #expect(ProjectSkills.all([desk]) == [ProjectSkills(projectId: "web", name: "Web", skills: [deploy])])
+    }
+}
+
+struct SkillFolderTests {
+    @Test func aFolderIsReadWithItsFilesButNotTheHiddenOnes() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("My Skill_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("scripts"), withIntermediateDirectories: true)
+        try Data("---\nname: x\n---\n".utf8).write(to: folder.appendingPathComponent("SKILL.md"))
+        let script = folder.appendingPathComponent("scripts/run.sh")
+        try Data("echo hi\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        try Data().write(to: folder.appendingPathComponent(".DS_Store"))
+
+        let files = try SkillFolder.files(at: folder)
+        #expect(files.map(\.path) == ["SKILL.md", "scripts/run.sh"])
+        #expect(files.map(\.executable) == [false, true])
+        #expect(files[1].data == Data("echo hi\n".utf8))
+    }
+
+    @Test func aFolderWithoutASkillMdIsRefused() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(throws: SkillFolder.Unreadable.self) { try SkillFolder.files(at: folder) }
+    }
+
+    @Test func aFolderNamesAValidSkill() {
+        #expect(SkillFolder.name(of: "My Skill_v2") == "my-skill-v2")
+        #expect(SkillFolder.name(of: "--Review  PR!") == "review-pr")
+        #expect(SkillDocument.isValidName(SkillFolder.name(of: "Déjà vu")))
     }
 }
 
@@ -150,17 +208,17 @@ struct SkillsFleetTests {
         let synced = SkillLibrary(fleet.machines)
         #expect(synced.checkouts.count == 2)
         #expect(synced.checkouts.allSatisfy { $0.lastPull != nil })
-        let writer = try #require(synced.writer)
+        #expect(synced.writer != nil)
 
         // Add: written through one machine, pulled on the other.
         var document = SkillDocument(name: "triage", description: "Sort new issues by area.", body: "Label each issue.")
-        try await fleet.putSkill(document, on: writer)
+        try await fleet.putSkill(document.name, files: document.files)
         #expect(await eventually(within: 30) { inSync(fleet, skills: ["release-notes", "review-pr", "triage"]) })
         #expect(SkillLibrary(fleet.machines).checkouts.first?.head != synced.checkouts.first?.head)
 
         // Edit: the new description reaches both.
         document.description = "Sort new issues by area and urgency."
-        try await fleet.putSkill(document, on: writer)
+        try await fleet.putSkill(document.name, files: document.files)
         #expect(await eventually(within: 30) {
             let skill = SkillLibrary(fleet.machines).skills.first { $0.name == "triage" }
             return inSync(fleet, skills: ["release-notes", "review-pr", "triage"])
@@ -168,11 +226,11 @@ struct SkillsFleetTests {
         })
 
         // Delete.
-        try await fleet.deleteSkill("triage", on: writer)
+        try await fleet.deleteSkill("triage")
         #expect(await eventually(within: 30) { inSync(fleet, skills: Self.demo) })
 
         // Import from another repository, named after its folder.
-        try await fleet.importSkill(gitURL: a.skillSource, path: "changelog", on: writer)
+        try await fleet.importSkill(gitURL: a.skillSource, path: "changelog")
         #expect(await eventually(within: 30) { inSync(fleet, skills: ["changelog", "release-notes", "review-pr"]) })
         #expect(SkillLibrary(fleet.machines).skills.first?.description == "Keep CHANGELOG.md up to date.")
 

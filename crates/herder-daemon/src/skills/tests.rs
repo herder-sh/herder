@@ -408,7 +408,7 @@ async fn a_disabled_skill_is_left_out_on_this_machine() {
     fs::create_dir(&worktree).unwrap();
     let session = SessionId::new("s1");
     f.skills
-        .session_started(&session, &Provider::Claude, &worktree)
+        .session_started(&session, &Provider::Claude, &AccountId::new("a"), &worktree)
         .await;
     f.run(CommandBody::SetSkillEnabled {
         name: "deploy".into(),
@@ -556,7 +556,7 @@ async fn project_skills_are_found_in_nested_dirs_where_each_cli_looks() {
     );
     assert_eq!(paths(Provider::Opencode).len(), 3);
 
-    // A session's skills: the library's, then the project's.
+    // A session's skills: the library's and the project's, ordered by name.
     let bare = bare_repo(
         f.root.path(),
         "library",
@@ -565,11 +565,12 @@ async fn project_skills_are_found_in_nested_dirs_where_each_cli_looks() {
     f.set_repo(&bare).await;
     let session = SessionId::new("s1");
     f.skills
-        .session_started(&session, &Provider::Claude, &worktree)
+        .session_started(&session, &Provider::Claude, &AccountId::new("a"), &worktree)
         .await;
     let (_, skills) = f.sink.last_session();
+    assert_eq!(skills[0].description, "Lint it");
     assert_eq!(
-        skills[0],
+        skills[1],
         SessionSkill {
             name: "review".into(),
             description: "Review a diff".into(),
@@ -577,7 +578,6 @@ async fn project_skills_are_found_in_nested_dirs_where_each_cli_looks() {
             path: None,
         }
     );
-    assert_eq!(skills[1].description, "Lint it");
     assert_eq!(skills.len(), 3);
     // A library change sends them again; archive sends none.
     f.run(CommandBody::DeleteSkill {
@@ -598,8 +598,6 @@ async fn refuses_a_put_the_protocol_refuses() {
         files,
     };
     let md = || file("SKILL.md", &skill_md("x", "y"), false);
-    let err = f.run(put("ok", vec![md()])).await.unwrap_err();
-    assert_eq!(err.code, ErrorCode::NotFound, "no library is set");
     let bare = bare_repo(f.root.path(), "library", &[]);
     f.set_repo(&bare).await;
     for files in [
@@ -623,6 +621,141 @@ async fn refuses_a_put_the_protocol_refuses() {
     assert_eq!(err.code, ErrorCode::BadRequest);
     // The library it had is kept.
     assert_eq!(f.sink.status().repo.as_deref(), bare.to_str());
+}
+
+#[tokio::test]
+async fn a_library_without_a_repository_is_the_machines_own_until_one_is_set() {
+    let f = fixture();
+    f.run(CommandBody::PutSkill {
+        name: "notes".into(),
+        files: vec![file("SKILL.md", &skill_md("notes", "Take notes"), false)],
+    })
+    .await
+    .unwrap();
+    let status = f.sink.status();
+    assert_eq!(status.repo, None);
+    assert!(status.head.is_some(), "committed on the machine");
+    assert_eq!(f.names(), ["notes"]);
+    assert_eq!(linked(&f.data, "enabled"), ["notes"]);
+    let err = f.run(CommandBody::PullSkills).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+
+    // A put the protocol refuses leaves the machine's library as it was.
+    let refused = f
+        .run(CommandBody::PutSkill {
+            name: "notes".into(),
+            files: vec![file("README.md", "no SKILL.md", false)],
+        })
+        .await;
+    assert!(refused.is_err());
+    assert_eq!(f.names(), ["notes"]);
+
+    // Setting a repository carries the machine's skills into it, beside its own.
+    let bare = bare_repo(
+        f.root.path(),
+        "library",
+        &[("review/SKILL.md", &skill_md("review", "Review a diff"))],
+    );
+    f.set_repo(&bare).await;
+    assert_eq!(f.sink.status().repo.as_deref(), bare.to_str());
+    assert_eq!(f.names(), ["notes", "review"]);
+    let other = f.root.path().join("other");
+    run_git(
+        f.root.path(),
+        &[
+            "clone",
+            "--quiet",
+            bare.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        other.join("notes/SKILL.md").is_file(),
+        "pushed to the repository"
+    );
+}
+
+#[tokio::test]
+async fn an_accounts_own_skills_are_listed_and_reach_its_sessions() {
+    let f = fixture();
+    let config = f.root.path().join("claude-home");
+    let write = |path: &str, text: &str| {
+        let path = config.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    write(
+        "skills/plain/SKILL.md",
+        "---\ndescription: No name of its own\n---\n",
+    );
+    write(
+        "skills/synced/bucket/pdf/SKILL.md",
+        &skill_md("pdf", "Read PDFs"),
+    );
+    write("skills/.trash/old/SKILL.md", &skill_md("old", "Deleted"));
+    write("skills/empty/README.md", "no skill here");
+    // Codex's config dir links herder's library in; it is listed as the library already.
+    symlink(
+        f.data.join("skill-links/enabled"),
+        config.join("skills/herder"),
+    )
+    .unwrap();
+    f.run(CommandBody::PutSkill {
+        name: "notes".into(),
+        files: vec![file("SKILL.md", &skill_md("notes", "Take notes"), false)],
+    })
+    .await
+    .unwrap();
+
+    let account = AccountId::new("work");
+    f.skills.set_accounts(vec![
+        (account.clone(), config.clone()),
+        (AccountId::new("bare"), f.root.path().join("nothing")),
+    ]);
+    f.skills.pull().await;
+    let accounts = f.sink.status().accounts;
+    assert_eq!(accounts.len(), 1, "an account without skills is left out");
+    assert_eq!(accounts[0].account_id, account);
+    let listed: Vec<_> = accounts[0]
+        .skills
+        .iter()
+        .map(|skill| (skill.name.as_str(), skill.path.as_deref(), skill.source))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                "pdf",
+                Some("skills/synced/bucket/pdf"),
+                SkillSource::Account
+            ),
+            ("plain", Some("skills/plain"), SkillSource::Account),
+        ]
+    );
+
+    let worktree = f.root.path().join("worktree");
+    fs::create_dir(&worktree).unwrap();
+    f.skills
+        .session_started(
+            &SessionId::new("s1"),
+            &Provider::Claude,
+            &account,
+            &worktree,
+        )
+        .await;
+    let (_, skills) = f.sink.last_session();
+    let names: Vec<_> = skills
+        .iter()
+        .map(|skill| (skill.name.as_str(), skill.source))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("notes", SkillSource::Library),
+            ("pdf", SkillSource::Account),
+            ("plain", SkillSource::Account),
+        ]
+    );
 }
 
 #[test]

@@ -1059,6 +1059,7 @@ mod tests {
             pull_error: None,
             skills: Vec::new(),
             reload: Vec::new(),
+            accounts: Vec::new(),
         };
         let skills = vec![SessionSkill {
             name: "deploy".into(),

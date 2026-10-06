@@ -1,5 +1,6 @@
 //! Drives the session manager with the fake adapter, the way clients will through the hub.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -2987,6 +2988,61 @@ async fn usage_a_session_reports_reaches_clients_with_its_account() {
     assert_eq!(accounts[0].usage, [five_hour(41.5), seven_day.clone()]);
     assert_eq!(daemon.manager.accounts(), accounts);
     daemon.until_status(SessionStatus::Idle).await;
+    daemon.stop().await;
+}
+
+/// A skill library sink that keeps every session's last skills.
+#[derive(Default)]
+struct SessionSkills(Mutex<HashMap<SessionId, Vec<herder_protocol::SessionSkill>>>);
+
+impl SkillsSink for SessionSkills {
+    fn skills_status(&self, _: herder_protocol::SkillsStatus) {}
+    fn session_skills(&self, session_id: &SessionId, skills: Vec<herder_protocol::SessionSkill>) {
+        self.0.lock().unwrap().insert(session_id.clone(), skills);
+    }
+}
+
+impl SessionSkills {
+    fn names(&self, session_id: &SessionId) -> Option<Vec<String>> {
+        let skills = self.0.lock().unwrap();
+        Some(
+            skills
+                .get(session_id)?
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect(),
+        )
+    }
+}
+
+#[tokio::test]
+async fn a_sessions_skills_are_sent_once_created_and_again_when_the_daemon_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let deliver = |manager: &SessionManager, data: &str| {
+        let sink = Arc::new(SessionSkills::default());
+        let data_dir = dir.path().join(data);
+        std::fs::create_dir(&data_dir).unwrap();
+        let skills = Skills::open(&data_dir, &manager.providers(), sink.clone()).unwrap();
+        manager.deliver_skills(Arc::new(skills)).unwrap();
+        sink
+    };
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let skill = daemon.repo.join(".claude/skills/lint/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(&skill, "---\nname: lint\ndescription: Lint it\n---\n").unwrap();
+    git(&daemon.repo, &["add", "--all"]);
+    git(&daemon.repo, &["commit", "--quiet", "-m", "lint"]);
+    let sink = deliver(&daemon.manager, "data");
+
+    // No prompt yet, so no CLI: the skills are sent all the same.
+    let session = daemon.create().await;
+    assert_eq!(sink.names(&session), Some(vec!["lint".to_owned()]));
+    daemon.stop().await;
+
+    let daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let sink = deliver(&daemon.manager, "data-again");
+    daemon.manager.list_skills().await.unwrap();
+    assert_eq!(sink.names(&session), Some(vec!["lint".to_owned()]));
     daemon.stop().await;
 }
 

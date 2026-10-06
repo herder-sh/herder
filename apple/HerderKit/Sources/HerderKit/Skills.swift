@@ -2,7 +2,8 @@ import Foundation
 import Herder
 
 /// The skill library as the machines have it: the repository, each machine's checkout of it,
-/// and every skill with the machines that have it and whether each has it enabled.
+/// and every skill with the machines that have it and whether each has it enabled. Until a
+/// repository is set, each machine's library is its own, and the app writes to all of them.
 struct SkillLibrary: Equatable {
     /// One machine's checkout of the library.
     struct Checkout: Equatable, Identifiable {
@@ -13,7 +14,7 @@ struct SkillLibrary: Equatable {
         let owner: Bool
         /// Whether the machine has reported its library yet.
         let reported: Bool
-        /// The repository the machine's checkout is of; `nil` until one is set.
+        /// The repository the machine's checkout is of; `nil` while its library is its own.
         let repo: String?
         /// The commit it is at.
         let head: String?
@@ -21,7 +22,7 @@ struct SkillLibrary: Equatable {
         let pullError: String?
 
         /// Whether the user may change the library through this machine now.
-        var writable: Bool { connected && owner && repo != nil }
+        var writable: Bool { connected && owner && reported }
     }
 
     /// A skill on one machine.
@@ -78,16 +79,22 @@ struct SkillLibrary: Equatable {
     /// machine on it.
     var repo: String? { checkouts.lazy.compactMap(\.repo).first }
 
-    /// The machine a write goes through: the first the user owns that has the library and is
-    /// connected. The client then has the others pull it.
+    /// The machine a write goes through: the first the user owns that is connected. The
+    /// client then has the others pull it.
     var writer: HostId? { checkouts.first(where: \.writable)?.hostId }
+
+    /// The machines a write goes to: the writer, which the others pull from, once there is a
+    /// repository; until then every machine the user can write to, each keeping its own.
+    var writers: [HostId] {
+        repo == nil ? checkouts.filter(\.writable).map(\.hostId) : writer.map { [$0] } ?? []
+    }
 
     /// The machine to set the library's repository on: the first connected one the user owns.
     /// The client sets it on every other machine they own.
     var setter: HostId? { checkouts.first { $0.connected && $0.owner }?.hostId }
 
-    /// The machines to pull on: every connected one with a library the user owns.
-    var pullable: [HostId] { checkouts.filter(\.writable).map(\.hostId) }
+    /// The machines to pull on: every connected one the user owns with a repository.
+    var pullable: [HostId] { checkouts.filter { $0.writable && $0.repo != nil }.map(\.hostId) }
 
     /// A commit, as short as git shows it.
     static func shortHead(_ head: String) -> String { String(head.prefix(7)) }
@@ -165,6 +172,74 @@ struct SkillDocument: Equatable {
     }
 }
 
+/// A skill folder picked on this device, as `put_skill` takes it: every file in it but the
+/// hidden ones, with paths relative to it.
+enum SkillFolder {
+    struct Unreadable: LocalizedError {
+        let errorDescription: String?
+    }
+
+    /// The files of the folder at `url`, which has a `SKILL.md` at its top.
+    static func files(at url: URL) throws -> [SkillFile] {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let base = url.standardizedFileURL.resolvingSymlinksInPath().path
+        guard FileManager.default.fileExists(atPath: base + "/SKILL.md") else {
+            throw Unreadable(errorDescription: "\(url.lastPathComponent) has no SKILL.md at its top.")
+        }
+        guard let walk = FileManager.default.enumerator(
+            at: URL(fileURLWithPath: base), includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles])
+        else {
+            throw Unreadable(errorDescription: "\(url.lastPathComponent) cannot be read.")
+        }
+        var files: [SkillFile] = []
+        for case let file as URL in walk {
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            let path = file.standardizedFileURL.resolvingSymlinksInPath().path
+            guard path.hasPrefix(base + "/") else { continue }
+            files.append(SkillFile(path: String(path.dropFirst(base.count + 1)), data: try Data(contentsOf: file),
+                                   executable: FileManager.default.isExecutableFile(atPath: path)))
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    /// A valid skill name made of a folder's name: lowercased, each run of other characters a
+    /// hyphen.
+    static func name(of folder: String) -> String {
+        var name = ""
+        for character in folder.lowercased() {
+            if character.isASCII && (character.isLetter || character.isNumber) {
+                name.append(character)
+            } else if !name.isEmpty && !name.hasSuffix("-") {
+                name.append("-")
+            }
+        }
+        while name.hasSuffix("-") { name.removeLast() }
+        return String(name.prefix(SkillDocument.maxNameCharacters))
+    }
+}
+
+/// The skills in each account's own config dir, with the machine it is on.
+struct AccountSkillList: Equatable, Identifiable {
+    var id: String { "\(hostId)/\(accountId)" }
+    let hostId: HostId
+    let accountId: AccountId
+    /// The account's label and machine, as the list heads it.
+    let title: String
+    let skills: [SessionSkill]
+
+    static func all(_ machines: [Machine]) -> [AccountSkillList] {
+        machines.flatMap { machine in
+            (machine.skills?.accounts ?? []).map { account in
+                let label = machine.accounts.first { $0.accountId == account.accountId }?.label ?? account.accountId
+                return AccountSkillList(hostId: machine.hostId, accountId: account.accountId,
+                                        title: "\(label) · \(machine.name)", skills: account.skills)
+            }
+        }
+    }
+}
+
 extension Fleet {
     /// Makes the git repository at `url` the skill library, through `hostId`; the client sets
     /// it on every other machine the user owns.
@@ -172,19 +247,31 @@ extension Fleet {
         _ = try await client.send(hostId: hostId, command: .setSkillsRepo(url: url))
     }
 
-    /// Adds `document` to the library, or replaces the skill of its name with it.
-    func putSkill(_ document: SkillDocument, on hostId: HostId) async throws {
-        _ = try await client.send(hostId: hostId, command: .putSkill(name: document.name, files: document.files))
+    /// Adds the skill `name` with exactly `files` to the library, or replaces the skill of
+    /// that name with it.
+    func putSkill(_ name: String, files: [SkillFile]) async throws {
+        try await writeSkills(.putSkill(name: name, files: files))
     }
 
-    func deleteSkill(_ name: String, on hostId: HostId) async throws {
-        _ = try await client.send(hostId: hostId, command: .deleteSkill(name: name))
+    func deleteSkill(_ name: String) async throws {
+        try await writeSkills(.deleteSkill(name: name))
     }
 
     /// Copies the skill folder `path` of the repository at `gitURL`, or the repository's top
     /// when `path` is empty, into the library.
-    func importSkill(gitURL: String, path: String, on hostId: HostId) async throws {
-        _ = try await client.send(hostId: hostId, command: .importSkill(gitUrl: gitURL, path: path.isEmpty ? nil : path))
+    func importSkill(gitURL: String, path: String) async throws {
+        try await writeSkills(.importSkill(gitUrl: gitURL, path: path.isEmpty ? nil : path))
+    }
+
+    /// Sends a change of the library to the machines it goes to ([`SkillLibrary.writers`]).
+    private func writeSkills(_ command: CommandBody) async throws {
+        let writers = SkillLibrary(machines).writers
+        guard !writers.isEmpty else {
+            throw HerderError.Local(detail: "No machine you own is connected.")
+        }
+        for hostId in writers {
+            _ = try await client.send(hostId: hostId, command: command)
+        }
     }
 
     /// Enables or disables a skill on one machine only.
