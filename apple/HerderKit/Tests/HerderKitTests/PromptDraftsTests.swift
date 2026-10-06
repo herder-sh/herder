@@ -33,4 +33,17 @@ struct PromptDraftsTests {
         #expect(drafts.load(PromptDrafts.key(two))?.text == "for two")
         #expect(drafts.load(PromptDrafts.key(SessionKey(hostId: "linux", sessionId: "s1"))) == nil)
     }
+
+    @Test func aPromptMovesWithItsDraftToAnotherProject() {
+        drafts.save(.init(text: "fix the login", images: []), for: "a")
+        drafts.move(.init(text: "fix the login", images: []), from: "a", to: "b")
+        #expect(drafts.load("a") == nil)
+        #expect(drafts.load("b")?.text == "fix the login")
+    }
+
+    @Test func movingAnEmptyPromptKeepsTheOtherProjectsDraft() {
+        drafts.save(.init(text: "kept", images: []), for: "b")
+        drafts.move(.init(text: "", images: []), from: "a", to: "b")
+        #expect(drafts.load("b")?.text == "kept")
+    }
 }

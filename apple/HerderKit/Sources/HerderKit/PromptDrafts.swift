@@ -47,6 +47,14 @@ struct PromptDrafts {
         try? JSONEncoder().encode(content).write(to: file(key), options: .atomic)
     }
 
+    /// Moves `content` from the draft `from` to the draft `to`, as the prompt goes along when a
+    /// draft moves to another project: `to` keeps its own draft when there is nothing to take.
+    func move(_ content: Content, from: String, to: String) {
+        guard from != to else { return }
+        if !content.isEmpty { save(content, for: to) }
+        save(Content(text: "", images: []), for: from)
+    }
+
     private func file(_ key: String) -> URL {
         let name = key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key
         return directory.appendingPathComponent(name + ".json")

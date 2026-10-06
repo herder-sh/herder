@@ -78,7 +78,7 @@ struct FleetView: View {
         #if os(iOS)
         .fullScreenCover(item: Binding(get: { sizeClass == .compact ? draft : nil }, set: { draft = $0 })) { draft in
             NavigationStack {
-                DraftSessionView(fleet: fleet, draft: draft) { opened($0) }
+                DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }
                     .toolbar { Button("Cancel") { self.draft = nil } }
             }
         }
