@@ -584,7 +584,6 @@ struct ProjectSessions: View {
                     .foregroundStyle(Theme.secondary)
                     if showsArchived {
                         SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: selection, showsProject: false)
-                            .opacity(0.75)
                     }
                 }
             }

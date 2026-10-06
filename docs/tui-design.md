@@ -117,6 +117,9 @@ How the screen is built:
   - **projects** is the tree: project ▸ sessions ▸ task children. Every row shows its
     rolled-up state. The number on a project or session row is how many sessions below it
     need you.
+  - Task trees stay whole. With archived sessions hidden (`H` shows them), only a tree whose
+    every session is archived is hidden. An archived parent with live children stays, muted,
+    as their root, and a live parent lists its archived children, muted, after its live ones.
   - **attention** lists every session flat, sorted by priority (needs you, then done, then
     running…), with `title · project · machine`. You can toggle this to `grouped`, as in
     Herdr.

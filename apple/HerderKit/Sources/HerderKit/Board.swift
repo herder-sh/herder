@@ -96,35 +96,59 @@ enum WorkState: Int, CaseIterable, Comparable, Identifiable {
     }
 }
 
-/// The sessions in one of the Board's columns.
+/// A task tree on the Board: its top session, and under it the rest of the tree.
+struct BoardTree: Hashable, Identifiable {
+    var id: SessionKey { lead.key }
+    let lead: SessionSummary
+    /// The rest of the tree, in tree order.
+    let children: [SessionSummary]
+
+    /// What the Board lists under the top: the live sessions in tree order, then the archived.
+    var listed: [SessionSummary] { live + archived }
+    var live: [SessionSummary] { children.filter { $0.state != .archived } }
+    var archived: [SessionSummary] { children.filter { $0.state == .archived } }
+
+    /// Whether a search finds the tree: its top or any session under it matches.
+    func matches(_ query: String) -> Bool {
+        ([lead] + children).contains { $0.matches(query) }
+    }
+}
+
+/// The task trees in one of the Board's columns.
 struct BoardColumn: Hashable, Identifiable {
     var id: WorkState { state }
     let state: WorkState
-    let sessions: [SessionSummary]
+    let trees: [BoardTree]
 }
 
 extension Lists {
-    /// Every session that is not archived or moved, under where its work stands, what needs
-    /// the user first; newest first within each.
+    /// Every task tree with a session that is neither archived nor moved, under where its most
+    /// urgent such session's work stands, what needs the user first; newest first within each.
+    /// A child never stands on its own: it is listed under the top of its tree.
     var board: [BoardColumn] {
-        let sessions = projects.flatMap(\.live)
-            .filter { ![.archived, .moved].contains($0.state) }
-            .map { session -> SessionSummary in
-                var flat = session
-                flat.depth = 0
-                return flat
-            }
-        let columns = Dictionary(grouping: sessions) { WorkState(state: $0.state, prs: $0.prs) }
+        // A project's live sessions are whole task trees: each top (depth 0), then the rest.
+        var trees: [[SessionSummary]] = []
+        for session in projects.flatMap(\.live) {
+            if session.depth == 0 || trees.isEmpty { trees.append([session]) } else { trees[trees.count - 1].append(session) }
+        }
+        let placed = trees.compactMap { members -> (BoardTree, WorkState)? in
+            let active = members.filter { ![.archived, .moved].contains($0.state) }
+            guard let state = active.map({ WorkState(state: $0.state, prs: $0.prs) }).min() else { return nil }
+            return (BoardTree(lead: members[0], children: Array(members.dropFirst())), state)
+        }
+        let columns = Dictionary(grouping: placed, by: \.1)
         return WorkState.allCases.compactMap { state in
             guard let members = columns[state] else { return nil }
             // Session ids are ULIDs, which sort by creation time.
-            let newest = members.sorted { ($0.key.sessionId, $0.key.hostId) > ($1.key.sessionId, $1.key.hostId) }
-            return BoardColumn(state: state, sessions: newest)
+            let newest = members.map(\.0).sorted {
+                ($0.lead.key.sessionId, $0.lead.key.hostId) > ($1.lead.key.sessionId, $1.lead.key.hostId)
+            }
+            return BoardColumn(state: state, trees: newest)
         }
     }
 }
 
-/// Every session by where its work stands, so "did CI pass?" needs no asking; a session opens
+/// Every task tree by where its work stands, so "did CI pass?" needs no asking; a session opens
 /// beside it, or is pushed.
 struct BoardView: View {
     let fleet: Fleet
@@ -136,8 +160,8 @@ struct BoardView: View {
 
     var body: some View {
         let columns = fleet.lists.board.compactMap { column -> BoardColumn? in
-            let sessions = column.sessions.filter { $0.matches(query) }
-            return sessions.isEmpty ? nil : BoardColumn(state: column.state, sessions: sessions)
+            let trees = column.trees.filter { $0.matches(query) }
+            return trees.isEmpty ? nil : BoardColumn(state: column.state, trees: trees)
         }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
@@ -151,13 +175,20 @@ struct BoardView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
                             Image(systemName: column.state.symbol)
-                            SectionHeading(title: column.state.label, count: column.sessions.count,
+                            SectionHeading(title: column.state.label, count: column.trees.count,
                                            tint: column.state.tint)
                         }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(column.state.tint)
                         .accessibilityElement(children: .combine)
-                        SessionGroup(title: nil, sessions: column.sessions, fleet: fleet, selection: selection)
+                        VStack(spacing: 0) {
+                            ForEach(Array(column.trees.enumerated()), id: \.element.id) { index, tree in
+                                if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
+                                BoardTreeRows(tree: tree, fleet: fleet, selection: selection)
+                            }
+                        }
+                        .padding(4)
+                        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
                     }
                 }
             }
@@ -187,5 +218,92 @@ struct BoardView: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A task tree's rows on the Board: its top session's row and its provider's own agents, then
+/// its herder children as sub-agent rows, the archived ones last, folded when there are several.
+private struct BoardTreeRows: View {
+    let tree: BoardTree
+    let fleet: Fleet
+    let selection: Binding<SessionKey?>?
+    @State private var showsArchived = false
+
+    var body: some View {
+        SessionLink(session: tree.lead, fleet: fleet, selection: selection)
+        ForEach(tree.lead.agents) { agent in
+            NativeAgentRow(agent: agent, fleet: fleet, key: tree.lead.key)
+        }
+        ForEach(tree.live) { child in
+            BoardChildRow(session: child, fleet: fleet, selection: selection)
+        }
+        let archived = tree.archived
+        if archived.count == 1 || showsArchived {
+            ForEach(archived) { child in
+                BoardChildRow(session: child, fleet: fleet, selection: selection)
+            }
+        } else if archived.count > 1 {
+            Button { showsArchived = true } label: {
+                HStack(spacing: 8) {
+                    TreeLine().frame(width: 14)
+                    Image(systemName: "archivebox").font(.caption).frame(width: 20, height: 20)
+                    Text("\(archived.count) archived").font(.subheadline)
+                    Spacer(minLength: 6)
+                    Image(systemName: "chevron.right").font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(Theme.tertiary)
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show \(archived.count) archived sub-sessions")
+        }
+    }
+}
+
+/// A herder child under the top of its task tree on the Board, drawn as a provider's agent is
+/// (`NativeAgentRow`), badged with where its own work stands. It opens the child, into
+/// `selection` when given, else by pushing it, as `SessionLink` does.
+private struct BoardChildRow: View {
+    let session: SessionSummary
+    let fleet: Fleet
+    let selection: Binding<SessionKey?>?
+    @State private var hovering = false
+
+    var body: some View {
+        if let selection {
+            Button { selection.wrappedValue = session.key } label: { row(selected: selection.wrappedValue == session.key) }
+                .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: NavRoute.session(session.key)) { row(selected: false) }
+                .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder private func row(selected: Bool) -> some View {
+        let archived = session.state == .archived
+        let work = WorkState(state: session.state, prs: session.prs)
+        let badge = archived ? "Archived" : work.label
+        HStack(spacing: 8) {
+            TreeLine().frame(width: CGFloat(max(session.depth, 1)) * 14)
+            ProviderMark(provider: fleet.sessions[session.key]?.provider ?? "claude", size: 11)
+                .frame(width: 20, height: 20)
+                .background(Theme.raised, in: Circle())
+                .overlay(Circle().strokeBorder(Theme.stroke))
+            Text(session.title).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
+            Spacer(minLength: 6)
+            if !archived && work == .working { ProgressView().controlSize(.mini) }
+            Text(badge).font(.caption.weight(.semibold)).foregroundStyle(archived ? Theme.tertiary : work.tint)
+                .fixedSize()
+        }
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
+        .background(selected || hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
+        .contentShape(.rect)
+        .opacity(archived ? 0.75 : 1)
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Open sub-session: \(session.title), \(badge)")
     }
 }
