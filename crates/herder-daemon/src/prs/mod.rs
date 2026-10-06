@@ -571,11 +571,7 @@ impl PrTracker {
         }
         let prs = self.journal.prs(session_id.clone()).await?;
         for follow_up in pending {
-            let current = prs.iter().find(|pr| Some(pr.number) == follow_up.pr);
-            let due = current.filter(|pr| {
-                open(pr) && pr.head_sha == follow_up.head_sha && meets(pr, follow_up.reason)
-            });
-            let Some(pr) = due else {
+            let Some(pr) = due(&follow_up, &prs) else {
                 self.change_follow_ups(session_id, |follow_ups| {
                     follow_ups.pending.retain(|pending| *pending != follow_up);
                 });
@@ -1107,7 +1103,7 @@ impl PrTracker {
 }
 
 /// Whether `pr` is still open, a draft or not.
-fn open(pr: &PullRequest) -> bool {
+pub(crate) fn open(pr: &PullRequest) -> bool {
     matches!(pr.state, PrState::Open | PrState::Draft)
 }
 
@@ -1120,6 +1116,25 @@ fn meets(pr: &PullRequest, reason: FollowUpReason) -> bool {
         FollowUpReason::ChangesRequested => pr.review == ReviewStatus::ChangesRequested,
         FollowUpReason::Stalled | FollowUpReason::Unknown => false,
     }
+}
+
+/// The pull request among `prs` that still calls for `follow_up`, if one does.
+fn due<'a>(follow_up: &FollowUp, prs: &'a [PullRequest]) -> Option<&'a PullRequest> {
+    prs.iter().find(|pr| {
+        Some(pr.number) == follow_up.pr
+            && open(pr)
+            && pr.head_sha == follow_up.head_sha
+            && meets(pr, follow_up.reason)
+    })
+}
+
+/// Whether a session whose journal is `events` and whose pull requests are `prs` is owed a
+/// pull request follow-up it gets once idle.
+pub(crate) fn owes_follow_up(events: &[Event], prs: &[PullRequest]) -> bool {
+    replay(events)
+        .pending
+        .iter()
+        .any(|follow_up| due(follow_up, prs).is_some())
 }
 
 /// The follow-ups `pr` is owed, having changed from `before`: each condition it meets now and

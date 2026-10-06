@@ -17,6 +17,7 @@ pub mod resources;
 pub mod session;
 pub mod settings;
 pub mod skills;
+pub mod stalls;
 pub mod terminal;
 pub mod usage;
 pub mod vault;
@@ -230,6 +231,12 @@ pub async fn serve(
             follow_ups: config.follow_ups.pr_events,
         })
         .await?;
+    sessions.watch_stalls(stalls::Config {
+        after: std::time::Duration::from_secs(config.follow_ups.stall_after_secs),
+        max_nudges: config.follow_ups.max_stall_nudges,
+        pr_events: config.follow_ups.pr_events,
+        interval: stalls::INTERVAL,
+    })?;
     sessions.track_usage(usage::Config {
         probes,
         dir: data_dir.root().join("usage"),
