@@ -240,7 +240,6 @@ async fn create(client: &Client, host: &str, repo: &str) -> SessionId {
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let created = client.send(HostId::new(host), command).await.unwrap();

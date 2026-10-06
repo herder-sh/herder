@@ -295,7 +295,6 @@ mod tests {
             log: Default::default(),
             accounts: Default::default(),
             binaries: Default::default(),
-            tasks: Default::default(),
             failover: Default::default(),
             titles: Default::default(),
             follow_ups: Default::default(),

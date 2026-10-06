@@ -93,7 +93,6 @@ impl Daemon {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         };
         match self.manager.handle(alice(), command).await.unwrap() {

@@ -252,7 +252,6 @@ use actor::{Actor, Request, SessionCommand, Switch};
 pub use failover::FailoverConfig;
 use failover::Limits;
 use journal::Journal;
-pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
 use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
@@ -594,7 +593,6 @@ impl SessionManager {
                 provider,
                 model,
                 permission_mode,
-                max_children,
                 failover_pin,
             } => {
                 let (repo, project) = self.resolve_repo(repo, project_id)?;
@@ -611,7 +609,6 @@ impl SessionManager {
                     permission_mode,
                     parent: None,
                     task: None,
-                    max_children,
                     failover_pin,
                 };
                 let (session_id, _) = self.create_session(Some(by), request).await?;
@@ -901,6 +898,7 @@ impl SessionManager {
             inner.journal.clone(),
             config,
             self.prompter(),
+            self.on_merged(),
             inner.shutdown.clone(),
         )
         .await?;
@@ -939,17 +937,46 @@ impl SessionManager {
         })
     }
 
-    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]), enforcing
-    /// `limits`, until the manager's shutdown, and registers it with every session's CLI from
-    /// its next start; once per manager.
-    pub fn serve_mcp(&self, config: mcp::Config, limits: TaskLimits) -> anyhow::Result<()> {
+    /// Tells the manager of merged pull requests, while it lives.
+    fn on_merged(&self) -> prs::OnMerged {
+        let manager = Arc::downgrade(&self.inner);
+        Box::new(move |session_id| {
+            let manager = manager.upgrade().map(|inner| Self { inner });
+            Box::pin(async move {
+                if let Some(manager) = manager {
+                    manager.pr_merged(&session_id).await;
+                }
+            })
+        })
+    }
+
+    /// One of `session_id`'s pull requests was merged: a child that is done is archived
+    /// ([`tasks`]). Only a live child's actor is asked; nothing starts for anything else.
+    pub async fn pr_merged(&self, session_id: &SessionId) {
+        let live_child = matches!(
+            self.inner.journal.session(session_id.clone()).await,
+            Ok(Some(session))
+                if session.parent.is_some() && session.status == SessionStatus::Idle
+        );
+        if live_child
+            && let Err(err) = self
+                .send(session_id.clone(), None, Request::ArchiveIfDone)
+                .await
+        {
+            warn!(%session_id, "cannot archive the merged child: {}", err.message);
+        }
+    }
+
+    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]) until the
+    /// manager's shutdown, and registers it with every session's CLI from its next start; once
+    /// per manager.
+    pub fn serve_mcp(&self, config: mcp::Config) -> anyhow::Result<()> {
         let inner = &self.inner;
         if inner.mcp.get().is_some() {
             anyhow::bail!("the MCP server runs already");
         }
         let tools = Arc::new(TaskTools {
             inner: Arc::downgrade(inner),
-            limits,
         });
         let _ = inner
             .mcp
@@ -1847,7 +1874,6 @@ impl SessionManager {
             parent: request.parent,
             parent_host: None,
             task: request.task,
-            max_children: request.max_children,
             failover_pin: request.failover_pin,
         };
         inner
@@ -1984,8 +2010,6 @@ struct CreateRequest {
     parent: Option<SessionId>,
     /// The child's task label.
     task: Option<String>,
-    /// The session's own limit on live children.
-    max_children: Option<u32>,
     /// The session's own failover pin.
     failover_pin: Option<bool>,
 }

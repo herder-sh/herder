@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
-    Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PromptFile, PromptId,
-    QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
+    Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PrState, PromptFile,
+    PromptId, QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -114,6 +114,8 @@ pub(super) enum Request {
     /// Stops the session and makes it read-only, leaving the worktree for
     /// [`Request::RemoveWorktree`].
     Archive,
+    /// Archives a child that is done ([`Actor::done`]); does nothing otherwise.
+    ArchiveIfDone,
     /// Removes an archived session's worktree, keeping its branches; does nothing once the
     /// session is not archived.
     RemoveWorktree,
@@ -201,9 +203,6 @@ pub(super) struct Actor {
     /// Agents the adapter runs in the background. They outlive their turn, so the session stays
     /// `running` between turns while any work.
     background: u32,
-    /// Other tasks the adapter runs in the background, such as shell commands. They keep a
-    /// finished child from being archived, which would remove the worktree they run in.
-    commands: u32,
     /// The host's admission of the running turn, or of the next one while it waits to start.
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
@@ -258,7 +257,6 @@ impl Actor {
             turn: None,
             cli_turn: None,
             background: 0,
-            commands: 0,
             permit: None,
             waiting: None,
             prompt: None,
@@ -724,6 +722,11 @@ impl Actor {
                     .map_err(super::internal)?;
             }
             Request::Archive => self.archive(by).await?,
+            Request::ArchiveIfDone => {
+                if self.turn.is_none() && self.done().await {
+                    self.archive(None).await?;
+                }
+            }
             Request::Switch { account_id, to } => {
                 self.switch(by, account_id, to).await?;
                 self.cancel_retry(true).await;
@@ -2086,7 +2089,6 @@ impl Actor {
                             tokio::spawn(stop(adapter));
                         }
                         self.background = 0;
-                        self.commands = 0;
                         settled = SessionStatus::Error;
                         oom
                     }
@@ -2222,14 +2224,14 @@ impl Actor {
                 self.background = running;
                 self.settle_background().await;
             }
-            AdapterEvent::BackgroundCommands { running } => self.commands = running,
+            // Shell commands left running in the background do not keep the session busy.
+            AdapterEvent::BackgroundCommands { .. } => {}
             AdapterEvent::Exited { error } => self.exited(error).await,
         }
     }
 
     /// The adapter was stopped, and its background agents with it.
     async fn background_gone(&mut self) {
-        self.commands = 0;
         if std::mem::take(&mut self.background) > 0 {
             self.settle_background().await;
         }
@@ -2268,16 +2270,14 @@ impl Actor {
     }
 
     /// Journals the end of the running turn and reports it as `summary`, then starts the next
-    /// queued prompt or settles on `settled`. A child that completed its turn with nothing
-    /// queued is archived once it reported, unless its worktree has changes or commands it
-    /// started in the background still run there, which its report then says. A worktree that
-    /// is gone, or is no longer a checkout, has no changes.
+    /// queued prompt or settles on `settled`. A child that completed its turn and is done
+    /// ([`Self::done`]) is archived once it reported.
     async fn turn_ended(
         &mut self,
         turn_id: TurnId,
         body: EventBody,
         settled: SessionStatus,
-        mut summary: String,
+        summary: String,
     ) {
         let completed = matches!(body, EventBody::TurnCompleted { .. });
         self.inner.turn_ended_on(&self.session.account_id, &body);
@@ -2297,32 +2297,40 @@ impl Actor {
             };
             self.set_status(status).await;
         }
-        let finished = completed
-            && self.session.parent.is_some()
-            && self.session.status == SessionStatus::Idle
-            && self.queue.is_empty()
-            && self.setup.is_none();
-        let mut archive = false;
-        if finished && self.commands > 0 {
-            summary.push_str(KEPT_RUNNING);
-        } else if finished && self.session.branch.is_none() {
-            // Archiving leaves the folder as it is.
-            archive = true;
-        } else if finished {
-            match worktree::dirty(Path::new(&self.session.worktree)).await {
-                Ok(false) => archive = true,
-                Ok(true) => summary.push_str(KEPT_DIRTY),
-                Err(err) => warn!(
-                    session_id = %self.session.session_id,
-                    "cannot tell whether the finished child's worktree has changes: {err}"
-                ),
-            }
-        }
+        let archive = completed && self.done().await;
         self.report(turn_id, summary, archive).await;
         if self.prompts == Some(titles::REFRESH_AFTER) {
             titles::auto(&self.inner, self.session.session_id.clone());
         }
         self.start_next().await;
+    }
+
+    /// Whether the session is a child whose work is done: idle with nothing queued, and every
+    /// pull request it has merged, at least one. A child without pull requests stays live until
+    /// archived by hand.
+    async fn done(&self) -> bool {
+        if self.session.parent.is_none()
+            || self.session.status != SessionStatus::Idle
+            || !self.queue.is_empty()
+            || self.setup.is_some()
+        {
+            return false;
+        }
+        match self
+            .inner
+            .journal
+            .prs(self.session.session_id.clone())
+            .await
+        {
+            Ok(prs) => !prs.is_empty() && prs.iter().all(|pr| pr.state == PrState::Merged),
+            Err(err) => {
+                warn!(
+                    session_id = %self.session.session_id,
+                    "cannot read the child's pull requests: {err:#}"
+                );
+                false
+            }
+        }
     }
 
     /// Whether the session stays on its account when it hits a limit: as it was created, else
@@ -2397,7 +2405,6 @@ impl Actor {
                 let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
             }
             self.background = 0;
-            self.commands = 0;
             self.queue.push_front(Prompt {
                 retry: true,
                 retry_at: Some(at),
@@ -2460,7 +2467,6 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let background = std::mem::take(&mut self.background) > 0;
-        self.commands = 0;
         let oom = match &error {
             Some(error) => self.out_of_memory(error).await,
             None => None,
@@ -2661,18 +2667,6 @@ impl Actor {
         }
     }
 }
-
-/// Appended to the report of a child that finished with changes in its worktree, which keep it
-/// from being archived.
-const KEPT_DIRTY: &str = "\n\n(herder kept this child live instead of archiving it: its \
-                          worktree has uncommitted or untracked changes. Send it a follow-up to \
-                          commit or discard them.)";
-
-/// Appended to the report of a child that finished while commands it started in the background
-/// still run, which keep it from being archived: archiving would remove their worktree.
-const KEPT_RUNNING: &str = "\n\n(herder kept this child live instead of archiving it: commands \
-                            it started in the background still run in its worktree. It reports \
-                            again when it finishes after them.)";
 
 /// The journal event for `event` when it ends the turn `turn_id`.
 fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {

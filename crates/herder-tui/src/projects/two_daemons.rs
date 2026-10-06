@@ -165,7 +165,6 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         };
         client.send(HostId::new(*id), command).await.unwrap();

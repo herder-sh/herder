@@ -4,9 +4,7 @@
 //! and branch, created with the primary as its `parent`. It starts on the primary's account,
 //! provider and failover pin, with the primary's model and permission mode unless `spawn` picks
 //! others; its permission mode may never exceed the primary's, and a child cannot spawn (a task
-//! is one level deep). A primary has at most the `max_children` it was created with, else
-//! [`TaskLimits::max_children`], live (not archived) children at once; `spawn` past that is
-//! refused as `limit_exceeded`. While the host admits no more turns for want of memory, load or
+//! is one level deep). A primary may have any number of children. While the host admits no more turns for want of memory, load or
 //! pressure ([`crate::resources::admission`]), `spawn` is refused as `host_busy` with a hint to
 //! retry after [`RETRY_AFTER_SECS`]; while only the turn limit binds, the child is created and
 //! its first turn waits for a slot. While `wait_for` blocks, the primary's turn lends its slot
@@ -18,11 +16,13 @@
 //! oldest first, each once. The queue lives in memory: a daemon restart drops reports no
 //! `wait_for` took, which stay in the primary's journal and in `status`.
 //!
-//! A child that completes a turn with nothing queued, its worktree clean, is archived right
-//! after its report is journaled and before `wait_for` hears of it: its worktree is removed
-//! days later, its branch kept, and it no longer counts toward `max_children`. A child whose worktree has
-//! changes stays idle, and its report says why. A failed or interrupted turn, and a primary,
-//! never archive a session. `send` to an archived child unarchives it before the prompt.
+//! A child is done once it is idle with nothing queued and every pull request it has is merged,
+//! at least one. A child that completes a turn done is archived right after its report is
+//! journaled and before `wait_for` hears of it; an idle child is archived as soon as its last
+//! pull request merges ([`crate::prs`]). Its worktree is removed days later, its branch kept. A
+//! child without pull requests stays idle until archived by hand. A failed or interrupted turn,
+//! and a primary, never archive a session. `send` to an archived child unarchives it before the
+//! prompt.
 //!
 //! A child's question or approval request routed to the primary ([`super::routing`]) joins
 //! the same queue, and stays in `status.open_questions` until it is answered, escalated, or
@@ -42,8 +42,8 @@ use herder_tasktools::{
     SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, ToolCall, ToolError,
     WaitForInput, WaitForOutput,
 };
-use serde::{Deserialize, Serialize};
-use tokio::sync::{self, oneshot, watch};
+use serde::Serialize;
+use tokio::sync::{oneshot, watch};
 use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
@@ -51,29 +51,12 @@ use super::{CreateRequest, Inner, SessionManager};
 use crate::mcp::{ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
 
-/// Limits on every task on this daemon: the `[tasks]` table of the daemon config.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TaskLimits {
-    /// Live (not archived) children a primary may have at once.
-    pub max_children: u32,
-}
-
-impl Default for TaskLimits {
-    fn default() -> Self {
-        Self { max_children: 5 }
-    }
-}
-
 /// What every primary session waits for: its children's reports, and which children are
 /// working.
 pub(crate) struct Tasks {
     state: Mutex<State>,
     /// Bumped on every change, waking every `wait_for` to look again.
     changed: watch::Sender<()>,
-    /// Held by each `spawn` from its admission until its child exists, so concurrent spawns
-    /// cannot both take a primary's last free slot.
-    admission: sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -93,7 +76,6 @@ impl Default for Tasks {
         Self {
             state: Mutex::default(),
             changed: watch::Sender::new(()),
-            admission: sync::Mutex::new(()),
         }
     }
 }
@@ -247,21 +229,18 @@ impl State {
 pub(crate) struct TaskTools {
     /// Weak, since the manager owns the MCP server that owns this.
     pub(super) inner: Weak<Inner>,
-    /// What `spawn` enforces.
-    pub(super) limits: TaskLimits,
 }
 
 impl ToolHandler for TaskTools {
     fn call(&self, caller: SessionId, call: ToolCall) -> ToolFuture {
         let inner = self.inner.upgrade();
-        let limits = self.limits;
         Box::pin(async move {
             let Some(inner) = inner else {
                 return ToolError::new(ErrorCode::Internal, "the daemon is shutting down").into();
             };
             let manager = SessionManager { inner };
             let result = match call {
-                ToolCall::Spawn(input) => success(manager.spawn(caller, input, limits).await),
+                ToolCall::Spawn(input) => success(manager.spawn(caller, input).await),
                 ToolCall::Send(input) => success(manager.send_child(caller, input).await),
                 ToolCall::SendSession(input) => success(manager.send_session(caller, input).await),
                 ToolCall::Status(input) => success(manager.child_status(caller, input).await),
@@ -313,12 +292,7 @@ pub(super) fn rank(mode: PermissionMode) -> u8 {
 }
 
 impl SessionManager {
-    async fn spawn(
-        &self,
-        caller: SessionId,
-        input: SpawnInput,
-        limits: TaskLimits,
-    ) -> Result<SpawnOutput, ToolError> {
+    async fn spawn(&self, caller: SessionId, input: SpawnInput) -> Result<SpawnOutput, ToolError> {
         let primary = self.caller(&caller).await?;
         // Refuse before creating a child if automated relay depth is exhausted.
         self.agent_message(&caller, String::new())
@@ -355,35 +329,13 @@ impl SessionManager {
             ));
         }
         // Admission, after every check on the arguments and before anything is created: the
-        // task's child limit, then the host's capacity.
-        let admitted = self.inner.tasks.admission.lock().await;
+        // host's capacity.
         let settings = self
             .inner
             .journal
             .settings(caller.clone())
             .await
             .map_err(|err| tool_internal(format!("{err:#}")))?;
-        let max_children = settings.max_children.unwrap_or(limits.max_children);
-        let live = self
-            .inner
-            .journal
-            .children(caller.clone())
-            .await
-            .map_err(|err| tool_internal(format!("{err:#}")))?
-            .into_iter()
-            .filter(|child| child.status != SessionStatus::Archived)
-            .count();
-        if live >= max_children as usize {
-            return Err(ToolError::new(
-                ErrorCode::LimitExceeded,
-                format!(
-                    "this task already has {live} live children, and its limit is \
-                     {max_children}; give the remaining work to a child you have with `send`, \
-                     or do it yourself. A child stops counting once it is archived, as it is \
-                     when it finishes a turn with a clean worktree"
-                ),
-            ));
-        }
         if let Some(admission) = self.inner.admission.get()
             && let Some(constraint) = admission.host_constraint()
         {
@@ -405,7 +357,6 @@ impl SessionManager {
             permission_mode,
             parent: Some(caller.clone()),
             task: Some(input.task.clone()),
-            max_children: None,
             // The task fails over, or stays put, as one.
             failover_pin: settings.failover_pin,
         };
@@ -413,7 +364,6 @@ impl SessionManager {
             .create_session(None, request)
             .await
             .map_err(tool_error)?;
-        drop(admitted);
         let body = EventBody::ChildSpawned {
             child_session_id: child.clone(),
             host_id: None,

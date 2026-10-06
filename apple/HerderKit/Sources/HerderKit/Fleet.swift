@@ -213,7 +213,7 @@ public final class Fleet {
             hostId: hostId,
             command: .createSession(
                 repo: repo, projectId: projectId, branch: nil, accountId: accountId, provider: nil,
-                model: model.isEmpty ? nil : model, permissionMode: mode, maxChildren: nil, failoverPin: nil))
+                model: model.isEmpty ? nil : model, permissionMode: mode, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = result else {
             throw HerderError.Local(detail: "the machine did not create a session")
         }

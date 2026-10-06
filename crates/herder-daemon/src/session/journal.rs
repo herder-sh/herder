@@ -41,8 +41,6 @@ impl Projects {
 /// What a session was created with that lists do not show.
 #[derive(Debug, Default)]
 pub(crate) struct Settings {
-    /// Its own limit on live children, as a task's primary.
-    pub(crate) max_children: Option<u32>,
     /// Its own failover pin.
     pub(crate) failover_pin: Option<bool>,
 }
@@ -326,14 +324,7 @@ impl Journal {
     pub(crate) async fn settings(&self, session_id: SessionId) -> Result<Settings> {
         let first = self.read_since(session_id, 0, 1).await?;
         Ok(match first.into_iter().next().map(|event| event.body) {
-            Some(EventBody::SessionCreated {
-                max_children,
-                failover_pin,
-                ..
-            }) => Settings {
-                max_children,
-                failover_pin,
-            },
+            Some(EventBody::SessionCreated { failover_pin, .. }) => Settings { failover_pin },
             _ => Settings::default(),
         })
     }

@@ -125,7 +125,6 @@ fn seed(data_dir: &Path, session: &str) {
                 parent: None,
                 parent_host: None,
                 task: None,
-                max_children: None,
                 failover_pin: None,
             },
         })

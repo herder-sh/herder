@@ -18,7 +18,7 @@ use herder_daemon::resources::{
 use herder_daemon::session::titles::INSTRUCTION;
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, EventSink, FailoverConfig, KEEP_ARCHIVED_WORKTREE,
-    SessionManager, Setup, TaskLimits, TitleCli, TitleClis, TitlesConfig,
+    SessionManager, Setup, TitleCli, TitleClis, TitlesConfig,
 };
 use herder_daemon::settings::Settings;
 use herder_daemon::skills::{Skills, SkillsSink};
@@ -259,7 +259,6 @@ impl Daemon {
                     provider: None,
                     model: None,
                     permission_mode: Some(PermissionMode::Ask),
-                    max_children: None,
                     failover_pin: None,
                 },
             )
@@ -1330,7 +1329,6 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let error = daemon.manager.handle(alice(), create).await.unwrap_err();
@@ -1361,7 +1359,6 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let code = |result: Result<CommandResult, ErrorInfo>| result.unwrap_err().code;
@@ -1469,7 +1466,6 @@ async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let result = daemon.manager.handle(alice(), create("fix/login")).await;
@@ -1772,7 +1768,6 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
@@ -1833,13 +1828,10 @@ async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session()
     std::fs::create_dir(&data_dir).unwrap();
     daemon
         .manager
-        .serve_mcp(
-            mcp::Config {
-                data_dir: data_dir.clone(),
-                herder: PathBuf::from("/opt/herder"),
-            },
-            TaskLimits::default(),
-        )
+        .serve_mcp(mcp::Config {
+            data_dir: data_dir.clone(),
+            herder: PathBuf::from("/opt/herder"),
+        })
         .unwrap();
     let session = daemon.create().await;
     daemon.prompt(alice(), &session, "First.").await;
@@ -2311,7 +2303,6 @@ impl Switching {
             provider: None,
             model: model.map(str::to_owned),
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
@@ -2926,7 +2917,6 @@ async fn a_child_switches_to_any_account_like_its_primary() {
         task: parent.as_ref().map(|_| "help".into()),
         parent,
         parent_host: None,
-        max_children: None,
         failover_pin: None,
     };
     let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
@@ -3455,7 +3445,6 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let (c1, c2) = (CommandId::new("c1"), CommandId::new("c2"));
@@ -4773,7 +4762,6 @@ async fn a_session_created_by_provider_starts_on_its_account_with_most_room() {
             provider,
             model: None,
             permission_mode: None,
-            max_children: None,
             failover_pin: None,
         };
     let Ok(CommandResult::SessionCreated { session_id }) =
@@ -4837,7 +4825,6 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
             provider: None,
             model: None,
             permission_mode: given,
-            max_children: None,
             failover_pin: None,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
@@ -5043,7 +5030,6 @@ async fn a_session_in_a_folder_that_is_not_a_git_repository_works_in_the_folder(
         provider: None,
         model: None,
         permission_mode: None,
-        max_children: None,
         failover_pin: None,
     };
     let error = daemon.manager.handle(alice(), named).await.unwrap_err();

@@ -33,9 +33,7 @@ use herder_daemon::login::Logins;
 use herder_daemon::mcp;
 use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
-use herder_daemon::session::{
-    AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup, TaskLimits,
-};
+use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
 use herder_daemon::terminal::Terminals;
 use herder_daemon::worktree::{Worktrees, checkpoint};
@@ -413,7 +411,6 @@ impl Scenario<'_> {
                     provider: None,
                     model: None,
                     permission_mode: Some(PermissionMode::AutoEdit),
-                    max_children: None,
                     failover_pin: None,
                 },
             )
@@ -537,13 +534,10 @@ impl Daemon {
             push_timeout: TIMEOUT,
         })?;
         // The MCP socket's path must stay short, so it goes in the machine's own directory.
-        sessions.serve_mcp(
-            mcp::Config {
-                data_dir: dir.to_owned(),
-                herder: PathBuf::from("herder"),
-            },
-            TaskLimits::default(),
-        )?;
+        sessions.serve_mcp(mcp::Config {
+            data_dir: dir.to_owned(),
+            herder: PathBuf::from("herder"),
+        })?;
         let resources = ResourcesConfig {
             max_turns: Some(16),
             ..ResourcesConfig::default()

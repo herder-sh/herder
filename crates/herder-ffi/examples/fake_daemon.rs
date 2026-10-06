@@ -98,7 +98,6 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
                 provider: None,
                 model: None,
                 permission_mode: None,
-                max_children: None,
                 failover_pin: None,
             },
         )
