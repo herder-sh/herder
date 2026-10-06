@@ -213,6 +213,24 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 - **Search:** the pane's search field filters by title, branch, worktree, project, machine and
   PR number or title (`SessionSummary.matches`).
 
+### 4.8 Board (`BoardView`, `Lists.board`)
+
+One column per `WorkState`, what needs the user first: needs you, CI failed, changes
+requested, conflicting, ready to merge, idle, working, waiting on CI, merged. A column lists
+task trees, not sessions, newest first, and its count counts trees.
+
+- **Only top-level trees:** a child never has a card of its own. Under its tree's top row and
+  that session's own provider agents (`NativeAgentRow`), each herder child is a compact row in
+  the same style: tree line, provider mark, title, and its own `WorkState` badge on the right,
+  with a mini spinner while it works. Tapping it opens the child. A child's provider agents
+  are not shown on the Board.
+- **Column:** the most urgent `WorkState` among the tree's sessions that are neither archived
+  nor moved, so a child that needs you or failed CI never hides in its parent's Working column.
+- **Archived:** archived children come last, dimmed, badged "Archived"; several fold into one
+  "N archived" row that expands. A tree whose top is archived but that has a live child stays,
+  its top row dimmed. A tree with no live session is not on the Board.
+- **Search** keeps a tree when its top or any of its children matches.
+
 ---
 
 ## 5. Session (`SessionView`)
