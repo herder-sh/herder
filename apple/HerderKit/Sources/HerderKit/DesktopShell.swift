@@ -161,7 +161,7 @@ private struct ListAndSession<List: View>: View {
 
     @ViewBuilder private var detail: some View {
         if let draft {
-            DraftSessionView(fleet: fleet, draft: draft, created: opened).id(draft.id)
+            DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }.id(draft.id)
         } else if let session {
             SessionView(fleet: fleet, key: session) { self.session = $0 }
         } else {
