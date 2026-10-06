@@ -140,8 +140,8 @@ struct FleetView: View {
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$homePath, $projectsPath, $prsPath] {
-            if let index = path.wrappedValue.firstIndex(of: key) { path.wrappedValue.removeSubrange(index...) }
+        for path in [$homePath, $projectsPath, $boardPath] {
+            if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
 
