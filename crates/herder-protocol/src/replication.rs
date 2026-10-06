@@ -17,18 +17,19 @@
 //! 3. The vault handles messages in order. It acknowledges a batch only once its events are
 //!    durable, with a cumulative [`VaultMessage::Ack`].
 //!
-//! Images a prompt carried travel ahead of the events that name them: before each batch, the
-//! host sends a [`HostMessage::Attachment`] for every attachment of a `user_message` in it.
-//! The vault keeps each durably before it handles the next message, so the batch's ack covers
-//! the images too, and a batch re-sent after a reconnect brings them again. Re-sending one is
-//! idempotent: the vault holds one image per session and attachment id, and skips a re-send
-//! with the same content hash. Only image bytes the host still has are sent.
+//! The images and files prompts carried, their attachments, travel ahead of the events that
+//! name them: before each batch, the host sends a [`HostMessage::Attachment`] for every
+//! attachment of a `user_message` in it. The vault keeps each durably before it handles the
+//! next message, so the batch's ack covers the attachments too, and a batch re-sent after a
+//! reconnect brings them again. Re-sending one is idempotent: the vault holds one attachment
+//! per session and attachment id, and skips a re-send with the same content hash. Only bytes
+//! the host still has are sent.
 //!
-//! Images are backed up only when the host's hello gives an `attachments_cap`; without one the
-//! host sends none, and the vault drops any it gets. Within the cap the vault evicts the
-//! host's oldest images to make room for a new one, and drops an image bigger than the cap.
-//! Neither fails the connection: a session whose images are not held is recovered without
-//! them.
+//! Attachments are backed up only when the host's hello gives an `attachments_cap`; without
+//! one the host sends none, and the vault drops any it gets. Within the cap the vault evicts
+//! the host's oldest attachments to make room for a new one, and drops one bigger than the
+//! cap. Neither fails the connection: a session whose attachments are not held is recovered
+//! without them.
 //!
 //! The vault drops archived sessions after its retention period. Its hello still gives a
 //! cursor for each, at the seq it held, so the host does not send it again; it takes the
@@ -154,16 +155,18 @@ pub struct Batch {
     pub events: Vec<JournalRecord>,
 }
 
-/// The bytes of an image a prompt of a session carried.
+/// The bytes of an image or file a prompt of a session carried.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AttachmentData {
-    /// Session whose prompt carried the image.
+    /// Session whose prompt carried it.
     pub session_id: SessionId,
-    /// The image as the `user_message` names it. The vault refuses it as a bad request unless
-    /// `media_type` is one of [`crate::IMAGE_MEDIA_TYPES`] and `size` is the length of `data`,
-    /// at most [`crate::MAX_IMAGE_BYTES`], or when it holds different bytes under its id.
+    /// The image or file as the `user_message` names it. The vault refuses it as a bad request
+    /// unless `size` is the length of `data` and, for an image, `media_type` is one of
+    /// [`crate::IMAGE_MEDIA_TYPES`] and `size` at most [`crate::MAX_IMAGE_BYTES`], for a file,
+    /// `size` is at most [`crate::MAX_FILE_BYTES`]; or when it holds different bytes under its
+    /// id.
     pub attachment: Attachment,
-    /// The image file's bytes.
+    /// The image's or file's bytes.
     pub data: Bytes,
 }
 

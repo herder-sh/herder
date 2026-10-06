@@ -18,6 +18,14 @@ struct PromptDraftsTests {
         #expect(drafts.load("github.com/acme/web") == nil)
     }
 
+    @Test func aDraftKeepsItsFilesAndIsKeptForThemAlone() {
+        let file = PromptFile(name: "report.xlsx", data: Data([4, 5]))
+        drafts.save(.init(text: "", images: [], files: [file]), for: "p")
+        #expect(drafts.load("p")?.promptFiles == [file])
+        drafts.save(.init(text: "", images: []), for: "p")
+        #expect(drafts.load("p") == nil)
+    }
+
     @Test func anEmptiedDraftIsForgotten() {
         drafts.save(.init(text: "half a thought", images: []), for: "p")
         drafts.save(.init(text: "  \n", images: []), for: "p")

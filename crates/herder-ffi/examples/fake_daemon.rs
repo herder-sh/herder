@@ -113,6 +113,7 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
                 session_id,
                 text: "Run the tests.".into(),
                 images: Vec::new(),
+                files: Vec::new(),
             },
         )
         .await?;

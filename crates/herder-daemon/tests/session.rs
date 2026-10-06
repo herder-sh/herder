@@ -27,9 +27,10 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
-    ErrorCode, ErrorInfo, Event, EventBody, HostId, Image, Item, ItemBody, ItemId, MAX_TITLE_CHARS,
-    PermissionMode, Project, ProjectId, PromptId, Provider, QuestionId, SessionHead, SessionId,
-    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsageWindow, UserId,
+    ErrorCode, ErrorInfo, Event, EventBody, FILE_MEDIA_TYPE, HostId, Image, Item, ItemBody, ItemId,
+    MAX_FILE_BYTES, MAX_TITLE_CHARS, PermissionMode, Project, ProjectId, PromptFile, PromptId,
+    Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TitleSource, TurnError,
+    TurnId, TurnUsage, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use jiff::SignedDuration;
@@ -275,6 +276,7 @@ impl Daemon {
             session_id: session_id.clone(),
             text: text.into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         let result = self.manager.handle(by, command).await.unwrap();
         assert_eq!(result, CommandResult::Applied);
@@ -1315,6 +1317,7 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
         session_id: SessionId::new("nope"),
         text: "Hi.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
@@ -1552,6 +1555,7 @@ async fn archive_keeps_the_worktree_for_days_then_removes_it_keeping_the_branche
         session_id: session.clone(),
         text: "Again.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -1569,6 +1573,7 @@ async fn archive_keeps_the_worktree_for_days_then_removes_it_keeping_the_branche
         session_id: session,
         text: "Again.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     let error = daemon.manager.handle(alice(), prompt).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -1779,6 +1784,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
             session_id: session_id.clone(),
             text: "First.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         manager.handle(alice(), prompt).await.unwrap();
         loop {
@@ -2326,6 +2332,7 @@ impl Switching {
             session_id: session_id.clone(),
             text: text.into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
         self.until(|body| {
@@ -2810,6 +2817,7 @@ async fn switching_is_refused_while_a_turn_runs_and_applies_once_it_ends() {
         session_id: session.clone(),
         text: "Work forever.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     daemon.handle(prompt).await.unwrap();
     daemon
@@ -3459,6 +3467,7 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
         session_id: session.clone(),
         text: text.into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     let sent = daemon
         .manager
@@ -3503,6 +3512,7 @@ impl Switching {
             session_id: session_id.clone(),
             text: text.into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         assert_eq!(self.handle(prompt).await, Ok(CommandResult::Applied));
     }
@@ -4414,6 +4424,7 @@ fn prompt_with(session_id: &SessionId, text: &str, images: Vec<Image>) -> Comman
         session_id: session_id.clone(),
         text: text.into(),
         images,
+        files: Vec::new(),
     }
 }
 
@@ -4534,6 +4545,144 @@ async fn images_that_are_not_images_or_go_to_a_cli_without_images_are_refused() 
     assert_eq!(error.code, ErrorCode::Unsupported, "{error:?}");
     // Nothing was queued or journaled.
     assert_eq!(daemon.journal(&session).await.len(), 1);
+    daemon.stop().await;
+}
+
+#[tokio::test]
+async fn a_prompts_files_are_kept_outside_the_worktree_and_their_paths_reach_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    // Any CLI gets files, one that takes no images too.
+    let mut blind = FakeAdapter::new(fixture("files.jsonl"));
+    blind.images = false;
+    let recording = Recording {
+        adapter: Box::new(blind),
+        starts: Default::default(),
+        commands: Default::default(),
+        gate: Default::default(),
+    };
+    let (starts, commands) = (recording.starts.clone(), recording.commands.clone());
+    let daemon = Daemon::open_with(
+        dir.path(),
+        Arc::new(recording),
+        starts,
+        commands,
+        Default::default(),
+        Default::default(),
+    )
+    .await;
+    let session = daemon.create().await;
+    let file = |name: &str, data: &[u8]| PromptFile {
+        name: name.into(),
+        data: Bytes(data.to_vec()),
+    };
+    let prompt = |files| CommandBody::SendPrompt {
+        session_id: session.clone(),
+        text: "Sum these up.".into(),
+        images: Vec::new(),
+        files,
+    };
+
+    // Refused up front: a name that is a path, or a file over the limit.
+    for files in [
+        vec![file("../report.xlsx", b"PK")],
+        vec![file("big.bin", &vec![0; MAX_FILE_BYTES + 1])],
+    ] {
+        let error = daemon.manager.handle(alice(), prompt(files)).await;
+        assert_eq!(error.unwrap_err().code, ErrorCode::BadRequest);
+    }
+    assert_eq!(daemon.journal(&session).await.len(), 1);
+
+    let files = vec![file("report.xlsx", b"PK\x03\x04"), file("notes.txt", b"hi")];
+    let applied = daemon.manager.handle(alice(), prompt(files)).await;
+    assert_eq!(applied, Ok(CommandResult::Applied));
+    let text = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let sent = daemon
+                .commands
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|command| match command {
+                    AdapterCommand::SendPrompt { text, images, .. } => {
+                        Some((text.clone(), images.len()))
+                    }
+                    _ => None,
+                });
+            if let Some(sent) = sent {
+                return sent;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let kept = attachments(&daemon.journal(&session).await);
+    let described: Vec<_> = kept
+        .iter()
+        .map(|a| (a.name.as_deref(), a.media_type.as_str(), a.size))
+        .collect();
+    assert_eq!(
+        described,
+        [
+            (Some("report.xlsx"), FILE_MEDIA_TYPE, 4),
+            (Some("notes.txt"), FILE_MEDIA_TYPE, 2)
+        ]
+    );
+    let kept_at = |attachment: &Attachment| {
+        dir.path()
+            .join("attachments")
+            .join(session.as_str())
+            .join(attachment.attachment_id.as_str())
+            .join(attachment.name.as_deref().unwrap())
+    };
+    assert_eq!(
+        text,
+        (
+            format!(
+                "Sum these up.\n\nAttached files:\n- {}\n- {}",
+                kept_at(&kept[0]).display(),
+                kept_at(&kept[1]).display()
+            ),
+            0
+        )
+    );
+    assert_eq!(std::fs::read(kept_at(&kept[0])).unwrap(), b"PK\x03\x04");
+    assert_eq!(std::fs::read(kept_at(&kept[1])).unwrap(), b"hi");
+    // Nothing lands in the session's worktree.
+    let worktrees = dir.path().join("worktrees");
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(
+            std::fs::read_dir(&worktrees)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path(),
+        )
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "");
+
+    // Clients fetch a file as they fetch an image.
+    let fetched = daemon
+        .manager
+        .handle(
+            bob(),
+            CommandBody::GetAttachment {
+                session_id: session.clone(),
+                attachment_id: kept[1].attachment_id.clone(),
+            },
+        )
+        .await;
+    assert_eq!(
+        fetched,
+        Ok(CommandResult::Attachment {
+            media_type: FILE_MEDIA_TYPE.into(),
+            data: Bytes(b"hi".to_vec()),
+        })
+    );
     daemon.stop().await;
 }
 

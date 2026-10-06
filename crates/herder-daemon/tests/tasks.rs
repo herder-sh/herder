@@ -360,6 +360,7 @@ impl Daemon {
             session_id: session_id.clone(),
             text: "Plan.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         self.manager.handle(alice(), prompt).await.unwrap();
         for _ in 0..250 {
@@ -777,6 +778,7 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
         session_id: primary.clone(),
         text: "Hang.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     daemon.manager.handle(alice(), prompt).await.unwrap();
     daemon
@@ -1614,6 +1616,7 @@ async fn independent_agent_messages_queue_deduplicate_and_survive_restart() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon
@@ -1691,6 +1694,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon
@@ -1711,6 +1715,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Later.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     let queue = async || {
@@ -1769,6 +1774,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Also.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     let ids: Vec<_> = queue()
@@ -1894,6 +1900,7 @@ async fn queued_agent_message_cannot_gain_permissions_after_restart() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon

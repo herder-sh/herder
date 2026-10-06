@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
-    Item, ItemBody, ItemId, MAX_PROMPT_IMAGE_BYTES, PermissionMode, PromptId, QuestionId, Route,
-    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
+    Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PromptFile, PromptId,
+    QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -62,11 +62,12 @@ pub(super) enum Request {
         text: String,
         follow_up: FollowUp,
     },
-    /// Queues a prompt, keeping its images; `queued` learns whether it waits behind a running
-    /// turn.
+    /// Queues a prompt, keeping its images and files; `queued` learns whether it waits behind
+    /// a running turn.
     SendPrompt {
         text: String,
         images: Vec<Image>,
+        files: Vec<PromptFile>,
         queued: Option<oneshot::Sender<bool>>,
     },
     Interrupt,
@@ -160,7 +161,7 @@ struct Prompt {
     follow_up: Option<FollowUp>,
     by: Option<UserId>,
     text: String,
-    /// The images it carries, kept apart ([`attachments`]).
+    /// The images and files it carries, kept apart ([`attachments`]).
     attachments: Vec<Attachment>,
     /// Whether another immediate failover retry is disabled for this prompt.
     retry: bool,
@@ -606,9 +607,10 @@ impl Actor {
             Request::SendPrompt {
                 text,
                 images,
+                files,
                 queued,
             } => {
-                let attachments = self.keep(images).await?;
+                let attachments = self.keep(images, files).await?;
                 self.cancel_retry(false).await;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
@@ -1237,20 +1239,22 @@ impl Actor {
             .flat_map(|prompt| prompt.attachments.iter().cloned())
             .collect();
         let bytes: u64 = attachments.iter().map(|attachment| attachment.size).sum();
-        if bytes > MAX_PROMPT_IMAGE_BYTES as u64 {
+        if bytes > MAX_PROMPT_ATTACHMENT_BYTES as u64 {
             return Err(error(
                 ErrorCode::BadRequest,
                 format!(
-                    "the merged prompt's images would have more than \
-                     {MAX_PROMPT_IMAGE_BYTES} bytes together"
+                    "the merged prompt's images and files would have more than \
+                     {MAX_PROMPT_ATTACHMENT_BYTES} bytes together"
                 ),
             ));
         }
-        let text = merge::merge_texts(
-            prompts
+        let text = merge::merge_texts(prompts.iter().map(|prompt| {
+            let images = prompt
+                .attachments
                 .iter()
-                .map(|prompt| (prompt.text.as_str(), prompt.attachments.len())),
-        );
+                .filter(|attachment| attachment.name.is_none());
+            (prompt.text.as_str(), images.count())
+        }));
         let first = indices[0];
         self.queue[first].text = text;
         self.queue[first].attachments = attachments;
@@ -1263,10 +1267,14 @@ impl Actor {
         Ok(())
     }
 
-    /// Checks a prompt's `images` and keeps them; refused when the session's adapter cannot
-    /// take images.
-    async fn keep(&self, images: Vec<Image>) -> Result<Vec<Attachment>, ErrorInfo> {
-        if images.is_empty() {
+    /// Checks a prompt's `images` and `files` and keeps them; images are refused when the
+    /// session's adapter cannot take them.
+    async fn keep(
+        &self,
+        images: Vec<Image>,
+        files: Vec<PromptFile>,
+    ) -> Result<Vec<Attachment>, ErrorInfo> {
+        if images.is_empty() && files.is_empty() {
             return Ok(Vec::new());
         }
         let provider = &self.session.provider;
@@ -1275,14 +1283,15 @@ impl Actor {
             .adapters
             .get(provider)
             .is_some_and(|adapter| adapter.accepts_images());
-        if !takes_images {
+        if !images.is_empty() && !takes_images {
             return Err(error(
                 ErrorCode::Unsupported,
                 format!("{} cannot take images with a prompt", provider.as_str()),
             ));
         }
-        attachments::validate(&images)?;
-        attachments::save(&self.inner.attachments, &self.session.session_id, images).await
+        attachments::validate(&images, &files)?;
+        let session_id = &self.session.session_id;
+        attachments::save(&self.inner.attachments, session_id, images, files).await
     }
 
     /// Removes the worktree of a session still archived, keeping its branches.
@@ -1654,6 +1663,7 @@ impl Actor {
                 }
             }
             let images = self.images(&attachments).await;
+            let prompt_text = self.with_files(&text, &attachments);
             if let Err(err) = self
                 .user_message(
                     by.clone(),
@@ -1678,7 +1688,7 @@ impl Actor {
                         .as_ref()
                         .map(|message| message.sender_session_id.clone()),
                     turn_id: turn_id.clone(),
-                    text: text.clone(),
+                    text: prompt_text,
                     images,
                 });
             }
@@ -1701,14 +1711,32 @@ impl Actor {
     /// logged and left out, as the turn can go on without it.
     async fn images(&self, attachments: &[Attachment]) -> Vec<Image> {
         let mut images = Vec::with_capacity(attachments.len());
-        for attachment in attachments {
+        for attachment in attachments.iter().filter(|a| a.name.is_none()) {
             let session_id = &self.session.session_id;
             match attachments::load(&self.inner.attachments, session_id, attachment).await {
-                Ok(image) => images.push(image),
+                Ok(data) => images.push(Image {
+                    media_type: attachment.media_type.clone(),
+                    data,
+                }),
                 Err(err) => warn!(%session_id, "leaving an image out: {}", err.message),
             }
         }
         images
+    }
+
+    /// `text` as the agent gets it: with a note naming where each file `attachments` name is
+    /// on this host, which the CLI runs on, so any agent can read them.
+    fn with_files(&self, text: &str, attachments: &[Attachment]) -> String {
+        let session_id = &self.session.session_id;
+        let paths: Vec<_> = attachments
+            .iter()
+            .filter(|attachment| attachment.name.is_some())
+            .filter_map(|attachment| {
+                attachments::path(&self.inner.attachments, session_id, attachment)
+            })
+            .map(|path| std::path::absolute(&path).unwrap_or(path))
+            .collect();
+        attachments::with_files(text, &paths)
     }
 
     /// Starts the setup command in the worktree, in the session's scope, as a turn of its own:

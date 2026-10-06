@@ -505,6 +505,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             session_id: primary.clone(),
             text: "Plan.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     client

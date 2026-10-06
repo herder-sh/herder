@@ -207,7 +207,7 @@ public final class Fleet {
     /// Creates a session, prompts it when a prompt is given, and returns it.
     func createSession(
         on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
-        mode: PermissionMode, prompt: String, images: [Herder.Image] = []
+        mode: PermissionMode, prompt: String, images: [Herder.Image] = [], files: [PromptFile] = []
     ) async throws -> SessionKey {
         let result = try await client.send(
             hostId: hostId,
@@ -218,27 +218,27 @@ public final class Fleet {
             throw HerderError.Local(detail: "the machine did not create a session")
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
-        if !prompt.isEmpty || !images.isEmpty {
+        if !prompt.isEmpty || !images.isEmpty || !files.isEmpty {
             // Through the outbox, as any prompt: the machine journals the first one only once
             // its CLI is up, and till then the new session would show no turns.
             sessions[key] = sessions[key] ?? SessionModel(key: key)
-            await submit(prompt, images: images, to: key)
+            await submit(prompt, images: images, files: files, to: key)
         }
         return key
     }
 
     /// Sends what the user typed: the answer to the session's oldest question when one is
     /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
-    func submit(_ text: String, images: [Herder.Image] = [], to key: SessionKey) async {
+    func submit(_ text: String, images: [Herder.Image] = [], files: [PromptFile] = [], to key: SessionKey) async {
         guard let session = sessions[key] else { return }
-        if let question = session.questions.first, images.isEmpty {
+        if let question = session.questions.first, images.isEmpty, files.isEmpty {
             await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
                        about: key)
             return
         }
-        let outgoing = Outgoing(text: text, images: images)
+        let outgoing = Outgoing(text: text, images: images, files: files)
         sessions[key]?.outbox.append(outgoing)
-        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images), about: key)
+        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images, files: files), about: key)
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
             sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }
@@ -267,7 +267,7 @@ public final class Fleet {
     }
 
     /// Merges queued prompts into the first of them, so they run as one turn; the machine joins
-    /// their texts and images, which only it holds.
+    /// their texts, images and files, which only it holds.
     func mergeQueued(_ promptIds: [PromptId], in key: SessionKey) async {
         await editQueue(.mergeQueued(sessionId: key.sessionId, promptIds: promptIds), of: key)
     }
@@ -285,10 +285,10 @@ public final class Fleet {
     }
 
     /// Brings an archived session back, then sends the prompt; a refusal is shown with it.
-    func unarchiveAndSubmit(_ text: String, images: [Herder.Image], to key: SessionKey) async {
+    func unarchiveAndSubmit(_ text: String, images: [Herder.Image], files: [PromptFile] = [], to key: SessionKey) async {
         await send(.unarchiveSession(sessionId: key.sessionId), about: key)
         guard refusals[key] == nil else { return }
-        await submit(text, images: images, to: key)
+        await submit(text, images: images, files: files, to: key)
     }
 
     /// Fetches a user message's image once; views read it from `attachments`.

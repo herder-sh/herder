@@ -441,6 +441,7 @@ impl Scenario<'_> {
                     session_id: session_id.clone(),
                     text: text.into(),
                     images: Vec::new(),
+                    files: Vec::new(),
                 },
             )
             .await?;

@@ -54,17 +54,19 @@
 //! still there, else adds it back at the path it had, on the session's own branch, and
 //! journals the `idle` status.
 //!
-//! # Images
+//! # Images and files
 //!
 //! A prompt may carry images when its session's adapter takes them
 //! ([`herder_adapters::Adapter::accepts_images`]); otherwise it is refused as `unsupported`.
-//! They are checked and kept as files when the prompt arrives ([`attachments`]), journaled as
-//! the attachments of its `user_message`, and handed to the agent with the prompt's text when
-//! its turn starts. `get_attachment` reads one back; it changes nothing, so its answer is not
-//! remembered ([`changes_nothing`]). A transcript replayed into another CLI keeps each prompt's
-//! attachments, and the adapter names every image in a line of text: the seed carries no
-//! bytes, and the vault keeps none either, so a forked session's earlier images are
-//! references only.
+//! It may carry files of any type whatever the adapter. Both are checked and kept when the
+//! prompt arrives ([`attachments`]), each file in a folder of the session outside its
+//! worktree, and journaled as the attachments of its `user_message`. When its turn starts,
+//! the images go to the agent with the prompt's text, and the files' paths in a note appended
+//! to it: the CLI runs on this host, so any agent can read them. `get_attachment` reads one
+//! back; it changes nothing, so its answer is not remembered ([`changes_nothing`]). A
+//! transcript replayed into another CLI keeps each prompt's attachments, and the adapter names
+//! every image and file in a line of text: the seed carries no bytes, and the vault keeps none
+//! either, so a forked session's earlier attachments are references only.
 //!
 //! # Checkpoints
 //!
@@ -609,11 +611,13 @@ impl SessionManager {
                 session_id,
                 text,
                 images,
+                files,
             } => (
                 session_id,
                 Request::SendPrompt {
                     text,
                     images,
+                    files,
                     queued: None,
                 },
             ),
@@ -1000,16 +1004,16 @@ impl SessionManager {
             .map_err(|_| anyhow::anyhow!("projects are managed already"))
     }
 
-    /// The bytes of `attachment`, an image a prompt of `session_id` carried.
-    pub(crate) async fn image(
+    /// The bytes of `attachment`, an image or file a prompt of `session_id` carried.
+    pub(crate) async fn attachment_data(
         &self,
         session_id: &SessionId,
         attachment: &Attachment,
-    ) -> Result<Image, ErrorInfo> {
+    ) -> Result<Bytes, ErrorInfo> {
         attachments::load(&self.inner.attachments, session_id, attachment).await
     }
 
-    /// The bytes of the image `attachment_id` a prompt of `session_id` carried.
+    /// The bytes of the image or file `attachment_id` a prompt of `session_id` carried.
     async fn attachment(
         &self,
         session_id: &SessionId,
@@ -1021,11 +1025,9 @@ impl SessionManager {
             .await
             .map_err(internal)?
             .ok_or_else(|| not_found(session_id))?;
-        let image = attachments::fetch(&self.inner.attachments, session_id, attachment_id).await?;
-        Ok(CommandResult::Attachment {
-            media_type: image.media_type,
-            data: image.data,
-        })
+        let (media_type, data) =
+            attachments::fetch(&self.inner.attachments, session_id, attachment_id).await?;
+        Ok(CommandResult::Attachment { media_type, data })
     }
 
     /// Declares the repository at `path` as a project ([`Overrides::add`]).

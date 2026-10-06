@@ -659,6 +659,7 @@ mod tests {
                     session_id: SessionId::new("s2"),
                     text: "/etc is fine".into(),
                     images: Vec::new(),
+                    files: Vec::new(),
                 },
                 origin: Origin::Prompt(key("h1", "s2"), "/etc is fine".into()),
             }]

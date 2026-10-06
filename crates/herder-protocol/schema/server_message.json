@@ -613,7 +613,7 @@
       ]
     },
     "Attachment": {
-      "description": "An image a prompt carried, kept on the session's host.",
+      "description": "An image or file a prompt carried, kept on the session's host.",
       "type": "object",
       "properties": {
         "attachment_id": {
@@ -621,11 +621,18 @@
           "$ref": "#/$defs/AttachmentId"
         },
         "media_type": {
-          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "description": "One of [`IMAGE_MEDIA_TYPES`] for an image; [`FILE_MEDIA_TYPE`] for a file.",
           "type": "string"
         },
+        "name": {
+          "description": "The file's name, as sent; absent for an image.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "size": {
-          "description": "Size of the image in bytes.",
+          "description": "Size of the image or file in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -755,15 +762,15 @@
           ]
         },
         {
-          "description": "The bytes of an image, answering `get_attachment`.",
+          "description": "The bytes of an image or file, answering `get_attachment`.",
           "type": "object",
           "properties": {
             "data": {
-              "description": "The image file's bytes.",
+              "description": "The image's or file's bytes.",
               "$ref": "#/$defs/Bytes"
             },
             "media_type": {
-              "description": "The image's media type.",
+              "description": "The image's or file's media type.",
               "type": "string"
             },
             "type": {
@@ -2471,7 +2478,7 @@
           "type": "object",
           "properties": {
             "attachments": {
-              "description": "Images sent with the prompt, in order; `get_attachment` fetches their bytes.",
+              "description": "Images and files sent with the prompt, in order; `get_attachment` fetches their\nbytes.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Attachment"
@@ -3025,6 +3032,13 @@
               "type": "null"
             }
           ]
+        },
+        "files": {
+          "description": "How many files it carries.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
         },
         "images": {
           "description": "How many images it carries.",

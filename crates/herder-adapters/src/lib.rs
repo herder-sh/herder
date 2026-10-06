@@ -333,17 +333,20 @@ pub enum AdapterEvent {
 }
 
 /// A user message's text as a CLI gets it in a replayed transcript: the text, then a line
-/// naming each image the message carried. A seed holds attachment references only, never the
-/// bytes, so every adapter replays images this way.
+/// naming each image and file the message carried. A seed holds attachment references only,
+/// never the bytes nor where a file is kept, so every adapter replays attachments this way.
 pub(crate) fn seed_user_text(text: &str, attachments: &[Attachment]) -> String {
+    let why = "not part of this replay";
     let mut text = text.to_owned();
     for attachment in attachments {
         text.push('\n');
-        text.push_str(&image_placeholder(
-            &attachment.media_type,
-            attachment.size,
-            "not part of this replay",
-        ));
+        text.push_str(&match &attachment.name {
+            None => image_placeholder(&attachment.media_type, attachment.size, why),
+            Some(name) => format!(
+                "[file attached: {name}, {} KB; {why}]",
+                attachment.size.div_ceil(1024)
+            ),
+        });
     }
     text
 }

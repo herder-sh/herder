@@ -316,6 +316,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
                 session_id: session_id.clone(),
                 text: "First.".into(),
                 images: vec![image.clone()],
+                files: Vec::new(),
             },
         )
         .await

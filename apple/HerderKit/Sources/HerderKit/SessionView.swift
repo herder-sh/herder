@@ -503,6 +503,7 @@ private struct Composer: View {
     let handOff: (HostId, AccountId?) -> Void
     @State private var text = ""
     @State private var images: [Herder.Image] = []
+    @State private var files: [PromptFile] = []
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
@@ -522,6 +523,7 @@ private struct Composer: View {
             ComposerBox(
                 text: $text,
                 images: $images,
+                files: $files,
                 placeholder: placeholder,
                 tint: model.parent != nil ? Theme.child : nil,
                 models: fleet.modelGroups(on: key.hostId, providers: model.provider.map { [$0] } ?? [],
@@ -557,16 +559,21 @@ private struct Composer: View {
             if let kept = PromptDrafts.shared.load(PromptDrafts.key(key)) {
                 text = kept.text
                 images = kept.herderImages
+                files = kept.promptFiles
             }
         }
         // Kept a moment after the last keystroke, and at once on leaving.
-        .task(id: PromptDrafts.Content(text: text, images: images)) {
+        .task(id: draftContent) {
             guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
         }
         .onDisappear {
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
         }
+    }
+
+    private var draftContent: PromptDrafts.Content {
+        PromptDrafts.Content(text: text, images: images, files: files)
     }
 
     /// The provider's accounts on the machine; picking one moves the session to it.
@@ -605,16 +612,17 @@ private struct Composer: View {
 
     private func send() {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = images
-        guard !text.isEmpty || !images.isEmpty else { return }
+        let (images, files) = (images, files)
+        guard !text.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         self.text = ""
         self.images = []
+        self.files = []
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(key))
         sent()
         if model.state == .archived {
-            Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }
+            Task { await fleet.unarchiveAndSubmit(text, images: images, files: files, to: key) }
         } else {
-            Task { await fleet.submit(text, images: images, to: key) }
+            Task { await fleet.submit(text, images: images, files: files, to: key) }
         }
     }
 }
@@ -679,6 +687,7 @@ struct DraftSessionView: View {
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
     @State private var images: [Herder.Image] = []
+    @State private var files: [PromptFile] = []
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
@@ -740,6 +749,7 @@ struct DraftSessionView: View {
             ComposerBox(
                 text: $text,
                 images: $images,
+                files: $files,
                 placeholder: "Ask for changes, or describe what to build",
                 models: fleet.modelGroups(on: hostId, providers: fleet.providers(on: hostId), current: choice,
                                           offersDefault: true),
@@ -784,17 +794,22 @@ struct DraftSessionView: View {
             if let kept = PromptDrafts.shared.load(draft.key) {
                 text = kept.text
                 images = kept.herderImages
+                files = kept.promptFiles
             }
         }
         // Kept a moment after the last keystroke, and at once on leaving; not while the
         // session is starting, so a sent prompt is not kept again.
-        .task(id: PromptDrafts.Content(text: text, images: images)) {
+        .task(id: draftContent) {
             guard starting == nil, (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key)
+            PromptDrafts.shared.save(draftContent, for: draft.key)
         }
         .onDisappear {
-            if starting == nil { PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key) }
+            if starting == nil { PromptDrafts.shared.save(draftContent, for: draft.key) }
         }
+    }
+
+    private var draftContent: PromptDrafts.Content {
+        PromptDrafts.Content(text: text, images: images, files: files)
     }
 
     /// Every account on the machine, of each provider; picking another provider's account
@@ -821,33 +836,35 @@ struct DraftSessionView: View {
 
     private func start() async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty || !images.isEmpty else { return }
+        guard !prompt.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         guard let account else {
             error = "\(machine?.name ?? "This machine") has no \(ModelCatalog.providerName(choice.provider)) account."
             return
         }
         ModePreference.remember(mode, for: draft)
         if let projectId = draft.projectId { MachinePreference.remember(hostId, for: projectId) }
-        let sent = images
+        let (sent, sentFiles) = (images, files)
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
             error = nil
             text = ""
             images = []
+            files = []
         }
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
-                model: choice.model, mode: mode, prompt: prompt, images: sent))
+                model: choice.model, mode: mode, prompt: prompt, images: sent, files: sentFiles))
         } catch {
             withAnimation(.smooth(duration: 0.4)) {
                 starting = nil
                 text = prompt
                 images = sent
+                files = sentFiles
                 self.error = describe(error)
             }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent), for: draft.key)
+            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent, files: sentFiles), for: draft.key)
         }
     }
 }

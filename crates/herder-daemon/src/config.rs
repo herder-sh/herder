@@ -149,11 +149,11 @@
 //! address = "vault.example.com:7447"
 //! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
 //! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
-//! attachments = true           # back up prompt images too; off by default
-//! attachments_cap = 1073741824 # most bytes of images the vault keeps; 1 GiB by default
+//! attachments = true           # back up prompt images and files too; off by default
+//! attachments_cap = 1073741824 # most bytes of them the vault keeps; 1 GiB by default
 //! ```
 //!
-//! With `attachments`, the vault keeps this host's images up to `attachments_cap` bytes,
+//! With `attachments`, the vault keeps this host's images and files up to `attachments_cap` bytes,
 //! evicting the oldest first; without it the host sends none.
 //!
 //! A vault's own `[vault]` table sets how long it keeps archived sessions:

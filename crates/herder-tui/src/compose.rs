@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use herder_protocol::{
     Answer, ApprovalDecision, AttachmentId, CommandBody, CommandResult, HostId,
-    IMAGE_NOT_BACKED_UP, Image, MAX_PROMPT_IMAGE_BYTES, PermissionMode, SessionStatus,
+    IMAGE_NOT_BACKED_UP, Image, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, SessionStatus,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Style;
@@ -348,10 +348,10 @@ impl App {
         self.compose.loading = self.compose.loading.saturating_sub(1);
         let carried: usize = self.compose.images.iter().map(|i| i.data.0.len()).sum();
         let result = result.and_then(|image| {
-            if carried + image.data.0.len() > MAX_PROMPT_IMAGE_BYTES {
+            if carried + image.data.0.len() > MAX_PROMPT_ATTACHMENT_BYTES {
                 Err(format!(
                     "over {} of images in one prompt",
-                    attach::size(MAX_PROMPT_IMAGE_BYTES as u64)
+                    attach::size(MAX_PROMPT_ATTACHMENT_BYTES as u64)
                 ))
             } else {
                 Ok(image)
@@ -629,6 +629,7 @@ impl App {
             session_id,
             text: prompt.clone(),
             images,
+            files: Vec::new(),
         };
         vec![send(&key, command, Origin::Prompt(key.clone(), prompt))]
     }
@@ -826,6 +827,7 @@ mod tests {
                 session_id: SessionId::new("s2"),
                 text: text.into(),
                 images,
+                files: Vec::new(),
             },
             Origin::Prompt(key("h1", "s2"), text.into()),
         )
@@ -1018,6 +1020,7 @@ mod tests {
             attachment_id: herder_protocol::AttachmentId::new(id),
             media_type: media_type.into(),
             size: 10,
+            name: None,
         };
         let message = |id: &str, attachments| {
             added(
@@ -1121,6 +1124,7 @@ mod tests {
                     session_id: SessionId::new("s2"),
                     text: prompt.clone(),
                     images: Vec::new(),
+                    files: Vec::new(),
                 },
                 Origin::Prompt(key("h1", "s2"), prompt.clone()),
             )]

@@ -360,6 +360,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
         session_id: session_id.clone(),
         text: text.into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     let sent = client.send(host.clone(), prompt("First.")).await.unwrap();
     assert_eq!(sent, CommandResult::Applied);
@@ -734,6 +735,7 @@ async fn pairing_fails_on_a_wrong_code_or_fingerprint_and_saves_nothing() {
                 session_id: SessionId::new("nope"),
                 text: "Hi.".into(),
                 images: Vec::new(),
+                files: Vec::new(),
             },
         )
         .await
@@ -1417,6 +1419,7 @@ async fn a_ten_minute_suspension_resumes_without_a_gap() {
         session_id: session_id.clone(),
         text: "First.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     assert_eq!(
         phone.send(host.clone(), prompt).await.unwrap(),
@@ -1542,6 +1545,7 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
         session_id: session_id.clone(),
         text: text.into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     client.send(host.clone(), prompt("First.")).await.unwrap();
     let mut before = View::default();

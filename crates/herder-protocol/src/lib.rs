@@ -25,8 +25,8 @@ mod types;
 mod usage;
 
 pub use attachment::{
-    Attachment, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_IMAGE_BYTES,
-    MAX_PROMPT_IMAGE_BYTES,
+    Attachment, FILE_MEDIA_TYPE, IMAGE_MEDIA_TYPES, IMAGE_NOT_BACKED_UP, Image, MAX_FILE_BYTES,
+    MAX_FILE_NAME_BYTES, MAX_IMAGE_BYTES, MAX_PROMPT_ATTACHMENT_BYTES, PromptFile,
 };
 pub use bytes::Bytes;
 pub use client::{ClientHello, ClientMessage, Command, CommandBody, Cursor, HistoryPart, Relay};

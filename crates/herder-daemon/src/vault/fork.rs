@@ -61,7 +61,7 @@ impl FromVault {
         };
         Ok(Source {
             events: view.events,
-            images: view.images,
+            attachments: view.attachments,
             project_id: Some(project_id),
             host_id,
         })

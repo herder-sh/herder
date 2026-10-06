@@ -4,9 +4,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, Answer, ApprovalDecision, ApprovalId, AttachmentId, Bytes, CommandId,
-    DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptId, Provider,
-    QuestionId, Seq, SessionId, TerminalId, UsagePeriod,
+    AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, Bytes, CommandId,
+    DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptFile, PromptId,
+    Provider, QuestionId, Seq, SessionId, TerminalId, UsagePeriod,
 };
 
 /// A client-to-daemon message.
@@ -90,6 +90,13 @@ pub enum HistoryPart {
         attachment_id: AttachmentId,
         /// Its bytes.
         image: Image,
+    },
+    /// A file a prompt of the session carried, as `get_attachment` answers for it.
+    File {
+        /// The file, as the prompt's `user_message` names it.
+        attachment: Attachment,
+        /// Its bytes.
+        data: Bytes,
     },
 }
 
@@ -199,18 +206,23 @@ pub enum CommandBody {
         session_id: SessionId,
         /// Prompt text.
         text: String,
-        /// Images for the agent to see with the text, together at most
-        /// [`crate::MAX_PROMPT_IMAGE_BYTES`]; a provider that cannot take images refuses them
-        /// as `unsupported`.
+        /// Images for the agent to see with the text; a provider that cannot take images
+        /// refuses them as `unsupported`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<Image>,
+        /// Files for the agent to read: kept on the session's host, in a folder of the session
+        /// outside its worktree, and named by path in a note appended to the text the agent
+        /// gets. Every provider takes them. With `images`, at most
+        /// [`crate::MAX_PROMPT_ATTACHMENT_BYTES`] together.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<PromptFile>,
     },
-    /// Fetch the bytes of an image a prompt of the session carried; answered with
+    /// Fetch the bytes of an image or file a prompt of the session carried; answered with
     /// `attachment`. It changes nothing, so a resend is answered afresh.
     GetAttachment {
         /// Session whose prompt carried it.
         session_id: SessionId,
-        /// The image, as the prompt's `user_message` names it.
+        /// The image or file, as the prompt's `user_message` names it.
         attachment_id: AttachmentId,
     },
     /// Stop the running turn.
@@ -248,11 +260,12 @@ pub enum CommandBody {
     },
     /// Merge queued prompts into one, so they run as one turn. The merged prompt keeps the
     /// first listed prompt's id and place in the queue; the rest leave it. Its text is theirs,
-    /// in the listed order, with a blank line between them, and its images are theirs, in the
-    /// same order, with each prompt's `[Image #N]` markers renumbered to count across the
-    /// merged prompt. Refused as `remove_queued` is, for any listed prompt; and with
-    /// `bad_request` for fewer than two prompts, a prompt listed twice, a prompt an agent sent,
-    /// prompts different users sent, or images over [`crate::MAX_PROMPT_IMAGE_BYTES`] together.
+    /// in the listed order, with a blank line between them, and its images and files are
+    /// theirs, in the same order, with each prompt's `[Image #N]` markers renumbered to count
+    /// across the merged prompt's images. Refused as `remove_queued` is, for any listed prompt;
+    /// and with `bad_request` for fewer than two prompts, a prompt listed twice, a prompt an
+    /// agent sent, prompts different users sent, or images and files over
+    /// [`crate::MAX_PROMPT_ATTACHMENT_BYTES`] together.
     MergeQueued {
         /// Target session.
         session_id: SessionId,

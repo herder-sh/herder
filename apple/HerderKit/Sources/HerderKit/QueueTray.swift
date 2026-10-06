@@ -148,7 +148,7 @@ struct QueueTray: View {
     }
 }
 
-/// One queued message: its sender when another agent sent it, its text and images, and Send
+/// One queued message: its sender when another agent sent it, its text, images and files, and Send
 /// Now; on the Mac, Send Now and Remove show on hover.
 private struct QueuedRow: View {
     let fleet: Fleet
@@ -173,6 +173,10 @@ private struct QueuedRow: View {
             }
             if prompt.images > 0 {
                 Label("\(prompt.images)", systemImage: "photo")
+                    .font(.caption).foregroundStyle(Theme.tertiary)
+            }
+            if prompt.files > 0 {
+                Label("\(prompt.files)", systemImage: "paperclip")
                     .font(.caption).foregroundStyle(Theme.tertiary)
             }
             Spacer(minLength: 0)

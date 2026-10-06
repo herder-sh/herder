@@ -411,7 +411,8 @@ pub enum ItemBody {
     UserMessage {
         /// Prompt text.
         text: String,
-        /// Images sent with the prompt, in order; `get_attachment` fetches their bytes.
+        /// Images and files sent with the prompt, in order; `get_attachment` fetches their
+        /// bytes.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<Attachment>,
     },
