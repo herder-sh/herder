@@ -56,6 +56,7 @@ impl Backend for TestBackend {
             account_id: AccountId::new("claude-main"),
             provider: Provider::Claude,
             label: "Main".into(),
+            email: None,
             usage: Vec::new(),
         }]
     }

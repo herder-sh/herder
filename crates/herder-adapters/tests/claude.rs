@@ -14,7 +14,9 @@ use std::time::Duration;
 use herder_adapters::claude;
 use herder_adapters::fixture::Fixture;
 use herder_adapters::transport::Transport;
-use herder_adapters::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
+use herder_adapters::{
+    AccountUsage, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest,
+};
 use herder_protocol::{
     Answer, ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId,
     PermissionMode, QuestionId, Timestamp, TurnError, TurnId, TurnUsage, UsageWindow,
@@ -979,12 +981,12 @@ async fn a_cli_that_dies_before_initialize_answers_fails_start() {
 
 #[tokio::test]
 async fn read_usage_answers_with_the_plan_windows_and_runs_no_turn() {
-    // The answer is trimmed from Claude Code 2.1.286's own; nothing but the two requests is
+    // The answers are trimmed from Claude Code 2.1.286's own; nothing but the two requests is
     // sent, then stdin is closed.
     let fixture = Fixture::parse(
         "inline",
         r#"{"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-1\",\"request\":{\"subtype\":\"initialize\"}}"}
-{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{}}}"}
+{"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-1\",\"response\":{\"account\":{\"email\":\"dev@example.com\",\"subscriptionType\":\"max\"}}}}"}
 {"dir":"in","line":"{\"type\":\"control_request\",\"request_id\":\"herder-2\",\"request\":{\"subtype\":\"get_usage\",\"skip_behaviors\":true}}"}
 {"dir":"out","line":"{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"herder-2\",\"response\":{\"session\":{\"total_cost_usd\":0},\"rate_limits_available\":true,\"rate_limits\":{\"five_hour\":{\"utilization\":9,\"resets_at\":\"2026-10-02T20:19:59.921522+00:00\"},\"seven_day\":{\"utilization\":2,\"resets_at\":\"2026-10-08T15:59:59.921548+00:00\"},\"seven_day_opus\":null,\"extra_usage\":{\"is_enabled\":true,\"utilization\":null},\"model_scoped\":[{\"display_name\":\"Fable\",\"utilization\":0,\"resets_at\":\"2026-10-08T16:00:00+00:00\"}]},\"behaviors\":null}}}"}
 {"dir":"in","eof":true}
@@ -992,17 +994,18 @@ async fn read_usage_answers_with_the_plan_windows_and_runs_no_turn() {
 "#,
     )
     .unwrap();
-    let windows = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
+    let usage = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(usage.email.as_deref(), Some("dev@example.com"));
     let window = |name: &str, used_percent, resets_at: &str| UsageWindow {
         window: name.into(),
         used_percent,
         resets_at: Some(resets_at.parse().unwrap()),
     };
     assert_eq!(
-        windows,
+        usage.windows,
         [
             window("five_hour", 9.0, "2026-10-02T20:19:59.921522Z"),
             window("seven_day", 2.0, "2026-10-08T15:59:59.921548Z"),
@@ -1024,11 +1027,11 @@ async fn read_usage_of_an_account_without_plan_limits_is_empty() {
 "#,
     )
     .unwrap();
-    let windows = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
+    let usage = timeout(TIMEOUT, claude::read_usage(Transport::replay(fixture)))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(windows, []);
+    assert_eq!(usage, AccountUsage::default());
 }
 
 #[tokio::test]

@@ -943,6 +943,7 @@ pub struct Account {
     pub provider: Provider,
     pub label: String,
     pub config_dir: Option<String>,
+    pub email: Option<String>,
     pub usage: Vec<UsageWindow>,
 }
 

@@ -431,6 +431,13 @@
             "null"
           ]
         },
+        "email": {
+          "description": "Email address the provider login is signed in as, as its CLI last reported it; absent\nuntil it reports one, and for a login without one, such as an API key. Accounts with\nthe same provider and email share one login, and so its limits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "label": {
           "description": "Display label chosen by the owner.",
           "type": "string"

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::fake::FakeAdapter;
-use herder_adapters::{Adapter, AdapterCommand, StartFuture, StartRequest};
+use herder_adapters::{AccountUsage, Adapter, AdapterCommand, StartFuture, StartRequest};
 use herder_daemon::Config;
 use herder_daemon::handoff;
 use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
@@ -2998,7 +2998,8 @@ impl SkillsSink for NoSkills {
     fn session_skills(&self, _: &SessionId, _: Vec<herder_protocol::SessionSkill>) {}
 }
 
-/// A probe answering with how many times it ran, as the five-hour window's percentage.
+/// A probe answering with how many times it ran, as the five-hour window's percentage, for a
+/// login with an email.
 struct Counting {
     requests: Arc<Mutex<Vec<StartRequest>>>,
 }
@@ -3008,7 +3009,12 @@ impl Probe for Counting {
         let mut requests = self.requests.lock().unwrap();
         requests.push(request);
         let used = requests.len() as f64;
-        Box::pin(async move { Ok(vec![window("five_hour", used, "2026-10-02T15:00:00Z")]) })
+        Box::pin(async move {
+            Ok(AccountUsage {
+                email: Some("dev@example.com".into()),
+                windows: vec![window("five_hour", used, "2026-10-02T15:00:00Z")],
+            })
+        })
     }
 }
 
@@ -3032,6 +3038,7 @@ async fn idle_accounts_are_probed_at_once_and_again_on_refresh() {
 
     let accounts = daemon.next_accounts().await;
     assert_eq!(accounts[0].usage[0].used_percent, 1.0);
+    assert_eq!(accounts[0].email.as_deref(), Some("dev@example.com"));
     // A client opening asks again; the interval alone would not for an hour.
     daemon.manager.refresh_usage();
     let accounts = daemon.next_accounts().await;
@@ -4500,7 +4507,12 @@ impl Probe for ByAccount {
             .iter()
             .find(|(account, _)| *account == name)
             .map_or(0.0, |(_, used)| *used);
-        Box::pin(async move { Ok(vec![window("five_hour", used, "2099-01-01T00:00:00Z")]) })
+        Box::pin(async move {
+            Ok(AccountUsage {
+                email: None,
+                windows: vec![window("five_hour", used, "2099-01-01T00:00:00Z")],
+            })
+        })
     }
 }
 
@@ -4839,11 +4851,14 @@ impl Probe for ResetUsage {
     fn read(&self, _: StartRequest) -> ProbeFuture {
         let at = self.0;
         Box::pin(async move {
-            Ok(vec![UsageWindow {
-                window: "five_hour".into(),
-                used_percent: 100.0,
-                resets_at: Some(at),
-            }])
+            Ok(AccountUsage {
+                email: None,
+                windows: vec![UsageWindow {
+                    window: "five_hour".into(),
+                    used_percent: 100.0,
+                    resets_at: Some(at),
+                }],
+            })
         })
     }
 }

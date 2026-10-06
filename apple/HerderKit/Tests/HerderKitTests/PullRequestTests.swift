@@ -156,8 +156,8 @@ struct FollowUpTests {
             guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else { return }
             var host = machine("h", name: "h", sessions: [])
             host.accounts = [
-                Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
-                Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
+                Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, email: nil, usage: []),
+                Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: nil, usage: []),
             ]
             fleet.setMachinesForTesting([host])
             #expect(fleet.defaultProvider(on: "h", projectId: nil) == "claude")

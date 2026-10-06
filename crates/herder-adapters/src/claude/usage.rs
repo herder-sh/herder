@@ -1,5 +1,6 @@
 //! The account's limit windows: read once with `get_usage`, and taken from the
-//! `rate_limit_event` lines of a running session.
+//! `rate_limit_event` lines of a running session. The read also takes the login's email from
+//! the `initialize` answer.
 
 use std::collections::BTreeMap;
 
@@ -9,20 +10,22 @@ use serde_json::Value;
 
 use super::session::{STOP_TIMEOUT, fatal, gone};
 use super::wire::{self, EventWindow, Incoming, Request};
+use crate::AccountUsage;
 use crate::transport::Transport;
 
-/// The windows `get_usage` answers with: the plan's limits from claude.ai's usage endpoint.
+/// The email `initialize` answers with, and the windows `get_usage` does: the plan's limits
+/// from claude.ai's usage endpoint.
 ///
 /// Sends `initialize`, then `get_usage` with `skip_behaviors`, then closes stdin. No prompt is
 /// sent, so no turn runs and no tokens are spent. An account without plan limits, such as an
 /// API key, has no windows.
-pub(super) async fn read(transport: Transport) -> Result<Vec<UsageWindow>, TurnError> {
+pub(super) async fn read(transport: Transport) -> Result<AccountUsage, TurnError> {
     let Transport {
         stdin,
         mut stdout,
         mut exit,
     } = transport;
-    let mut answer = None;
+    let mut answers = Vec::new();
     for (id, request) in [
         ("herder-1", Request::Initialize),
         (
@@ -58,7 +61,7 @@ pub(super) async fn read(transport: Transport) -> Result<Vec<UsageWindow>, TurnE
         if let Some(error) = response.error.filter(|_| response.subtype == "error") {
             return Err(fatal(format!("claude refused {id}: {error}")));
         }
-        answer = response.response;
+        answers.push(response.response);
     }
     // Closing stdin is how `claude` is asked to exit; it is killed if it does not.
     drop(stdin);
@@ -67,10 +70,35 @@ pub(super) async fn read(transport: Transport) -> Result<Vec<UsageWindow>, TurnE
     })
     .await;
     let _ = gone(&mut exit).await;
-    let usage: GetUsage = answer
+    let mut answers = answers.into_iter();
+    let initialize: Initialize = answers
+        .next()
+        .flatten()
         .and_then(|answer| serde_json::from_value(answer).ok())
         .unwrap_or_default();
-    Ok(usage.rate_limits.map(plan_windows).unwrap_or_default())
+    let usage: GetUsage = answers
+        .next()
+        .flatten()
+        .and_then(|answer| serde_json::from_value(answer).ok())
+        .unwrap_or_default();
+    Ok(AccountUsage {
+        email: initialize.account.and_then(|account| account.email),
+        windows: usage.rate_limits.map(plan_windows).unwrap_or_default(),
+    })
+}
+
+/// The `initialize` answer, as far as the usage read takes it.
+#[derive(Debug, Default, Deserialize)]
+struct Initialize {
+    #[serde(default)]
+    account: Option<InitializeAccount>,
+}
+
+/// The login `initialize` names; an API key has no email.
+#[derive(Debug, Deserialize)]
+struct InitializeAccount {
+    #[serde(default)]
+    email: Option<String>,
 }
 
 /// The `get_usage` answer, as far as herder reads it.

@@ -1099,6 +1099,7 @@ mod tests {
                 account_id: herder_protocol::AccountId::new("claude"),
                 provider: herder_protocol::Provider::Claude,
                 label: "Main".into(),
+                email: None,
                 usage: vec![herder_protocol::UsageWindow {
                     window: "five_hour".into(),
                     used_percent,

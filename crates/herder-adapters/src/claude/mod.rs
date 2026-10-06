@@ -195,13 +195,13 @@ mod wire;
 
 use std::path::{Path, PathBuf};
 
-use herder_protocol::{ErrorClass, PermissionMode, TurnError, UsageWindow};
+use herder_protocol::{ErrorClass, PermissionMode, TurnError};
 use tokio::process::Command;
 
 pub use hooks::{PRE_TOOL_USE_ARGS, pre_tool_use};
 
 use crate::transport::Transport;
-use crate::{Adapter, McpServer, StartFuture, StartRequest};
+use crate::{AccountUsage, Adapter, McpServer, StartFuture, StartRequest};
 
 /// The Claude Code version the wire format and fixtures were taken from.
 pub const CLAUDE_VERSION: &str = "2.1.286";
@@ -239,12 +239,12 @@ impl Adapter for ClaudeAdapter {
 }
 
 impl ClaudeAdapter {
-    /// The account's limit windows, read by a `claude` run for `request` that exits once it
-    /// answered; see the module docs. Empty for an account without plan limits.
+    /// The account's email and limit windows, read by a `claude` run for `request` that exits
+    /// once it answered; see the module docs.
     pub fn read_usage(
         &self,
         request: StartRequest,
-    ) -> impl Future<Output = Result<Vec<UsageWindow>, TurnError>> + Send + 'static {
+    ) -> impl Future<Output = Result<AccountUsage, TurnError>> + Send + 'static {
         let mut command = command(&self.program, &request);
         // Nothing the user customized is needed to answer, and their hooks must not run.
         command.arg("--safe-mode");
@@ -258,9 +258,9 @@ impl ClaudeAdapter {
     }
 }
 
-/// Reads the account's limit windows over `transport`, which must carry a `claude` started by
-/// [`command`], or a recording of one.
-pub async fn read_usage(transport: Transport) -> Result<Vec<UsageWindow>, TurnError> {
+/// Reads the account's email and limit windows over `transport`, which must carry a `claude`
+/// started by [`command`], or a recording of one.
+pub async fn read_usage(transport: Transport) -> Result<AccountUsage, TurnError> {
     usage::read(transport).await
 }
 

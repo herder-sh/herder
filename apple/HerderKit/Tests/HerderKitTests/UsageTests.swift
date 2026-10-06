@@ -13,8 +13,10 @@ private func total(
                cacheRead: 300, cacheWrite: 0, costUsd: cost, costEstimated: estimated)
 }
 
-private func account(_ id: AccountId, provider: Provider = "claude", windows: [UsageWindow] = []) -> Account {
-    Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, usage: windows)
+private func account(
+    _ id: AccountId, provider: Provider = "claude", email: String? = nil, windows: [UsageWindow] = []
+) -> Account {
+    Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, email: email, usage: windows)
 }
 
 struct UsageReportTests {
@@ -42,7 +44,8 @@ struct UsageReportTests {
         // no plan window is left out.
         #expect(report.accounts.map(\.id) == ["laptop/gpt", "desk/work", "laptop/work"])
         #expect(report.accounts.map(\.amount.turns) == [1, 2, 1])
-        #expect(report.accounts.map(\.machine) == ["laptop", "desk", "laptop"])
+        #expect(report.accounts.map(\.machines) == [["laptop"], ["desk"], ["laptop"]])
+        #expect(report.accounts.map(\.title) == ["Gpt", "Work", "Work"])
         // A model's turns on every machine and account add up into one row.
         #expect(report.models.map(\.id) == ["codex/gpt-5", "claude/opus"])
         #expect(report.models.map(\.amount.turns) == [1, 3])
@@ -77,8 +80,40 @@ struct UsageReportTests {
         let gone = MachineUsage(hostId: "desk", name: "desk", accounts: [],
                                 totals: [total("removed", "opus")])
         let report = UsageReport([gone], now: now)
-        #expect(report.accounts.map(\.label) == ["removed"])
+        #expect(report.accounts.map(\.labels) == [["removed"]])
         #expect(report.total.turns == 1)
+    }
+
+    @Test func accountsSignedInToOneLoginAddUpIntoOneRow() throws {
+        let reset = { (hours: Double) in now.addingTimeInterval(hours * 3600).ISO8601Format() }
+        // The same Claude login on both machines, under three accounts; desk's report of the
+        // weekly window is older, from before it reset. Codex's login of the same email is
+        // another one.
+        let machines = [
+            MachineUsage(hostId: "desk", name: "desk", accounts: [
+                account("main", email: "dev@example.com", windows: [
+                    UsageWindow(window: "seven_day", usedPercent: 95, resetsAt: reset(-1)),
+                ]),
+                account("spare", email: "dev@example.com"),
+                account("gpt", provider: "codex", email: "dev@example.com"),
+            ], totals: [total("main", "opus", cost: 2), total("spare", "opus", cost: 1)]),
+            MachineUsage(hostId: "laptop", name: "laptop", accounts: [
+                account("work", email: "dev@example.com", windows: [
+                    UsageWindow(window: "five_hour", usedPercent: 20, resetsAt: reset(2)),
+                    UsageWindow(window: "seven_day", usedPercent: 10, resetsAt: reset(160)),
+                ]),
+            ], totals: [total("work", "opus", cost: 0.5)]),
+        ]
+        let report = UsageReport(machines, now: now)
+        #expect(report.accounts.map(\.id) == ["claude/dev@example.com"])
+        let login = try #require(report.accounts.first)
+        #expect(login.title == "dev@example.com")
+        #expect(login.labels == ["Main", "Spare", "Work"])
+        #expect(login.machines == ["desk", "laptop"])
+        #expect(login.amount.turns == 3)
+        #expect(login.amount.costUsd == 3.5)
+        #expect(login.session?.percentUsed == 20)
+        #expect(login.weekly?.percentUsed == 10)
     }
 
     @Test func cacheSavingsAreTheShareOfInputReadFromTheCache() {

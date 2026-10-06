@@ -127,6 +127,7 @@ pub(super) fn herd() -> App {
         account_id: AccountId::new("claude-main"),
         provider: Provider::Claude,
         label: "claude-main".to_owned(),
+        email: None,
         usage: vec![window("five_hour", 38.0), window("seven_day", 12.0)],
     }];
     machines[1].accounts = machines[0].accounts.clone();
@@ -828,6 +829,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         account_id: herder_protocol::AccountId::new("claude-main"),
         provider: herder_protocol::Provider::Claude,
         label: "Main".into(),
+        email: None,
         usage: Vec::new(),
     }];
     app.update(Msg::Machines(machines));

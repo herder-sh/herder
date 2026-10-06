@@ -62,21 +62,42 @@ struct ModelCatalogTests {
 struct SettingsMenuTests {
     @Test func accountsCarryTheirProviderAndBusiestWindow() {
         let accounts = [
-            Account(accountId: "main", provider: "claude", label: "Main", configDir: nil, usage: [
+            Account(accountId: "main", provider: "claude", label: "Main", configDir: nil, email: nil, usage: [
                 UsageWindow(window: "five_hour", usedPercent: 12.4, resetsAt: nil),
                 UsageWindow(window: "seven_day", usedPercent: 61.6, resetsAt: nil),
             ]),
-            Account(accountId: "gpt", provider: "codex", label: "GPT", configDir: nil, usage: []),
-            Account(accountId: "work", provider: "claude", label: "Work", configDir: nil, usage: []),
+            Account(accountId: "gpt", provider: "codex", label: "GPT", configDir: nil, email: nil, usage: []),
+            Account(accountId: "work", provider: "claude", label: "Work", configDir: nil, email: nil, usage: []),
         ]
         let options = SettingsOption.accounts(accounts, current: "work")
         #expect(options.map(\.id) == ["main", "gpt", "work"])
         #expect(options.map(\.provider) == ["claude", "codex", "claude"])
-        #expect(options[0].detail == "Weekly 62%")
+        #expect(options[0].detail == "Weekly 38% left")
         #expect(options[0].usage == 61.6)
         #expect(options.map(\.current) == [false, false, true])
         // No usage reported: no detail and no meter.
         #expect(options[2].detail == nil && options[2].usage == nil)
+    }
+
+    @Test func accountsOfOneLoginAreOneOption() {
+        let account = { (id: AccountId, provider: Provider, email: String?) in
+            Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, email: email, usage: [])
+        }
+        let accounts = [
+            account("main", "claude", "dev@example.com"),
+            account("security", "claude", "dev@example.com"),
+            account("gpt", "codex", "dev@example.com"),
+            account("other", "claude", nil),
+            account("again", "claude", nil),
+        ]
+        // The first of a login stands for it, or the current one; accounts without an email
+        // are each their own.
+        let first = SettingsOption.accounts(accounts, current: nil)
+        #expect(first.map(\.id) == ["main", "gpt", "other", "again"])
+        #expect(first.map(\.subtitle) == ["dev@example.com", "dev@example.com", nil, nil])
+        let current = SettingsOption.accounts(accounts, current: "security")
+        #expect(current.map(\.id) == ["security", "gpt", "other", "again"])
+        #expect(current.map(\.current) == [true, false, false, false])
     }
 
     @Test func machinesPutTheCurrentFirstAndSayWhyOthersCannotBePicked() {
@@ -141,8 +162,8 @@ struct DraftModelTests {
                            projects: [Project(projectId: "p", name: "p", paths: [], defaultPermissionMode: nil,
                                               defaultAccount: "main", setupCommand: nil)])
         host.accounts = [
-            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
-            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
+            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: nil, usage: []),
+            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, email: nil, usage: []),
         ]
         let fleet = try #require(makeFleet([host]))
         #expect(fleet.draftChoice(on: "h", projectId: "p") == .init(provider: "claude", model: "claude-opus-5-5"))
@@ -158,11 +179,11 @@ struct DraftModelTests {
     @Test func movingToAMachineWithoutTheProviderFallsBackToItsDefault() throws {
         var both = machine("a", name: "a", sessions: [])
         both.accounts = [
-            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
-            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
+            Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: nil, usage: []),
+            Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, email: nil, usage: []),
         ]
         var claudeOnly = machine("b", name: "b", sessions: [])
-        claudeOnly.accounts = [Account(accountId: "other", provider: "claude", label: "other", configDir: nil, usage: [])]
+        claudeOnly.accounts = [Account(accountId: "other", provider: "claude", label: "other", configDir: nil, email: nil, usage: [])]
         let fleet = try #require(makeFleet([both, claudeOnly]))
         let codex = ModelCatalog.Choice(provider: "codex", model: "gpt-6-luna")
         #expect(fleet.draftChoice(codex, movedTo: "a", projectId: nil) == codex)

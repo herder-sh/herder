@@ -206,6 +206,14 @@ pub struct AccountReadResult {
     pub requires_openai_auth: bool,
 }
 
+impl AccountReadResult {
+    /// The email of a ChatGPT login; an API key has none.
+    pub fn email(&self) -> Option<String> {
+        let email = self.account.as_ref()?.get("email")?.as_str()?;
+        Some(email.to_owned())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitsReadResult {

@@ -82,6 +82,16 @@ pub trait Adapter: Send + Sync {
 /// What [`Adapter::start`] returns: owns everything it needs, so the daemon can spawn it.
 pub type StartFuture = Pin<Box<dyn Future<Output = Result<AdapterSession, TurnError>> + Send>>;
 
+/// What a usage probe reads of an account: who its login is, and its limit windows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AccountUsage {
+    /// Email address the login is signed in as; absent when the CLI does not say, as for an
+    /// API key.
+    pub email: Option<String>,
+    /// Every limit window; empty for an account without plan limits.
+    pub windows: Vec<UsageWindow>,
+}
+
 /// Everything an adapter needs to run one session.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartRequest {

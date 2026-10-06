@@ -65,11 +65,11 @@ mod wire;
 
 use std::path::PathBuf;
 
-use herder_protocol::{ErrorClass, PermissionMode, TurnError, UsageWindow};
+use herder_protocol::{ErrorClass, PermissionMode, TurnError};
 use tokio::process::Command;
 
 use crate::transport::Transport;
-use crate::{Adapter, StartFuture, StartRequest};
+use crate::{AccountUsage, Adapter, StartFuture, StartRequest};
 
 use wire::{AskForApproval, CodexTurnError, SandboxMode, SandboxPolicy};
 
@@ -109,13 +109,12 @@ impl Adapter for CodexAdapter {
 }
 
 impl CodexAdapter {
-    /// The account's limit windows, read by a `codex app-server` run for `request` that is
-    /// asked to exit once it answered; no thread is opened. Empty for an account without plan
-    /// limits.
+    /// The account's email and limit windows, read by a `codex app-server` run for `request`
+    /// that is asked to exit once it answered; no thread is opened.
     pub fn read_usage(
         &self,
         request: StartRequest,
-    ) -> impl Future<Output = Result<Vec<UsageWindow>, TurnError>> + Send + 'static {
+    ) -> impl Future<Output = Result<AccountUsage, TurnError>> + Send + 'static {
         let command = command(&self.program, &request);
         async move {
             let transport = Transport::spawn(command).map_err(|err| TurnError {
@@ -127,12 +126,12 @@ impl CodexAdapter {
     }
 }
 
-/// Reads the account's limit windows over `transport`, which must carry a `codex app-server`
-/// from [`command`], or a recording of one.
+/// Reads the account's email and limit windows over `transport`, which must carry a
+/// `codex app-server` from [`command`], or a recording of one.
 pub async fn read_usage(
     transport: Transport,
     request: &StartRequest,
-) -> Result<Vec<UsageWindow>, TurnError> {
+) -> Result<AccountUsage, TurnError> {
     session::read_usage(transport, request).await
 }
 
