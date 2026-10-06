@@ -42,11 +42,11 @@ enum ProjectIconUpload {
     }
 }
 
-/// A project's icon on one machine: the current one, a picture to upload in its place, and,
-/// when one was uploaded, a way back to the icon the machine finds in the clone.
+/// A project's icon: the one every device shows, a picture to upload in its place on every
+/// machine this device owns, and, when one was uploaded, a way back to the icon the machines
+/// find in their clones.
 struct ProjectIconRow: View {
     let fleet: Fleet
-    let machine: Machine
     let project: Project
     /// The background the form holds, shown before the machine lists it.
     let background: String?
@@ -101,7 +101,7 @@ struct ProjectIconRow: View {
     }
 
     private var detail: String {
-        if project.iconUploaded { return "Uploaded to \(machine.name)" }
+        if project.iconUploaded { return "Uploaded" }
         return project.icon == nil ? "None found in the clone" : "Found in the clone"
     }
 
@@ -130,13 +130,13 @@ struct ProjectIconRow: View {
         }
     }
 
-    /// Sends `data`, made into an icon, to the machine; `nil` clears the upload.
+    /// Sends `data`, made into an icon, to the machines; `nil` clears the uploads.
     private func upload(_ data: Data?) async {
         busy = true
         defer { busy = false }
         do {
             let png = try data.map { try ProjectIconUpload.png($0) }
-            try await fleet.setProjectIcon(project.projectId, on: machine.hostId, png: png)
+            try await fleet.setProjectIcon(project.projectId, png: png)
             error = nil
         } catch {
             self.error = describe(error)

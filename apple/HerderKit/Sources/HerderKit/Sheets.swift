@@ -503,13 +503,13 @@ struct ProjectSettingsForm: View {
                         .multilineTextAlignment(.trailing)
                         .autocorrectionDisabled()
                         .focused($editingName)
-                        .onSubmit { Task { await save() } }
+                        .onSubmit { Task { await saveAppearance() } }
                         .padding(.horizontal, 10)
                         .frame(maxWidth: 240, minHeight: 32)
                         .background(Theme.surface, in: .rect(cornerRadius: 7))
                 }
                 RowDivider()
-                ProjectIconRow(fleet: fleet, machine: machine, project: project, background: iconBackground,
+                ProjectIconRow(fleet: fleet, project: project, background: iconBackground,
                                error: $error)
                 RowDivider()
                 SettingRow(label: "Background", detail: "Fills the tile behind the icon") {
@@ -617,10 +617,10 @@ struct ProjectSettingsForm: View {
             loaded = true
         }
         .onChange(of: mode) { if loaded { Task { await save() } } }
-        .onChange(of: iconBackground) { if loaded { Task { await save() } } }
+        .onChange(of: iconBackground) { if loaded { Task { await saveAppearance() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
-        .onChange(of: editingName) { if !editingName { Task { await save() } } }
+        .onChange(of: editingName) { if !editingName { Task { await saveAppearance() } } }
     }
 
     /// The icon backgrounds to choose from; any other `#rrggbb` comes from the config file.
@@ -656,16 +656,29 @@ struct ProjectSettingsForm: View {
 
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        let name = trimmed.isEmpty ? defaultName : trimmed
-        guard name != project.name || mode != project.defaultPermissionMode || account != project.defaultAccount
-                || (command.isEmpty ? nil : command) != project.setupCommand
-                || iconBackground != project.iconBackground else { return }
+        guard mode != project.defaultPermissionMode || account != project.defaultAccount
+                || (command.isEmpty ? nil : command) != project.setupCommand else { return }
         do {
-            try await fleet.setProjectSettings(project.projectId, on: machine.hostId, name: name, mode: mode,
+            try await fleet.setProjectSettings(project.projectId, on: machine.hostId, name: appearanceName, mode: mode,
                                                account: account,
                                                setupCommand: command.isEmpty ? nil : command,
                                                iconBackground: iconBackground)
+            error = nil
+        } catch {
+            self.error = describe(error)
+        }
+    }
+
+    /// The name as the machines get it: blank goes back to the repository's.
+    private var appearanceName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? defaultName : trimmed
+    }
+
+    /// The name and background go to every machine, as the icon does, so all devices show them.
+    private func saveAppearance() async {
+        do {
+            try await fleet.setProjectAppearance(project.projectId, name: appearanceName, background: iconBackground)
             error = nil
         } catch {
             self.error = describe(error)
