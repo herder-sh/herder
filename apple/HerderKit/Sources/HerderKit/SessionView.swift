@@ -363,6 +363,8 @@ struct SessionView: View {
                         if let open { open(fork) } else { pushedFork = fork }
                     }
                 }
+                // Its own box per session: switching sessions keeps what each had typed.
+                .id(key)
             }
         }
         .frame(maxWidth: 784)
@@ -517,6 +519,20 @@ private struct Composer: View {
                 Text(refusal).font(.footnote).foregroundStyle(Theme.failure).padding(.horizontal, 18)
             }
         }
+        .onAppear {
+            if let kept = PromptDrafts.shared.load(PromptDrafts.key(key)) {
+                text = kept.text
+                images = kept.herderImages
+            }
+        }
+        // Kept a moment after the last keystroke, and at once on leaving.
+        .task(id: PromptDrafts.Content(text: text, images: images)) {
+            guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
+            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+        }
+        .onDisappear {
+            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+        }
     }
 
     /// The provider's accounts on the machine; picking one moves the session to it.
@@ -559,6 +575,7 @@ private struct Composer: View {
         guard !text.isEmpty || !images.isEmpty else { return }
         self.text = ""
         self.images = []
+        PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(key))
         sent()
         if model.state == .archived {
             Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }

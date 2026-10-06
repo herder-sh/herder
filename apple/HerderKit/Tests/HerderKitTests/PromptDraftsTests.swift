@@ -23,4 +23,14 @@ struct PromptDraftsTests {
         drafts.save(.init(text: "  \n", images: []), for: "p")
         #expect(drafts.load("p") == nil)
     }
+
+    @Test func eachSessionKeepsItsOwnDraft() {
+        let one = SessionKey(hostId: "mac", sessionId: "s1")
+        let two = SessionKey(hostId: "mac", sessionId: "s2")
+        drafts.save(.init(text: "for one", images: []), for: PromptDrafts.key(one))
+        drafts.save(.init(text: "for two", images: []), for: PromptDrafts.key(two))
+        #expect(drafts.load(PromptDrafts.key(one))?.text == "for one")
+        #expect(drafts.load(PromptDrafts.key(two))?.text == "for two")
+        #expect(drafts.load(PromptDrafts.key(SessionKey(hostId: "linux", sessionId: "s1"))) == nil)
+    }
 }

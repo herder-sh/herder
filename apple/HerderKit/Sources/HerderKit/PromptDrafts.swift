@@ -1,8 +1,8 @@
 import Foundation
 import Herder
 
-/// What was typed for a new session and not sent yet, kept on this device per project, so
-/// going elsewhere or quitting the app loses none of it.
+/// What was typed and not sent yet, kept on this device per project for a new session and
+/// per session for an open one, so going elsewhere or quitting the app loses none of it.
 struct PromptDrafts {
     struct Content: Codable, Equatable {
         struct Picture: Codable, Equatable {
@@ -22,14 +22,17 @@ struct PromptDrafts {
         var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty }
     }
 
-    /// The folder the drafts are files in, one per project.
+    /// The folder the drafts are files in, one per project or session.
     let directory: URL
 
     static let shared = PromptDrafts(directory: FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("herder/drafts", isDirectory: true))
 
-    /// The draft of a new session in the project or repository `key`, if there is one.
+    /// What a session's draft is kept by; apart from any project's or repository's.
+    static func key(_ session: SessionKey) -> String { "session:\(session.hostId)/\(session.sessionId)" }
+
+    /// The draft kept by `key`: a new session's project or repository, or a session's.
     func load(_ key: String) -> Content? {
         (try? Data(contentsOf: file(key))).flatMap { try? JSONDecoder().decode(Content.self, from: $0) }
     }
