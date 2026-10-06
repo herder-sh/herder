@@ -155,6 +155,23 @@ struct DraftModelTests {
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: picked.provider)?.accountId == "gpt")
     }
 
+    @Test func aProjectOpensOnTheMachineItWasLastStartedOnNotAnotherProjects() throws {
+        let one = "draft-machine-\(UUID())", two = "draft-machine-\(UUID())"
+        defer { [one, two].forEach { UserDefaults.standard.removeObject(forKey: "machine." + $0) } }
+        let projects = [one, two].map {
+            Project(projectId: $0, name: $0, paths: [], defaultPermissionMode: nil, defaultAccount: nil, setupCommand: nil)
+        }
+        let fleet = try #require(makeFleet([machine("a", name: "a", sessions: [], projects: projects),
+                                            machine("b", name: "b", sessions: [], projects: projects)]))
+        #expect(Draft.inProject(one, fleet: fleet)?.hostId == "a")
+        MachinePreference.remember("b", for: one)
+        #expect(Draft.inProject(one, fleet: fleet)?.hostId == "b")
+        #expect(Draft.inProject(two, fleet: fleet)?.hostId == "a")
+        // A remembered machine that no longer has the project gives way to one that does.
+        MachinePreference.remember("gone", for: two)
+        #expect(Draft.inProject(two, fleet: fleet)?.hostId == "a")
+    }
+
     @Test func movingToAMachineWithoutTheProviderFallsBackToItsDefault() throws {
         var both = machine("a", name: "a", sessions: [])
         both.accounts = [
