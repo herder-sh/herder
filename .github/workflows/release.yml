@@ -1,8 +1,9 @@
 name: release
 
 # A `v*` tag builds static musl binaries and the macOS app, and publishes them as a GitHub
-# Release. workflow_dispatch, and PRs that change this file or the app's release script, run the
-# same build without publishing.
+# Release; it also uploads the iOS app to TestFlight. workflow_dispatch runs the same, without
+# publishing the GitHub Release. PRs that change this file or the app's release script run the
+# builds only, without the TestFlight upload, which needs the App Store Connect secrets.
 
 on:
   push:
@@ -119,6 +120,36 @@ jobs:
           name: herder-app-macos-arm64
           path: dist/*
           if-no-files-found: error
+
+  testflight:
+    name: upload iOS app to TestFlight
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain and the iOS target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the Metal toolchain (SwiftTerm's renderer needs it) and XcodeGen
+        run: |
+          xcodebuild -downloadComponent MetalToolchain
+          brew install xcodegen
+      - name: Build the bindings and the xcframework
+        run: apple/scripts/build-ffi.sh aarch64-apple-ios
+      - name: Archive and upload the iOS app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          # Grows with every run of this workflow, so each upload of a version has a new build.
+          BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          export ASC_KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s' "$ASC_KEY" > "$ASC_KEY_PATH"
+          apple/scripts/upload-testflight.sh
 
   publish:
     name: publish
