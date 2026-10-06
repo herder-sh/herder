@@ -671,6 +671,7 @@ impl App {
         if self.grouping == Grouping::Projects {
             return self.project_rows(fold);
         }
+        let hidden = self.hidden();
         let mut rows = Vec::new();
         for machine in &self.machines {
             rows.push(Row::Machine(machine.host_id.clone()));
@@ -684,7 +685,7 @@ impl App {
                         host_id: machine.host_id.clone(),
                         session_id: head.session_id.clone(),
                     })
-                    .filter(|key| !self.shadowed(key) && !self.hidden(key))
+                    .filter(|key| !self.shadowed(key) && !hidden.contains(key))
                     .collect()
             };
             if machine.hosts.is_empty() {
@@ -703,10 +704,35 @@ impl App {
         rows
     }
 
-    /// Whether the session list leaves `key`'s session out: it is archived, and archived
-    /// sessions are hidden.
-    pub fn hidden(&self, key: &SessionKey) -> bool {
-        !self.show_archived && self.archived(key)
+    /// The sessions the session list leaves out: none while archived sessions are shown, else
+    /// the archived ones whose whole task tree is archived. A task tree with a session that is
+    /// not archived stays whole, so archiving a parent or a child never takes it apart.
+    pub(crate) fn hidden(&self) -> HashSet<SessionKey> {
+        if self.show_archived {
+            return HashSet::new();
+        }
+        let top = |key: &SessionKey| {
+            let mut top = key.clone();
+            let mut seen = HashSet::new();
+            while seen.insert(top.clone()) {
+                match self.primary(&top) {
+                    Some((parent, _)) => top = parent,
+                    None => break,
+                }
+            }
+            top
+        };
+        let live: HashSet<SessionKey> = self
+            .sessions
+            .keys()
+            .filter(|key| !self.archived(key))
+            .map(top)
+            .collect();
+        self.sessions
+            .keys()
+            .filter(|key| self.archived(key) && !live.contains(&top(key)))
+            .cloned()
+            .collect()
     }
 
     /// Whether `key`'s session is archived, by its events or, until they load, its listing.
@@ -736,7 +762,8 @@ impl App {
     }
 
     /// The session rows of `keys`, given oldest first: newest first, each followed by its
-    /// children among `keys`, oldest first, unless it is folded.
+    /// children among `keys`, unless it is folded: the live ones oldest first, then the
+    /// archived ones.
     pub(crate) fn forest(&self, keys: &[SessionKey], fold: bool) -> Vec<Row> {
         let listed: HashSet<&SessionKey> = keys.iter().collect();
         let parent = |key: &SessionKey| {
@@ -768,7 +795,8 @@ impl App {
             if fold && self.folded.contains(key) {
                 continue;
             }
-            if let Some(kids) = children.get(key) {
+            if let Some(kids) = children.get_mut(key) {
+                kids.sort_by_key(|kid| self.archived(kid));
                 stack.extend(kids.iter().rev().map(|kid| (*kid, depth + 1)));
             }
         }
@@ -979,6 +1007,70 @@ mod tests {
         assert_eq!(
             app.rows(),
             [Row::Machine(HostId::new("h1")), session("h1", "s3", 0)]
+        );
+    }
+
+    fn archive(app: &mut App, id: &str) {
+        fake::feed(
+            app,
+            "h1",
+            id,
+            fake::update(id, 2, vec![fake::status(SessionStatus::Archived)], vec![]),
+        );
+    }
+
+    #[test]
+    fn archiving_a_parent_keeps_its_children_under_it() {
+        let mut app = fake::tree();
+        archive(&mut app, "s2");
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s2", 0),
+                session("h1", "s3", 1),
+                session("h1", "s4", 1),
+                session("h1", "s1", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn archiving_a_child_keeps_it_under_its_live_parent_after_the_live_children() {
+        let mut app = fake::tree();
+        archive(&mut app, "s3");
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s2", 0),
+                session("h1", "s4", 1),
+                session("h1", "s3", 1),
+                session("h1", "s1", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_task_tree_archived_whole_is_hidden_until_archived_sessions_are_shown() {
+        let mut app = fake::tree();
+        for id in ["s2", "s3", "s4"] {
+            archive(&mut app, id);
+        }
+        assert_eq!(
+            app.rows(),
+            [Row::Machine(HostId::new("h1")), session("h1", "s1", 0)]
+        );
+        app.show_archived = true;
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s2", 0),
+                session("h1", "s3", 1),
+                session("h1", "s4", 1),
+                session("h1", "s1", 0),
+            ]
         );
     }
 

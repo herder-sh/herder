@@ -124,13 +124,14 @@ impl App {
     pub(crate) fn project_rows(&self, fold: bool) -> Vec<Row> {
         let mut projects: BTreeMap<(bool, String, Option<ProjectId>), Vec<SessionKey>> =
             BTreeMap::new();
+        let hidden = self.hidden();
         for machine in &self.machines {
             for head in &machine.sessions {
                 let key = SessionKey {
                     host_id: machine.host_id.clone(),
                     session_id: head.session_id.clone(),
                 };
-                if self.shadowed(&key) || self.hidden(&key) {
+                if self.shadowed(&key) || hidden.contains(&key) {
                     continue;
                 }
                 let project = self.project_of(&key);
