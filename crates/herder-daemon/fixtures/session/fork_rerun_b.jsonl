@@ -1,0 +1,5 @@
+# Its fork on another host: the handed-off prompt runs again, with its image, unprompted.
+{"expect": {"type": "send_prompt", "turn_id": "b-turn-1", "text": "Fix it.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpzY3JlZW5zaG90"}]}}
+{"emit": {"type": "turn_started", "turn_id": "b-turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-2", "turn_id": "b-turn-1", "body": {"type": "assistant_message", "text": "Fixed."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "b-turn-1"}}

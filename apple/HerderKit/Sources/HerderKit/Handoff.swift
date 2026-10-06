@@ -55,9 +55,12 @@ extension Fleet {
 
     /// Forks `key` onto `hostId`, on `accountId` or the machine's default for the session's
     /// provider, showing it in `handoffs` meanwhile; returns the fork to open. A failure shows
-    /// in a toast.
+    /// in a toast. Handed off mid-turn, the session's turn runs again on the other machine, so
+    /// its own is interrupted once the fork is made, as far as its machine can be reached: the
+    /// original must not go on with the same work unseen.
     func handOff(_ key: SessionKey, to hostId: HostId, account accountId: AccountId?) async -> SessionKey? {
         guard handoffs[key] == nil else { return nil }
+        let midTurn = hostId != key.hostId && [.running, .needsYou].contains(sessions[key]?.status)
         let name = machines.first { $0.hostId == hostId }?.name ?? hostId
         handoffs[key] = hostId
         defer { handoffs[key] = nil }
@@ -69,6 +72,9 @@ extension Fleet {
             }
             let fork = SessionKey(hostId: hostId, sessionId: sessionId)
             forkOrigins[fork] = ForkOrigin(sessionId: original, hostId: fromHost)
+            if midTurn {
+                Task { _ = try? await client.send(hostId: key.hostId, command: .interrupt(sessionId: key.sessionId)) }
+            }
             toast = Toast(text: hostId == key.hostId ? "Forked the session" : "Handed off to \(name)")
             return fork
         } catch {

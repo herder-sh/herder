@@ -11,13 +11,21 @@
 //! the pull requests and other branches the original tracked, so it owns only its own branch.
 //! Its `session_created` names this host's clone of the repository, its new worktree and its
 //! new branch. The worktree is restored from the original's latest checkpoint: a local one
-//! when the original ran here, else one on `origin` ([`checkpoint::fetch_latest`]). A turn the
-//! original had open is closed as after a restart, a read-only original's fork is idle, and
-//! the fork moves to an account of this host by `account_switched` when the original's is not
-//! here. Its journal marks the fork with `session_forked`, naming the original and its host,
-//! and both that and the account switch are `by` the user who forked it; its next prompt starts the CLI seeded with the transcript, as after any switch. The
-//! images its prompts carried are kept for it under their ids, so `get_attachment` answers as
-//! for the original.
+//! when the original ran here, else one on `origin` ([`checkpoint::fetch_latest`]). A
+//! read-only original's fork is idle, and the fork moves to an account of this host by
+//! `account_switched` when the original's is not here. Its journal marks the fork with
+//! `session_forked`, naming the original and its host, and both that and the account switch
+//! are `by` the user who forked it; its next prompt starts the CLI seeded with the transcript,
+//! as after any switch. The images its prompts carried are kept for it under their ids, so
+//! `get_attachment` answers as for the original.
+//!
+//! A turn the original had open is failed on the fork, its open approvals expired, as after a
+//! restart, but saying it was handed off. When a user's prompt opened it, that prompt, with its
+//! images, runs again on the fork right away, as failover retries a turn: queued `by` the
+//! same user, it starts the CLI seeded with the transcript, which holds the failed turn's
+//! partial items. A turn opened otherwise, by an agent's message or a follow-up,
+//! which belong to the host they were sent to, leaves the fork `needs_you`. The original is not
+//! told: its client interrupts it.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,8 +36,9 @@ use herder_protocol::{
     AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, HistoryPart, HostId, Image,
     ItemBody, ProjectId, Provider, Relay, SessionId, SessionStatus, UserId,
 };
+use herder_store::QueuedPrompt;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{SessionManager, actor, attachments, error, internal, worktree_error};
 use crate::vault::fork::FromVault;
@@ -410,6 +419,7 @@ impl SessionManager {
             *created_worktree = worktree.path.to_string_lossy().into_owned();
             branch.clone_from(&worktree.branch);
         }
+        let rerun = open_prompt(&events);
         let journal = &inner.journal;
         journal.import(events).await.map_err(internal)?;
         let body = EventBody::SessionForked {
@@ -444,11 +454,30 @@ impl SessionManager {
             .await
             .map_err(internal)?
             .ok_or_else(|| super::not_found(&session_id))?;
-        if matches!(
+        let open = matches!(
             session.status,
             SessionStatus::Running | SessionStatus::NeedsYou | SessionStatus::WaitingForCapacity
-        ) {
-            actor::close_abandoned_turn(journal, &inner.tasks, &session)
+        );
+        let rerun = rerun.filter(|_| open);
+        if open {
+            let (why, then) = match &rerun {
+                Some(prompt) => {
+                    // Queued before the turn closes, so it is not settled as if nothing ran.
+                    journal
+                        .set_queued_prompts(session_id.clone(), vec![prompt.clone()])
+                        .await
+                        .map_err(internal)?;
+                    (
+                        "the session was handed off during this turn; its prompt runs again here",
+                        SessionStatus::Running,
+                    )
+                }
+                None => (
+                    "the session was handed off during this turn",
+                    SessionStatus::NeedsYou,
+                ),
+            };
+            actor::close_abandoned_turn(journal, &inner.tasks, &session, why, then)
                 .await
                 .map_err(internal)?;
         }
@@ -456,6 +485,12 @@ impl SessionManager {
             && worktree.branch.is_some()
         {
             prs.install(&session_id, &worktree.path).await;
+        }
+        // The fork's actor runs the queued prompt; were it not to start, the next daemon would.
+        if rerun.is_some()
+            && let Err(err) = self.actor(&session_id).await
+        {
+            warn!(%session_id, "cannot run the handed-off prompt: {}", err.message);
         }
         info!(
             %session_id,
@@ -541,4 +576,39 @@ impl SessionManager {
             .await
             .map(|_| ())
     }
+}
+
+/// The prompt a user sent for a turn `events` leave open, to run again; `None` when no turn
+/// is open, or an agent's message or a follow-up opened it.
+fn open_prompt(events: &[Event]) -> Option<QueuedPrompt> {
+    let mut open = None;
+    for event in events {
+        match &event.body {
+            EventBody::ItemAdded { item } => {
+                if let ItemBody::UserMessage { text, attachments } = &item.body {
+                    open = (item.agent_message.is_none() && item.follow_up.is_none()).then(|| {
+                        let prompt = QueuedPrompt {
+                            prompt_id: actor::new_prompt_id(),
+                            agent_message: None,
+                            by: event.by.clone(),
+                            text: text.clone(),
+                            attachments: attachments.clone(),
+                            retry: false,
+                            retry_at: None,
+                        };
+                        (item.turn_id.clone(), prompt)
+                    });
+                }
+            }
+            EventBody::TurnCompleted { turn_id, .. }
+            | EventBody::TurnInterrupted { turn_id }
+            | EventBody::TurnFailed { turn_id, .. }
+                if open.as_ref().is_some_and(|(open, _)| open == turn_id) =>
+            {
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    open.map(|(_, prompt)| prompt)
 }

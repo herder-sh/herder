@@ -2678,8 +2678,9 @@ async fn stop(mut adapter: AdapterSession) {
     while adapter.events.recv().await.is_some() {}
 }
 
-/// Closes a turn left open by a daemon that stopped mid-turn, expiring its open approvals, and
-/// settles the session's status.
+/// Closes a turn left open by a daemon that stopped mid-turn, or by a handoff, failing it with
+/// `why`, expiring its open approvals, and settles the session's status: `then` once it closed
+/// a turn.
 ///
 /// An open approval expires, not left open: the CLI that asked is gone with the old daemon,
 /// so no answer can reach it, and the next turn starts a new CLI that asks afresh if it still
@@ -2690,6 +2691,8 @@ pub(super) async fn close_abandoned_turn(
     journal: &Journal,
     tasks: &Tasks,
     session: &Session,
+    why: &str,
+    then: SessionStatus,
 ) -> Result<()> {
     let mut open = None;
     let mut approvals = Vec::new();
@@ -2716,7 +2719,7 @@ pub(super) async fn close_abandoned_turn(
         Some(turn_id) => {
             let error = TurnError {
                 class: ErrorClass::Transient,
-                message: "the daemon stopped during this turn".to_owned(),
+                message: why.to_owned(),
             };
             let summary = failed(&error);
             let body = EventBody::TurnFailed {
@@ -2724,7 +2727,7 @@ pub(super) async fn close_abandoned_turn(
                 error,
             };
             journal.record(id.clone(), None, body).await?;
-            (SessionStatus::NeedsYou, Some((turn_id, summary)))
+            (then, Some((turn_id, summary)))
         }
         None if matches!(
             session.status,
@@ -2822,7 +2825,7 @@ fn fatal(message: String) -> TurnError {
 }
 
 /// A new id for a queued prompt.
-fn new_prompt_id() -> PromptId {
+pub(super) fn new_prompt_id() -> PromptId {
     PromptId::new(ulid::Ulid::new().to_string())
 }
 

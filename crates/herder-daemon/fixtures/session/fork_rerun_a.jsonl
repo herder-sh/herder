@@ -1,0 +1,5 @@
+# A session handed off mid-turn: its only prompt, with an image, is still running.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Fix it.", "images": [{"media_type": "image/png", "data": "iVBORw0KGgpzY3JlZW5zaG90"}]}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "item_completed", "item": {"id": "item-1", "turn_id": "turn-1", "body": {"type": "assistant_message", "text": "On it."}}}}
+{"sleep_ms": 600000}
