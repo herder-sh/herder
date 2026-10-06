@@ -177,10 +177,10 @@ private struct MomentRow: View {
             }
         case .pr(let pr, let change):
             line("arrow.triangle.pull", pr.state.color) {
-                Text("**#\(pr.number)** \(change) · \(pr.title)").foregroundStyle(Theme.text).lineLimit(2)
+                Text("**#\(String(pr.number))** \(change) · \(pr.title)").foregroundStyle(Theme.text).lineLimit(2)
             }
         case .prUnlinked(let number):
-            line("arrow.triangle.pull", Theme.tertiary) { Text("#\(number) unlinked").foregroundStyle(Theme.secondary) }
+            line("arrow.triangle.pull", Theme.tertiary) { Text(verbatim: "#\(number) unlinked").foregroundStyle(Theme.secondary) }
         case .approval(let summary):
             line("hand.raised.fill", Theme.accent) { Text(summary).foregroundStyle(Theme.text).lineLimit(2) }
         case .decided(let decision, let byUser):

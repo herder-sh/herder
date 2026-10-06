@@ -58,7 +58,7 @@ struct PRBadge: View {
         HStack(spacing: 3) {
             Image(systemName: pr.state == .merged ? "arrow.triangle.merge" : "arrow.triangle.pull")
                 .imageScale(.small)
-            Text("#\(pr.number)")
+            Text(verbatim: "#\(pr.number)")
             if pr.state == .open || pr.state == .draft {
                 switch pr.ci {
                 case .passing: Image(systemName: "checkmark").foregroundStyle(Theme.success)
