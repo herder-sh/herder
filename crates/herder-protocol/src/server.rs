@@ -332,6 +332,11 @@ pub struct Account {
     /// Config directory on the host; absent for the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Email address the provider login is signed in as, as its CLI last reported it; absent
+    /// until it reports one, and for a login without one, such as an API key. Accounts with
+    /// the same provider and email share one login, and so its limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
 }

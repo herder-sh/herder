@@ -1082,6 +1082,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
             provider,
+            email: None,
             usage: vec![
                 UsageWindow {
                     window: "five_hour".into(),

@@ -11,7 +11,9 @@ use std::time::Duration;
 use herder_adapters::codex;
 use herder_adapters::fixture::{Fixture, Record};
 use herder_adapters::transport::Transport;
-use herder_adapters::{Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest};
+use herder_adapters::{
+    AccountUsage, Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest,
+};
 use herder_protocol::{
     ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
     Timestamp, TurnError, TurnId, TurnUsage, UsageWindow,
@@ -745,24 +747,31 @@ fn fixtures_match_the_codex_schema() {
 
 #[tokio::test]
 async fn read_usage_reads_the_limits_without_opening_a_thread() {
-    // The recorded handshake, then the rate limits as the second request; stdin is closed
-    // right after, with no thread/start.
+    // The recorded handshake up to account/read, its answer, then the rate limits; stdin is
+    // closed right after, with no thread/start.
     let fixture = turn_prefix(
-        5,
-        r#"{"dir":"in","line":"{\"id\":1,\"method\":\"account/rateLimits/read\",\"params\":null}"}
-{"dir":"out","line":"{\"id\":1,\"result\":{\"rateLimits\":{\"limitId\":\"codex\",\"primary\":{\"usedPercent\":25,\"windowDurationMins\":10080,\"resetsAt\":1791052121},\"secondary\":null},\"rateLimitsByLimitId\":null}}"}
+        6,
+        r#"{"dir":"out","line":"{\"id\":1,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"dev@example.com\",\"planType\":\"pro\"},\"requiresOpenaiAuth\":true}}"}
+{"dir":"in","line":"{\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":null}"}
+{"dir":"out","line":"{\"id\":2,\"result\":{\"rateLimits\":{\"limitId\":\"codex\",\"primary\":{\"usedPercent\":25,\"windowDurationMins\":10080,\"resetsAt\":1791052121},\"secondary\":null},\"rateLimitsByLimitId\":null}}"}
 {"dir":"in","eof":true}
 {"exit":0}
 "#,
     );
-    let windows = timeout(
+    let usage = timeout(
         TIMEOUT,
         codex::read_usage(Transport::replay(fixture), &request(Vec::new())),
     )
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(windows, [weekly(25.0)]);
+    assert_eq!(
+        usage,
+        AccountUsage {
+            email: Some("dev@example.com".into()),
+            windows: vec![weekly(25.0)],
+        }
+    );
 }
 
 /// A turn's tokens, the `last` of its `thread/tokenUsage/updated`s added up with the cached

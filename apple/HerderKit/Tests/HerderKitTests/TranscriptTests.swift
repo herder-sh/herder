@@ -212,7 +212,7 @@ struct TranscriptTests {
 @MainActor
 struct DefaultAccountTests {
     private func account(_ id: String, _ provider: String, used: Double) -> Account {
-        Account(accountId: id, provider: provider, label: id, configDir: nil, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)])
+        Account(accountId: id, provider: provider, label: id, configDir: nil, email: nil, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)])
     }
 
     @Test func theProjectsAccountWinsElseTheLeastUsed() throws {

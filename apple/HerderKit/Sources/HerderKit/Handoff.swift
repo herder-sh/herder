@@ -26,7 +26,7 @@ extension Fleet {
 
     /// The machine section of a session's menus: the current machine first, each other one
     /// handing the session off when picked, or with its accounts of the provider to pick from
-    /// when it has several; "Fork Session" forks onto the current machine. `handOff` gets the
+    /// when it has several logins; "Fork Session" forks onto the current machine. `handOff` gets the
     /// machine and the account, `nil` for the machine's default.
     func machineSection(for key: SessionKey, provider: Provider?, forkable: Bool,
                         handOff: @escaping (HostId, AccountId?) -> Void) -> SettingsSection {
@@ -36,10 +36,10 @@ extension Fleet {
         }.map { option in
             guard !option.current, option.unavailable == nil,
                   let machine = machines.first(where: { $0.hostId == option.id }) else { return option }
-            let accounts = machine.accounts.filter { $0.provider == provider }
+            let accounts = SettingsOption.accounts(machine.accounts.filter { $0.provider == provider }, current: nil)
             guard accounts.count > 1 else { return option }
             var option = option
-            option.children = SettingsOption.accounts(accounts, current: nil)
+            option.children = accounts
             return option
         }
         return SettingsSection(

@@ -433,10 +433,19 @@ impl Inner {
         }
     }
 
+    /// Takes a usage probe's answer, as [`Self::report_usage`] does a session's report.
+    fn probed_usage(&self, account_id: &AccountId, usage: herder_adapters::AccountUsage) {
+        self.limits.worked(account_id);
+        if let Some(usage) = self.usage.probed(account_id, usage) {
+            let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
+            self.journal.sink().accounts_changed(&accounts);
+        }
+    }
+
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
     pub(super) fn limit_hit(&self, account_id: &AccountId) {
         let usage = self.usage.all();
-        let windows = usage.get(account_id).map_or(&[][..], Vec::as_slice);
+        let windows = usage.windows.get(account_id).map_or(&[][..], Vec::as_slice);
         self.limits.hit(account_id, windows, Timestamp::now());
     }
 
@@ -460,6 +469,7 @@ impl Inner {
     pub(super) fn limit_reset(&self, account_id: &AccountId) -> Option<Timestamp> {
         self.usage
             .all()
+            .windows
             .get(account_id)?
             .iter()
             .filter(|window| window.used_percent >= 100.0)
@@ -478,7 +488,7 @@ impl Inner {
         let choice = failover::Choice {
             accounts: &accounts,
             adapters: &self.adapters,
-            usage: &self.usage.all(),
+            usage: &self.usage.all().windows,
             limits: &self.limits,
             now: Timestamp::now(),
         };
@@ -1553,7 +1563,7 @@ impl SessionManager {
             .all(|session| session.status == herder_protocol::SessionStatus::Archived);
         let account = save(&previous, may_change_directory)?;
         if account.config_dir != previous.config_dir {
-            inner.usage.all().remove(account_id);
+            inner.usage.forget(account_id);
         }
         inner
             .accounts
@@ -1605,9 +1615,9 @@ impl SessionManager {
                     .unwrap_or_default()
             },
             Arc::clone(&inner.refresh_usage),
-            move |account_id, windows| {
+            move |account_id, usage| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.report_usage(account_id, windows);
+                    inner.probed_usage(account_id, usage);
                 }
             },
             inner.shutdown.clone(),

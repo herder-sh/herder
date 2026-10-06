@@ -294,6 +294,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         account_id: AccountId::new(id),
         provider: Provider::Claude,
         label: label.to_owned(),
+        email: None,
         usage: Vec::new(),
     }
 }

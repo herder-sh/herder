@@ -381,6 +381,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             account_id: account.clone(),
             provider: Provider::Claude,
             label: "Work".into(),
+            email: None,
             usage: Vec::new(),
         }]
     );
