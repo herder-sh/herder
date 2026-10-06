@@ -305,17 +305,22 @@ public final class Fleet {
         Self.icon(of: projectId, on: machines, fetched: projectIcons)
     }
 
-    /// The first fetched icon any machine lists for the project, with that machine's
-    /// background for it; without one, the first background a machine sets for it.
+    /// The project's icon every device shows: an uploaded icon before one found in a clone,
+    /// then the machine with the lowest id, with that machine's background for it; without a
+    /// fetched icon, the background of the lowest-id machine that sets one. Choosing by id keeps
+    /// the choice from hanging on the order this device paired its machines in.
     nonisolated static func icon(
         of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]
     ) -> ProjectIconImage? {
         guard let projectId else { return nil }
-        let listed = machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId } }
-        let iconed = listed.compactMap { project in
-            project.icon.flatMap { fetched[$0] }.map { ProjectIconImage(data: $0, background: project.iconBackground) }
+        let listed = machines.sorted { $0.hostId < $1.hostId }
+            .compactMap { machine in machine.projects.first { $0.projectId == projectId } }
+        let iconed = listed.compactMap { project -> (uploaded: Bool, image: ProjectIconImage)? in
+            project.icon.flatMap { fetched[$0] }
+                .map { (project.iconUploaded, ProjectIconImage(data: $0, background: project.iconBackground)) }
         }
-        return iconed.first ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
+        return (iconed.first(where: \.uploaded) ?? iconed.first)?.image
+            ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
     }
 
     /// Fetches each icon the machines list and this app has not got, once per hash.
@@ -359,12 +364,36 @@ public final class Fleet {
             setupCommand: setupCommand, iconBackground: iconBackground))
     }
 
-    /// Uploads a PNG as a project's icon on a machine, or clears the upload when `png` is nil
-    /// so the machine finds one in the clone again; owners only. The project list that follows
-    /// carries the new icon hash, which `fetchProjectIcons` fetches.
-    func setProjectIcon(_ projectId: ProjectId, on hostId: HostId, png: Data?) async throws {
+    /// Uploads a PNG as a project's icon on every connected machine this device owns that
+    /// lists it, so every device shows the same one, or clears the uploads when `png` is nil
+    /// so the machines find one in the clone again. The project lists that follow carry the
+    /// new icon hash, which `fetchProjectIcons` fetches.
+    func setProjectIcon(_ projectId: ProjectId, png: Data?) async throws {
         let icon = png.map { Herder.Image(mediaType: "image/png", data: $0) }
-        _ = try await client.send(hostId: hostId, command: .setProjectIcon(projectId: projectId, icon: icon))
+        for (machine, _) in ownedMachines(listing: projectId) {
+            _ = try await client.send(hostId: machine.hostId, command: .setProjectIcon(projectId: projectId, icon: icon))
+        }
+    }
+
+    /// Sets a project's name and the colour its tile fills with on every connected machine
+    /// this device owns that lists it, so every device shows the same, keeping each machine's
+    /// other settings for the project.
+    func setProjectAppearance(_ projectId: ProjectId, name: String, background: String?) async throws {
+        for (machine, project) in ownedMachines(listing: projectId)
+        where project.name != name || project.iconBackground != background {
+            try await setProjectSettings(projectId, on: machine.hostId, name: name, mode: project.defaultPermissionMode,
+                                         account: project.defaultAccount, setupCommand: project.setupCommand,
+                                         iconBackground: background)
+        }
+    }
+
+    /// The connected machines this device owns that list the project, with their listing.
+    private func ownedMachines(listing projectId: ProjectId) -> [(Machine, Project)] {
+        machines.compactMap { machine in
+            guard machine.role == .owner, machine.connection == .connected,
+                  let project = machine.projects.first(where: { $0.projectId == projectId }) else { return nil }
+            return (machine, project)
+        }
     }
 
     /// Stops a machine managing a project; its clones stay on disk. The machine refuses while
