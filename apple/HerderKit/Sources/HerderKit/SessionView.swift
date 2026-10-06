@@ -59,7 +59,7 @@ struct SessionView: View {
             ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if model?.loaded != true {
+                    if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
                     } else if blocks.isEmpty && model?.status != .waitingForCapacity {
                         Text("No turns yet. Send a prompt to start.").foregroundStyle(Theme.tertiary)
