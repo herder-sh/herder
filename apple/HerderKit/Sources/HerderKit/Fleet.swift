@@ -21,6 +21,8 @@ public final class Fleet {
     private(set) var archiving: Set<SessionKey> = [] { didSet { refreshLists() } }
     /// An archive the machine refused, for the user to decide on.
     var archiveRefusal: ArchiveRefusal?
+    /// The session the user is typing a new title for.
+    var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
@@ -425,6 +427,17 @@ public final class Fleet {
         } catch {
             if toast == archived { toast = nil }
             archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error))
+        }
+    }
+
+    /// Sets a session's title; a refusal, such as an empty title, shows as a toast.
+    func rename(_ key: SessionKey, to title: String) async {
+        do {
+            _ = try await client.send(hostId: key.hostId,
+                                      command: .renameSession(sessionId: key.sessionId, title: title))
+            refusals[key] = nil
+        } catch {
+            toast = Toast(text: "Could not rename: \(describe(error))", failed: true)
         }
     }
 

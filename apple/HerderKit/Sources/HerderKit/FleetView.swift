@@ -92,6 +92,13 @@ struct FleetView: View {
         } message: { refusal in
             Text(refusal.reason)
         }
+        .alert("Rename Session", isPresented: Binding(get: { fleet.renaming != nil }, set: { if !$0 { fleet.renaming = nil } })) {
+            RenameSessionField(title: fleet.renaming.flatMap { fleet.sessions[$0]?.title } ?? "") { title in
+                guard let key = fleet.renaming else { return }
+                Task { await fleet.rename(key, to: title) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .onChange(of: draft) {
             // A draft shows in a list's session pane; Machines has none.
             if let draft {
@@ -298,7 +305,7 @@ struct SessionGroup: View {
 }
 
 /// A session row that opens the session, into `selection` when given, else by pushing it,
-/// with archiving at hand: a button on hover, and in the context menu.
+/// with archiving at hand: a button on hover, and in the context menu beside renaming.
 struct SessionLink: View {
     let session: SessionSummary
     let fleet: Fleet
@@ -330,6 +337,9 @@ struct SessionLink: View {
         }
         .onHover { hovering = $0 }
         .contextMenu {
+            if session.state.renamable {
+                Button("Rename…", systemImage: "pencil") { fleet.renaming = session.key }
+            }
             if session.state != .archived {
                 Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
             }
@@ -450,6 +460,22 @@ struct ProjectView: View {
                 Button("New Session", systemImage: "plus") { draft = started }
                     .disabled(started == nil)
             }
+        }
+    }
+}
+
+/// The field of the rename alert, starting from the session's current title.
+private struct RenameSessionField: View {
+    let title: String
+    let rename: (String) -> Void
+    @State private var typed = ""
+
+    var body: some View {
+        TextField("Title", text: $typed)
+            .onAppear { typed = title }
+        Button("Rename") {
+            let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && trimmed != title { rename(trimmed) }
         }
     }
 }
