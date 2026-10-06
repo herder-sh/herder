@@ -41,7 +41,20 @@ open. To install it on an Apple silicon Mac:
    Or right-click the app, choose **Open**, then **Open** again (on recent macOS: try to open
    it once, then **System Settings › Privacy & Security › Open Anyway**).
 
-There is no iOS build to install yet: TestFlight needs an Apple Developer account.
+The iOS app goes out through TestFlight. The `release` workflow's `testflight` job runs
+`apple/scripts/upload-testflight.sh` on each `v*` tag, and on workflow_dispatch: it archives the
+app in Release with the herder version and the run number as its build, and uploads it to App
+Store Connect. Xcode signs it with cloud-managed certificates through an App Store Connect API
+key, so the repo keeps no certificate or profile, only these secrets:
+
+- `APPLE_TEAM_ID`: the Apple Developer team the app belongs to.
+- `ASC_KEY_ID`, `ASC_ISSUER_ID`: the App Store Connect API key (Users and Access › Integrations),
+  with the Admin role, which cloud signing needs.
+- `ASC_KEY`: the contents of the key's `.p8` file.
+
+App Store Connect needs an app record for `sh.herder.Herder` before the first upload. Once a
+build has processed, the testers in the app's internal TestFlight group get it in the TestFlight
+app.
 
 ## Test
 
