@@ -670,6 +670,8 @@ struct DraftSessionView: View {
     let fleet: Fleet
     let draft: Draft
     let created: (SessionKey) -> Void
+    /// Moves the draft to another project, picked from its heading.
+    let moved: (Draft) -> Void
     @State private var hostId: HostId = ""
     /// The provider and model it starts on; picking another provider's model switches to it.
     @State private var choice = ModelCatalog.Choice(provider: "", model: "")
@@ -682,6 +684,7 @@ struct DraftSessionView: View {
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
+    @State private var picking = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// A phone's width: the chat sits closer to the edges and the footer says less.
@@ -730,11 +733,7 @@ struct DraftSessionView: View {
                     removal: .opacity
                 ))
             } else {
-                Text("What should we build in \(machine?.name ?? "")/\(place)?")
-                    .font(.system(size: compact ? 24 : 30, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                    .multilineTextAlignment(.center)
-                    .transition(.opacity)
+                heading.transition(.opacity)
             }
             // Always present, so on send it slides down to where the session's composer sits.
             ComposerBox(
@@ -795,6 +794,49 @@ struct DraftSessionView: View {
         .onDisappear {
             if starting == nil { PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key) }
         }
+        .sheet(isPresented: $picking) {
+            ProjectPicker(fleet: fleet, newProject: false, picked: move(to:))
+        }
+    }
+
+    /// What it asks, with where it runs as a button that picks another project.
+    private var heading: some View {
+        let font = Font.system(size: compact ? 24 : 30, weight: .medium)
+        let project = Button { picking = true } label: {
+            HStack(spacing: 8) {
+                ProjectIcon(projectId: draft.projectId ?? draft.repo, name: place,
+                            image: fleet.projectIcon(draft.projectId), size: compact ? 24 : 30)
+                Text("\(machine?.name ?? "")/\(place)").lineLimit(1).truncationMode(.middle)
+                SwiftUI.Image(systemName: "chevron.down").font(.system(size: compact ? 13 : 15, weight: .bold))
+                    .foregroundStyle(Theme.secondary)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Start in another project")
+        .accessibilityIdentifier("draft-project")
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Text("What should we build in")
+                HStack(spacing: 2) { project; Text("?") }
+            }
+            VStack(spacing: 6) {
+                Text("What should we build in")
+                HStack(spacing: 2) { project; Text("?") }
+            }
+        }
+        .font(font)
+        .foregroundStyle(Theme.text)
+    }
+
+    /// Moves to the picked project, taking the prompt along; the draft left behind is forgotten.
+    private func move(to picked: Draft) {
+        guard picked.key != draft.key else { return }
+        PromptDrafts.shared.move(PromptDrafts.Content(text: text, images: images), from: draft.key, to: picked.key)
+        // Emptied, so leaving this draft does not keep the prompt here again.
+        text = ""
+        images = []
+        moved(picked)
     }
 
     /// Every account on the machine, of each provider; picking another provider's account
