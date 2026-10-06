@@ -359,6 +359,9 @@ struct SessionView: View {
                 }
                 Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
                 Button("Link Pull Request…", systemImage: "link") { linking = true }
+                if model.state.renamable {
+                    Button("Rename…", systemImage: "pencil") { fleet.renaming = key }
+                }
                 Divider()
                 Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
                     .disabled(fleet.archiving.contains(key))

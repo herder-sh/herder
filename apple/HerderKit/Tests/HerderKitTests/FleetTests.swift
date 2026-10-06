@@ -60,7 +60,7 @@ struct FleetTests {
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func aSessionStartedFromTheAppShowsLiveAndArchives() async throws {
+    func aSessionStartedFromTheAppShowsLiveRenamesAndArchives() async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("cannot open a fresh profile")
@@ -80,6 +80,10 @@ struct FleetTests {
             fleet.lists.home.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
         })
         #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
+
+        await fleet.rename(key, to: "Greeting")
+        #expect(await eventually { fleet.lists.home.contains { $0.key == key && $0.title == "Greeting" } })
+        #expect(fleet.toast == nil)
 
         await fleet.archive(key)
         #expect(await eventually { fleet.sessions[key]?.state == .archived })
