@@ -86,7 +86,8 @@
 //! start with `~/`, must otherwise be absolute, and need not exist yet: logging in creates it.
 //! herder never looks inside. Two accounts of one provider cannot share a config dir, as they
 //! would be one login, and a Claude account cannot name `~/.claude`: `CLAUDE_CONFIG_DIR`
-//! pointed there is not Claude's default login, so omit `config_dir` for that.
+//! pointed there is not Claude's default login, so omit `config_dir` for that. An account added
+//! from a client naming `~/.claude` is saved without one.
 //!
 //! # Tasks
 //!
@@ -1479,6 +1480,19 @@ fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
     result
 }
 
+/// Where `provider`'s CLI keeps the login it uses without a config dir, when pointing its config
+/// dir variable there is another login: `~/.claude` for Claude, whose default login keeps its
+/// settings in `~/.claude.json` instead.
+pub(crate) fn default_login_dir(
+    provider: &Provider,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Option<PathBuf>> {
+    if *provider != Provider::Claude {
+        return Ok(None);
+    }
+    resolve_path(Path::new("~/.claude"), env).map(Some)
+}
+
 /// Validates the `[[accounts]]` entries and resolves their config dirs.
 fn resolve_accounts(
     entries: Vec<AccountFile>,
@@ -1505,15 +1519,13 @@ fn resolve_accounts(
                 "account {id}: config_dir {} is not a directory",
                 dir.display()
             );
-            if provider == Provider::Claude {
-                let default = resolve_path(Path::new("~/.claude"), env)?;
-                ensure!(
-                    *dir != default,
-                    "account {id}: config_dir {} is where claude keeps its default login, \
-                     which CLAUDE_CONFIG_DIR does not reach; omit config_dir to use it",
-                    dir.display()
-                );
-            }
+            ensure!(
+                default_login_dir(&provider, env)?.as_ref() != Some(dir),
+                "account {id}: config_dir {} is where {} keeps its default login, \
+                 which its config dir variable does not reach; omit config_dir to use it",
+                dir.display(),
+                provider.as_str()
+            );
         }
         ensure!(
             logins.insert((provider.clone(), config_dir.clone())),

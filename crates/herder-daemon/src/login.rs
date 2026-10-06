@@ -2,7 +2,9 @@
 //! logging an existing one in again the same way.
 //!
 //! Each login runs in the account's config dir, a new one herder creates, or one the owner names:
-//! empty, or already holding a login, but no other account's. The dir is handed to the
+//! empty, or already holding a login, but no other account's. Naming the dir where the CLI keeps
+//! its default login, when its config dir variable does not reach it (`~/.claude`), adds that
+//! default login: the login runs without a config dir and the account is saved without one. The dir is handed to the
 //! provider's CLI through its config dir variables, on a pseudo-terminal relayed to the owner who asked ([`crate::terminal`]). The
 //! owner completes the provider's own flow there, a device code or a URL to open and a code to
 //! paste back, so it works from another machine; nothing relies on a callback to localhost.
@@ -324,6 +326,33 @@ impl Logins {
         let default = format!("~/.{}-{account_id}", provider.as_str());
         let dir = resolve_path(Path::new(config_dir.unwrap_or(&default)), &env)
             .map_err(|err| error(ErrorCode::BadRequest, format!("config dir: {err:#}")))?;
+        let label = label.map_or_else(|| account_id.to_string(), str::to_owned);
+        if config::default_login_dir(provider, &env).is_ok_and(|login| login.as_ref() == Some(&dir))
+        {
+            // Pointing the CLI at this dir is another login: the account is the default one.
+            if let Some(other) = accounts
+                .iter()
+                .find(|a| a.provider == **provider && a.config_dir.is_none())
+            {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    format!(
+                        "account {} is the default {} login already",
+                        other.account_id,
+                        provider.as_str()
+                    ),
+                ));
+            }
+            let place = Place {
+                config_dir: None,
+                cwd: home(&env)?,
+            };
+            let purpose = Purpose::Add {
+                label,
+                created: false,
+            };
+            return Ok(login(inner, account_id, provider, program, place, purpose));
+        }
         if let Some(other) = accounts.iter().find(|a| {
             a.config_dir.as_deref().is_some_and(|other| {
                 resolve_path(Path::new(other), &env).is_ok_and(|other| other == dir)
@@ -343,10 +372,7 @@ impl Logins {
             config_dir: Some(dir.clone()),
             cwd: dir,
         };
-        let purpose = Purpose::Add {
-            label: label.map_or_else(|| account_id.to_string(), str::to_owned),
-            created,
-        };
+        let purpose = Purpose::Add { label, created };
         Ok(login(inner, account_id, provider, program, place, purpose))
     }
 
@@ -405,15 +431,7 @@ impl Logins {
                     ),
                 ));
             }
-            None => env("HOME")
-                .map(PathBuf::from)
-                .filter(|home| home.is_absolute())
-                .ok_or_else(|| {
-                    error(
-                        ErrorCode::BadRequest,
-                        "the login has nowhere to run: $HOME is not set".into(),
-                    )
-                })?,
+            None => home(&env)?,
         };
         let place = Place {
             config_dir: account.config_dir,
@@ -428,6 +446,19 @@ impl Logins {
             Purpose::Again,
         ))
     }
+}
+
+/// The home directory, where a login in the CLI's default config dir runs.
+fn home(env: &impl Fn(&str) -> Option<OsString>) -> Result<PathBuf, ErrorInfo> {
+    env("HOME")
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
+        .ok_or_else(|| {
+            error(
+                ErrorCode::BadRequest,
+                "the login has nowhere to run: $HOME is not set".into(),
+            )
+        })
 }
 
 /// `program`, the login of `account_id`, to run at `place` for `purpose`.
@@ -989,6 +1020,39 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(err.code, ErrorCode::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn naming_claudes_default_dir_adds_its_default_login() {
+        let f = fixture().await;
+        let mut login = f
+            .start("claude", Provider::Claude, Some("~/.claude"))
+            .unwrap();
+        // The daemon's own environment stays, as it does for the account's sessions.
+        assert_eq!(
+            login.command.get_env("CLAUDE_CONFIG_DIR"),
+            std::env::var_os("CLAUDE_CONFIG_DIR").as_deref()
+        );
+        assert_eq!(
+            login.command.get_cwd(),
+            Some(&f.home.path().as_os_str().to_owned())
+        );
+        assert!(!f.home.path().join(".claude").exists());
+        login.pending.program.status.args =
+            vec!["-c".into(), r#"echo '{"loggedIn": true}'"#.into()];
+        let line = login.pending.finish(None);
+        assert_eq!(line, "\r\nherder: added account claude\r\n");
+        let saved = std::fs::read_to_string(f.home.path().join("daemon.toml")).unwrap();
+        assert_eq!(
+            saved,
+            "[[accounts]]\nid = \"claude\"\nprovider = \"claude\"\nlabel = \"claude\"\n"
+        );
+        // There is one default login.
+        let err = f
+            .start("claude-2", Provider::Claude, Some("~/.claude"))
+            .err()
+            .unwrap();
+        assert_eq!(err.code, ErrorCode::Conflict, "{}", err.message);
     }
 
     #[tokio::test]

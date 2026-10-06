@@ -70,7 +70,7 @@ struct AddAccountSheet: View {
                 }
                 Field(label: "Display label") { InputBox(placeholder: "Work", text: $draft.label) }
                 Field(label: "Config directory (optional)",
-                      hint: "A new directory, or one already logged in. Leave empty to let herder choose. The account appears once the provider reports it logged in.") {
+                      hint: "A new directory, or one already logged in; ~/.claude adds Claude’s default login. Leave empty to let herder choose. The account appears once the provider reports it logged in.") {
                     InputBox(placeholder: "~/.claude-work", text: $draft.configDir, mono: true)
                 }
                 if !draft.id.isEmpty, let problem {
