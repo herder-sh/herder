@@ -235,7 +235,7 @@ struct NativeAgentCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open sub-chat: \(agent.title), \(agent.status)")
+        .accessibilityLabel("Open sub-agent: \(agent.title), \(agent.status)")
         .sheet(isPresented: $showingChat) {
             NativeAgentChat(reference: agent.id, fleet: fleet, key: key)
         }
