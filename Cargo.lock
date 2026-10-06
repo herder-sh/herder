@@ -1226,7 +1226,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "herder"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "herder-adapters"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.23.1",
  "herder-protocol",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "herder-client-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "herder-daemon"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "herder-ffi"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "herder-adapters",
@@ -1355,7 +1355,7 @@ dependencies = [
 
 [[package]]
 name = "herder-protocol"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.23.1",
  "jiff",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "herder-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "herder-protocol",
  "proptest",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "herder-tasktools"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "herder-protocol",
  "jsonschema",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "herder-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
