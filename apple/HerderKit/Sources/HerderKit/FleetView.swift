@@ -109,6 +109,10 @@ struct FleetView: View {
             }
         }
         .onChange(of: session) { if session != nil { draft = nil } }
+        // An archived session closes, wherever it was open.
+        .onChange(of: fleet.archiving) { before, _ in
+            for key in fleet.archived(since: before) { close(key) }
+        }
         // A removed project's pane has nothing left to show.
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .home }
@@ -137,6 +141,14 @@ struct FleetView: View {
         } else {
             tab = .home
             homePath = [.session(key)]
+        }
+    }
+
+    /// Closes a session's pane, and pops it and what was pushed over it on every tab.
+    private func close(_ key: SessionKey) {
+        if session == key { session = nil }
+        for path in [$homePath, $projectsPath, $boardPath] {
+            if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
 
