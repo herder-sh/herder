@@ -259,7 +259,6 @@ fn seed(dir: &Path, sessions: usize, events: usize) {
                 parent: None,
                 parent_host: None,
                 task: None,
-                max_children: None,
                 failover_pin: None,
             };
             append(&mut store, &session_id, body);

@@ -62,10 +62,6 @@ pub enum EventBody {
         /// Short label of the session's task, shown in the task tree.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<String>,
-        /// Most live children this session may have as a task's primary; absent for the
-        /// daemon's limit.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_children: Option<u32>,
         /// Whether the session stays on its account when it hits a limit; absent for the
         /// daemon's `[failover] pin`.
         #[serde(default, skip_serializing_if = "Option::is_none")]

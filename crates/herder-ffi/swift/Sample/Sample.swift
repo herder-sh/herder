@@ -51,7 +51,7 @@ struct Sample {
             hostId: host,
             command: .createSession(
                 repo: repo, projectId: nil, branch: nil, accountId: account, provider: nil,
-                model: nil, permissionMode: .ask, maxChildren: nil, failoverPin: nil))
+                model: nil, permissionMode: .ask, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = created else {
             throw Failure(description: "expected a session, got \(created)")
         }

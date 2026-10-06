@@ -134,10 +134,6 @@ pub enum CommandBody {
         /// `ask`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         permission_mode: Option<PermissionMode>,
-        /// Most live children the session may have as a task's primary; the daemon's
-        /// `[tasks] max_children` when absent.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_children: Option<u32>,
         /// Whether the session stays on its account when it hits a limit instead of rotating
         /// to another account of its provider; the daemon's `[failover] pin` when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]

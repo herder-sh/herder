@@ -525,7 +525,6 @@ impl App {
             provider: None,
             model: (!model.is_empty()).then_some(model),
             permission_mode: Some(dialog.mode),
-            max_children: None,
             failover_pin: None,
         };
         vec![Effect::Send {
@@ -623,7 +622,6 @@ mod tests {
                 provider: None,
                 model: Some("claude-opus".into()),
                 permission_mode: Some(PermissionMode::ReadOnly),
-                max_children: None,
                 failover_pin: None,
             },
             origin: Origin::NewSession(HostId::new("h1")),

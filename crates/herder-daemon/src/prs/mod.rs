@@ -43,6 +43,11 @@
 //! list are read. Review threads are only in GraphQL, which has no conditional requests: they
 //! are read again only when the pull request, its checks or its reviews changed.
 //!
+//! # Merged
+//!
+//! Once a pull request is merged, its session is told ([`OnMerged`]); a child whose pull requests
+//! are all merged is archived then.
+//!
 //! # Follow-ups
 //!
 //! With `[follow_ups] pr_events` on, an idle session is prompted when one of its open pull
@@ -140,6 +145,10 @@ pub(crate) type Prompter = Box<
     dyn Fn(SessionId, String, FollowUp) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
 >;
 
+/// Tells a session that one of its pull requests was merged.
+pub(crate) type OnMerged =
+    Box<dyn Fn(SessionId) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// A branch, on the GitHub account `owner`, that may head a session's pull request.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct Head {
@@ -152,6 +161,7 @@ pub struct PrTracker {
     journal: Journal,
     config: Config,
     prompter: Prompter,
+    on_merged: OnMerged,
     state: Mutex<State>,
     /// One poll pass at a time.
     polling: tokio::sync::Mutex<()>,
@@ -226,12 +236,14 @@ impl PrTracker {
         journal: Journal,
         config: Config,
         prompter: Prompter,
+        on_merged: OnMerged,
         shutdown: CancellationToken,
     ) -> Result<Arc<Self>> {
         let tracker = Arc::new(Self {
             journal,
             config,
             prompter,
+            on_merged,
             state: Mutex::new(State::default()),
             polling: tokio::sync::Mutex::new(()),
             links: tokio::sync::Mutex::new(()),
@@ -770,20 +782,25 @@ impl PrTracker {
             // Before the update is journaled, so reading the journal does not count it twice.
             self.follow_ups(session_id).await?;
         }
-        let _links = self.links.lock().await;
+        let links = self.links.lock().await;
         let linked = self.journal.prs(session_id.clone()).await?;
         let Some(current) = linked.iter().find(|linked| linked.number == pr.number) else {
             return Ok(());
         };
-        if *current != pr {
-            self.journal
-                .record(
-                    session_id.clone(),
-                    None,
-                    EventBody::PrUpdated { pr: pr.clone() },
-                )
-                .await?;
-            self.change_follow_ups(session_id, |follow_ups| follow_ups.changed(current, &pr));
+        if *current == pr {
+            return Ok(());
+        }
+        self.journal
+            .record(
+                session_id.clone(),
+                None,
+                EventBody::PrUpdated { pr: pr.clone() },
+            )
+            .await?;
+        self.change_follow_ups(session_id, |follow_ups| follow_ups.changed(current, &pr));
+        drop(links);
+        if pr.state == PrState::Merged {
+            (self.on_merged)(session_id.clone()).await;
         }
         Ok(())
     }

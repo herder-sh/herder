@@ -69,10 +69,6 @@ enum Command {
         /// Branch to create [default: a name herder picks].
         #[arg(long, value_name = "BRANCH")]
         branch: Option<String>,
-        /// Most children the session may run at once as a task's primary [default: the
-        /// machine's limit].
-        #[arg(long, value_name = "N")]
-        max_children: Option<u32>,
         /// Keep the session on its account when it hits a limit [default: the machine's
         /// failover setting].
         #[arg(long, conflicts_with = "no_pin")]
@@ -255,7 +251,6 @@ impl Cli {
                 model,
                 mode,
                 branch,
-                max_children,
                 pin,
                 no_pin,
             } => {
@@ -272,7 +267,6 @@ impl Cli {
                         provider: provider.map(Provider::from),
                         model,
                         permission_mode: mode.map(Into::into),
-                        max_children,
                         failover_pin: (pin || no_pin).then_some(pin),
                     })
                     .await?;

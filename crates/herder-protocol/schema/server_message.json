@@ -1211,10 +1211,6 @@
           "description": "What every session's CLI may use, and the budget turns are admitted within.",
           "$ref": "#/$defs/ResourceSettings"
         },
-        "tasks": {
-          "description": "Limits on every task.",
-          "$ref": "#/$defs/TaskSettings"
-        },
         "titles": {
           "description": "How sessions are titled.",
           "$ref": "#/$defs/TitleSettings"
@@ -1224,7 +1220,6 @@
         "listen",
         "log",
         "binaries",
-        "tasks",
         "failover",
         "titles",
         "resources",
@@ -1428,15 +1423,6 @@
                 "boolean",
                 "null"
               ]
-            },
-            "max_children": {
-              "description": "Most live children this session may have as a task's primary; absent for the\ndaemon's limit.",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint32",
-              "minimum": 0
             },
             "model": {
               "description": "Starting model, in the provider's own naming.",
@@ -3553,21 +3539,6 @@
       "required": [
         "skills",
         "reload"
-      ]
-    },
-    "TaskSettings": {
-      "description": "The `[tasks]` table.",
-      "type": "object",
-      "properties": {
-        "max_children": {
-          "description": "Live (not archived) children a task's primary may have at once.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "max_children"
       ]
     },
     "Terminal": {
