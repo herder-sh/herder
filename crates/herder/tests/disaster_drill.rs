@@ -59,8 +59,8 @@ fn fake() -> Provider {
 
 /// The scripted agent a drill host runs instead of a vendor CLI. Each line of a prompt is an
 /// edit to the worktree, `path=content` or `-path` to delete; a last line `hang` leaves the
-/// turn open forever, as a CLI working when its host dies. Every start's seed is appended to
-/// `seeds` as one JSON line of its message texts.
+/// turn open until it is interrupted, as a CLI working when its host dies. Every start's seed
+/// is appended to `seeds` as one JSON line of its message texts.
 struct Agent {
     seeds: PathBuf,
 }
@@ -88,10 +88,20 @@ impl Adapter for Agent {
             let (commands, mut command_rx) = mpsc::unbounded_channel();
             let (events, event_rx) = mpsc::channel(64);
             tokio::spawn(async move {
+                let mut hanging = None;
                 while let Some(command) = command_rx.recv().await {
                     let AdapterCommand::SendPrompt { turn_id, text, .. } = command else {
                         if command == AdapterCommand::Shutdown {
                             break;
+                        }
+                        if command == AdapterCommand::Interrupt
+                            && let Some(turn_id) = hanging.take()
+                            && events
+                                .send(AdapterEvent::TurnInterrupted { turn_id })
+                                .await
+                                .is_err()
+                        {
+                            return;
                         }
                         continue;
                     };
@@ -124,7 +134,9 @@ impl Adapter for Agent {
                         },
                         AdapterEvent::ItemCompleted { item: reply },
                     ];
-                    if !hang {
+                    if hang {
+                        hanging = Some(turn_id);
+                    } else {
                         out.push(AdapterEvent::TurnCompleted {
                             turn_id,
                             usage: None,
@@ -699,10 +711,9 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
         .unwrap_or_else(|| panic!("no worktree in {output}"));
     assert!(b_worktree.starts_with(&b_dir), "{}", b_worktree.display());
 
-    // B's worktree is exactly A's last checkpoint: the edit of the turn A died in is gone.
-    assert_eq!(worktree_files(&b_worktree), expected);
-
-    // The session's history goes on on B, the fork's agent seeded with the transcript from A.
+    // The session's history goes on on B, the fork's agent seeded with the transcript from A:
+    // the turn A died in runs again there, unprompted, and B's worktree is A's last checkpoint
+    // with only that turn's edit made again.
     let b_link = pair(&b_config, "alice").await;
     let mut client = Client::connect(
         &b_link.hosts[0],
@@ -716,6 +727,40 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
         .until(|body| matches!(body, EventBody::AccountSwitched { .. }))
         .await;
     assert!(client.events.len() > a_events);
+    let rerun_turn = loop {
+        let rerun = client.events[a_events..].iter().find_map(|event| match &event.body {
+            EventBody::ItemAdded { item }
+                if matches!(&item.body, ItemBody::UserMessage { text, .. } if text == A_LAST) =>
+            {
+                Some(item.turn_id.clone())
+            }
+            _ => None,
+        });
+        if let Some(turn_id) = rerun {
+            break turn_id;
+        }
+        client.recv().await;
+    };
+    client
+        .until(|body| {
+            matches!(body, EventBody::ItemAdded { item }
+                if item.turn_id == rerun_turn && matches!(item.body, ItemBody::AssistantMessage { .. }))
+        })
+        .await;
+    let mut rerun_files = expected.clone();
+    rerun_files.insert("src/lib.rs".into(), "pub fn run() { half written".into());
+    assert_eq!(worktree_files(&b_worktree), rerun_files);
+    client
+        .command(CommandBody::Interrupt {
+            session_id: forked.clone(),
+        })
+        .await
+        .unwrap();
+    client
+        .until(
+            |body| matches!(body, EventBody::TurnInterrupted { turn_id } if *turn_id == rerun_turn),
+        )
+        .await;
     client.prompt(&forked, B_TURN).await.unwrap();
     client.until_idle_after(A_TURNS.len() + 1).await;
     assert_eq!(
@@ -731,10 +776,28 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
     let prompts: Vec<_> = seeds[0].iter().step_by(2).map(String::as_str).collect();
     assert_eq!(prompts, [A_TURNS[0], A_TURNS[1], A_TURNS[2], A_LAST]);
     // ... and B checkpoints the fork's turns to origin as A did.
+    let b_turn = client
+        .events
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item }
+                if matches!(&item.body, ItemBody::UserMessage { text, .. } if text == B_TURN) =>
+            {
+                Some(item.turn_id.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        if let Some(latest) = checkpoints(&origin, &forked).pop() {
-            assert_eq!(worktree_files(&b_worktree), tree_files(&origin, &latest));
+        let checkpoint = checkpoints(&origin, &forked)
+            .into_iter()
+            .find(|checkpoint| checkpoint.ends_with(&format!("/{b_turn}")));
+        if let Some(checkpoint) = checkpoint {
+            assert_eq!(
+                worktree_files(&b_worktree),
+                tree_files(&origin, &checkpoint)
+            );
             break;
         }
         assert!(Instant::now() < deadline, "B never checkpointed its turn");

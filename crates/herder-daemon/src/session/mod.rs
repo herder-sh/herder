@@ -515,7 +515,14 @@ impl SessionManager {
                     | SessionStatus::NeedsYou
                     | SessionStatus::WaitingForCapacity
             ) {
-                actor::close_abandoned_turn(&journal, &tasks, &session).await?;
+                actor::close_abandoned_turn(
+                    &journal,
+                    &tasks,
+                    &session,
+                    "the daemon stopped during this turn",
+                    SessionStatus::NeedsYou,
+                )
+                .await?;
             }
         }
         Ok(Self {

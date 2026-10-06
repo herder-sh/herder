@@ -612,7 +612,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     assert_eq!(git(&b_worktree, &["status", "--porcelain"]), "?? notes.txt");
     // Its journal is A's, under the fork's id, with B's paths and branch, then the fork from
     // A and the switch to B's account, both by the user who forked it, and the turn A had
-    // open, failed.
+    // open, failed as handed off.
     let b_journal = b.journal(&fork).await;
     assert!(b_journal.iter().all(|event| event.session_id == fork));
     let copied = &b_journal[..a_journal.len()];
@@ -651,21 +651,36 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
     );
     assert_eq!((&tail[0].by, &tail[1].by), (&Some(alice()), &Some(alice())));
     assert!(
-        matches!(&tail[2].body, EventBody::TurnFailed { turn_id, .. } if turn_id.as_str() == "turn-2")
+        matches!(&tail[2].body, EventBody::TurnFailed { turn_id, error }
+            if turn_id.as_str() == "turn-2" && error.message.contains("handed off")),
+        "{:?}",
+        tail[2].body
     );
-    assert_eq!(status(&b_journal), Some(SessionStatus::NeedsYou));
     // B answers for the image A's prompt carried.
     assert_eq!(
-        b.images(&fork, &b_journal).await,
+        b.images(&fork, &b_journal[..a_journal.len()]).await,
         std::slice::from_ref(&image)
     );
 
-    // The fork goes on on B, its CLI seeded with the transcript.
+    // The fork goes on on B, its CLI seeded with the transcript: the prompt A was running runs
+    // again, then the next.
     b.prompt(&fork, "Third.").await.unwrap();
-    b.journal_until(&fork, |body| {
-        matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-1")
-    })
-    .await;
+    let b_journal = b
+        .journal_until(&fork, |body| {
+            matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-2")
+        })
+        .await;
+    let prompts: Vec<_> = b_journal[a_journal.len()..]
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { text, .. } => Some((item.turn_id.as_str(), text.as_str())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(prompts, [("b-turn-1", "Second."), ("b-turn-2", "Third.")]);
     let seeds = b.seeds.lock().unwrap().clone();
     assert_eq!(seeds.len(), 1);
     assert_eq!(seeds[0][..3], ["First.", "One.", "Second."]);
@@ -715,8 +730,10 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         })
         .collect();
     assert_eq!(marks, [(&session_id, "host-a", &Some(alice()))]);
-    assert_eq!(status(&local_journal), Some(SessionStatus::NeedsYou));
-    assert_eq!(a.images(&local, &local_journal).await, [image]);
+    assert_eq!(
+        a.images(&local, &local_journal[..a_journal.len()]).await,
+        [image]
+    );
     assert_eq!(
         status(&a.journal(&session_id).await),
         Some(SessionStatus::Running)
@@ -929,4 +946,162 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
     // The upload was taken.
     let again = b.handle(fork_relayed(relay())).await.unwrap_err();
     assert!(again.message.contains("no history"), "{again:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (a_dir, b_dir) = (tmp.path().join("a"), tmp.path().join("b"));
+    clones(tmp.path(), &[&a_dir, &b_dir]);
+
+    // Host A runs a prompt with an image, and is still in its turn.
+    let a = HostDaemon::start(
+        &a_dir,
+        "host-a",
+        "a-account",
+        "fork_rerun_a.jsonl",
+        dead_vault(),
+    )
+    .await;
+    let created = a
+        .handle(CommandBody::CreateSession {
+            repo: None,
+            project_id: Some(project()),
+            branch: None,
+            account_id: Some(AccountId::new("a-account")),
+            provider: None,
+            model: None,
+            permission_mode: Some(PermissionMode::Ask),
+            max_children: None,
+            failover_pin: None,
+        })
+        .await
+        .unwrap();
+    let CommandResult::SessionCreated { session_id } = created else {
+        panic!("expected a created session, got {created:?}");
+    };
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\nscreenshot".to_vec()),
+    };
+    a.prompt_with(&session_id, "Fix it.", vec![image.clone()])
+        .await
+        .unwrap();
+    let a_journal = a
+        .journal_until(
+            &session_id,
+            |body| matches!(body, EventBody::ItemAdded { item } if item.id.as_str() == "item-1"),
+        )
+        .await;
+    let attachments = a_journal
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { attachments, .. } => Some(attachments.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+
+    // A client relays the session to host B and hands it off there.
+    let b = HostDaemon::start(
+        &b_dir,
+        "host-b",
+        "b-account",
+        "fork_rerun_b.jsonl",
+        dead_vault(),
+    )
+    .await;
+    b.handle(CommandBody::UploadHistory {
+        session_id: session_id.clone(),
+        part: HistoryPart::Events {
+            events: a_journal.clone(),
+        },
+    })
+    .await
+    .unwrap();
+    b.handle(CommandBody::UploadHistory {
+        session_id: session_id.clone(),
+        part: HistoryPart::Image {
+            attachment_id: attachments[0].attachment_id.clone(),
+            image,
+        },
+    })
+    .await
+    .unwrap();
+    let forked = b
+        .handle(CommandBody::ForkSession {
+            session_id: session_id.clone(),
+            account_id: None,
+            relay: Some(Relay {
+                host_id: HostId::new("host-a"),
+                project_id: project(),
+            }),
+        })
+        .await
+        .unwrap();
+    let CommandResult::SessionForked {
+        session_id: fork, ..
+    } = forked
+    else {
+        panic!("expected a fork, got {forked:?}");
+    };
+
+    // Unprompted, the fork fails the turn A had open as handed off, and runs its prompt again,
+    // with its image, by the user who sent it, on a CLI seeded with the transcript.
+    let b_journal = b
+        .journal_until(&fork, |body| {
+            matches!(body, EventBody::TurnCompleted { turn_id, .. } if turn_id.as_str() == "b-turn-1")
+        })
+        .await;
+    let tail = &b_journal[a_journal.len()..];
+    assert!(
+        tail.iter().any(
+            |event| matches!(&event.body, EventBody::TurnFailed { turn_id, error }
+            if turn_id.as_str() == "turn-1"
+                && error.message
+                    == "the session was handed off during this turn; its prompt runs again here")
+        ),
+        "{:#?}",
+        tail.iter().map(|event| &event.body).collect::<Vec<_>>()
+    );
+    assert!(
+        !tail.iter().any(|event| matches!(
+            event.body,
+            EventBody::SessionStatusChanged {
+                status: SessionStatus::NeedsYou,
+                ..
+            }
+        )),
+        "{:#?}",
+        tail.iter().map(|event| &event.body).collect::<Vec<_>>()
+    );
+    let rerun = tail
+        .iter()
+        .find_map(|event| match &event.body {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { text, attachments } => {
+                    Some((item.turn_id.as_str(), &event.by, text.as_str(), attachments))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(rerun, ("b-turn-1", &Some(alice()), "Fix it.", &attachments));
+    let seeds = b.seeds.lock().unwrap().clone();
+    assert_eq!(seeds, [["Fix it.", "On it."]]);
+    let b_journal = b
+        .journal_until(&fork, |body| {
+            matches!(
+                body,
+                EventBody::SessionStatusChanged {
+                    status: SessionStatus::Idle,
+                    ..
+                }
+            )
+        })
+        .await;
+    assert_eq!(status(&b_journal), Some(SessionStatus::Idle));
 }
