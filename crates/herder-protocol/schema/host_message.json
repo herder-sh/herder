@@ -62,7 +62,7 @@
   ],
   "$defs": {
     "Attachment": {
-      "description": "An image a prompt carried, kept on the session's host.",
+      "description": "An image or file a prompt carried, kept on the session's host.",
       "type": "object",
       "properties": {
         "attachment_id": {
@@ -70,11 +70,18 @@
           "$ref": "#/$defs/AttachmentId"
         },
         "media_type": {
-          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "description": "One of [`IMAGE_MEDIA_TYPES`] for an image; [`FILE_MEDIA_TYPE`] for a file.",
           "type": "string"
         },
+        "name": {
+          "description": "The file's name, as sent; absent for an image.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "size": {
-          "description": "Size of the image in bytes.",
+          "description": "Size of the image or file in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -87,19 +94,19 @@
       ]
     },
     "AttachmentData": {
-      "description": "The bytes of an image a prompt of a session carried.",
+      "description": "The bytes of an image or file a prompt of a session carried.",
       "type": "object",
       "properties": {
         "attachment": {
-          "description": "The image as the `user_message` names it. The vault refuses it as a bad request unless\n`media_type` is one of [`crate::IMAGE_MEDIA_TYPES`] and `size` is the length of `data`,\nat most [`crate::MAX_IMAGE_BYTES`], or when it holds different bytes under its id.",
+          "description": "The image or file as the `user_message` names it. The vault refuses it as a bad request\nunless `size` is the length of `data` and, for an image, `media_type` is one of\n[`crate::IMAGE_MEDIA_TYPES`] and `size` at most [`crate::MAX_IMAGE_BYTES`], for a file,\n`size` is at most [`crate::MAX_FILE_BYTES`]; or when it holds different bytes under its\nid.",
           "$ref": "#/$defs/Attachment"
         },
         "data": {
-          "description": "The image file's bytes.",
+          "description": "The image's or file's bytes.",
           "$ref": "#/$defs/Bytes"
         },
         "session_id": {
-          "description": "Session whose prompt carried the image.",
+          "description": "Session whose prompt carried it.",
           "$ref": "#/$defs/SessionId"
         }
       },

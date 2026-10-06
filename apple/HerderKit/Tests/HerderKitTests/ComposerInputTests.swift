@@ -21,7 +21,7 @@ struct PromptEditorTests {
         box.text = initial
         let editor = PromptEditor(
             text: Binding(get: { box.text }, set: { box.text = $0 }), focused: .constant(true),
-            images: [], pastes: [], addImages: { _ in "" }, addPaste: { _ in "" }, submit: { box.submitted += 1 })
+            images: [], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: { box.submitted += 1 })
         let coordinator = editor.makeCoordinator()
         let view = ChipTextView(usingTextLayoutManager: true)
         view.allowsUndo = true
@@ -84,7 +84,7 @@ struct PromptEditorTests {
         let image = Herder.Image(mediaType: "image/png", data: png)
         coordinator.parent = PromptEditor(
             text: Binding(get: { box.text }, set: { box.text = $0 }), focused: .constant(true),
-            images: [image], pastes: [], addImages: { _ in "" }, addPaste: { _ in "" }, submit: {})
+            images: [image], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: {})
         coordinator.refresh(view)
         let after = try #require(view.attributedString().attribute(.attachment, at: 0, effectiveRange: nil) as? ChipAttachment)
         #expect(after !== before)

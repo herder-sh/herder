@@ -10,16 +10,26 @@ struct PromptDrafts {
             let data: Data
         }
 
+        struct Document: Codable, Equatable {
+            let name: String
+            let data: Data
+        }
+
         var text = ""
         var images: [Picture] = []
+        var files: [Document] = []
 
-        init(text: String, images: [Herder.Image]) {
+        init(text: String, images: [Herder.Image], files: [PromptFile] = []) {
             self.text = text
             self.images = images.map { Picture(mediaType: $0.mediaType, data: $0.data) }
+            self.files = files.map { Document(name: $0.name, data: $0.data) }
         }
 
         var herderImages: [Herder.Image] { images.map { Herder.Image(mediaType: $0.mediaType, data: $0.data) } }
-        var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty }
+        var promptFiles: [PromptFile] { files.map { PromptFile(name: $0.name, data: $0.data) } }
+        var isEmpty: Bool {
+            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && images.isEmpty && files.isEmpty
+        }
     }
 
     /// The folder the drafts are files in, one per project or session.

@@ -297,6 +297,7 @@ fn seed_images(dir: &Path, sessions: usize, prompts: usize) {
                         attachment_id: AttachmentId::new(id),
                         media_type: "image/png".into(),
                         size: data.len() as u64,
+                        name: None,
                     }],
                 },
             };
@@ -551,6 +552,7 @@ async fn refusal(client: &Client, vault: &HostId, session: &str) -> herder_proto
         session_id: SessionId::new(session),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     match client.send(vault.clone(), command).await {
         Err(Error::Rejected { info: error }) => error,
@@ -978,6 +980,7 @@ fn image_message(session: &str, id: &str, data: &[u8]) -> HostMessage {
             attachment_id: AttachmentId::new(id),
             media_type: "image/png".into(),
             size: data.len() as u64,
+            name: None,
         },
         data: herder_protocol::Bytes(data.to_vec()),
     })

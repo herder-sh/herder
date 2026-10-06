@@ -12,9 +12,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    AttachmentId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorCode, Event, EventBody, FleetHost, Image, ItemBody, PROTOCOL_VERSION,
-    ServerMessage, SessionHead, SessionId,
+    Attachment, Bytes, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
+    Cursor, ErrorCode, Event, EventBody, FleetHost, ItemBody, PROTOCOL_VERSION, ServerMessage,
+    SessionHead, SessionId,
 };
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
@@ -44,7 +44,7 @@ pub(super) struct View {
     /// The journal asked for, oldest first.
     pub(super) events: Vec<Event>,
     /// Every image the journal names that the vault holds.
-    pub(super) images: Vec<(AttachmentId, Image)>,
+    pub(super) attachments: Vec<(Attachment, Bytes)>,
 }
 
 /// Opens a WebSocket to the vault over TLS, pinned through `connector`.
@@ -123,19 +123,19 @@ async fn read_view(
         }
     }
     if let Some(session_id) = journal {
-        view.images = images(&mut ws, session_id, &view.events).await?;
+        view.attachments = attachments(&mut ws, session_id, &view.events).await?;
     }
     let _ = ws.close(None).await;
     Ok(view)
 }
 
-/// Fetches every image a `user_message` of `events` names, one at a time; one the vault does
-/// not hold, such as one its host lost, is left out.
-async fn images(
+/// Fetches every image and file a `user_message` of `events` names, one at a time; one the
+/// vault does not hold, such as one its host lost, is left out.
+async fn attachments(
     ws: &mut Ws,
     session_id: &SessionId,
     events: &[Event],
-) -> Result<Vec<(AttachmentId, Image)>> {
+) -> Result<Vec<(Attachment, Bytes)>> {
     let named = events.iter().flat_map(|event| match &event.body {
         EventBody::ItemAdded { item } => match &item.body {
             ItemBody::UserMessage { attachments, .. } => attachments.as_slice(),
@@ -143,7 +143,7 @@ async fn images(
         },
         _ => &[],
     });
-    let mut images = Vec::new();
+    let mut fetched = Vec::new();
     for attachment in named {
         let id = CommandId::new(format!("image-{}", attachment.attachment_id));
         let command = ClientMessage::Command(Command {
@@ -165,19 +165,19 @@ async fn images(
             match serde_json::from_str(&text)? {
                 ServerMessage::CommandAccepted {
                     command_id,
-                    result: CommandResult::Attachment { media_type, data },
+                    result: CommandResult::Attachment { data, .. },
                 } if command_id == id => {
-                    images.push((attachment.attachment_id.clone(), Image { media_type, data }));
+                    fetched.push((attachment.clone(), data));
                     break;
                 }
                 ServerMessage::CommandRejected { command_id, error } if command_id == id => {
                     if error.code != ErrorCode::NotFound {
-                        bail!("the vault refused an image: {}", error.message);
+                        bail!("the vault refused an attachment: {}", error.message);
                     }
                     warn!(
                         %session_id,
                         attachment_id = %attachment.attachment_id,
-                        "the vault holds no copy of this image; it is not recovered"
+                        "the vault holds no copy of this attachment; it is not recovered"
                     );
                     break;
                 }
@@ -186,5 +186,5 @@ async fn images(
             }
         }
     }
-    Ok(images)
+    Ok(fetched)
 }

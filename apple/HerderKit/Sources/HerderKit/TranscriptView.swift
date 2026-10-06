@@ -26,13 +26,19 @@ struct TranscriptBlockView: View {
                     Label("From herder", systemImage: "arrow.triangle.pull")
                         .font(.caption).foregroundStyle(Theme.secondary)
                 }
-                if !inline && !attachments.isEmpty {
-                    MessageImages(fleet: fleet, key: key, attachments: attachments)
+                let images = attachments.filter { !$0.isFile }
+                if !inline && !images.isEmpty {
+                    MessageImages(fleet: fleet, key: key, attachments: images)
                 }
                 if !inline, let outgoing, !outgoing.images.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, image in Picture(data: image.data, height: 140) }
                     }
+                }
+                let files = outgoing.map { $0.files.map { (name: $0.name, size: Int64($0.data.count)) } }
+                    ?? attachments.compactMap { attachment in attachment.name.map { (name: $0, size: Int64(attachment.size)) } }
+                if !files.isEmpty {
+                    MessageFiles(files: files)
                 }
                 Group {
                     if inline {

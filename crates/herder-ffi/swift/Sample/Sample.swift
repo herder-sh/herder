@@ -58,7 +58,7 @@ struct Sample {
         print("created session \(sessionId)")
         let subscription = try client.subscribeSession(hostId: host, sessionId: sessionId)
         let sent = try await client.send(
-            hostId: host, command: .sendPrompt(sessionId: sessionId, text: "Say hello.", images: []))
+            hostId: host, command: .sendPrompt(sessionId: sessionId, text: "Say hello.", images: [], files: []))
         try check(sent == .applied, "the prompt was applied")
 
         var events: [EventBody] = []

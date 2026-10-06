@@ -308,6 +308,9 @@ pub struct QueuedPrompt {
     pub text: String,
     /// How many images it carries.
     pub images: u32,
+    /// How many files it carries.
+    #[serde(default)]
+    pub files: u32,
     /// User who sent it; absent when an agent did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<UserId>,
@@ -396,11 +399,11 @@ pub enum CommandResult {
         /// The new terminal.
         terminal_id: TerminalId,
     },
-    /// The bytes of an image, answering `get_attachment`.
+    /// The bytes of an image or file, answering `get_attachment`.
     Attachment {
-        /// The image's media type.
+        /// The image's or file's media type.
         media_type: String,
-        /// The image file's bytes.
+        /// The image's or file's bytes.
         data: Bytes,
     },
     /// A folder's entries, answering `list_directory`.

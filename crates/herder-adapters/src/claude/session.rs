@@ -1382,11 +1382,20 @@ mod tests {
         let seed = [
             item(ItemBody::UserMessage {
                 text: "Fix it".into(),
-                attachments: vec![Attachment {
-                    attachment_id: AttachmentId::new("a1"),
-                    media_type: "image/png".into(),
-                    size: 2048,
-                }],
+                attachments: vec![
+                    Attachment {
+                        attachment_id: AttachmentId::new("a1"),
+                        media_type: "image/png".into(),
+                        size: 2048,
+                        name: None,
+                    },
+                    Attachment {
+                        attachment_id: AttachmentId::new("a2"),
+                        media_type: "application/octet-stream".into(),
+                        size: 100,
+                        name: Some("data.csv".into()),
+                    },
+                ],
             }),
             item(ItemBody::ToolCall {
                 name: "Bash".into(),
@@ -1404,7 +1413,7 @@ mod tests {
         assert_eq!(
             seed_text(&seed).unwrap(),
             format!(
-                "{SEED_PREAMBLE}\n\nUser: Fix it\n[image attached: image/png, 2 KB; not part of this replay]\n\n[Assistant called tool Bash with \
+                "{SEED_PREAMBLE}\n\nUser: Fix it\n[image attached: image/png, 2 KB; not part of this replay]\n[file attached: data.csv, 1 KB; not part of this replay]\n\n[Assistant called tool Bash with \
                  {{\"command\":\"ls\"}}]\n\n[Tool failed: nope]\n\nAssistant: Done."
             )
         );

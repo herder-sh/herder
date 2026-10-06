@@ -112,6 +112,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             session_id: session_id(),
             text: "Fix the build".into(),
             images: Vec::new(),
+            files: Vec::new(),
         }),
         command(CommandBody::SendPrompt {
             session_id: session_id(),
@@ -119,6 +120,16 @@ fn client_fixtures() -> Vec<ClientMessage> {
             images: vec![Image {
                 media_type: "image/png".into(),
                 data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+            }],
+            files: Vec::new(),
+        }),
+        command(CommandBody::SendPrompt {
+            session_id: session_id(),
+            text: "Sum these up".into(),
+            images: Vec::new(),
+            files: vec![PromptFile {
+                name: "report.xlsx".into(),
+                data: Bytes(b"PK\x03\x04".to_vec()),
             }],
         }),
         command(CommandBody::GetAttachment {
@@ -165,6 +176,18 @@ fn client_fixtures() -> Vec<ClientMessage> {
                     media_type: "image/png".into(),
                     data: Bytes(b"\x89PNG".to_vec()),
                 },
+            },
+        }),
+        command(CommandBody::UploadHistory {
+            session_id: session_id(),
+            part: HistoryPart::File {
+                attachment: Attachment {
+                    attachment_id: AttachmentId::new("01J9FILE"),
+                    media_type: FILE_MEDIA_TYPE.into(),
+                    size: 4,
+                    name: Some("data.csv".into()),
+                },
+                data: Bytes(b"a,b\n".to_vec()),
             },
         }),
         command(CommandBody::AddProject {
@@ -448,6 +471,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                             prompt_id: PromptId::new("01J9PROMPT"),
                             text: "Then update the docs".into(),
                             images: 1,
+                            files: 2,
                             by: Some(UserId::new("01J9OWNER")),
                             agent_message: None,
                         },
@@ -455,6 +479,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                             prompt_id: PromptId::new("01J9OTHER"),
                             text: "Review my change".into(),
                             images: 0,
+                            files: 0,
                             by: None,
                             agent_message: Some(AgentMessage {
                                 sender_session_id: SessionId::new("01J9SENDER"),
@@ -722,11 +747,20 @@ fn server_fixtures() -> Vec<ServerMessage> {
             EventBody::ItemAdded {
                 item: item(ItemBody::UserMessage {
                     text: "Fix the build".into(),
-                    attachments: vec![Attachment {
-                        attachment_id: AttachmentId::new("01J9ATTACHMENT"),
-                        media_type: "image/png".into(),
-                        size: 8,
-                    }],
+                    attachments: vec![
+                        Attachment {
+                            attachment_id: AttachmentId::new("01J9ATTACHMENT"),
+                            media_type: "image/png".into(),
+                            size: 8,
+                            name: None,
+                        },
+                        Attachment {
+                            attachment_id: AttachmentId::new("01J9FILE"),
+                            media_type: FILE_MEDIA_TYPE.into(),
+                            size: 2048,
+                            name: Some("spec.pdf".into()),
+                        },
+                    ],
                 }),
             },
         ),
@@ -2439,6 +2473,7 @@ fn prompts_without_images_keep_their_wire_shape() {
             session_id: SessionId::new("s"),
             text: "hi".into(),
             images: Vec::new(),
+            files: Vec::new(),
         }
     );
     assert_eq!(serde_json::to_value(&body).unwrap(), prompt);
@@ -2462,6 +2497,45 @@ fn prompts_without_images_keep_their_wire_shape() {
         serde_json::to_value(&image).unwrap(),
         json!({ "media_type": "image/png", "data": "iVBORw==" })
     );
+}
+
+#[test]
+fn file_attachments_carry_their_name_and_images_none() {
+    let image = json!({ "attachment_id": "a1", "media_type": "image/png", "size": 8 });
+    let decoded: Attachment = serde_json::from_value(image.clone()).unwrap();
+    assert_eq!(decoded.name, None);
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), image);
+
+    let file = json!({
+        "attachment_id": "a2",
+        "media_type": "application/octet-stream",
+        "size": 2048,
+        "name": "spec.pdf",
+    });
+    let decoded: Attachment = serde_json::from_value(file.clone()).unwrap();
+    assert_eq!(decoded.name.as_deref(), Some("spec.pdf"));
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), file);
+
+    let prompt = json!({
+        "type": "send_prompt",
+        "session_id": "s",
+        "text": "read it",
+        "files": [{ "name": "a.csv", "data": "YSxi" }],
+    });
+    let body: CommandBody = serde_json::from_value(prompt.clone()).unwrap();
+    assert_eq!(
+        body,
+        CommandBody::SendPrompt {
+            session_id: SessionId::new("s"),
+            text: "read it".into(),
+            images: Vec::new(),
+            files: vec![PromptFile {
+                name: "a.csv".into(),
+                data: Bytes(b"a,b".to_vec()),
+            }],
+        }
+    );
+    assert_eq!(serde_json::to_value(&body).unwrap(), prompt);
 }
 
 #[test]
@@ -2588,8 +2662,19 @@ fn host_fixtures() -> Vec<HostMessage> {
             attachment_id: AttachmentId::new("01J9IMAGE"),
             media_type: "image/png".into(),
             size: 8,
+            name: None,
         },
         data: Bytes(b"\x89PNG\r\n\x1a\n".to_vec()),
+    }));
+    messages.push(HostMessage::Attachment(AttachmentData {
+        session_id: SessionId::new("01J9SESSION"),
+        attachment: Attachment {
+            attachment_id: AttachmentId::new("01J9FILE"),
+            media_type: FILE_MEDIA_TYPE.into(),
+            size: 5,
+            name: Some("notes.txt".into()),
+        },
+        data: Bytes(b"notes".to_vec()),
     }));
     messages
 }
@@ -2946,13 +3031,20 @@ fn queue_edits_and_queues_have_their_wire_form() {
         prompt_id: PromptId::new("p1"),
         text: "next".into(),
         images: 0,
+        files: 0,
         by: Some(UserId::new("u1")),
         agent_message: None,
     };
     assert_eq!(
         serde_json::to_value(&queued).unwrap(),
-        json!({ "prompt_id": "p1", "text": "next", "images": 0, "by": "u1" })
+        json!({ "prompt_id": "p1", "text": "next", "images": 0, "files": 0, "by": "u1" })
     );
+    // A queued prompt from a daemon that counts no files has none.
+    let decoded: QueuedPrompt = serde_json::from_value(
+        json!({ "prompt_id": "p1", "text": "next", "images": 0, "by": "u1" }),
+    )
+    .unwrap();
+    assert_eq!(decoded, queued);
 }
 
 /// Every setting, set to something other than its default.

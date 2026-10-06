@@ -567,6 +567,7 @@ async fn commands_are_answered_by_the_backend() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert_eq!(
@@ -581,6 +582,7 @@ async fn commands_are_answered_by_the_backend() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert!(matches!(
@@ -1000,6 +1002,7 @@ async fn terminals_are_for_owners_only() {
                 session_id: session.clone(),
                 text: "hi".into(),
                 images: Vec::new(),
+                files: Vec::new(),
             },
         }))
         .await;
@@ -1053,6 +1056,7 @@ async fn terminals_are_for_owners_only() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     assert!(matches!(
         member.command("c4", prompt).await,

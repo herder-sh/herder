@@ -11,7 +11,7 @@ import Testing
         let machine = SettingsSection(kind: .machine, options: [], choose: { _ in })
         let account = SettingsSection(kind: .account, options: [], choose: { _ in })
         let composer = ComposerBox(
-            text: .constant(""), images: .constant([]), placeholder: "Ask", models: [],
+            text: .constant(""), images: .constant([]), files: .constant([]), placeholder: "Ask", models: [],
             current: .init(provider: "claude", model: "claude-opus-4-5"), mode: .fullAccess, running: false,
             choose: { _ in }, setMode: { _ in }, send: {}, stop: {}
         ) {

@@ -417,10 +417,17 @@ fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<Session
 /// A queued prompt as the session's queue lists it; `None` for a turn's prompt queued again
 /// to retry it, which has started already.
 fn listed(prompt: QueuedPrompt) -> Option<herder_protocol::QueuedPrompt> {
+    let files = prompt
+        .attachments
+        .iter()
+        .filter(|a| a.name.is_some())
+        .count();
+    let images = prompt.attachments.len() - files;
     (!prompt.retry).then(|| herder_protocol::QueuedPrompt {
         prompt_id: prompt.prompt_id,
         text: prompt.text,
-        images: u32::try_from(prompt.attachments.len()).unwrap_or(u32::MAX),
+        images: u32::try_from(images).unwrap_or(u32::MAX),
+        files: u32::try_from(files).unwrap_or(u32::MAX),
         by: prompt.by,
         agent_message: prompt.agent_message,
     })

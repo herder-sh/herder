@@ -16,12 +16,12 @@ use herder_protocol::{
     FailoverSettings, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
     HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
     LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project,
-    ProjectDiscovery, ProjectId, PromptId, Provider, ProviderBinary, ProviderReload, PullRequest,
-    QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SessionHead,
-    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
-    SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
+    PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route,
+    SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload,
+    SkillSource, SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow,
+    UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -415,6 +415,9 @@ pub struct Attachment {
     pub attachment_id: AttachmentId,
     pub media_type: String,
     pub size: u64,
+    // Defaulted, so Swift and Kotlin code that builds an image's attachment need not name it.
+    #[uniffi(default = None)]
+    pub name: Option<String>,
 }
 
 #[uniffi::remote(Enum)]
@@ -553,6 +556,7 @@ pub enum CommandBody {
         session_id: SessionId,
         text: String,
         images: Vec<Image>,
+        files: Vec<PromptFile>,
     },
     GetAttachment {
         session_id: SessionId,
@@ -732,6 +736,12 @@ pub struct Image {
 }
 
 #[uniffi::remote(Record)]
+pub struct PromptFile {
+    pub name: String,
+    pub data: Bytes,
+}
+
+#[uniffi::remote(Record)]
 pub struct Relay {
     pub host_id: HostId,
     pub project_id: ProjectId,
@@ -745,6 +755,10 @@ pub enum HistoryPart {
     Image {
         attachment_id: AttachmentId,
         image: Image,
+    },
+    File {
+        attachment: Attachment,
+        data: Bytes,
     },
 }
 
@@ -970,6 +984,10 @@ pub struct QueuedPrompt {
     pub prompt_id: PromptId,
     pub text: String,
     pub images: u32,
+    // Defaulted, so Swift and Kotlin code that builds a queued prompt, as tests do, need not
+    // name it.
+    #[uniffi(default = 0)]
+    pub files: u32,
     pub by: Option<UserId>,
     pub agent_message: Option<AgentMessage>,
 }

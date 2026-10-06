@@ -750,6 +750,8 @@ struct Outgoing: Hashable, Identifiable {
     let text: String
     /// The images sent with it, shown until the session takes it.
     var images: [Herder.Image] = []
+    /// The files sent with it, shown until the session takes it.
+    var files: [PromptFile] = []
     var state: State = .sending
 }
 

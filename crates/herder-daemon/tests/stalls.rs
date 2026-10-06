@@ -107,6 +107,7 @@ impl Daemon {
             session_id: session_id.clone(),
             text: text.into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         let result = self.manager.handle(alice(), command).await.unwrap();
         assert_eq!(result, CommandResult::Applied);

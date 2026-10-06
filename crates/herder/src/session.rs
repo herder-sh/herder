@@ -516,6 +516,7 @@ impl Cli {
             session_id: view.session_id.clone(),
             text,
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await?;
         let deadline = Instant::now() + CONNECT_TIMEOUT;

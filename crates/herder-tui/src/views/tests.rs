@@ -562,11 +562,13 @@ fn a_prompts_images_show_under_it() {
                         attachment_id: herder_protocol::AttachmentId::new("01J9A"),
                         media_type: "image/png".into(),
                         size: 12 * 1024 + 7,
+                        name: None,
                     },
                     herder_protocol::Attachment {
                         attachment_id: herder_protocol::AttachmentId::new("01J9B"),
                         media_type: "image/jpeg".into(),
                         size: 3 * 1024 * 1024 / 2,
+                        name: None,
                     },
                 ],
             },
@@ -581,6 +583,37 @@ fn a_prompts_images_show_under_it() {
     app.focus = Focus::Transcript;
     let screen = render(&mut app, 160, 20).backend().to_string();
     assert!(screen.contains("o open images"), "{screen}");
+}
+
+#[test]
+fn a_prompts_files_show_by_name_and_images_count_without_them() {
+    let attachment = |id: &str, size: u64, name: Option<&str>| herder_protocol::Attachment {
+        attachment_id: herder_protocol::AttachmentId::new(id),
+        media_type: if name.is_some() {
+            herder_protocol::FILE_MEDIA_TYPE
+        } else {
+            "image/png"
+        }
+        .into(),
+        size,
+        name: name.map(Into::into),
+    };
+    let mut app = open_s2(vec![
+        fake::started("turn-1"),
+        added(
+            "i1",
+            ItemBody::UserMessage {
+                text: "Sum these up.".into(),
+                attachments: vec![
+                    attachment("01J9A", 2048, Some("report.xlsx")),
+                    attachment("01J9B", 1024, None),
+                ],
+            },
+        ),
+    ]);
+    let screen = render(&mut app, 100, 20).backend().to_string();
+    assert!(screen.contains("report.xlsx · 2 KB"), "{screen}");
+    assert!(screen.contains("image 1 · 1 KB"), "{screen}");
 }
 
 #[test]

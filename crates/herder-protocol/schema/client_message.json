@@ -236,7 +236,7 @@
       ]
     },
     "Attachment": {
-      "description": "An image a prompt carried, kept on the session's host.",
+      "description": "An image or file a prompt carried, kept on the session's host.",
       "type": "object",
       "properties": {
         "attachment_id": {
@@ -244,11 +244,18 @@
           "$ref": "#/$defs/AttachmentId"
         },
         "media_type": {
-          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "description": "One of [`IMAGE_MEDIA_TYPES`] for an image; [`FILE_MEDIA_TYPE`] for a file.",
           "type": "string"
         },
+        "name": {
+          "description": "The file's name, as sent; absent for an image.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "size": {
-          "description": "Size of the image in bytes.",
+          "description": "Size of the image or file in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -615,8 +622,15 @@
           "description": "Start a turn with a prompt.",
           "type": "object",
           "properties": {
+            "files": {
+              "description": "Files for the agent to read: kept on the session's host, in a folder of the session\noutside its worktree, and named by path in a note appended to the text the agent\ngets. Every provider takes them. With `images`, at most\n[`crate::MAX_PROMPT_ATTACHMENT_BYTES`] together.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/PromptFile"
+              }
+            },
             "images": {
-              "description": "Images for the agent to see with the text, together at most\n[`crate::MAX_PROMPT_IMAGE_BYTES`]; a provider that cannot take images refuses them\nas `unsupported`.",
+              "description": "Images for the agent to see with the text; a provider that cannot take images\nrefuses them as `unsupported`.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Image"
@@ -642,11 +656,11 @@
           ]
         },
         {
-          "description": "Fetch the bytes of an image a prompt of the session carried; answered with\n`attachment`. It changes nothing, so a resend is answered afresh.",
+          "description": "Fetch the bytes of an image or file a prompt of the session carried; answered with\n`attachment`. It changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
             "attachment_id": {
-              "description": "The image, as the prompt's `user_message` names it.",
+              "description": "The image or file, as the prompt's `user_message` names it.",
               "$ref": "#/$defs/AttachmentId"
             },
             "session_id": {
@@ -763,7 +777,7 @@
           ]
         },
         {
-          "description": "Merge queued prompts into one, so they run as one turn. The merged prompt keeps the\nfirst listed prompt's id and place in the queue; the rest leave it. Its text is theirs,\nin the listed order, with a blank line between them, and its images are theirs, in the\nsame order, with each prompt's `[Image #N]` markers renumbered to count across the\nmerged prompt. Refused as `remove_queued` is, for any listed prompt; and with\n`bad_request` for fewer than two prompts, a prompt listed twice, a prompt an agent sent,\nprompts different users sent, or images over [`crate::MAX_PROMPT_IMAGE_BYTES`] together.",
+          "description": "Merge queued prompts into one, so they run as one turn. The merged prompt keeps the\nfirst listed prompt's id and place in the queue; the rest leave it. Its text is theirs,\nin the listed order, with a blank line between them, and its images and files are\ntheirs, in the same order, with each prompt's `[Image #N]` markers renumbered to count\nacross the merged prompt's images. Refused as `remove_queued` is, for any listed prompt;\nand with `bad_request` for fewer than two prompts, a prompt listed twice, a prompt an\nagent sent, prompts different users sent, or images and files over\n[`crate::MAX_PROMPT_ATTACHMENT_BYTES`] together.",
           "type": "object",
           "properties": {
             "prompt_ids": {
@@ -2774,6 +2788,29 @@
             "attachment_id",
             "image"
           ]
+        },
+        {
+          "description": "A file a prompt of the session carried, as `get_attachment` answers for it.",
+          "type": "object",
+          "properties": {
+            "attachment": {
+              "description": "The file, as the prompt's `user_message` names it.",
+              "$ref": "#/$defs/Attachment"
+            },
+            "data": {
+              "description": "Its bytes.",
+              "$ref": "#/$defs/Bytes"
+            },
+            "type": {
+              "type": "string",
+              "const": "file"
+            }
+          },
+          "required": [
+            "type",
+            "attachment",
+            "data"
+          ]
         }
       ]
     },
@@ -2863,7 +2900,7 @@
           "type": "object",
           "properties": {
             "attachments": {
-              "description": "Images sent with the prompt, in order; `get_attachment` fetches their bytes.",
+              "description": "Images and files sent with the prompt, in order; `get_attachment` fetches their\nbytes.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Attachment"
@@ -3112,6 +3149,24 @@
     "ProjectId": {
       "description": "Identifies a project across hosts.\n\nFrom a remote, it is the host and repository path, as in `github.com/org/repo`. For a\nrepository without one, it is the host id and absolute path, as in\n`01J9HOST:/home/dev/scratch`.",
       "type": "string"
+    },
+    "PromptFile": {
+      "description": "A file of any type a client sends with a prompt, for the agent to read from the session's\nhost.",
+      "type": "object",
+      "properties": {
+        "data": {
+          "description": "The file's bytes: at most [`MAX_FILE_BYTES`].",
+          "$ref": "#/$defs/Bytes"
+        },
+        "name": {
+          "description": "The file's name, without any folder: at most [`MAX_FILE_NAME_BYTES`] bytes, neither\n`.` nor `..`, and without `/`, `\\` or control characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "data"
+      ]
     },
     "PromptId": {
       "description": "Identifies a prompt waiting in its session's queue; a ULID string, opaque.",
