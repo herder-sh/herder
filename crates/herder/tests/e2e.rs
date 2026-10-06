@@ -396,7 +396,6 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await

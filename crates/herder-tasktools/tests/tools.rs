@@ -442,7 +442,6 @@ fn call_results_are_the_mcp_shape() {
 fn tool_errors_carry_stable_codes() {
     let codes = [
         (ErrorCode::InvalidArguments, "invalid_arguments"),
-        (ErrorCode::LimitExceeded, "limit_exceeded"),
         (ErrorCode::DepthExceeded, "depth_exceeded"),
         (ErrorCode::NotAllowed, "not_allowed"),
         (ErrorCode::NotYourChild, "not_your_child"),
@@ -455,15 +454,15 @@ fn tool_errors_carry_stable_codes() {
         assert_eq!(serde_json::to_value(code).unwrap(), wire);
     }
     let result = CallToolResult::from(ToolError::new(
-        ErrorCode::LimitExceeded,
-        "this task already has 5 children",
+        ErrorCode::DepthExceeded,
+        "children cannot spawn children",
     ));
     assert_eq!(
         serde_json::to_value(result).unwrap(),
         json!({
             "content": [{
                 "type": "text",
-                "text": r#"{"code":"limit_exceeded","message":"this task already has 5 children"}"#
+                "text": r#"{"code":"depth_exceeded","message":"children cannot spawn children"}"#
             }],
             "isError": true
         })

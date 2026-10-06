@@ -75,7 +75,6 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         parent: parent.map(SessionId::new),
         parent_host: None,
         task: task.map(str::to_owned),
-        max_children: None,
         failover_pin: None,
     }
 }

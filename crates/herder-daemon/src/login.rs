@@ -1231,7 +1231,6 @@ mod tests {
                     parent: None,
                     parent_host: None,
                     task: None,
-                    max_children: None,
                     failover_pin: None,
                 },
             })

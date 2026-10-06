@@ -36,7 +36,6 @@ fn created() -> EventBody {
         parent: None,
         parent_host: None,
         task: None,
-        max_children: None,
         failover_pin: None,
     }
 }
@@ -67,7 +66,6 @@ fn child_created(parent: &SessionId, task: &str) -> EventBody {
         parent: Some(parent.clone()),
         parent_host: None,
         task: Some(task.into()),
-        max_children: None,
         failover_pin: None,
     }
 }
@@ -331,7 +329,6 @@ fn a_session_in_its_folder_itself_owns_no_branch() {
         parent: None,
         task: None,
         parent_host: None,
-        max_children: None,
         failover_pin: None,
     };
     store.append(new_event(&s, 0, body)).unwrap();

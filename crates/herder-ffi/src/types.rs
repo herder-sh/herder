@@ -19,9 +19,9 @@ use herder_protocol::{
     ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
     PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route,
     SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload,
-    SkillSource, SkillsStatus, TaskSettings, Terminal, TerminalId, TerminalPurpose, Timestamp,
-    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow,
-    UserId, VaultStatus, VaultVolume,
+    SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings,
+    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
+    VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -208,7 +208,6 @@ pub enum EventBody {
         parent: Option<SessionId>,
         parent_host: Option<HostId>,
         task: Option<String>,
-        max_children: Option<u32>,
         failover_pin: Option<bool>,
     },
     BranchCheckedOut {
@@ -527,7 +526,6 @@ pub enum CommandBody {
         provider: Option<Provider>,
         model: Option<String>,
         permission_mode: Option<PermissionMode>,
-        max_children: Option<u32>,
         failover_pin: Option<bool>,
     },
     ArchiveSession {
@@ -1011,7 +1009,6 @@ pub struct DaemonSettings {
     pub listen: Vec<String>,
     pub log: LogSettings,
     pub binaries: Vec<ProviderBinary>,
-    pub tasks: TaskSettings,
     pub failover: FailoverSettings,
     pub titles: TitleSettings,
     pub resources: ResourceSettings,
@@ -1036,11 +1033,6 @@ pub enum LogFormat {
 pub struct ProviderBinary {
     pub provider: Provider,
     pub binary: String,
-}
-
-#[uniffi::remote(Record)]
-pub struct TaskSettings {
-    pub max_children: u32,
 }
 
 #[uniffi::remote(Record)]

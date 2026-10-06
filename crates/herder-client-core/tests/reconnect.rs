@@ -344,7 +344,6 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
                 provider: None,
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
-                max_children: None,
                 failover_pin: None,
             },
         )
@@ -452,7 +451,6 @@ async fn synced_waits_for_the_lists_and_the_replay() {
                 provider: None,
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
-                max_children: None,
                 failover_pin: None,
             },
         )
@@ -871,7 +869,6 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
                 provider: None,
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
-                max_children: None,
                 failover_pin: None,
             },
         )
@@ -1359,7 +1356,6 @@ async fn create_session(client: &Client, host: &HostId, repo: String) -> Session
                 provider: None,
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
-                max_children: None,
                 failover_pin: None,
             },
         )

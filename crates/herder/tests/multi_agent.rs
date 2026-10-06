@@ -492,7 +492,6 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::AutoEdit),
-            max_children: None,
             failover_pin: None,
         })
         .await

@@ -53,7 +53,7 @@ pub use server::{
 };
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, LogFormat, LogSettings, ProjectDiscovery,
-    ProviderBinary, ResourceSettings, TaskSettings, TitleSettings,
+    ProviderBinary, ResourceSettings, TitleSettings,
 };
 pub use skills::{
     AccountSkills, LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload,

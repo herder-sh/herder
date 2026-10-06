@@ -89,7 +89,6 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         },
     ))

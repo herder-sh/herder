@@ -91,7 +91,6 @@ fn client_fixtures() -> Vec<ClientMessage> {
             provider: Some(Provider::Claude),
             model: Some("opus".into()),
             permission_mode: Some(PermissionMode::Ask),
-            max_children: Some(3),
             failover_pin: Some(true),
         }),
         command(CommandBody::CreateSession {
@@ -102,7 +101,6 @@ fn client_fixtures() -> Vec<ClientMessage> {
             provider: None,
             model: None,
             permission_mode: None,
-            max_children: None,
             failover_pin: None,
         }),
         ClientMessage::Sync {
@@ -736,7 +734,6 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 parent: None,
                 parent_host: None,
                 task: None,
-                max_children: Some(3),
                 failover_pin: Some(false),
             },
         ),
@@ -1409,7 +1406,6 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 parent: Some(primary()),
                 parent_host: None,
                 task: Some("Store migration".into()),
-                max_children: None,
                 failover_pin: None,
             },
         ),
@@ -1445,7 +1441,6 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 parent: Some(primary()),
                 parent_host: Some(HostId::new("01J9HOST")),
                 task: Some("Build the Mac app".into()),
-                max_children: None,
                 failover_pin: None,
             },
         }),
@@ -1760,7 +1755,6 @@ fn remote_parent_and_child_host_are_on_the_wire_only_when_set() {
         parent: Some(SessionId::new("p")),
         parent_host,
         task: None,
-        max_children: None,
         failover_pin: None,
     };
     let spawned = |host_id: Option<HostId>| EventBody::ChildSpawned {
@@ -1799,7 +1793,6 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
         parent,
         parent_host,
         task,
-        max_children,
         failover_pin,
         ..
     } = body
@@ -1807,7 +1800,7 @@ fn events_without_task_fields_decode_as_top_level_and_user_routed() {
         panic!("expected session_created");
     };
     assert_eq!((parent, parent_host, task), (None, None, None));
-    assert_eq!((max_children, failover_pin), (None, None));
+    assert_eq!(failover_pin, None);
 
     let pr: PullRequest = serde_json::from_value(json!({
         "number": 1,
@@ -2120,7 +2113,6 @@ fn project_optional_fields_may_be_absent() {
             provider: None,
             model: None,
             permission_mode: None,
-            max_children: None,
             failover_pin: None,
         }
     );
@@ -3059,7 +3051,6 @@ fn settings() -> DaemonSettings {
             provider: Provider::Claude,
             binary: "~/.local/bin/claude".into(),
         }],
-        tasks: TaskSettings { max_children: 8 },
         failover: FailoverSettings { pin: true },
         titles: TitleSettings {
             enabled: true,

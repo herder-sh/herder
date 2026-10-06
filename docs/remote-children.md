@@ -48,8 +48,7 @@ Refusals the agent can act on:
 
 - `not_allowed`: no peer by that name, or the peer does not have the primary's project.
 - `host_busy` with `retry_after_secs`: the target is unreachable or its admission refuses.
-- the existing ones (depth, provider, permission mode, `max_children`, which counts remote
-  children too).
+- the existing ones (depth, provider, permission mode).
 
 ## 3. Pairing and trust
 

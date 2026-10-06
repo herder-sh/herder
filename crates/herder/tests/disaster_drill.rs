@@ -603,7 +603,6 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await

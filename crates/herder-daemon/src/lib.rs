@@ -214,13 +214,10 @@ pub async fn serve(
         async move { admission.run(&hub, shutdown).await }
     });
     let herder = herder_binary()?;
-    sessions.serve_mcp(
-        mcp::Config {
-            data_dir: data_dir.root().to_owned(),
-            herder: herder.clone(),
-        },
-        config.tasks,
-    )?;
+    sessions.serve_mcp(mcp::Config {
+        data_dir: data_dir.root().to_owned(),
+        herder: herder.clone(),
+    })?;
     sessions
         .track_prs(prs::Config {
             data_dir: data_dir.root().to_owned(),
@@ -325,7 +322,6 @@ mod tests {
             log: config::LogConfig::default(),
             accounts: session::Accounts::new(),
             binaries: Default::default(),
-            tasks: session::TaskLimits::default(),
             failover: Default::default(),
             titles: Default::default(),
             follow_ups: Default::default(),

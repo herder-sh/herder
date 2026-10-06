@@ -17,8 +17,6 @@ pub struct DaemonSettings {
     pub log: LogSettings,
     /// The CLI run per provider, where it is not the provider's own name on `PATH`.
     pub binaries: Vec<ProviderBinary>,
-    /// Limits on every task.
-    pub tasks: TaskSettings,
     /// How sessions fail over when their account hits a limit.
     pub failover: FailoverSettings,
     /// How sessions are titled.
@@ -60,13 +58,6 @@ pub struct ProviderBinary {
     pub provider: Provider,
     /// Path of its CLI on the host, absolute or starting with `~/`.
     pub binary: String,
-}
-
-/// The `[tasks]` table.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct TaskSettings {
-    /// Live (not archived) children a task's primary may have at once.
-    pub max_children: u32,
 }
 
 /// The `[titles]` table.
