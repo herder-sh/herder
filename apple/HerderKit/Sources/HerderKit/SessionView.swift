@@ -780,7 +780,7 @@ struct DraftSessionView: View {
     private var machineSection: SettingsSection {
         SettingsSection(kind: .machine, options: SettingsOption.machines(machines, current: hostId) { _ in nil }) { id in
             hostId = id
-            MachinePreference.remember(id)
+            if let projectId = draft.projectId { MachinePreference.remember(id, for: projectId) }
             choice = fleet.draftChoice(choice, movedTo: id, projectId: draft.projectId)
         }
     }
@@ -793,7 +793,7 @@ struct DraftSessionView: View {
             return
         }
         ModePreference.remember(mode, for: draft)
-        MachinePreference.remember(hostId)
+        if let projectId = draft.projectId { MachinePreference.remember(hostId, for: projectId) }
         let sent = images
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
@@ -818,15 +818,18 @@ struct DraftSessionView: View {
     }
 }
 
-/// The machine last picked for a new session, or last started one on, remembered on this
-/// device; new sessions start there when it has their project.
+/// The machine last picked for a new session in a project, or last started one in it on,
+/// remembered per project on this device, so one project's machine does not carry over to
+/// another; its new sessions start there while it has the project.
 enum MachinePreference {
-    private static let key = "draftMachine"
+    private static func key(_ projectId: String) -> String { "machine." + projectId }
 
-    static var last: HostId? { UserDefaults.standard.string(forKey: key) }
+    static func last(for projectId: String) -> HostId? {
+        UserDefaults.standard.string(forKey: key(projectId))
+    }
 
-    static func remember(_ hostId: HostId) {
-        UserDefaults.standard.set(hostId, forKey: key)
+    static func remember(_ hostId: HostId, for projectId: String) {
+        UserDefaults.standard.set(hostId, forKey: key(projectId))
     }
 }
 

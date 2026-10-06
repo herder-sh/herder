@@ -218,14 +218,14 @@ struct Draft: Hashable, Identifiable {
     }
 
     /// Where a new session in a project starts, of `candidates`: the machine last picked for a
-    /// new session on this device, else the one the project's newest session ran on, else the
+    /// new session in the project on this device, else the one the project's newest session ran on, else the
     /// first.
     @MainActor
     static func machine(for projectId: String, among candidates: [HostId], fleet: Fleet) -> HostId? {
         let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
             .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
             .max { $0.1 < $1.1 }?.0
-        return machine(among: candidates, last: MachinePreference.last, newest: newest)
+        return machine(among: candidates, last: MachinePreference.last(for: projectId), newest: newest)
     }
 
     static func machine(among candidates: [HostId], last: HostId?, newest: HostId?) -> HostId? {
@@ -235,7 +235,7 @@ struct Draft: Hashable, Identifiable {
 
 /// Picks where a new session runs, as a palette: one row per project, across machines, then a
 /// repository path on a machine for a new project. The chat opens on the machine last picked
-/// for a new session, else the one the project was used on last; it can change there.
+/// for a new session in the project, else the one the project was used on last; it can change there.
 struct ProjectPicker: View {
     let fleet: Fleet
     let newProject: Bool
