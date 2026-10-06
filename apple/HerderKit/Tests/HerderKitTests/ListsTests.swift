@@ -100,7 +100,7 @@ struct ListsTests {
         #expect(lists.projects[0].machines == ["alpha", "beta"])
     }
 
-    @Test func archivedSessionsFollowTheLiveOnesEachGroupATaskTree() {
+    @Test func taskTreesStayWholeAndGoToArchivedOnlyWhenAllOfThemIs() {
         let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
         var scripts = ["01A", "01B", "01C", "01D", "01E", "01F", "01G"].map { Script($0) }
         let sessions = [
@@ -116,17 +116,60 @@ struct ListsTests {
         for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
         let lists = Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) }))
         let project = lists.projects[0]
-        // A child whose parent is in the other group leads in its own.
-        #expect(project.live.map(\.title) == ["Live child of an archived lead", "Live lead", "Live child"])
-        #expect(project.live.map(\.depth) == [0, 0, 1])
-        #expect(project.archived.map(\.title) == [
-            "Archived lead of a live child", "Archived lead", "Its archived child", "Archived child of a live lead",
+        // An archived lead still leads its live child; an archived child stays under its live
+        // lead, after the live children.
+        #expect(project.live.map(\.title) == [
+            "Archived lead of a live child", "Live child of an archived lead",
+            "Live lead", "Live child", "Archived child of a live lead",
         ])
-        #expect(project.archived.map(\.depth) == [0, 0, 1, 0])
-        #expect(project.archived.allSatisfy { $0.state == .archived })
+        #expect(project.live.map(\.depth) == [0, 1, 0, 1, 1])
+        // Only a tree archived whole is in Archived, still a tree.
+        #expect(project.archived.map(\.title) == ["Archived lead", "Its archived child"])
+        #expect(project.archived.map(\.depth) == [0, 1])
         #expect(project.sessions.map(\.key) == (project.live + project.archived).map(\.key))
-        // A lead still counts all its children, in either group.
-        #expect(project.live[1].children == 2)
+        // A lead counts all its children, archived or not.
+        #expect(project.live[2].children == 2)
+    }
+
+    @Test func archivingAParentKeepsItsChildrenUnderIt() {
+        var parent = Script("01A")
+        var child = Script("01B")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B"])
+        for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
+        let lists = Lists(machines: [host], sessions: [
+            parent.key: parent.model([created()]),
+            child.key: child.model([created(parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+        ], archiving: [parent.key])
+        #expect(lists.projects[0].live.map(\.key) == [parent.key, child.key])
+        #expect(lists.projects[0].live.map(\.depth) == [0, 1])
+        #expect(lists.projects[0].archived.isEmpty)
+        // Home keeps the archived parent while its child works, to lead it.
+        #expect(lists.home.map(\.key) == [parent.key, child.key])
+        #expect(lists.home.map(\.depth) == [0, 1])
+    }
+
+    @Test func archivingAChildKeepsItUnderItsLiveParent() {
+        var parent = Script("01A")
+        var child = Script("01B")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B"])
+        for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
+        let lists = Lists(machines: [host], sessions: [
+            parent.key: parent.model([created()]), child.key: child.model([created(parent: "01A")]),
+        ], archiving: [child.key])
+        #expect(lists.projects[0].live.map(\.key) == [parent.key, child.key])
+        #expect(lists.projects[0].live.map(\.depth) == [0, 1])
+        #expect(lists.projects[0].live[0].children == 1)
+        #expect(lists.projects[0].archived.isEmpty)
+        #expect(lists.home.map(\.key) == [parent.key])
+    }
+
+    @Test func aChildIsNestedByTheListsParentBeforeItsEventsLoad() {
+        var parent = Script("01A")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B"])
+        host.sessions[1].parent = "01A"
+        let lists = Lists(machines: [host], sessions: [parent.key: parent.model([created()])])
+        #expect(lists.projects[0].sessions.map(\.key.sessionId) == ["01A", "01B"])
+        #expect(lists.projects[0].sessions.map(\.depth) == [0, 1])
     }
 
     @Test func aSessionBeingArchivedIsListedArchivedAlready() {

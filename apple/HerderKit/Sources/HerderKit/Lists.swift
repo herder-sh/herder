@@ -1,15 +1,18 @@
 import Foundation
 import Herder
 
-/// A project and its sessions across machines, in task-tree order: the live ones, then the
-/// archived ones, each group a task tree of its own.
+/// A project and its sessions across machines, in task-tree order: the task trees with a live
+/// session, then the ones archived whole.
 struct ProjectGroup: Hashable, Identifiable {
     var id: String { projectId ?? "" }
     /// `nil` for sessions whose project is not known yet.
     let projectId: String?
     let name: String
     let machines: [String]
+    /// Its task trees with a session that is not archived, whole: an archived parent stays to
+    /// lead its live children, and archived children stay under their parent.
     var live: [SessionSummary]
+    /// Its task trees whose every session is archived.
     var archived: [SessionSummary]
     /// Where its machines keep its clones.
     var paths: [String] = []
@@ -56,8 +59,9 @@ struct ProjectGroup: Hashable, Identifiable {
 /// TUI builds its own (crates/herder-tui/src/app.rs, projects.rs, inbox.rs).
 struct Lists: Equatable {
     var requests: [PendingRequest] = []
-    /// Home's sessions: every task tree that is not archived, newest first by when it was
-    /// created, so a session keeps its place as it starts and stops working.
+    /// Home's sessions: every task tree whose top is neither archived nor moved or that has a
+    /// working session, newest first by when it was created, so a session keeps its place as
+    /// it starts and stops working.
     var home: [SessionSummary] = []
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
@@ -113,7 +117,8 @@ struct Lists: Equatable {
 
     /// Home's task trees, newest first by when the top session was created: the top session
     /// leads, its working children under it. Idle children are left to their parent, so they
-    /// never crowd Home; archived and moved sessions are left out.
+    /// never crowd Home. A tree whose top is archived or moved is left out unless it still
+    /// has a working session, which keeps its top in place to lead it.
     private static func home(_ entries: [Entry], children: [SessionKey: [Entry]], now: Date) -> [SessionSummary] {
         func isWorking(_ entry: Entry) -> Bool { [.running, .waiting, .needsYou].contains(entry.model.state) }
         func descendants(_ entry: Entry, depth: Int = 0) -> [Entry] {
@@ -122,11 +127,12 @@ struct Lists: Equatable {
                 .flatMap { [$0] + descendants($0, depth: depth + 1) }
         }
         return forest(entries).filter { $0.1 == 0 }.map(\.0)
-            .filter { ![.archived, .moved].contains($0.model.state) }
+            .map { top in (top, descendants(top).filter(isWorking)) }
+            .filter { top, working in ![.archived, .moved].contains(top.model.state) || !working.isEmpty }
             // Session ids are ULIDs, which sort by creation time.
-            .sorted { ($0.key.sessionId, $0.key.hostId) > ($1.key.sessionId, $1.key.hostId) }
-            .flatMap { top in
-                [top.summary(now: now, children: children)] + descendants(top).filter(isWorking).map { child in
+            .sorted { ($0.0.key.sessionId, $0.0.key.hostId) > ($1.0.key.sessionId, $1.0.key.hostId) }
+            .flatMap { top, working in
+                [top.summary(now: now, children: children)] + working.map { child in
                     var summary = child.summary(now: now, children: children)
                     summary.depth = 1
                     return summary
@@ -135,7 +141,9 @@ struct Lists: Equatable {
     }
 
     /// Every project a machine lists or a listed session is in, and the sessions no project
-    /// holds yet, each with its live sessions apart from its archived ones. An archived
+    /// holds yet, each with its task trees that have a live session apart from those archived
+    /// whole. Trees are built from all of a project's sessions before they are split, so
+    /// archiving a parent or a child never takes a tree apart. An archived
     /// session no project holds is left out: it is one of a project the machine dropped, or
     /// of a repository gone from it, and would only keep that project in the list.
     private static func projects(_ entries: [Entry], machines: [Machine], now: Date) -> [ProjectGroup] {
@@ -150,12 +158,18 @@ struct Lists: Equatable {
             let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
             // A session counts only the children in its own project.
             let children = Self.children(members)
-            // A child whose parent is in the other group leads a tree of its own in its group.
-            func tree(archived: Bool) -> [SessionSummary] {
-                forest(sorted.filter { ($0.model.state == .archived) == archived }).map { entry, depth in
+            var live: [SessionSummary] = []
+            var archived: [SessionSummary] = []
+            for tree in trees(forest(sorted)) {
+                let summaries = tree.map { entry, depth in
                     var summary = entry.summary(now: now, children: children)
                     summary.depth = depth
                     return summary
+                }
+                if tree.allSatisfy({ $0.0.model.state == .archived }) {
+                    archived += summaries
+                } else {
+                    live += summaries
                 }
             }
             var machineNames = machines.filter { machine in
@@ -171,7 +185,7 @@ struct Lists: Equatable {
             let lastActive = members.compactMap(\.model.updatedAt).max()
             let group = ProjectGroup(
                 projectId: projectId, name: name, machines: machineNames,
-                live: tree(archived: false), archived: tree(archived: true), paths: paths,
+                live: live, archived: archived, paths: paths,
                 age: Timestamp.age(lastActive, now: now))
             return (group, lastActive)
         }
@@ -194,8 +208,8 @@ struct Lists: Equatable {
             .first { $0 != fallback } ?? fallback
     }
 
-    /// Top-level sessions newest first, each followed by its children oldest first. A child
-    /// whose parent is not listed is top-level.
+    /// Top-level sessions newest first, each followed by its children: the live ones oldest
+    /// first, then the archived ones. A child whose parent is not listed is top-level.
     static func forest(_ entries: [Entry]) -> [(Entry, Int)] {
         let keys = Set(entries.map(\.key))
         let children = children(entries)
@@ -207,7 +221,8 @@ struct Lists: Equatable {
         func visit(_ entry: Entry, depth: Int) {
             ordered.append((entry, depth))
             guard depth < 8 else { return }
-            for child in children[entry.key] ?? [] {
+            let kids = children[entry.key] ?? []
+            for child in kids.filter({ $0.model.state != .archived }) + kids.filter({ $0.model.state == .archived }) {
                 visit(child, depth: depth + 1)
             }
         }
@@ -215,6 +230,15 @@ struct Lists: Equatable {
             visit(top, depth: 0)
         }
         return ordered
+    }
+
+    /// A forest's task trees, each its top-level session and everything under it.
+    static func trees(_ forest: [(Entry, Int)]) -> [[(Entry, Int)]] {
+        var trees: [[(Entry, Int)]] = []
+        for node in forest {
+            if node.1 == 0 || trees.isEmpty { trees.append([node]) } else { trees[trees.count - 1].append(node) }
+        }
+        return trees
     }
 
     /// Each session's children among `entries`, in their order, by the parent's key.
@@ -299,9 +323,10 @@ struct Lists: Equatable {
 
         var machineName: String { host?.hostName ?? machine.name }
 
-        /// Its parent's key; a parent is always on the same machine.
+        /// Its parent's key; a parent is always on the same machine. The list's parent stands
+        /// in until the session's own events have loaded, so its tree holds while they do.
         var parentKey: SessionKey? {
-            model.parent.map { SessionKey(hostId: key.hostId, sessionId: $0) }
+            (model.parent ?? head.parent).map { SessionKey(hostId: key.hostId, sessionId: $0) }
         }
 
         /// `children` holds each session's children by the parent's key; see `Lists.children`.

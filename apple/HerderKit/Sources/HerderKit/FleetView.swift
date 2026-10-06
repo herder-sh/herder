@@ -338,7 +338,7 @@ struct SessionLink: View {
                     .buttonStyle(.plain)
             }
         }
-        .opacity(fleet.archiving.contains(session.key) ? 0.5 : 1)
+        .opacity(fleet.archiving.contains(session.key) ? 0.5 : session.state == .archived ? 0.75 : 1)
         .overlay(alignment: .topTrailing) {
             if fleet.archiving.contains(session.key) {
                 ArchivingLabel().padding(8)
@@ -416,7 +416,8 @@ struct ProjectsView: View {
                         StatusGlyph(state: state, size: 7, pulses: false)
                     }
                 }
-                Text(([project.live.count == 1 ? "1 session" : "\(project.live.count) sessions"] + project.machines)
+                let count = project.live.filter { $0.state != .archived }.count
+                Text(([count == 1 ? "1 session" : "\(count) sessions"] + project.machines)
                     .joined(separator: " · "))
                     .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
