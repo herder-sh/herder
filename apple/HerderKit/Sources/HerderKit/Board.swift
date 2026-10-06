@@ -168,7 +168,6 @@ struct BoardView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Board")
-        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 
     private var pullRequestsLink: some View {

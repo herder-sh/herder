@@ -564,6 +564,5 @@ struct PullRequestsView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Pull Requests")
-        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 }

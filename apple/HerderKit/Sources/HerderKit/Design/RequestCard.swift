@@ -116,7 +116,7 @@ struct RequestCard: View {
             Button { selection.wrappedValue = request.session.key } label: { sessionLine }
                 .buttonStyle(.plain)
         } else {
-            NavigationLink(value: request.session.key) { sessionLine }
+            NavigationLink(value: NavRoute.session(request.session.key)) { sessionLine }
                 .buttonStyle(.plain)
         }
     }

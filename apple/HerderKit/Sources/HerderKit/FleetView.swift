@@ -52,9 +52,9 @@ struct FleetView: View {
     @State private var session: SessionKey?
     @State private var draft: Draft?
     @State private var tab = CompactTab.home
-    @State private var homePath: [SessionKey] = []
-    @State private var projectsPath: [SessionKey] = []
-    @State private var boardPath: [SessionKey] = []
+    @State private var homePath: [NavRoute] = []
+    @State private var projectsPath: [NavRoute] = []
+    @State private var boardPath: [NavRoute] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -117,15 +117,20 @@ struct FleetView: View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
     }
 
-    /// Shows a session just created from a draft: in its project's pane, or pushed on Home.
+    /// Shows a session just created from a draft: in its project's pane, or pushed on the
+    /// Projects tab it was started from, else on Home.
     private func opened(_ key: SessionKey) {
         draft = nil
         if let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
             item = .project(projectId)
         }
         session = key
-        tab = .home
-        homePath = [key]
+        if tab == .projects {
+            projectsPath.append(.session(key))
+        } else {
+            tab = .home
+            homePath = [.session(key)]
+        }
     }
 
     #if os(iOS)
@@ -146,21 +151,33 @@ struct FleetView: View {
             NavigationStack(path: $homePath) {
                 HomeView(fleet: fleet, sheet: $sheet)
                     .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
+                    .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $homePath)
         case .projects:
             NavigationStack(path: $projectsPath) {
-                ProjectsView(fleet: fleet, sheet: $sheet, draft: $draft, projects: fleet.lists.projects)
+                ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
                     .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
+                    .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $projectsPath)
         case .board:
-            NavigationStack(path: $boardPath) { BoardView(fleet: fleet, showsPullRequests: true) }
-                .environment(\.sessionPath, $boardPath)
+            NavigationStack(path: $boardPath) {
+                BoardView(fleet: fleet, showsPullRequests: true)
+                    .navigationDestination(for: NavRoute.self, destination: destination)
+            }
+            .environment(\.sessionPath, $boardPath)
         case .usage:
             NavigationStack { UsageView(fleet: fleet) }
         case .machines:
             NavigationStack { MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true, showsSkills: true) }
+        }
+    }
+
+    @ViewBuilder private func destination(_ route: NavRoute) -> some View {
+        switch route {
+        case .session(let key): SessionView(fleet: fleet, key: key)
+        case .project(let id): ProjectView(fleet: fleet, id: id, sheet: $sheet, draft: $draft)
         }
     }
     #endif
@@ -205,7 +222,6 @@ struct HomeView: View {
         #if os(macOS)
         .navigationSubtitle(ConnectionLine.text(lists.machines))
         #endif
-        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
     }
 }
 
@@ -299,7 +315,7 @@ struct SessionLink: View {
                         selection.wrappedValue == session.key || hovering ? Theme.raised : .clear,
                         in: .rect(cornerRadius: Theme.corner - 2))
             } else {
-                NavigationLink(value: session.key) { row }
+                NavigationLink(value: NavRoute.session(session.key)) { row }
                     .buttonStyle(.plain)
             }
         }
@@ -326,21 +342,14 @@ struct SessionLink: View {
     }
 }
 
-/// The projects as compact rows, most recently active first, each unfolding to its sessions
-/// in task-tree order: the live ones, then the archived ones folded away at the end. A search
-/// keeps the projects whose name or path matches, and those with sessions that match,
-/// unfolded to show just those sessions.
+/// The projects as compact rows, most recently active first, each opening its own screen and
+/// starting a session from its plus. A search keeps the projects whose name or path matches,
+/// and those with sessions that match, listing those sessions under it.
 struct ProjectsView: View {
     let fleet: Fleet
-    @Binding var sheet: AppSheet?
     @Binding var draft: Draft?
     let projects: [ProjectGroup]
-    var title = "Projects"
     @State private var query = ""
-    /// What the user unfolded: project ids, and `archived:` ids for their archived sessions.
-    @State private var unfolded: Set<String> = []
-    /// The same while a search runs, starting with what it found through sessions unfolded.
-    @State private var searchUnfolded: Set<String> = []
 
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
@@ -348,27 +357,11 @@ struct ProjectsView: View {
         let shown = ProjectGroup.found(projects, query: query)
         List {
             ForEach(shown) { project in
-                DisclosureGroup(isExpanded: folding(project.id)) {
-                    ForEach(project.live) { session in
-                        row(session)
-                        ForEach(session.agents) { agent in
-                            NativeAgentRow(agent: agent, fleet: fleet, key: session.key, depth: session.depth)
-                                .listRowBackground(Theme.surface)
-                        }
-                    }
-                    if !project.archived.isEmpty {
-                        DisclosureGroup(isExpanded: folding("archived:" + project.id)) {
-                            ForEach(project.archived) { row($0) }
-                        } label: {
-                            Text("Archived · \(project.archived.count)")
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.secondary)
-                        }
-                        .listRowBackground(Theme.surface)
-                    }
-                } label: {
-                    header(project)
+                NavigationLink(value: NavRoute.project(project.id)) { header(project) }
+                    .listRowBackground(Theme.surface)
+                if searching {
+                    ForEach(project.sessions) { row($0) }
                 }
-                .listRowBackground(Theme.surface)
             }
         }
         .environment(\.defaultMinListRowHeight, 36)
@@ -381,33 +374,14 @@ struct ProjectsView: View {
             }
         }
         .searchable(text: $query, prompt: "Projects and sessions")
-        .onChange(of: query) {
-            // What a search finds only through sessions opens to show them.
-            let found = ProjectGroup.found(projects, query: query).filter { !$0.matches(query) }
-            searchUnfolded = Set(found.map(\.id) + found.filter { !$0.archived.isEmpty }.map { "archived:" + $0.id })
-        }
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .refreshable { fleet.wake() }
-        .navigationTitle(title)
-        .navigationDestination(for: SessionKey.self) { SessionView(fleet: fleet, key: $0) }
+        .navigationTitle("Projects")
     }
 
-    /// Whether `id` is unfolded: the user's own choice, or while searching the search's.
-    private func folding(_ id: String) -> Binding<Bool> {
-        Binding(
-            get: { searching ? searchUnfolded.contains(id) : unfolded.contains(id) },
-            set: { open in
-                if searching {
-                    if open { searchUnfolded.insert(id) } else { searchUnfolded.remove(id) }
-                } else {
-                    if open { unfolded.insert(id) } else { unfolded.remove(id) }
-                }
-            })
-    }
-
-    /// A project's one compact row: its icon and name, its live sessions and machines, and how
-    /// long since anything happened in it.
+    /// A project's one compact row: its icon and name, its live sessions and machines, how
+    /// long since anything happened in it, and a plus that starts a session in it.
     private func header(_ project: ProjectGroup) -> some View {
         HStack(spacing: 10) {
             ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId),
@@ -429,44 +403,52 @@ struct ProjectsView: View {
                 Text(project.age).font(.caption).foregroundStyle(Theme.tertiary)
             }
             if let id = project.projectId {
-                // Borderless, so tapping it starts a session rather than unfolding the row.
-                Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
+                let started = Draft.inProject(id, fleet: fleet)
+                // Borderless, so tapping it starts a session rather than opening the project.
+                Button("New Session", systemImage: "plus") { draft = started }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .foregroundStyle(Theme.secondary)
+                    .disabled(started == nil)
             }
         }
         .contentShape(.rect)
-        .contextMenu {
-            if let id = project.projectId {
-                Button("New Session", systemImage: "plus") { draft = Draft.inProject(id, fleet: fleet) }
-                Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
-            }
-        }
-        .swipeActions(edge: .trailing) {
-            if let id = project.projectId {
-                Button("Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
-                    .tint(Theme.raised)
-            }
-        }
     }
 
     private func row(_ session: SessionSummary) -> some View {
-        NavigationLink(value: session.key) {
+        NavigationLink(value: NavRoute.session(session.key)) {
             SessionRow(session: session, showsProject: false)
         }
         .listRowBackground(Theme.surface)
-        .swipeActions(edge: .trailing) {
-            if session.state != .archived {
-                Button("Archive", systemImage: "archivebox") {
-                    Task { await fleet.archive(session.key) }
-                }
-                .tint(Theme.raised)
+        .padding(.leading, 24)
+    }
+}
+
+/// A project's own screen on iPhone, as the project's pane on iPad: its sessions, with starting
+/// one and the project's settings at hand.
+struct ProjectView: View {
+    let fleet: Fleet
+    let id: String
+    @Binding var sheet: AppSheet?
+    @Binding var draft: Draft?
+
+    var body: some View {
+        let project = fleet.lists.projects.first { $0.id == id }
+        ScrollView {
+            if let project {
+                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived)
+                    .padding(16)
             }
         }
-        .contextMenu {
-            if session.state != .archived {
-                Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
+        .background(Theme.background)
+        .refreshable { fleet.wake() }
+        .navigationTitle(project?.name ?? "Project")
+        .toolbar {
+            if let projectId = project?.projectId {
+                Button("Project Settings", systemImage: "gearshape") { sheet = .projectSettings(projectId: id) }
+                let started = Draft.inProject(projectId, fleet: fleet)
+                Button("New Session", systemImage: "plus") { draft = started }
+                    .disabled(started == nil)
             }
         }
     }
