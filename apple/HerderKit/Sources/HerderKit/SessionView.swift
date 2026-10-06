@@ -382,7 +382,13 @@ struct SessionView: View {
     private func controls(_ model: SessionModel, _ summary: SessionSummary?) -> some View {
         VStack(spacing: 8) {
             if let request = pinned(model, summary) {
-                RequestCard(request: request.request, fleet: fleet, showsSession: false, more: request.more)
+                // The composer takes the user's own answer, as it would with the card gone; each
+                // answer brings in the next question.
+                RequestCard(request: request.request, fleet: fleet, showsSession: false, more: request.more,
+                            step: request.step, answersInComposer: readOnly(model, summary) == nil)
+                    .id(request.request.requestId)
+                    .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                            removal: .opacity))
             }
             if let readOnly = readOnly(model, summary) {
                 Label(readOnly, systemImage: "lock")
@@ -401,6 +407,7 @@ struct SessionView: View {
                 .id(key)
             }
         }
+        .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.request.requestId)
         .frame(maxWidth: 784)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
@@ -410,7 +417,8 @@ struct SessionView: View {
     }
 
     /// The oldest approval, else the oldest question, on any route, as the TUI pins them.
-    private func pinned(_ model: SessionModel, _ summary: SessionSummary?) -> (request: PendingRequest, more: Int)? {
+    private func pinned(_ model: SessionModel, _ summary: SessionSummary?)
+        -> (request: PendingRequest, more: Int, step: (number: Int, of: Int)?)? {
         guard let summary, let pending = model.approvals.first ?? model.questions.first else { return nil }
         let kind: PendingRequest.Kind = switch pending.kind {
         case .approval(let summary): .approval(summary: summary)
@@ -421,7 +429,9 @@ struct SessionView: View {
             : pending.reason?.text
         return (PendingRequest(requestId: pending.id, session: summary, kind: kind, since: pending.since,
                                age: Timestamp.age(pending.since, now: .now), reason: reason, note: pending.note),
-                model.approvals.count + model.questions.count - 1)
+                model.approvals.count + model.questions.count - 1,
+                model.approvals.isEmpty && model.questionRun > 1
+                    ? (model.questionRun - model.questions.count + 1, model.questionRun) : nil)
     }
 
     /// Why the session cannot be driven from here, if it cannot.
@@ -603,7 +613,9 @@ private struct Composer: View {
     private var forkable: Bool { model.loaded && model.parent == nil }
 
     private var placeholder: String {
-        if !model.questions.isEmpty { return "Type an answer…" }
+        if case .question(_, let choices) = model.questions.first?.kind {
+            return choices.isEmpty ? "Type an answer…" : "Type your own answer…"
+        }
         if model.parent != nil {
             return model.turn != nil ? "Queue a message for this child session…" : "Message this child session…"
         }

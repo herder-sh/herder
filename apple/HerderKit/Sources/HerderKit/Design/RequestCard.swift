@@ -10,34 +10,50 @@ struct RequestCard: View {
     /// Where the session row opens the session on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>? = nil
     var more = 0
+    /// Which of the questions asked together this is, and of how many, when more than one.
+    var step: (number: Int, of: Int)? = nil
+    /// The session's composer below the card takes the user's own answer, so the card has no
+    /// field of its own.
+    var answersInComposer = false
     @State private var answer = ""
-    @State private var sending = false
 
     var body: some View {
-        // A long question scrolls inside the card rather than being cut short.
-        ViewThatFits(in: .vertical) {
-            content
-            ScrollView { content }.frame(maxHeight: 420)
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            if showsSession { sessionLink }
+            // A long question scrolls under the header rather than pushing it out of view.
+            ViewThatFits(in: .vertical) {
+                content
+                ScrollView { content }.frame(maxHeight: 360)
+            }
+            if let refusal = fleet.refusals[request.session.key] {
+                Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
+            }
         }
+        .padding(14)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.accent, lineWidth: 1.5))
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: request.isQuestion ? "questionmark.bubble.fill" : "hand.raised.fill")
+                .font(.subheadline.weight(.bold))
+            Text(request.isQuestion ? "Question" : "Approval needed")
+                .font(.subheadline.weight(.semibold))
+            if let step {
+                StepDots(number: step.number, of: step.of)
+            } else if more > 0 {
+                Text("+\(more) more").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+            }
+            Spacer()
+            Text(request.age).font(.caption).foregroundStyle(Theme.tertiary)
+        }
+        .foregroundStyle(Theme.accent)
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: request.isQuestion ? "questionmark.bubble.fill" : "hand.raised.fill")
-                    .font(.subheadline.weight(.bold))
-                Text(request.isQuestion ? "Question" : "Approval needed")
-                    .font(.subheadline.weight(.semibold))
-                if more > 0 {
-                    Text("+\(more) more").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                }
-                Spacer()
-                Text(request.age).font(.caption).foregroundStyle(Theme.tertiary)
-            }
-            .foregroundStyle(Theme.accent)
-            if showsSession { sessionLink }
             switch request.kind {
             case .approval(let summary):
                 Text(summary)
@@ -62,14 +78,16 @@ struct RequestCard: View {
                             await fleet.answer(request, with: .choice(index: UInt32(index)))
                         }
                     }
-                    answerField
+                    if !answersInComposer { answerField }
+                }
+                if answersInComposer, !labels.isEmpty {
+                    Label("Or type your own answer below", systemImage: "arrow.down")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.tertiary)
                 }
             }
-            if let refusal = fleet.refusals[request.session.key] {
-                Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
-            }
         }
-        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The user's own answer, sent with Return or the arrow.
@@ -151,6 +169,27 @@ struct RequestCard: View {
         if let note = request.note {
             Text("The primary says: \(note)").font(.footnote).italic().foregroundStyle(Theme.secondary)
         }
+    }
+}
+
+/// "2 of 3" with a dot per question, the answered ones filled.
+private struct StepDots: View {
+    let number: Int
+    let of: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 3) {
+                ForEach(1...max(of, 1), id: \.self) { index in
+                    Capsule()
+                        .fill(index <= number ? Theme.accent : Theme.stroke)
+                        .frame(width: index == number ? 12 : 5, height: 5)
+                }
+            }
+            Text("\(number) of \(of)").font(.caption.weight(.semibold).monospacedDigit()).foregroundStyle(Theme.secondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Question \(number) of \(of)")
     }
 }
 

@@ -48,6 +48,9 @@ struct SessionModel {
     var turn: TurnId?
     var approvals: [Pending] = []
     var questions: [Pending] = []
+    /// How many questions were asked since none was pending, answered or not: the pinned one is
+    /// number `questionRun - questions.count + 1` of them.
+    var questionRun = 0
     var prs: [PullRequest] = []
     /// Why the last turn failed, until the next one starts.
     var failure: String?
@@ -148,6 +151,8 @@ struct SessionModel {
         case .approvalResolved(let id, _, _):
             approvals.removeAll { $0.id == id }
         case .questionAsked(let id, let turnId, let text, let choices, let routedTo, let reason):
+            if questions.isEmpty { questionRun = 0 }
+            questionRun += 1
             questions.append(Pending(
                 id: id, turnId: turnId, kind: .question(text: text, choices: choices),
                 routedTo: routedTo, reason: reason, since: at))
