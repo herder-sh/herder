@@ -430,6 +430,10 @@ pub enum CommandBody {
     SetProjectSettings {
         /// The project, one of this daemon's.
         project_id: ProjectId,
+        /// Display name of the project; absent, blank or the last segment of its id goes back
+        /// to that segment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         /// Permission mode new sessions of the project start in when none is given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default_permission_mode: Option<PermissionMode>,

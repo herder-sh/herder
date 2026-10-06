@@ -498,31 +498,47 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     // Adding it again changes nothing.
     assert_eq!(handle(add).await, Ok(added));
 
-    let set = |default_account: &str, icon_background: &str| {
+    let set = |name: &str, default_account: &str, icon_background: &str| {
         herder_protocol::CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/org/app"),
+            name: Some(name.into()),
             default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
             default_account: Some(AccountId::new(default_account)),
             setup_command: Some("make setup".into()),
             icon_background: Some(icon_background.into()),
         }
     };
-    let error = handle(set("nobody", "#ffffff")).await.unwrap_err();
+    let error = handle(set("app", "nobody", "#ffffff")).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
-    let error = handle(set("main", "white")).await.unwrap_err();
+    let error = handle(set("app", "main", "white")).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
     assert_eq!(
-        handle(set("main", "#ffffff")).await,
+        handle(set(" The app ", "main", "#ffffff")).await,
         Ok(herder_protocol::CommandResult::Applied)
     );
-    let mut expected = project("github.com/org/app", "app", &[&path]);
+    let mut expected = project("github.com/org/app", "The app", &[&path]);
     expected.default_permission_mode = Some(herder_protocol::PermissionMode::AutoEdit);
     expected.default_account = Some(AccountId::new("main"));
     expected.setup_command = Some("make setup".into());
     expected.icon_background = Some("#ffffff".into());
-    assert_eq!(next_projects(&outbox).await, [expected]);
+    assert_eq!(next_projects(&outbox).await, [expected.clone()]);
+    let named = crate::config::read_projects(&file).unwrap().entries;
+    assert_eq!(named[0].name.as_deref(), Some("The app"));
+    // The name it gets without one, or a blank one, clears the configured name.
+    for name in ["app", " "] {
+        handle(set("The app", "main", "#ffffff")).await.unwrap();
+        handle(set(name, "main", "#ffffff")).await.unwrap();
+        let entries = crate::config::read_projects(&file).unwrap().entries;
+        assert_eq!(entries[0].name, None, "{name:?}");
+    }
+    expected.name = "app".into();
+    let mut listed = next_projects(&outbox).await;
+    while listed != [expected.clone()] {
+        listed = next_projects(&outbox).await;
+    }
     let unknown = herder_protocol::CommandBody::SetProjectSettings {
         project_id: ProjectId::new("github.com/org/other"),
+        name: None,
         default_permission_mode: None,
         default_account: None,
         setup_command: None,
@@ -545,13 +561,12 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
             project_id: local.clone()
         })
     );
-    let listed = next_projects(&outbox).await;
-    assert!(
-        listed
-            .iter()
-            .any(|project| project.project_id == local && project.paths == [notes_path.clone()]),
-        "{listed:?}"
-    );
+    // Lists from the renames above may come first.
+    while !next_projects(&outbox)
+        .await
+        .iter()
+        .any(|project| project.project_id == local && project.paths == [notes_path.clone()])
+    {}
 
     // The file keeps what was there and holds the project, as a restart reads it.
     let text = fs::read_to_string(&file).unwrap();
@@ -872,6 +887,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
     );
     let set = herder_protocol::CommandBody::SetProjectSettings {
         project_id: ProjectId::new("github.com/org/lib"),
+        name: None,
         default_permission_mode: None,
         default_account: None,
         setup_command: Some("true".into()),

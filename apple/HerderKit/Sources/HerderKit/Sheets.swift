@@ -411,9 +411,9 @@ private struct PickRow: View {
     }
 }
 
-/// A project's settings on each machine that has it, editable by the machine's owners: the
-/// permissions and account new sessions start with, and the command a new worktree runs first.
-/// Changes apply as they are made.
+/// A project's settings on each machine that has it, editable by the machine's owners: its name
+/// and icon, the permissions and account new sessions start with, and the command a new worktree
+/// runs first. Changes apply as they are made.
 struct ProjectSettingsSheet: View {
     let fleet: Fleet
     let projectId: String
@@ -481,6 +481,7 @@ struct ProjectSettingsForm: View {
     let fleet: Fleet
     let machine: Machine
     let project: Project
+    @State private var name = ""
     @State private var mode: PermissionMode?
     @State private var account: AccountId?
     @State private var setup = ""
@@ -489,11 +490,25 @@ struct ProjectSettingsForm: View {
     @State private var error: String?
     @State private var confirmingRemove = false
     @FocusState private var editingSetup: Bool
+    @FocusState private var editingName: Bool
 
     var body: some View {
         let owner = machine.role == .owner
         VStack(alignment: .leading, spacing: 18) {
             SettingsGroup(title: "Appearance") {
+                SettingRow(label: "Name", detail: "Blank goes back to the repository's") {
+                    TextField(defaultName, text: $name)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Theme.text)
+                        .multilineTextAlignment(.trailing)
+                        .autocorrectionDisabled()
+                        .focused($editingName)
+                        .onSubmit { Task { await save() } }
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: 240, minHeight: 32)
+                        .background(Theme.surface, in: .rect(cornerRadius: 7))
+                }
+                RowDivider()
                 ProjectIconRow(fleet: fleet, machine: machine, project: project, background: iconBackground,
                                error: $error)
                 RowDivider()
@@ -594,6 +609,7 @@ struct ProjectSettingsForm: View {
             Text("Its clones stay on disk. Archived sessions keep their history.")
         }
         .onAppear {
+            name = project.name
             mode = project.defaultPermissionMode
             account = project.defaultAccount
             setup = project.setupCommand ?? ""
@@ -604,6 +620,7 @@ struct ProjectSettingsForm: View {
         .onChange(of: iconBackground) { if loaded { Task { await save() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
+        .onChange(of: editingName) { if !editingName { Task { await save() } } }
     }
 
     /// The icon backgrounds to choose from; any other `#rrggbb` comes from the config file.
@@ -632,13 +649,21 @@ struct ProjectSettingsForm: View {
         machine.accounts.first { $0.accountId == account }?.label ?? "Most room left"
     }
 
+    /// The name the machine gives the project when none is set: the last segment of its id.
+    private var defaultName: String {
+        project.projectId.split(whereSeparator: { $0 == "/" || $0 == ":" }).last.map(String.init) ?? project.projectId
+    }
+
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
-        guard mode != project.defaultPermissionMode || account != project.defaultAccount
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let name = trimmed.isEmpty ? defaultName : trimmed
+        guard name != project.name || mode != project.defaultPermissionMode || account != project.defaultAccount
                 || (command.isEmpty ? nil : command) != project.setupCommand
                 || iconBackground != project.iconBackground else { return }
         do {
-            try await fleet.setProjectSettings(project.projectId, on: machine.hostId, mode: mode, account: account,
+            try await fleet.setProjectSettings(project.projectId, on: machine.hostId, name: name, mode: mode,
+                                               account: account,
                                                setupCommand: command.isEmpty ? nil : command,
                                                iconBackground: iconBackground)
             error = nil

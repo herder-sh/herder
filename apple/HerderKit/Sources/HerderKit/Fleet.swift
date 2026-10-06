@@ -351,12 +351,12 @@ public final class Fleet {
 
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
-        _ projectId: ProjectId, on hostId: HostId, mode: PermissionMode?, account: AccountId?, setupCommand: String?,
-        iconBackground: String?
+        _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,
+        setupCommand: String?, iconBackground: String?
     ) async throws {
         _ = try await client.send(hostId: hostId, command: .setProjectSettings(
-            projectId: projectId, defaultPermissionMode: mode, defaultAccount: account, setupCommand: setupCommand,
-            iconBackground: iconBackground))
+            projectId: projectId, name: name, defaultPermissionMode: mode, defaultAccount: account,
+            setupCommand: setupCommand, iconBackground: iconBackground))
     }
 
     /// Uploads a PNG as a project's icon on a machine, or clears the upload when `png` is nil
