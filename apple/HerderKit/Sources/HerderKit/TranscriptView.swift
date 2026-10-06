@@ -202,9 +202,10 @@ struct MarkdownText: View {
     @Environment(\.findHighlight) private var find
 
     var body: some View {
+        let blocks = Self.blocks(parts)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                switch part {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                switch block.first {
                 case .code(let code, let language):
                     Self.codeText(code, language: language)
                         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
@@ -213,8 +214,9 @@ struct MarkdownText: View {
                     MermaidBlock(source: source)
                 case .table(let table):
                     MarkdownTableView(table: table)
-                case .line(let line):
-                    lineView(line, last: index == parts.count - 1)
+                case .line, .gap, nil:
+                    LinkText(prose(block, last: index == blocks.count - 1))
+                        .font(.body).foregroundStyle(Theme.text).lineSpacing(3)
                 }
             }
         }
@@ -232,25 +234,64 @@ struct MarkdownText: View {
         }
     }
 
-    @ViewBuilder private func lineView(_ line: String, last: Bool) -> some View {
-        let cursor = streaming && last ? " ▍" : ""
-        if line.hasPrefix("#") {
-            Text(inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
-                .font(.headline).foregroundStyle(Theme.text)
-        } else if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("•").foregroundStyle(Theme.secondary)
-                Text(inline(String(line.dropFirst(item.count)) + cursor))
+    /// Each run of prose lines as one block, everything else as a block of its own. A selection
+    /// can't leave the `Text` it starts in, so a run drawn as one `Text` copies across lines.
+    static func blocks(_ parts: [Part]) -> [[Part]] {
+        var blocks: [[Part]] = []
+        for part in parts {
+            switch (part, blocks.last?.last) {
+            case (.line, .line?), (.line, .gap?), (.gap, .line?):
+                blocks[blocks.count - 1].append(part)
+            case (.gap, _):
+                continue
+            default:
+                blocks.append([part])
             }
-            .font(.body).foregroundStyle(Theme.text)
-        } else if line.hasPrefix(">") {
-            Text(inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
-                .italic().foregroundStyle(Theme.secondary)
-                .padding(.leading, 10)
-                .overlay(alignment: .leading) { Rectangle().fill(Theme.stroke).frame(width: 2) }
-        } else {
-            Text(inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
         }
+        return blocks
+    }
+
+    /// A run of prose lines as one text, a blank line between two as a short gap.
+    private func prose(_ block: [Part], last: Bool) -> AttributedString {
+        var string = AttributedString()
+        var gap = false
+        for (index, part) in block.enumerated() {
+            guard case .line(let line) = part else {
+                gap = true
+                continue
+            }
+            if !string.characters.isEmpty {
+                string += AttributedString("\n")
+                if gap {
+                    var spacer = AttributedString("\n")
+                    spacer.font = .system(size: 5)
+                    string += spacer
+                }
+            }
+            gap = false
+            string += styled(line + (streaming && last && index == block.count - 1 ? " ▍" : ""))
+        }
+        return string
+    }
+
+    private func styled(_ line: String) -> AttributedString {
+        if line.hasPrefix("#") {
+            var heading = inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces))
+            heading.font = .headline
+            return heading
+        }
+        if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
+            var bullet = AttributedString("•\u{2002}")
+            bullet.foregroundColor = Theme.secondary
+            return bullet + inline(String(line.dropFirst(item.count)))
+        }
+        if line.hasPrefix(">") {
+            var quote = inline(line.dropFirst().trimmingCharacters(in: .whitespaces))
+            quote.font = .body.italic()
+            quote.foregroundColor = Theme.secondary
+            return quote
+        }
+        return inline(line)
     }
 
     private func inline(_ text: String) -> AttributedString { Self.inline(text, prs: prLinks, find: find) }
@@ -305,11 +346,12 @@ struct MarkdownText: View {
     }
 
     enum Part: Equatable {
-        case line(String), code(String, language: String), diagram(String), table(MarkdownTable)
+        case line(String), gap, code(String, language: String), diagram(String), table(MarkdownTable)
     }
 
-    /// Fenced code blocks, pipe tables, and the non-blank lines between them. A ```mermaid
-    /// fence becomes a diagram once it's closed, so a streaming one stays source until then.
+    /// Fenced code blocks, pipe tables, and the lines between them, a blank one after a line as
+    /// a gap. A ```mermaid fence becomes a diagram once it's closed, so a streaming one stays
+    /// source until then.
     private var parts: [Part] { Self.parse(text, streaming: streaming) }
 
     static func parse(_ text: String, streaming: Bool = false) -> [Part] {
@@ -349,8 +391,11 @@ struct MarkdownText: View {
                 table = start
             } else if !trimmed.isEmpty {
                 parts.append(.line(String(line)))
+            } else if case .line? = parts.last {
+                parts.append(.gap)
             }
         }
+        if parts.last == .gap { parts.removeLast() }
         if let open = table { parts.append(.table(open)) }
         if let lines = code { parts.append(.code(lines.joined(separator: "\n"), language: language)) }
         if parts.isEmpty && streaming { parts.append(.line("")) }

@@ -22,7 +22,7 @@ struct MarkdownTableTests {
         #expect(MarkdownText.parse("Use a | b to pipe\nthen run it") == [.line("Use a | b to pipe"), .line("then run it")])
         #expect(MarkdownText.parse("| a | b |\n| -- | xx |") == [.line("| a | b |"), .line("| -- | xx |")])
         #expect(MarkdownText.parse("| a | b |\n|---|") == [.line("| a | b |"), .line("|---|")])
-        #expect(MarkdownText.parse("| a | b |\n\n|---|---|") == [.line("| a | b |"), .line("|---|---|")])
+        #expect(MarkdownText.parse("| a | b |\n\n|---|---|") == [.line("| a | b |"), .gap, .line("|---|---|")])
     }
 
     @Test func escapedPipesStayInTheirCell() {
