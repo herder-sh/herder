@@ -33,11 +33,13 @@ struct SessionView: View {
     @State private var top = TranscriptTop()
     /// Bumped on every send, so the transcript jumps to its end.
     @State private var sent = 0
+    @State private var find = TranscriptFind()
 
     var body: some View {
         let model = fleet.sessions[key]
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
         let blocks = model.map(Transcript.blocks) ?? []
+        let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
@@ -65,6 +67,7 @@ struct SessionView: View {
                     }
                     ForEach(blocks) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
+                            .environment(\.findHighlight, find.highlight(block.id))
                     }
                     if model?.loaded == true && model?.status == .waitingForCapacity {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
@@ -95,6 +98,12 @@ struct SessionView: View {
                     proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
                 }
             }
+            .onChange(of: find.current) { if let id = find.current { withAnimation { proxy.scrollTo(id, anchor: .center) } } }
+            .overlay(alignment: .topTrailing) {
+                if find.shown {
+                    FindBar(find: $find, matches: matches).padding(12)
+                }
+            }
             .overlay(alignment: .leading) {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
@@ -110,6 +119,7 @@ struct SessionView: View {
             }
             }
         }
+        .environment(\.prLinks, PRLinks(linkablePRs))
         .background(Theme.background)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -122,6 +132,7 @@ struct SessionView: View {
         }
         .onChange(of: key) { old, _ in
             showsTerminal = false
+            find = TranscriptFind()
             scroll.show(key)
             fleet.unwatch(old)
             fleet.watch(key)
@@ -244,6 +255,12 @@ struct SessionView: View {
                     .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
+            if !showsTerminal {
+                HeaderButton(symbol: "magnifyingglass", title: nil, selected: find.shown) { toggleFind() }
+                    .accessibilityLabel("Find in Transcript")
+                    .keyboardShortcut("f", modifiers: .command)
+                    .help("Find in the transcript (⌘F)")
+            }
             HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
@@ -269,6 +286,17 @@ struct SessionView: View {
 
     private var ownsTerminal: Bool {
         fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner
+    }
+
+    private func toggleFind() { find.shown.toggle() }
+
+    /// The pull requests `#123` in the transcript can name: the session tree's, then the
+    /// project's, whose repository the rest are in.
+    private var linkablePRs: [PullRequest] {
+        let tree = PRRollup(of: key, sessions: fleet.sessions).groups.flatMap(\.prs)
+        let project = fleet.lists.projects.first { $0.sessions.contains { $0.key == key } }?
+            .sessions.flatMap(\.prs) ?? []
+        return tree + project
     }
 
     private func showInspector() {
@@ -320,6 +348,9 @@ struct SessionView: View {
                                systemImage: showsTerminal ? "text.bubble" : "terminal") { showsTerminal.toggle() }
                     }
                     Button("Events and Statistics", systemImage: "info.circle") { showInspector() }
+                    if !showsTerminal {
+                        Button("Find in Transcript", systemImage: "magnifyingglass") { toggleFind() }
+                    }
                 }
             }
             if model.state != .archived {

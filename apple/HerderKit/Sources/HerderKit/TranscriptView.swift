@@ -8,6 +8,8 @@ struct TranscriptBlockView: View {
     let key: SessionKey
     /// Opens a child session; `nil` pushes it.
     let open: ((SessionKey) -> Void)?
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
     private var hostId: HostId { key.hostId }
 
     var body: some View {
@@ -36,11 +38,12 @@ struct TranscriptBlockView: View {
                     if inline {
                         MessageText(text: text, pictures: pictures) { await fleet.fetchAttachment($0, of: key) }
                     } else {
-                        Text(text)
+                        Text(MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find))
                     }
                 }
                     .font(.body)
                     .foregroundStyle(Theme.onBubble)
+                    .tint(Theme.link)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -61,7 +64,8 @@ struct TranscriptBlockView: View {
         case .reasoning(_, let text, let streaming):
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "brain").foregroundStyle(Theme.tertiary)
-                Text(text + (streaming ? " ▍" : "")).italic().foregroundStyle(Theme.secondary)
+                Text(MarkdownText.decorated(AttributedString(text + (streaming ? " ▍" : "")), prs: prLinks, find: find))
+                    .italic().foregroundStyle(Theme.secondary).tint(Theme.link)
                     .lineLimit(streaming ? nil : 3)
                     .textSelection(.enabled)
             }
@@ -188,6 +192,8 @@ struct HandoffSide: View {
 struct MarkdownText: View {
     let text: String
     var streaming = false
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -208,6 +214,8 @@ struct MarkdownText: View {
         }
         // Every line, heading and bullet can be selected and copied, not only code.
         .textSelection(.enabled)
+        // The app's tint is the text colour, which would hide links in prose.
+        .tint(Theme.link)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -221,29 +229,61 @@ struct MarkdownText: View {
     @ViewBuilder private func lineView(_ line: String, last: Bool) -> some View {
         let cursor = streaming && last ? " ▍" : ""
         if line.hasPrefix("#") {
-            Text(Self.inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
+            Text(inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
                 .font(.headline).foregroundStyle(Theme.text)
         } else if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("•").foregroundStyle(Theme.secondary)
-                Text(Self.inline(String(line.dropFirst(item.count)) + cursor))
+                Text(inline(String(line.dropFirst(item.count)) + cursor))
             }
             .font(.body).foregroundStyle(Theme.text)
         } else if line.hasPrefix(">") {
-            Text(Self.inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
+            Text(inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
                 .italic().foregroundStyle(Theme.secondary)
                 .padding(.leading, 10)
                 .overlay(alignment: .leading) { Rectangle().fill(Theme.stroke).frame(width: 2) }
         } else {
-            Text(Self.inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
+            Text(inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
         }
     }
 
-    static func inline(_ text: String) -> AttributedString {
-        var string = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
+    private func inline(_ text: String) -> AttributedString { Self.inline(text, prs: prLinks, find: find) }
+
+    static func inline(_ text: String, prs: PRLinks = PRLinks(), find: FindHighlight? = nil) -> AttributedString {
+        decorated((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text), prs: prs, find: find)
+    }
+
+    /// Links bare URLs and `#123` pull request references, underlines every link, and marks
+    /// what the transcript's find matches.
+    static func decorated(_ string: AttributedString, prs: PRLinks, find: FindHighlight?) -> AttributedString {
+        var string = string
         autolink(&string)
+        linkPullRequests(&string, prs: prs)
+        for run in string.runs where run.link != nil { string[run.range].underlineStyle = .single }
+        if let find { find.mark(&string) }
         return string
+    }
+
+    /// Links `#123` to that pull request, outside code spans, links and words like `a#1`.
+    static func linkPullRequests(_ string: inout AttributedString, prs: PRLinks) {
+        guard !prs.isEmpty else { return }
+        let plain = String(string.characters)
+        for match in plain.matches(of: /(?:^|[^\w&\/#])(?<ref>#(?<number>\d{1,7}))\b/) {
+            guard let number = UInt64(match.output.number), let url = prs.url(number) else { continue }
+            let ref = match.output.ref
+            link(&string, plain: plain, range: ref.startIndex..<ref.endIndex, to: url)
+        }
+    }
+
+    /// Links `range` of `plain`, the characters of `string`, unless it is code or a link already.
+    private static func link(_ string: inout AttributedString, plain: String, range: Range<String.Index>, to url: URL) {
+        let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
+        let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
+        let linked = string[start..<end].runs.contains {
+            $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
+        }
+        if !linked { string[start..<end].link = url }
     }
 
     /// Links bare `http(s)://` URLs, which Markdown leaves as text, outside code spans and links.
@@ -254,12 +294,7 @@ struct MarkdownText: View {
         for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
             guard let url = match.url, let range = Range(match.range, in: plain),
                   ["http://", "https://"].contains(where: plain[range].lowercased().hasPrefix) else { continue }
-            let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
-            let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
-            let linked = string[start..<end].runs.contains {
-                $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
-            }
-            if !linked { string[start..<end].link = url }
+            link(&string, plain: plain, range: range, to: url)
         }
     }
 
