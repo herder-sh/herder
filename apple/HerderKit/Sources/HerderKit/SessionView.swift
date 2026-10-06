@@ -299,7 +299,7 @@ struct SessionView: View {
             .popover(isPresented: $showsPRs, arrowEdge: .bottom) {
                 PRStrip(fleet: fleet, key: key, rollup: rollup, presentation: PRListPresentation(compact: compact)) { child in
                     showsPRs = false
-                    if let open { open(child) } else { path?.wrappedValue.append(child) }
+                    if let open { open(child) } else { path?.wrappedValue.append(.session(child)) }
                 }
                 .presentationCompactAdaptation(.sheet)
             }

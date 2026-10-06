@@ -26,7 +26,7 @@ struct AgentMessageSource: View {
             } else if let open {
                 Button { open(source) } label: { senderLabel }.buttonStyle(.plain)
             } else {
-                NavigationLink(value: source) { senderLabel }.buttonStyle(.plain)
+                NavigationLink(value: NavRoute.session(source)) { senderLabel }.buttonStyle(.plain)
             }
         }
         .help("Sender session: \(message.senderSessionId)")

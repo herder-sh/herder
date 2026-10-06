@@ -1,9 +1,16 @@
 import Herder
 import SwiftUI
 
+/// What a tab's navigation stack shows past its root, on iPhone.
+enum NavRoute: Hashable {
+    case session(SessionKey)
+    /// A project's own screen, by its group's id.
+    case project(String)
+}
+
 extension EnvironmentValues {
     /// The navigation path a session was pushed on, on iPhone; a child pops back to its parent.
-    @Entry var sessionPath: Binding<[SessionKey]>?
+    @Entry var sessionPath: Binding<[NavRoute]>?
 }
 
 /// Opens a session: through `open` beside the list, else by pushing it.
@@ -16,7 +23,7 @@ struct SessionButton<Label: View>: View {
         if let open {
             Button { open(key) } label: { label }.buttonStyle(.plain)
         } else {
-            NavigationLink(value: key) { label }.buttonStyle(.plain)
+            NavigationLink(value: NavRoute.session(key)) { label }.buttonStyle(.plain)
         }
     }
 }
@@ -300,11 +307,11 @@ struct ChildBanner: View {
                     if let open {
                         Button { open(parent) } label: { back }
                             .keyboardShortcut("[", modifiers: .command)
-                    } else if let path, path.wrappedValue.dropLast().last == parent {
+                    } else if let path, path.wrappedValue.dropLast().last == .session(parent) {
                         // Pushed from the parent: back pops to it, where it was left.
                         Button { path.wrappedValue.removeLast() } label: { back }
                     } else {
-                        NavigationLink(value: parent) { back }
+                        NavigationLink(value: NavRoute.session(parent)) { back }
                     }
                 }
                 .buttonStyle(.plain)

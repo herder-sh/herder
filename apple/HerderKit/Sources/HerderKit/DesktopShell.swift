@@ -558,16 +558,17 @@ struct IconButton: View {
 }
 
 /// A project's sessions: the live ones, then the archived ones, folded away until asked for.
-private struct ProjectSessions: View {
+struct ProjectSessions: View {
     let fleet: Fleet
     let live: [SessionSummary]
     let archived: [SessionSummary]
-    @Binding var selection: SessionKey?
+    /// Where a tapped session opens beside the list; `nil` pushes it.
+    var selection: Binding<SessionKey?>?
     @State private var showsArchived = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
-            SessionGroup(title: "Sessions", sessions: live, fleet: fleet, selection: $selection, showsProject: false)
+            SessionGroup(title: "Sessions", sessions: live, fleet: fleet, selection: selection, showsProject: false)
             if !archived.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Button { showsArchived.toggle() } label: {
@@ -582,7 +583,7 @@ private struct ProjectSessions: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.secondary)
                     if showsArchived {
-                        SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: $selection, showsProject: false)
+                        SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: selection, showsProject: false)
                             .opacity(0.75)
                     }
                 }
