@@ -178,6 +178,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
+            data_dir: dir.join("data"),
         }
         .run(shutdown.clone()),
     );

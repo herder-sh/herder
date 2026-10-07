@@ -584,6 +584,7 @@ impl Daemon {
                 hub: Arc::clone(&hub),
                 sessions: sessions.clone(),
                 sessions_changed,
+                data_dir: dir.join("data"),
             }
             .run(shutdown.clone()),
         );

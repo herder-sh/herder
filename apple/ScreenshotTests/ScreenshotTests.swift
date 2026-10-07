@@ -133,7 +133,7 @@ final class ScreenshotTests: XCTestCase {
     }
 
     /// Switches to the section named `name`: a tab on the iPhone, a sidebar row on the Mac, found
-    /// by its symbol in the rail, or by its label, with a count after it, in the sidebar.
+    /// by its label: the name in the rail, with a count after it in the sidebar.
     private func section(_ name: String) -> Bool {
         #if os(iOS)
         // Back from a session to the list, with the edge swipe: a session hides the tab bar.
@@ -146,10 +146,8 @@ final class ScreenshotTests: XCTestCase {
         guard wait(tab, "\(name) tab") else { return false }
         tab.tap()
         #else
-        let symbols = ["Home": "tray", "Board": "checklist", "Machines": "server.rack"]
-        let symbol = symbols[name] ?? name
         let row = app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ OR label == %@ OR label BEGINSWITH %@", symbol, name, "\(name), ")).firstMatch
+            format: "label == %@ OR label BEGINSWITH %@", name, "\(name), ")).firstMatch
         guard wait(row, "\(name) in the sidebar") else { return false }
         row.click()
         #endif
