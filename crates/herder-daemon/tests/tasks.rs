@@ -13,17 +13,17 @@ use herder_daemon::mcp;
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
-    TaskLimits, ulid_turn_ids,
+    ulid_turn_ids,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
+    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CiStatus,
     CommandBody, CommandResult, ErrorClass, ErrorCode, EscalationReason, Event, EventBody, Item,
-    ItemBody, ItemId, PermissionMode, PromptId, Provider, QuestionId, Route, SessionHead,
-    SessionId, SessionStatus, Timestamp, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
-    UserId,
+    ItemBody, ItemId, Mergeable, PermissionMode, PrState, PromptId, Provider, PullRequest,
+    QuestionId, ReviewStatus, Route, SessionHead, SessionId, SessionStatus, Timestamp, TurnError,
+    TurnId, TurnUsage, UsagePeriod, UsageTotal, UserId,
 };
-use herder_store::Store;
+use herder_store::{NewEvent, Store};
 use herder_tasktools::CallToolResult;
 use jiff::SignedDuration;
 use serde_json::{Value, json};
@@ -35,8 +35,7 @@ use tokio_util::sync::CancellationToken;
 /// A provider whose agent answers every prompt `Done: <prompt>` after a moment, never ends a
 /// turn on `Hang.`, and fails the turn on `Fail.`. It blocks on a request until it is answered: on `Ask.` it asks a
 /// question with choices A and B, on `Write <path>.` it asks to write the file, and on
-/// `Run <command>.` to run the command. `Background.` leaves a command running in the
-/// background past its turn, and `Finish.` ends it before its turn does.
+/// `Run <command>.` to run the command.
 struct Echo;
 
 impl Adapter for Echo {
@@ -97,15 +96,6 @@ impl Adapter for Echo {
                             }
                             if text == "Hang." {
                                 continue;
-                            }
-                            let commands = match text.as_str() {
-                                "Background." => Some(1),
-                                "Finish." => Some(0),
-                                _ => None,
-                            };
-                            if let Some(running) = commands {
-                                let running = AdapterEvent::BackgroundCommands { running };
-                                let _ = events.send(running).await;
                             }
                             if text == "Fail." {
                                 let error = TurnError {
@@ -260,11 +250,6 @@ struct Daemon {
 impl Daemon {
     /// A daemon on `dir`, which a later daemon may open again.
     async fn open(dir: &Path) -> Self {
-        Self::open_with(dir, TaskLimits::default()).await
-    }
-
-    /// A daemon on `dir` whose tasks have `limits`.
-    async fn open_with(dir: &Path, limits: TaskLimits) -> Self {
         let mut adapters = Adapters::new();
         adapters.register(Provider::Other("echo".into()), Arc::new(Echo));
         let mut accounts = Accounts::new();
@@ -290,13 +275,10 @@ impl Daemon {
         let data_dir = dir.join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
         manager
-            .serve_mcp(
-                mcp::Config {
-                    data_dir: data_dir.clone(),
-                    herder: PathBuf::from("/opt/herder"),
-                },
-                limits,
-            )
+            .serve_mcp(mcp::Config {
+                data_dir: data_dir.clone(),
+                herder: PathBuf::from("/opt/herder"),
+            })
             .unwrap();
         let notifier = Arc::new(Recorder::default());
         manager.notify_escalations(notifier.clone()).unwrap();
@@ -317,17 +299,12 @@ impl Daemon {
 
     /// A top-level session in `mode` whose CLI has started, so it holds an MCP token.
     async fn primary(&self, mode: PermissionMode) -> SessionId {
-        self.primary_with(mode, None).await
-    }
-
-    /// A primary created with its own limit on children, as `primary`.
-    async fn primary_with(&self, mode: PermissionMode, max_children: Option<u32>) -> SessionId {
-        let session_id = self.create_with(mode, max_children).await;
+        let session_id = self.create_with(mode).await;
         self.start(&session_id).await;
         session_id
     }
 
-    async fn create_with(&self, mode: PermissionMode, max_children: Option<u32>) -> SessionId {
+    async fn create_with(&self, mode: PermissionMode) -> SessionId {
         let create = CommandBody::CreateSession {
             repo: Some(self.repo.to_str().unwrap().to_owned()),
             project_id: None,
@@ -336,7 +313,6 @@ impl Daemon {
             provider: None,
             model: Some("echo-1".into()),
             permission_mode: Some(mode),
-            max_children,
             failover_pin: None,
         };
         let CommandResult::SessionCreated { session_id } =
@@ -360,6 +336,7 @@ impl Daemon {
             session_id: session_id.clone(),
             text: "Plan.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         self.manager.handle(alice(), prompt).await.unwrap();
         for _ in 0..250 {
@@ -394,6 +371,42 @@ impl Daemon {
 
     async fn until(&self, session_id: &SessionId, matching: fn(&EventBody) -> bool) {
         self.until_n(session_id, 1, matching).await;
+    }
+
+    /// Links pull request `number` to `session_id` in `state`, or changes it to `state`, as
+    /// the pull request tracker journals it.
+    async fn pr(&self, session_id: &SessionId, number: u64, state: PrState) {
+        let mut store = Store::open(self.data_dir.parent().unwrap().join("herder.db")).unwrap();
+        let linked = store
+            .session_prs(session_id)
+            .unwrap()
+            .iter()
+            .any(|pr| pr.number == number);
+        let pr = PullRequest {
+            number,
+            url: format!("https://github.com/acme/app/pull/{number}"),
+            title: format!("PR {number}"),
+            head_branch: None,
+            head_sha: None,
+            unresolved_threads: None,
+            state,
+            ci: CiStatus::None,
+            review: ReviewStatus::None,
+            mergeable: Mergeable::Unknown,
+        };
+        let body = if linked {
+            EventBody::PrUpdated { pr }
+        } else {
+            EventBody::PrLinked { pr }
+        };
+        store
+            .append(NewEvent {
+                session_id: session_id.clone(),
+                at: Timestamp::now(),
+                by: None,
+                body,
+            })
+            .unwrap();
     }
 
     /// The worktree `session_id` was created with.
@@ -521,13 +534,12 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
     let (child_a, child_b) = (id(&a["child"]), id(&b["child"]));
     assert_ne!(a["branch"], b["branch"]);
 
-    // Each child finished its turn with a clean worktree, so it is archived by the time its
-    // report comes.
+    // Each child finished its turn without pull requests, so it stays idle.
     let mut reports = BTreeSet::new();
     for _ in 0..2 {
         let event = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
         assert_eq!(event["kind"], "report", "{event}");
-        assert_eq!(event["status"], "archived", "{event}");
+        assert_eq!(event["status"], "idle", "{event}");
         reports.insert((
             event["child"].as_str().unwrap().to_owned(),
             event["summary"].as_str().unwrap().to_owned(),
@@ -588,7 +600,6 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
     };
     let branch = branch.as_ref().unwrap();
     assert_eq!(repo, daemon.repo.to_str().unwrap());
-    // Archived: the worktree stays until the sweep days later, the branch kept.
     assert!(Path::new(worktree).is_dir());
     let kept = format!("refs/heads/{branch}");
     git(&daemon.repo, &["show-ref", "--verify", "--quiet", &kept]);
@@ -616,7 +627,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
                 "child": child_a.as_str(),
                 "task": "Fix A",
                 "branch": a["branch"],
-                "status": "archived",
+                "status": "idle",
                 "last_report": "Done: Do A.",
                 "open_questions": [],
             },
@@ -624,7 +635,7 @@ async fn a_primary_spawns_two_children_and_gets_each_report_once() {
                 "child": child_b.as_str(),
                 "task": "Fix B",
                 "branch": b["branch"],
-                "status": "archived",
+                "status": "idle",
                 "last_report": "Done: Do B.",
                 "open_questions": [],
             },
@@ -668,50 +679,20 @@ async fn a_child_never_gets_a_permission_mode_above_its_primarys() {
 }
 
 #[tokio::test]
-async fn spawn_past_the_child_limit_is_refused_until_a_child_is_archived() {
+async fn a_primary_spawns_as_many_live_children_as_it_needs() {
     let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 2 }).await;
+    let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
     // Children blocked on a question stay live.
     let ask = json!({ "task": "T", "prompt": "Ask." });
-    let first = id(&tools.ok("spawn", ask.clone()).await["child"]);
-    tools.ok("spawn", ask.clone()).await;
-    for _ in 0..2 {
+    for _ in 0..8 {
+        tools.ok("spawn", ask.clone()).await;
         let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
         assert_eq!(request["kind"], "request");
     }
-
-    let refused = tools.call("spawn", ask.clone()).await;
-    assert!(refused.is_error, "{refused:?}");
-    let error: Value = serde_json::from_str(&refused.content[0].text).unwrap();
-    assert_eq!(error["code"], "limit_exceeded");
-    let message = error["message"].as_str().unwrap();
-    assert!(message.contains("its limit is 2"), "{message}");
     let status = tools.ok("status", json!({})).await;
-    assert_eq!(status["children"].as_array().unwrap().len(), 2);
-
-    // The limit is per task: another primary spawns freely, and one created with its own
-    // limit keeps to that.
-    let other = daemon.primary(PermissionMode::Ask).await;
-    daemon.connect(&other).ok("spawn", ask.clone()).await;
-    let own = daemon.primary_with(PermissionMode::Ask, Some(1)).await;
-    let mut own_tools = daemon.connect(&own);
-    own_tools.ok("spawn", ask.clone()).await;
-    assert_eq!(
-        own_tools.fails("spawn", ask.clone()).await,
-        "limit_exceeded"
-    );
-
-    // Once answered, the first child finishes and is archived, which frees its slot by the
-    // time its report comes.
-    let answer = json!({ "child": first.as_str(), "question_id": "question-1", "choice": 0 });
-    tools.ok("answer", answer).await;
-    let wait = json!({ "child": first.as_str(), "timeout_secs": 10 });
-    let report = tools.ok("wait_for", wait).await;
-    assert_eq!(report["status"], "archived", "{report}");
-    tools.ok("spawn", ask.clone()).await;
-    assert_eq!(tools.fails("spawn", ask).await, "limit_exceeded");
+    assert_eq!(status["children"].as_array().unwrap().len(), 8);
 }
 
 /// A host with `GIB`s of memory available, which the test changes.
@@ -777,6 +758,7 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
         session_id: primary.clone(),
         text: "Hang.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     daemon.manager.handle(alice(), prompt).await.unwrap();
     daemon
@@ -814,22 +796,6 @@ async fn with_one_turn_allowed_a_primary_waiting_for_its_child_lets_the_child_ru
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["summary"], "Done: Do it.", "{report}");
     assert_eq!(admission.resources().running_turns, 1);
-}
-
-#[tokio::test]
-async fn concurrent_spawns_cannot_both_take_the_last_free_slot() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::open_with(dir.path(), TaskLimits { max_children: 1 }).await;
-    let primary = daemon.primary(PermissionMode::Ask).await;
-    let (mut a, mut b) = (daemon.connect(&primary), daemon.connect(&primary));
-    let spawn = json!({ "task": "T", "prompt": "Do it." });
-    let (a, b) = tokio::join!(a.call("spawn", spawn.clone()), b.call("spawn", spawn));
-    assert_ne!(a.is_error, b.is_error, "{a:?} {b:?}");
-    let refused = if a.is_error { a } else { b };
-    assert!(
-        refused.content[0].text.contains("limit_exceeded"),
-        "{refused:?}"
-    );
 }
 
 #[tokio::test]
@@ -888,7 +854,11 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
     assert_eq!(first["status"], "running");
     let second = tools.ok("wait_for", wait.clone()).await;
     assert_eq!(second["summary"], "Done: Second.");
-    assert_eq!(second["status"], "archived");
+    assert_eq!(second["status"], "idle");
+    let archive = CommandBody::ArchiveSession {
+        session_id: child.clone(),
+    };
+    daemon.manager.handle(alice(), archive).await.unwrap();
     let worktree = daemon.worktree(&child).await;
     assert!(worktree.is_dir());
     daemon
@@ -904,7 +874,7 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
     assert!(worktree.is_dir());
     let third = tools.ok("wait_for", wait).await;
     assert_eq!(third["summary"], "Done: Third.");
-    assert_eq!(third["status"], "archived");
+    assert_eq!(third["status"], "idle");
     let send = json!({ "child": child.as_str(), "text": "Hang." });
     assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
     let wait = json!({ "child": child.as_str(), "timeout_secs": 1 });
@@ -920,7 +890,7 @@ async fn send_prompts_a_child_and_queues_behind_its_running_turn() {
 }
 
 #[tokio::test]
-async fn children_that_have_not_finished_cleanly_and_primaries_stay_live() {
+async fn children_with_unmerged_work_and_primaries_stay_live() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
@@ -934,20 +904,17 @@ async fn children_that_have_not_finished_cleanly_and_primaries_stay_live() {
     assert_eq!(request["kind"], "request");
     assert_eq!(daemon.status(&dirty).await, SessionStatus::Running);
 
-    // Its turn ends with an untracked file in its worktree: it stays idle, and says why.
-    let worktree = daemon.worktree(&dirty).await;
-    std::fs::write(worktree.join("notes.txt"), "half done").unwrap();
+    // Its turn ends with one of its pull requests merged and one open: it stays idle.
+    daemon.pr(&dirty, 1, PrState::Merged).await;
+    daemon.pr(&dirty, 2, PrState::Open).await;
     let answer = json!({ "child": dirty.as_str(), "question_id": "question-1", "choice": 0 });
     tools.ok("answer", answer).await;
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["status"], "idle", "{report}");
     let summary = report["summary"].as_str().unwrap();
     assert!(summary.starts_with("Answered: "), "{summary}");
-    assert!(
-        summary.contains("uncommitted or untracked changes"),
-        "{summary}"
-    );
-    assert!(worktree.join("notes.txt").is_file());
+    assert_eq!(daemon.status(&dirty).await, SessionStatus::Idle);
+    daemon.manager.pr_merged(&dirty).await;
     assert_eq!(daemon.status(&dirty).await, SessionStatus::Idle);
 
     // A failed child stays live.
@@ -974,73 +941,51 @@ async fn children_that_have_not_finished_cleanly_and_primaries_stay_live() {
         .await;
     assert_eq!(daemon.status(&primary).await, SessionStatus::Idle);
     assert!(daemon.worktree(&primary).await.is_dir());
+    // Nor do its pull requests, all merged.
+    daemon.pr(&primary, 3, PrState::Merged).await;
+    daemon.manager.pr_merged(&primary).await;
+    assert_eq!(daemon.status(&primary).await, SessionStatus::Idle);
 }
 
 #[tokio::test]
-async fn a_finished_child_whose_worktree_is_gone_is_archived() {
+async fn a_child_is_archived_once_all_its_pull_requests_are_merged() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
 
-    // Each child blocks on a question while its worktree goes: one entirely, the other leaving
-    // build output behind that is no checkout.
-    let mut children = Vec::new();
-    for _ in 0..2 {
-        let child = id(&tools
-            .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
-            .await["child"]);
-        let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
-        assert_eq!(request["kind"], "request");
-        children.push(child);
-    }
-    let gone = daemon.worktree(&children[0]).await;
-    std::fs::remove_dir_all(&gone).unwrap();
-    let left = daemon.worktree(&children[1]).await;
-    std::fs::remove_dir_all(&left).unwrap();
-    std::fs::create_dir_all(left.join("target/debug")).unwrap();
-
-    for child in &children {
-        let answer = json!({ "child": child.as_str(), "question_id": "question-1", "choice": 0 });
-        tools.ok("answer", answer).await;
-        let wait = json!({ "child": child.as_str(), "timeout_secs": 10 });
-        let report = tools.ok("wait_for", wait).await;
-        assert_eq!(report["status"], "archived", "{report}");
-        assert_eq!(daemon.status(child).await, SessionStatus::Archived);
-    }
-    assert!(!gone.exists());
-    // What was left is not git's to remove.
-    assert!(left.join("target/debug").is_dir());
-}
-
-#[tokio::test]
-async fn a_finished_child_is_not_archived_under_its_background_commands() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::open(dir.path()).await;
-    let primary = daemon.primary(PermissionMode::Ask).await;
-    let mut tools = daemon.connect(&primary);
-    let child = id(&tools
-        .ok("spawn", json!({ "task": "T", "prompt": "Background." }))
+    // A child whose pull requests all merged while it worked is archived when its turn ends,
+    // before its report comes.
+    let merged = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
         .await["child"]);
-    let wait = json!({ "child": child.as_str(), "timeout_secs": 10 });
-
-    // Its turn ends while a command it started still runs in its worktree: it stays idle, its
-    // worktree with it, and its report says why.
-    let report = tools.ok("wait_for", wait.clone()).await;
-    assert_eq!(report["status"], "idle", "{report}");
-    let summary = report["summary"].as_str().unwrap();
-    assert!(summary.starts_with("Done: Background."), "{summary}");
-    assert!(summary.contains("in the background still run"), "{summary}");
-    let worktree = daemon.worktree(&child).await;
-    assert!(worktree.join(".git").exists());
-
-    // Once they are done, its next clean turn archives it.
-    let send = json!({ "child": child.as_str(), "text": "Finish." });
-    assert_eq!(tools.ok("send", send).await, json!({ "queued": false }));
-    let report = tools.ok("wait_for", wait).await;
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    daemon.pr(&merged, 1, PrState::Merged).await;
+    // Mid-turn, a merge leaves it be.
+    daemon.manager.pr_merged(&merged).await;
+    assert_eq!(daemon.status(&merged).await, SessionStatus::Running);
+    let answer = json!({ "child": merged.as_str(), "question_id": "question-1", "choice": 0 });
+    tools.ok("answer", answer).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["status"], "archived", "{report}");
+    assert_eq!(daemon.status(&merged).await, SessionStatus::Archived);
     // The worktree stays until the sweep days later.
-    assert!(worktree.join(".git").exists());
+    assert!(daemon.worktree(&merged).await.is_dir());
+
+    // An idle child is archived as soon as its last pull request merges.
+    let idle = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Do it." }))
+        .await["child"]);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["status"], "idle", "{report}");
+    daemon.pr(&idle, 2, PrState::Merged).await;
+    daemon.pr(&idle, 3, PrState::Open).await;
+    daemon.manager.pr_merged(&idle).await;
+    assert_eq!(daemon.status(&idle).await, SessionStatus::Idle);
+    daemon.pr(&idle, 3, PrState::Merged).await;
+    daemon.manager.pr_merged(&idle).await;
+    assert_eq!(daemon.status(&idle).await, SessionStatus::Archived);
 }
 
 #[tokio::test]
@@ -1481,7 +1426,7 @@ async fn requests_the_primary_may_not_decide_or_escalates_go_to_the_user() {
         .await;
     let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
     assert_eq!(report["summary"], r#"Answered: {"type":"text","text":"B"}"#);
-    assert_eq!(report["status"], "archived");
+    assert_eq!(report["status"], "idle");
 }
 
 #[tokio::test]
@@ -1614,6 +1559,7 @@ async fn independent_agent_messages_queue_deduplicate_and_survive_restart() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon
@@ -1691,6 +1637,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon
@@ -1711,6 +1658,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Later.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     let queue = async || {
@@ -1769,6 +1717,7 @@ async fn agent_messages_wait_in_the_queue_like_prompts_and_can_be_edited() {
             session_id: b.clone(),
             text: "Also.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     let ids: Vec<_> = queue()
@@ -1894,6 +1843,7 @@ async fn queued_agent_message_cannot_gain_permissions_after_restart() {
             session_id: b.clone(),
             text: "Hang.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     daemon
@@ -1993,4 +1943,44 @@ async fn agent_delivery_receipts_survive_archive_and_scope_keys_by_sender() {
             .is_empty()
     );
     assert!(agent_messages(&daemon.journal(&b).await).is_empty());
+}
+
+#[tokio::test]
+async fn any_session_shows_an_html_page_within_its_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let page = json!({ "title": "Latency", "html": "<!doctype html><p>p50: 12 ms</p>" });
+    assert_eq!(
+        tools.ok("show_html", page.clone()).await,
+        json!({ "shown": true })
+    );
+
+    // A child shows pages too.
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    let mut child_tools = daemon.connect(&child);
+    assert_eq!(
+        child_tools.ok("show_html", page).await,
+        json!({ "shown": true })
+    );
+
+    let largest = "a".repeat(1 << 20);
+    assert_eq!(
+        tools
+            .ok("show_html", json!({ "title": "Big", "html": largest }))
+            .await,
+        json!({ "shown": true })
+    );
+    for invalid in [
+        json!({ "title": " \n", "html": "<p>x</p>" }),
+        json!({ "title": "Empty", "html": "  " }),
+        json!({ "title": "Too big", "html": "a".repeat((1 << 20) + 1) }),
+    ] {
+        assert_eq!(tools.fails("show_html", invalid).await, "invalid_arguments");
+    }
 }

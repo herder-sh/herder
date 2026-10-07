@@ -350,6 +350,7 @@ fn attach_transcript(missing: bool) -> App {
                 attachment_id: herder_protocol::AttachmentId::new(id),
                 media_type: media_type.into(),
                 size,
+                name: None,
             })
             .to_vec();
             first = Some(item.id.clone());

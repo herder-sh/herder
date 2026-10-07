@@ -8,6 +8,8 @@ struct TranscriptBlockView: View {
     let key: SessionKey
     /// Opens a child session; `nil` pushes it.
     let open: ((SessionKey) -> Void)?
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
     private var hostId: HostId { key.hostId }
 
     var body: some View {
@@ -24,23 +26,30 @@ struct TranscriptBlockView: View {
                     Label("From herder", systemImage: "arrow.triangle.pull")
                         .font(.caption).foregroundStyle(Theme.secondary)
                 }
-                if !inline && !attachments.isEmpty {
-                    MessageImages(fleet: fleet, key: key, attachments: attachments)
+                let images = attachments.filter { !$0.isFile }
+                if !inline && !images.isEmpty {
+                    MessageImages(fleet: fleet, key: key, attachments: images)
                 }
                 if !inline, let outgoing, !outgoing.images.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(Array(outgoing.images.enumerated()), id: \.offset) { _, image in Picture(data: image.data, height: 140) }
                     }
                 }
+                let files = outgoing.map { $0.files.map { (name: $0.name, size: Int64($0.data.count)) } }
+                    ?? attachments.compactMap { attachment in attachment.name.map { (name: $0, size: Int64(attachment.size)) } }
+                if !files.isEmpty {
+                    MessageFiles(files: files)
+                }
                 Group {
                     if inline {
                         MessageText(text: text, pictures: pictures) { await fleet.fetchAttachment($0, of: key) }
                     } else {
-                        Text(text)
+                        Text(MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find))
                     }
                 }
                     .font(.body)
                     .foregroundStyle(Theme.onBubble)
+                    .tint(Theme.link)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -61,7 +70,8 @@ struct TranscriptBlockView: View {
         case .reasoning(_, let text, let streaming):
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "brain").foregroundStyle(Theme.tertiary)
-                Text(text + (streaming ? " ▍" : "")).italic().foregroundStyle(Theme.secondary)
+                Text(MarkdownText.decorated(AttributedString(text + (streaming ? " ▍" : "")), prs: prLinks, find: find))
+                    .italic().foregroundStyle(Theme.secondary).tint(Theme.link)
                     .lineLimit(streaming ? nil : 3)
                     .textSelection(.enabled)
             }
@@ -69,6 +79,8 @@ struct TranscriptBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         case .tools(_, let calls):
             ToolGroup(calls: calls)
+        case .visual(let visual):
+            HtmlVisualBlock(visual: visual)
         case .agents(_, let agents):
             NativeAgentGroup(agents: agents, fleet: fleet, key: key)
         case .children(_, let children):
@@ -188,11 +200,14 @@ struct HandoffSide: View {
 struct MarkdownText: View {
     let text: String
     var streaming = false
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
 
     var body: some View {
+        let blocks = Self.blocks(parts)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
-                switch part {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                switch block.first {
                 case .code(let code, let language):
                     Self.codeText(code, language: language)
                         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
@@ -201,13 +216,16 @@ struct MarkdownText: View {
                     MermaidBlock(source: source)
                 case .table(let table):
                     MarkdownTableView(table: table)
-                case .line(let line):
-                    lineView(line, last: index == parts.count - 1)
+                case .line, .gap, nil:
+                    LinkText(prose(block, last: index == blocks.count - 1))
+                        .font(.body).foregroundStyle(Theme.text).lineSpacing(3)
                 }
             }
         }
         // Every line, heading and bullet can be selected and copied, not only code.
         .textSelection(.enabled)
+        // The app's tint is the text colour, which would hide links in prose.
+        .tint(Theme.link)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -218,32 +236,103 @@ struct MarkdownText: View {
         }
     }
 
-    @ViewBuilder private func lineView(_ line: String, last: Bool) -> some View {
-        let cursor = streaming && last ? " ▍" : ""
-        if line.hasPrefix("#") {
-            Text(Self.inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) + cursor))
-                .font(.headline).foregroundStyle(Theme.text)
-        } else if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("•").foregroundStyle(Theme.secondary)
-                Text(Self.inline(String(line.dropFirst(item.count)) + cursor))
+    /// Each run of prose lines as one block, everything else as a block of its own. A selection
+    /// can't leave the `Text` it starts in, so a run drawn as one `Text` copies across lines.
+    static func blocks(_ parts: [Part]) -> [[Part]] {
+        var blocks: [[Part]] = []
+        for part in parts {
+            switch (part, blocks.last?.last) {
+            case (.line, .line?), (.line, .gap?), (.gap, .line?):
+                blocks[blocks.count - 1].append(part)
+            case (.gap, _):
+                continue
+            default:
+                blocks.append([part])
             }
-            .font(.body).foregroundStyle(Theme.text)
-        } else if line.hasPrefix(">") {
-            Text(Self.inline(line.dropFirst().trimmingCharacters(in: .whitespaces) + cursor))
-                .italic().foregroundStyle(Theme.secondary)
-                .padding(.leading, 10)
-                .overlay(alignment: .leading) { Rectangle().fill(Theme.stroke).frame(width: 2) }
-        } else {
-            Text(Self.inline(line + cursor)).font(.body).foregroundStyle(Theme.text).lineSpacing(3)
+        }
+        return blocks
+    }
+
+    /// A run of prose lines as one text, a blank line between two as a short gap.
+    private func prose(_ block: [Part], last: Bool) -> AttributedString {
+        var string = AttributedString()
+        var gap = false
+        for (index, part) in block.enumerated() {
+            guard case .line(let line) = part else {
+                gap = true
+                continue
+            }
+            if !string.characters.isEmpty {
+                string += AttributedString("\n")
+                if gap {
+                    var spacer = AttributedString("\n")
+                    spacer.font = .system(size: 5)
+                    string += spacer
+                }
+            }
+            gap = false
+            string += styled(line + (streaming && last && index == block.count - 1 ? " ▍" : ""))
+        }
+        return string
+    }
+
+    private func styled(_ line: String) -> AttributedString {
+        if line.hasPrefix("#") {
+            var heading = inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces))
+            heading.font = .headline
+            return heading
+        }
+        if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
+            var bullet = AttributedString("•\u{2002}")
+            bullet.foregroundColor = Theme.secondary
+            return bullet + inline(String(line.dropFirst(item.count)))
+        }
+        if line.hasPrefix(">") {
+            var quote = inline(line.dropFirst().trimmingCharacters(in: .whitespaces))
+            quote.font = .body.italic()
+            quote.foregroundColor = Theme.secondary
+            return quote
+        }
+        return inline(line)
+    }
+
+    private func inline(_ text: String) -> AttributedString { Self.inline(text, prs: prLinks, find: find) }
+
+    static func inline(_ text: String, prs: PRLinks = PRLinks(), find: FindHighlight? = nil) -> AttributedString {
+        decorated((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text), prs: prs, find: find)
+    }
+
+    /// Links bare URLs and `#123` pull request references, underlines every link, and marks
+    /// what the transcript's find matches.
+    static func decorated(_ string: AttributedString, prs: PRLinks, find: FindHighlight?) -> AttributedString {
+        var string = string
+        autolink(&string)
+        linkPullRequests(&string, prs: prs)
+        for run in string.runs where run.link != nil { string[run.range].underlineStyle = .single }
+        if let find { find.mark(&string) }
+        return string
+    }
+
+    /// Links `#123` to that pull request, outside code spans, links and words like `a#1`.
+    static func linkPullRequests(_ string: inout AttributedString, prs: PRLinks) {
+        guard !prs.isEmpty else { return }
+        let plain = String(string.characters)
+        for match in plain.matches(of: /(?:^|[^\w&\/#])(?<ref>#(?<number>\d{1,7}))\b/) {
+            guard let number = UInt64(match.output.number), let url = prs.url(number) else { continue }
+            let ref = match.output.ref
+            link(&string, plain: plain, range: ref.startIndex..<ref.endIndex, to: url)
         }
     }
 
-    static func inline(_ text: String) -> AttributedString {
-        var string = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
-        autolink(&string)
-        return string
+    /// Links `range` of `plain`, the characters of `string`, unless it is code or a link already.
+    private static func link(_ string: inout AttributedString, plain: String, range: Range<String.Index>, to url: URL) {
+        let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
+        let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
+        let linked = string[start..<end].runs.contains {
+            $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
+        }
+        if !linked { string[start..<end].link = url }
     }
 
     /// Links bare `http(s)://` URLs, which Markdown leaves as text, outside code spans and links.
@@ -254,21 +343,17 @@ struct MarkdownText: View {
         for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
             guard let url = match.url, let range = Range(match.range, in: plain),
                   ["http://", "https://"].contains(where: plain[range].lowercased().hasPrefix) else { continue }
-            let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
-            let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
-            let linked = string[start..<end].runs.contains {
-                $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
-            }
-            if !linked { string[start..<end].link = url }
+            link(&string, plain: plain, range: range, to: url)
         }
     }
 
     enum Part: Equatable {
-        case line(String), code(String, language: String), diagram(String), table(MarkdownTable)
+        case line(String), gap, code(String, language: String), diagram(String), table(MarkdownTable)
     }
 
-    /// Fenced code blocks, pipe tables, and the non-blank lines between them. A ```mermaid
-    /// fence becomes a diagram once it's closed, so a streaming one stays source until then.
+    /// Fenced code blocks, pipe tables, and the lines between them, a blank one after a line as
+    /// a gap. A ```mermaid fence becomes a diagram once it's closed, so a streaming one stays
+    /// source until then.
     private var parts: [Part] { Self.parse(text, streaming: streaming) }
 
     static func parse(_ text: String, streaming: Bool = false) -> [Part] {
@@ -308,8 +393,11 @@ struct MarkdownText: View {
                 table = start
             } else if !trimmed.isEmpty {
                 parts.append(.line(String(line)))
+            } else if case .line? = parts.last {
+                parts.append(.gap)
             }
         }
+        if parts.last == .gap { parts.removeLast() }
         if let open = table { parts.append(.table(open)) }
         if let lines = code { parts.append(.code(lines.joined(separator: "\n"), language: language)) }
         if parts.isEmpty && streaming { parts.append(.line("")) }

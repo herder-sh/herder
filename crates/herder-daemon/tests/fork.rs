@@ -19,9 +19,9 @@ use herder_daemon::vault::fork::FromVault;
 use herder_daemon::vault::{LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
-    AccountId, Bytes, CommandBody, CommandResult, ErrorCode, Event, EventBody, HistoryPart, HostId,
-    Image, ItemBody, PermissionMode, Project, ProjectId, Provider, Relay, SessionId, SessionStatus,
-    TurnId, UserId,
+    AccountId, Attachment, AttachmentId, Bytes, CommandBody, CommandResult, ErrorCode, Event,
+    EventBody, FILE_MEDIA_TYPE, HistoryPart, HostId, Image, ItemBody, PermissionMode, Project,
+    ProjectId, Provider, Relay, SessionId, SessionStatus, TurnId, UserId,
 };
 use herder_store::Store;
 use tokio::net::TcpListener;
@@ -315,6 +315,7 @@ impl HostDaemon {
             session_id: session_id.clone(),
             text: text.into(),
             images,
+            files: Vec::new(),
         })
         .await
     }
@@ -482,7 +483,6 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await
@@ -781,7 +781,6 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await
@@ -798,7 +797,7 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
     a.prompt_with(&session_id, "First.", vec![image.clone()])
         .await
         .unwrap();
-    let a_journal = a
+    let mut a_journal = a
         .journal_until(&session_id, |body| {
             matches!(
                 body,
@@ -831,6 +830,20 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
             _ => None,
         })
         .unwrap();
+    // The prompt carried a file too, as a client relays it.
+    let file = Attachment {
+        attachment_id: AttachmentId::new("01J9FILE"),
+        media_type: FILE_MEDIA_TYPE.into(),
+        size: 3,
+        name: Some("data.csv".into()),
+    };
+    for event in &mut a_journal {
+        if let EventBody::ItemAdded { item } = &mut event.body
+            && let ItemBody::UserMessage { attachments, .. } = &mut item.body
+        {
+            attachments.push(file.clone());
+        }
+    }
 
     // Host B has a vault, which does not answer: a relayed history needs none.
     let b = HostDaemon::start(&b_dir, "host-b", "b-account", "fork_b.jsonl", dead_vault()).await;
@@ -892,7 +905,7 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
     let refused = b.handle(fork_relayed(None)).await.unwrap_err();
     assert!(refused.message.contains("vault"), "{refused:?}");
 
-    // The whole history, in two parts and the image, forks onto B.
+    // The whole history, in two parts, the image and the file, forks onto B.
     let (first, rest) = a_journal.split_at(2);
     b.handle(upload(first.to_vec())).await.unwrap();
     b.handle(upload(rest.to_vec())).await.unwrap();
@@ -901,6 +914,16 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
         part: HistoryPart::Image {
             attachment_id,
             image: image.clone(),
+        },
+    })
+    .await
+    .unwrap();
+    let csv = Bytes(b"a,b".to_vec());
+    b.handle(CommandBody::UploadHistory {
+        session_id: session_id.clone(),
+        part: HistoryPart::File {
+            attachment: file.clone(),
+            data: csv.clone(),
         },
     })
     .await
@@ -942,7 +965,11 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
         tail[0].body
     );
     assert_eq!(tail[0].by, Some(alice()));
-    assert_eq!(b.images(&fork, &b_journal).await, [image]);
+    let kept = Image {
+        media_type: FILE_MEDIA_TYPE.into(),
+        data: csv,
+    };
+    assert_eq!(b.images(&fork, &b_journal).await, [image, kept]);
     // The upload was taken.
     let again = b.handle(fork_relayed(relay())).await.unwrap_err();
     assert!(again.message.contains("no history"), "{again:?}");
@@ -972,7 +999,6 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await

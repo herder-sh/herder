@@ -149,9 +149,11 @@ impl App {
         let Some((key, session)) = self.open.as_ref().zip(self.open_session()) else {
             return Vec::new();
         };
+        // A prompt's files are for its agent, which read them on the machine.
         let images = |item: &Item| match &item.body {
-            ItemBody::UserMessage { attachments, .. } if !attachments.is_empty() => {
-                Some(attachments.clone())
+            ItemBody::UserMessage { attachments, .. } => {
+                let images: Vec<_> = attachments.iter().filter(|a| a.name.is_none()).collect();
+                (!images.is_empty()).then(|| images.into_iter().cloned().collect::<Vec<_>>())
             }
             _ => None,
         };

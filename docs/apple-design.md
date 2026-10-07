@@ -34,8 +34,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
    sheet on compact width (§6).
 4. **Nothing is ever wider than the screen.** No fixed width over 320 pt on iOS outside a
    regular-width branch; content columns cap at 760 pt and centre (§5.2).
-5. **Lists put live work first.** Needs you, then running, then idle; archived sessions go in a
-   collapsed **Archived** group at the end; children sit under their parent (§4.7).
+5. **Lists put live work first.** Needs you, then running, then idle; task trees archived whole
+   go in a collapsed **Archived** group at the end; children sit under their parent (§4.7).
 6. **State is a glyph plus a colour, never colour alone** (`StatusGlyph`), the same set on every
    row, header and card, as in the TUI.
 7. **Touch is first-class on iOS.** 44 pt hit areas on iOS and iPadOS; the Mac keeps its
@@ -130,14 +130,15 @@ Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-narrow.png`
    creation order so the list holds still while they work (`Lists.home`).
 3. **Recent**: idle and failed sessions, newest activity first, at most 20.
 
-Home never lists archived sessions. On iPhone, a connection line ("1 machine connected",
+Home never lists an archived session, except an archived parent that still has a working
+child: it stays to lead its child. On iPhone, a connection line ("1 machine connected",
 `ConnectionLine`) heads the list; on the Mac and iPad that line is the pane subtitle.
 
 ### 4.2 Projects (`ProjectsView`, `ProjectSessions`)
 
 One group per project, sorted by name, "No project yet" last. The group header is the
 project's tile (`ProjectIcon`), name, machines, and its New Session and settings buttons. Inside:
-the live sessions as task trees, then **Archived** (§4.7).
+the task trees with a live session, then **Archived** (§4.7).
 
 ### 4.3 Pull Requests (`PullRequestsView`)
 
@@ -197,15 +198,38 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 - **Children under parents:** a child is indented under its parent with a tree line
   (`SessionRow.depth`, `TreeLine`, 14 pt per level); a parent row shows its child count and how
   many need you. Idle children stay under their parent and never crowd Home.
-- **Archived last and collapsed:** archived sessions go in an **Archived** group at the end of
-  their project, collapsed, showing a count; opening it shows them, dimmed. Children stay under
-  their parent within each group. Archived sessions with no project are not listed.
+- **Task trees stay whole:** each tree is built from all of a project's sessions before the list
+  splits them, so archiving a parent or a child never takes a tree apart. A tree with any
+  session that is not archived is listed with the live ones: an archived parent stays, dimmed,
+  to lead its live children, and archived children stay under their parent, dimmed, after its
+  live children. A parent's child count counts all its children.
+- **Archived last and collapsed:** a tree whose every session is archived goes, whole, in an
+  **Archived** group at the end of its project, collapsed, showing a count; opening it shows
+  it, dimmed. Archived sessions with no project are not listed.
 - **One row component:** `SessionRow` everywhere: glyph, title (one line), age, activity (one
   line, accent when it needs you), project · branch, PR badges (two at most, then `+N`),
   machine. Rows are wrapped by `SessionLink` (Mac/iPad: selection, hover archive button,
   context menu) or a `NavigationLink` with a trailing swipe to archive (iPhone).
 - **Search:** the pane's search field filters by title, branch, worktree, project, machine and
   PR number or title (`SessionSummary.matches`).
+
+### 4.8 Board (`BoardView`, `Lists.board`)
+
+One column per `WorkState`, what needs the user first: needs you, CI failed, changes
+requested, conflicting, ready to merge, idle, working, waiting on CI, merged. A column lists
+task trees, not sessions, newest first, and its count counts trees.
+
+- **Only top-level trees:** a child never has a card of its own. Under its tree's top row and
+  that session's own provider agents (`NativeAgentRow`), each herder child is a compact row in
+  the same style: tree line, provider mark, title, and its own `WorkState` badge on the right,
+  with a mini spinner while it works. Tapping it opens the child. A child's provider agents
+  are not shown on the Board.
+- **Column:** the most urgent `WorkState` among the tree's sessions that are neither archived
+  nor moved, so a child that needs you or failed CI never hides in its parent's Working column.
+- **Archived:** archived children come last, dimmed, badged "Archived"; several fold into one
+  "N archived" row that expands. A tree whose top is archived but that has a live child stays,
+  its top row dimmed. A tree with no live session is not on the Board.
+- **Search** keeps a tree when its top or any of its children matches.
 
 ---
 

@@ -50,6 +50,9 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: herder scans the QR code that herder pair prints, to pair with a machine.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: >-
           herder connects to the machines you pair with, which may be on your local network.
+        # As declared in App Store Connect: only standard, exempt encryption (TLS to the daemons),
+        # so TestFlight builds do not wait on the export compliance question.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
     scheme:
       testTargets: [herder-iOS-UITests]
   herder-iOS-UITests:

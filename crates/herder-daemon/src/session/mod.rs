@@ -54,17 +54,19 @@
 //! still there, else adds it back at the path it had, on the session's own branch, and
 //! journals the `idle` status.
 //!
-//! # Images
+//! # Images and files
 //!
 //! A prompt may carry images when its session's adapter takes them
 //! ([`herder_adapters::Adapter::accepts_images`]); otherwise it is refused as `unsupported`.
-//! They are checked and kept as files when the prompt arrives ([`attachments`]), journaled as
-//! the attachments of its `user_message`, and handed to the agent with the prompt's text when
-//! its turn starts. `get_attachment` reads one back; it changes nothing, so its answer is not
-//! remembered ([`changes_nothing`]). A transcript replayed into another CLI keeps each prompt's
-//! attachments, and the adapter names every image in a line of text: the seed carries no
-//! bytes, and the vault keeps none either, so a forked session's earlier images are
-//! references only.
+//! It may carry files of any type whatever the adapter. Both are checked and kept when the
+//! prompt arrives ([`attachments`]), each file in a folder of the session outside its
+//! worktree, and journaled as the attachments of its `user_message`. When its turn starts,
+//! the images go to the agent with the prompt's text, and the files' paths in a note appended
+//! to it: the CLI runs on this host, so any agent can read them. `get_attachment` reads one
+//! back; it changes nothing, so its answer is not remembered ([`changes_nothing`]). A
+//! transcript replayed into another CLI keeps each prompt's attachments, and the adapter names
+//! every image and file in a line of text: the seed carries no bytes, and the vault keeps none
+//! either, so a forked session's earlier attachments are references only.
 //!
 //! # Checkpoints
 //!
@@ -250,7 +252,6 @@ use actor::{Actor, Request, SessionCommand, Switch};
 pub use failover::FailoverConfig;
 use failover::Limits;
 use journal::Journal;
-pub use tasks::TaskLimits;
 use tasks::{TaskTools, Tasks};
 use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
@@ -431,10 +432,19 @@ impl Inner {
         }
     }
 
+    /// Takes a usage probe's answer, as [`Self::report_usage`] does a session's report.
+    fn probed_usage(&self, account_id: &AccountId, usage: herder_adapters::AccountUsage) {
+        self.limits.worked(account_id);
+        if let Some(usage) = self.usage.probed(account_id, usage) {
+            let accounts = crate::accounts::list(&self.accounts_lock(), &usage);
+            self.journal.sink().accounts_changed(&accounts);
+        }
+    }
+
     /// Notes that `account_id` hit its limit just now; failover passes it over until it resets.
     pub(super) fn limit_hit(&self, account_id: &AccountId) {
         let usage = self.usage.all();
-        let windows = usage.get(account_id).map_or(&[][..], Vec::as_slice);
+        let windows = usage.windows.get(account_id).map_or(&[][..], Vec::as_slice);
         self.limits.hit(account_id, windows, Timestamp::now());
     }
 
@@ -458,6 +468,7 @@ impl Inner {
     pub(super) fn limit_reset(&self, account_id: &AccountId) -> Option<Timestamp> {
         self.usage
             .all()
+            .windows
             .get(account_id)?
             .iter()
             .filter(|window| window.used_percent >= 100.0)
@@ -476,7 +487,7 @@ impl Inner {
         let choice = failover::Choice {
             accounts: &accounts,
             adapters: &self.adapters,
-            usage: &self.usage.all(),
+            usage: &self.usage.all().windows,
             limits: &self.limits,
             now: Timestamp::now(),
         };
@@ -582,7 +593,6 @@ impl SessionManager {
                 provider,
                 model,
                 permission_mode,
-                max_children,
                 failover_pin,
             } => {
                 let (repo, project) = self.resolve_repo(repo, project_id)?;
@@ -599,7 +609,6 @@ impl SessionManager {
                     permission_mode,
                     parent: None,
                     task: None,
-                    max_children,
                     failover_pin,
                 };
                 let (session_id, _) = self.create_session(Some(by), request).await?;
@@ -609,11 +618,13 @@ impl SessionManager {
                 session_id,
                 text,
                 images,
+                files,
             } => (
                 session_id,
                 Request::SendPrompt {
                     text,
                     images,
+                    files,
                     queued: None,
                 },
             ),
@@ -628,6 +639,9 @@ impl SessionManager {
                     .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
             }
             CommandBody::AddProject { path } => return self.add_project(&path).await,
+            CommandBody::CloneProject { url, path } => {
+                return self.clone_project(&url, &path).await;
+            }
             CommandBody::UploadHistory { session_id, part } => {
                 self.upload_history(by, session_id, part).await?;
                 return Ok(CommandResult::Applied);
@@ -887,6 +901,7 @@ impl SessionManager {
             inner.journal.clone(),
             config,
             self.prompter(),
+            self.on_merged(),
             inner.shutdown.clone(),
         )
         .await?;
@@ -925,17 +940,46 @@ impl SessionManager {
         })
     }
 
-    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]), enforcing
-    /// `limits`, until the manager's shutdown, and registers it with every session's CLI from
-    /// its next start; once per manager.
-    pub fn serve_mcp(&self, config: mcp::Config, limits: TaskLimits) -> anyhow::Result<()> {
+    /// Tells the manager of merged pull requests, while it lives.
+    fn on_merged(&self) -> prs::OnMerged {
+        let manager = Arc::downgrade(&self.inner);
+        Box::new(move |session_id| {
+            let manager = manager.upgrade().map(|inner| Self { inner });
+            Box::pin(async move {
+                if let Some(manager) = manager {
+                    manager.pr_merged(&session_id).await;
+                }
+            })
+        })
+    }
+
+    /// One of `session_id`'s pull requests was merged: a child that is done is archived
+    /// ([`tasks`]). Only a live child's actor is asked; nothing starts for anything else.
+    pub async fn pr_merged(&self, session_id: &SessionId) {
+        let live_child = matches!(
+            self.inner.journal.session(session_id.clone()).await,
+            Ok(Some(session))
+                if session.parent.is_some() && session.status == SessionStatus::Idle
+        );
+        if live_child
+            && let Err(err) = self
+                .send(session_id.clone(), None, Request::ArchiveIfDone)
+                .await
+        {
+            warn!(%session_id, "cannot archive the merged child: {}", err.message);
+        }
+    }
+
+    /// Starts herder's MCP server ([`crate::mcp`]) with the task tools ([`tasks`]) until the
+    /// manager's shutdown, and registers it with every session's CLI from its next start; once
+    /// per manager.
+    pub fn serve_mcp(&self, config: mcp::Config) -> anyhow::Result<()> {
         let inner = &self.inner;
         if inner.mcp.get().is_some() {
             anyhow::bail!("the MCP server runs already");
         }
         let tools = Arc::new(TaskTools {
             inner: Arc::downgrade(inner),
-            limits,
         });
         let _ = inner
             .mcp
@@ -1000,16 +1044,16 @@ impl SessionManager {
             .map_err(|_| anyhow::anyhow!("projects are managed already"))
     }
 
-    /// The bytes of `attachment`, an image a prompt of `session_id` carried.
-    pub(crate) async fn image(
+    /// The bytes of `attachment`, an image or file a prompt of `session_id` carried.
+    pub(crate) async fn attachment_data(
         &self,
         session_id: &SessionId,
         attachment: &Attachment,
-    ) -> Result<Image, ErrorInfo> {
+    ) -> Result<Bytes, ErrorInfo> {
         attachments::load(&self.inner.attachments, session_id, attachment).await
     }
 
-    /// The bytes of the image `attachment_id` a prompt of `session_id` carried.
+    /// The bytes of the image or file `attachment_id` a prompt of `session_id` carried.
     async fn attachment(
         &self,
         session_id: &SessionId,
@@ -1021,11 +1065,9 @@ impl SessionManager {
             .await
             .map_err(internal)?
             .ok_or_else(|| not_found(session_id))?;
-        let image = attachments::fetch(&self.inner.attachments, session_id, attachment_id).await?;
-        Ok(CommandResult::Attachment {
-            media_type: image.media_type,
-            data: image.data,
-        })
+        let (media_type, data) =
+            attachments::fetch(&self.inner.attachments, session_id, attachment_id).await?;
+        Ok(CommandResult::Attachment { media_type, data })
     }
 
     /// Declares the repository at `path` as a project ([`Overrides::add`]).
@@ -1045,6 +1087,15 @@ impl SessionManager {
         .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
         let project_id = added?;
         Ok(CommandResult::ProjectAdded { project_id })
+    }
+
+    /// Clones `url` into the new folder `path` and declares the clone as a project
+    /// ([`Self::add_project`]).
+    async fn clone_project(&self, url: &str, path: &str) -> Result<CommandResult, ErrorInfo> {
+        self.projects()?;
+        let repo = crate::browse::absolute(path)?;
+        crate::projects::clone::clone(url, &repo).await?;
+        self.add_project(path).await
     }
 
     /// Replaces the settings of `project_id`, one of the listed projects
@@ -1551,7 +1602,7 @@ impl SessionManager {
             .all(|session| session.status == herder_protocol::SessionStatus::Archived);
         let account = save(&previous, may_change_directory)?;
         if account.config_dir != previous.config_dir {
-            inner.usage.all().remove(account_id);
+            inner.usage.forget(account_id);
         }
         inner
             .accounts
@@ -1603,9 +1654,9 @@ impl SessionManager {
                     .unwrap_or_default()
             },
             Arc::clone(&inner.refresh_usage),
-            move |account_id, windows| {
+            move |account_id, usage| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.report_usage(account_id, windows);
+                    inner.probed_usage(account_id, usage);
                 }
             },
             inner.shutdown.clone(),
@@ -1835,7 +1886,6 @@ impl SessionManager {
             parent: request.parent,
             parent_host: None,
             task: request.task,
-            max_children: request.max_children,
             failover_pin: request.failover_pin,
         };
         inner
@@ -1972,8 +2022,6 @@ struct CreateRequest {
     parent: Option<SessionId>,
     /// The child's task label.
     task: Option<String>,
-    /// The session's own limit on live children.
-    max_children: Option<u32>,
     /// The session's own failover pin.
     failover_pin: Option<bool>,
 }

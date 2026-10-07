@@ -21,6 +21,8 @@ public final class Fleet {
     private(set) var archiving: Set<SessionKey> = [] { didSet { refreshLists() } }
     /// An archive the machine refused, for the user to decide on.
     var archiveRefusal: ArchiveRefusal?
+    /// The session the user is typing a new title for.
+    var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
     /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
@@ -205,38 +207,38 @@ public final class Fleet {
     /// Creates a session, prompts it when a prompt is given, and returns it.
     func createSession(
         on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
-        mode: PermissionMode, prompt: String, images: [Herder.Image] = []
+        mode: PermissionMode, prompt: String, images: [Herder.Image] = [], files: [PromptFile] = []
     ) async throws -> SessionKey {
         let result = try await client.send(
             hostId: hostId,
             command: .createSession(
                 repo: repo, projectId: projectId, branch: nil, accountId: accountId, provider: nil,
-                model: model.isEmpty ? nil : model, permissionMode: mode, maxChildren: nil, failoverPin: nil))
+                model: model.isEmpty ? nil : model, permissionMode: mode, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = result else {
             throw HerderError.Local(detail: "the machine did not create a session")
         }
         let key = SessionKey(hostId: hostId, sessionId: sessionId)
-        if !prompt.isEmpty || !images.isEmpty {
+        if !prompt.isEmpty || !images.isEmpty || !files.isEmpty {
             // Through the outbox, as any prompt: the machine journals the first one only once
             // its CLI is up, and till then the new session would show no turns.
             sessions[key] = sessions[key] ?? SessionModel(key: key)
-            await submit(prompt, images: images, to: key)
+            await submit(prompt, images: images, files: files, to: key)
         }
         return key
     }
 
     /// Sends what the user typed: the answer to the session's oldest question when one is
     /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
-    func submit(_ text: String, images: [Herder.Image] = [], to key: SessionKey) async {
+    func submit(_ text: String, images: [Herder.Image] = [], files: [PromptFile] = [], to key: SessionKey) async {
         guard let session = sessions[key] else { return }
-        if let question = session.questions.first, images.isEmpty {
+        if let question = session.questions.first, images.isEmpty, files.isEmpty {
             await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
                        about: key)
             return
         }
-        let outgoing = Outgoing(text: text, images: images)
+        let outgoing = Outgoing(text: text, images: images, files: files)
         sessions[key]?.outbox.append(outgoing)
-        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images), about: key)
+        await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images, files: files), about: key)
         if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
             sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
         }
@@ -265,7 +267,7 @@ public final class Fleet {
     }
 
     /// Merges queued prompts into the first of them, so they run as one turn; the machine joins
-    /// their texts and images, which only it holds.
+    /// their texts, images and files, which only it holds.
     func mergeQueued(_ promptIds: [PromptId], in key: SessionKey) async {
         await editQueue(.mergeQueued(sessionId: key.sessionId, promptIds: promptIds), of: key)
     }
@@ -283,10 +285,10 @@ public final class Fleet {
     }
 
     /// Brings an archived session back, then sends the prompt; a refusal is shown with it.
-    func unarchiveAndSubmit(_ text: String, images: [Herder.Image], to key: SessionKey) async {
+    func unarchiveAndSubmit(_ text: String, images: [Herder.Image], files: [PromptFile] = [], to key: SessionKey) async {
         await send(.unarchiveSession(sessionId: key.sessionId), about: key)
         guard refusals[key] == nil else { return }
-        await submit(text, images: images, to: key)
+        await submit(text, images: images, files: files, to: key)
     }
 
     /// Fetches a user message's image once; views read it from `attachments`.
@@ -305,17 +307,22 @@ public final class Fleet {
         Self.icon(of: projectId, on: machines, fetched: projectIcons)
     }
 
-    /// The first fetched icon any machine lists for the project, with that machine's
-    /// background for it; without one, the first background a machine sets for it.
+    /// The project's icon every device shows: an uploaded icon before one found in a clone,
+    /// then the machine with the lowest id, with that machine's background for it; without a
+    /// fetched icon, the background of the lowest-id machine that sets one. Choosing by id keeps
+    /// the choice from hanging on the order this device paired its machines in.
     nonisolated static func icon(
         of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]
     ) -> ProjectIconImage? {
         guard let projectId else { return nil }
-        let listed = machines.lazy.compactMap { $0.projects.first { $0.projectId == projectId } }
-        let iconed = listed.compactMap { project in
-            project.icon.flatMap { fetched[$0] }.map { ProjectIconImage(data: $0, background: project.iconBackground) }
+        let listed = machines.sorted { $0.hostId < $1.hostId }
+            .compactMap { machine in machine.projects.first { $0.projectId == projectId } }
+        let iconed = listed.compactMap { project -> (uploaded: Bool, image: ProjectIconImage)? in
+            project.icon.flatMap { fetched[$0] }
+                .map { (project.iconUploaded, ProjectIconImage(data: $0, background: project.iconBackground)) }
         }
-        return iconed.first ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
+        return (iconed.first(where: \.uploaded) ?? iconed.first)?.image
+            ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
     }
 
     /// Fetches each icon the machines list and this app has not got, once per hash.
@@ -349,6 +356,14 @@ public final class Fleet {
         return projectId
     }
 
+    /// Clones a repository, a git URL or GitHub `owner/repo`, into a new folder on a machine and
+    /// registers the clone as a project; owners only.
+    func cloneProject(_ url: String, into path: String, on hostId: HostId) async throws -> ProjectId {
+        guard case .projectAdded(let projectId) = try await client.send(hostId: hostId, command: .cloneProject(url: url, path: path))
+        else { throw HerderError.Local(detail: "the machine did not clone the project") }
+        return projectId
+    }
+
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
         _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,
@@ -359,12 +374,36 @@ public final class Fleet {
             setupCommand: setupCommand, iconBackground: iconBackground))
     }
 
-    /// Uploads a PNG as a project's icon on a machine, or clears the upload when `png` is nil
-    /// so the machine finds one in the clone again; owners only. The project list that follows
-    /// carries the new icon hash, which `fetchProjectIcons` fetches.
-    func setProjectIcon(_ projectId: ProjectId, on hostId: HostId, png: Data?) async throws {
+    /// Uploads a PNG as a project's icon on every connected machine this device owns that
+    /// lists it, so every device shows the same one, or clears the uploads when `png` is nil
+    /// so the machines find one in the clone again. The project lists that follow carry the
+    /// new icon hash, which `fetchProjectIcons` fetches.
+    func setProjectIcon(_ projectId: ProjectId, png: Data?) async throws {
         let icon = png.map { Herder.Image(mediaType: "image/png", data: $0) }
-        _ = try await client.send(hostId: hostId, command: .setProjectIcon(projectId: projectId, icon: icon))
+        for (machine, _) in ownedMachines(listing: projectId) {
+            _ = try await client.send(hostId: machine.hostId, command: .setProjectIcon(projectId: projectId, icon: icon))
+        }
+    }
+
+    /// Sets a project's name and the colour its tile fills with on every connected machine
+    /// this device owns that lists it, so every device shows the same, keeping each machine's
+    /// other settings for the project.
+    func setProjectAppearance(_ projectId: ProjectId, name: String, background: String?) async throws {
+        for (machine, project) in ownedMachines(listing: projectId)
+        where project.name != name || project.iconBackground != background {
+            try await setProjectSettings(projectId, on: machine.hostId, name: name, mode: project.defaultPermissionMode,
+                                         account: project.defaultAccount, setupCommand: project.setupCommand,
+                                         iconBackground: background)
+        }
+    }
+
+    /// The connected machines this device owns that list the project, with their listing.
+    private func ownedMachines(listing projectId: ProjectId) -> [(Machine, Project)] {
+        machines.compactMap { machine in
+            guard machine.role == .owner, machine.connection == .connected,
+                  let project = machine.projects.first(where: { $0.projectId == projectId }) else { return nil }
+            return (machine, project)
+        }
     }
 
     /// Stops a machine managing a project; its clones stay on disk. The machine refuses while
@@ -426,6 +465,23 @@ public final class Fleet {
             if toast == archived { toast = nil }
             archiveRefusal = ArchiveRefusal(key: key, title: title, reason: describe(error))
         }
+    }
+
+    /// Sets a session's title; a refusal, such as an empty title, shows as a toast.
+    func rename(_ key: SessionKey, to title: String) async {
+        do {
+            _ = try await client.send(hostId: key.hostId,
+                                      command: .renameSession(sessionId: key.sessionId, title: title))
+            refusals[key] = nil
+        } catch {
+            toast = Toast(text: "Could not rename: \(describe(error))", failed: true)
+        }
+    }
+
+    /// The sessions of `before`, an earlier `archiving`, that the machine has archived since:
+    /// done archiving and not refused.
+    func archived(since before: Set<SessionKey>) -> Set<SessionKey> {
+        before.subtracting(archiving).filter { archiveRefusal?.key != $0 }
     }
 
     /// Brings an archived session back, from a toast's Undo.

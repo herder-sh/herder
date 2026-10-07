@@ -32,7 +32,9 @@ struct ModelPicker: View {
         .onHover { hovering = $0 }
         .help(sections.isEmpty ? "Model" : "Model, account and machine")
         .accessibilityIdentifier("model-picker")
-        .popover(isPresented: $open, arrowEdge: .top) {
+        // Opens upward: the composer sits at the bottom, and iOS keeps a popover on the edge
+        // it is given, so one opening downward is squeezed into the strip under the composer.
+        .popover(isPresented: $open, arrowEdge: .bottom) {
             ModelMenu(groups: groups, current: current, sections: sections) { choice in
                 open = false
                 choose(choice)
@@ -48,6 +50,8 @@ struct ModelPicker: View {
 struct SettingsOption: Hashable, Identifiable {
     let id: String
     let title: String
+    /// A second line under the title, as an account's email.
+    var subtitle: String?
     var detail: String?
     /// The provider an account signs in to, shown as its mark.
     var provider: Provider?
@@ -59,13 +63,23 @@ struct SettingsOption: Hashable, Identifiable {
     /// What to pick within it instead, as a machine's accounts; it opens them when picked.
     var children: [SettingsOption] = []
 
-    /// Accounts on a machine, each with its provider and busiest usage window.
+    /// Accounts on a machine, each with its provider, email and busiest usage window. Accounts
+    /// signed in to the same login, by provider and email, are one option, as they share its
+    /// limits: the current one, or else the first.
     static func accounts(_ accounts: [Account], current: AccountId?) -> [SettingsOption] {
-        accounts.map { account in
+        let login = { (account: Account) in account.email.map { "\(account.provider)/\($0)" } ?? account.accountId }
+        let currentLogin = accounts.first { $0.accountId == current }.map(login)
+        var seen: Set<String> = []
+        return accounts.filter { account in
+            let key = login(account)
+            if key == currentLogin && account.accountId != current { return false }
+            return seen.insert(key).inserted
+        }
+        .map { account in
             let busiest = account.usage.max { $0.usedPercent < $1.usedPercent }
             return SettingsOption(
-                id: account.accountId, title: account.label,
-                detail: busiest.map { "\(Lists.usageLabel($0.window)) \(Int($0.usedPercent.rounded()))%" },
+                id: account.accountId, title: account.label, subtitle: account.email,
+                detail: busiest.map { "\(Lists.usageLabel($0.window)) \(Int(max(0, 100 - $0.usedPercent).rounded()))% left" },
                 provider: account.provider, usage: busiest?.usedPercent, current: account.accountId == current)
         }
     }
@@ -368,7 +382,7 @@ struct SettingsSectionRows: View {
                         .foregroundStyle(option.current ? Theme.text : Theme.secondary)
                         .frame(width: 16)
                 }
-                Text(option.title).foregroundStyle(Theme.text).lineLimit(1)
+                OptionTitle(option: option)
                 Spacer(minLength: 8)
                 if let usage = option.usage {
                     UsageMeter(percent: usage)
@@ -394,7 +408,7 @@ struct SettingsSectionRows: View {
                         if let provider = child.provider {
                             ProviderMark(provider: provider, size: 13).frame(width: 16)
                         }
-                        Text(child.title).foregroundStyle(Theme.text).lineLimit(1)
+                        OptionTitle(option: child)
                         Spacer(minLength: 8)
                         if let usage = child.usage {
                             UsageMeter(percent: usage)
@@ -416,6 +430,22 @@ struct SettingsSectionRows: View {
             .disabled(!action.enabled)
             .opacity(action.enabled ? 1 : 0.5)
         }
+    }
+}
+
+/// An option's title, with its subtitle under it in a smaller face.
+private struct OptionTitle: View {
+    let option: SettingsOption
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(option.title).foregroundStyle(Theme.text)
+            if let subtitle = option.subtitle {
+                Text(subtitle).font(.caption).foregroundStyle(Theme.tertiary)
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.middle)
     }
 }
 
@@ -451,7 +481,8 @@ struct MenuRow<Content: View>: View {
             HStack(spacing: 8) { content }
                 .font(.subheadline)
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .padding(.vertical, 4)
+                .frame(minHeight: 30)
                 .background(enabled && highlighted == entry ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
                 .contentShape(.rect)
         }

@@ -4,14 +4,13 @@
 //! | -------- | ------------------ | ------------------------------------------ | ------ | ---------------------------------------- |
 //! | OpenCode | `opencode acp`     | `XDG_DATA_HOME` (`opencode/auth.json`)     | yes    | 1.18.21, credentials path moves          |
 //! | Grok     | `grok agent stdio` | `GROK_HOME` (replaces `~/.grok`)           | no     | 1.0.46 logged out, config and sessions move |
-//! | Cursor   | `agent acp`        | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | no     | no: from Cursor's docs, CLI not available |
+//! | Cursor   | `cursor-agent acp` | `CURSOR_CONFIG_DIR` and `XDG_CONFIG_HOME`  | yes    | 2026.10.01-e373342, initialize logged out |
 //!
 //! herder's skill library reaches Cursor as a plugin, `--plugin-dir <dir>`, and OpenCode as one
 //! of its `skills.paths`, set through `OPENCODE_CONFIG_CONTENT`, which OpenCode merges over its
 //! other config. Grok takes no extra skills.
 //!
-//! Images is what each agent advertised as `promptCapabilities.image` in the recordings, and
-//! for Cursor, unverified, no.
+//! Images is what each agent advertised as `promptCapabilities.image` in the recordings.
 //!
 //! A `$name` skill mention is rewritten the way T3 Code does: `/name` for Cursor, plain text
 //! naming the skill for OpenCode, which picks skills itself. Grok's is left as typed, as no
@@ -149,7 +148,11 @@ impl AgentProfile {
         }
     }
 
-    /// Cursor, `agent [--model <model>] acp`. Unverified: no Cursor CLI was available.
+    /// Cursor, `cursor-agent [--model <model>] acp`. Image support verified from
+    /// `initialize` on 2026.10.01-e373342, logged out in an isolated config directory.
+    ///
+    /// Cursor installs its CLI as both `agent` and `cursor-agent`; Grok installs an `agent`
+    /// too, which can come first on `PATH`, so herder runs the name only Cursor uses.
     ///
     /// Cursor's docs say `CURSOR_CONFIG_DIR` moves `cli-config.json`; its Linux login is
     /// `$XDG_CONFIG_HOME/cursor/auth.json`, so both point at the account's config dir. On macOS
@@ -157,7 +160,7 @@ impl AgentProfile {
     pub fn cursor() -> Self {
         Self {
             provider: Provider::Cursor,
-            program: "agent".into(),
+            program: "cursor-agent".into(),
             args: Vec::new(),
             model_flag: Some("--model".into()),
             trailing_args: strings(&["acp"]),
@@ -165,7 +168,7 @@ impl AgentProfile {
             launch_env: Vec::new(),
             login_env: Vec::new(),
             skills: SkillsLaunch::Flag("--plugin-dir".into()),
-            images: false,
+            images: true,
             skill_mention: SkillMention::Slash,
         }
     }
@@ -290,7 +293,7 @@ mod tests {
         );
         assert_eq!(args(&grok.command(&request(None))), ["agent", "stdio"]);
         let cursor = AgentProfile::cursor().command(&request(Some("gpt-5")));
-        assert_eq!(cursor.as_std().get_program(), "agent");
+        assert_eq!(cursor.as_std().get_program(), "cursor-agent");
         assert_eq!(args(&cursor), ["--model", "gpt-5", "acp"]);
         assert_eq!(
             args(&AgentProfile::opencode().command(&request(Some("opencode/big-pickle")))),

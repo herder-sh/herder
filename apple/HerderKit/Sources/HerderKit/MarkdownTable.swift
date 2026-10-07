@@ -63,6 +63,8 @@ struct MarkdownTable: Equatable {
 /// wider than the transcript. Long cells wrap rather than stretch a column.
 struct MarkdownTableView: View {
     let table: MarkdownTable
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -86,12 +88,13 @@ struct MarkdownTableView: View {
             .clipShape(.rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             .textSelection(.enabled)
+            .tint(Theme.link)
         }
     }
 
     private func cell(_ text: String, _ column: Int) -> some View {
         WrappingWidth(limit: 320) {
-            Text(MarkdownText.inline(text))
+            LinkText(MarkdownText.inline(text, prs: prLinks, find: find))
                 .multilineTextAlignment(textAlignment(table.alignments[column]))
         }
         .frame(maxWidth: .infinity, alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))

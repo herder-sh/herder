@@ -48,6 +48,9 @@ struct SessionModel {
     var turn: TurnId?
     var approvals: [Pending] = []
     var questions: [Pending] = []
+    /// How many questions were asked since none was pending, answered or not: the pinned one is
+    /// number `questionRun - questions.count + 1` of them.
+    var questionRun = 0
     var prs: [PullRequest] = []
     /// Why the last turn failed, until the next one starts.
     var failure: String?
@@ -59,7 +62,7 @@ struct SessionModel {
     /// The transcript: completed items, events worth a line, and spawned children, in order.
     var log: [LogEntry] = []
     /// What the user sent from this device, until the session takes it as a user message or
-    /// the machine's queue lists it.
+    /// the machine's queue lists it behind a running turn.
     var outbox: [Outgoing] = []
     /// When the running turn started.
     var turnStartedAt: Date?
@@ -79,13 +82,26 @@ struct SessionModel {
         self.key = key
     }
 
-    /// Hands what this device sent over to the machine's queue once it lists it: the queue
-    /// tray shows it from then on.
+    /// Hands what this device sent over to the machine's queue once it lists it behind a
+    /// running turn: the queue tray shows it from then on. With no turn running, a listed prompt
+    /// is about to start, and the machine takes it off the queue before it journals it; it stays
+    /// here till then, so it does not vanish while the CLI starts.
     mutating func settle(_ queue: [QueuedPrompt]) {
+        guard turn != nil else { return }
         for prompt in queue where prompt.agentMessage == nil {
             if let index = outbox.firstIndex(where: { $0.state == .delivered && $0.text == prompt.text }) {
                 outbox.remove(at: index)
             }
+        }
+    }
+
+    /// The prompts of the machine's queue the transcript does not show from the outbox.
+    func waiting(in queue: [QueuedPrompt]) -> [QueuedPrompt] {
+        var shown = outbox.filter { $0.state == .delivered }.map(\.text)
+        return queue.filter { prompt in
+            guard prompt.agentMessage == nil, let index = shown.firstIndex(of: prompt.text) else { return true }
+            shown.remove(at: index)
+            return false
         }
     }
 
@@ -104,7 +120,7 @@ struct SessionModel {
         updatedAt = at
         if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
         switch event.body {
-        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _, _):
+        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _):
             self.repo = repo
             self.worktree = worktree
             self.branch = branch
@@ -148,6 +164,8 @@ struct SessionModel {
         case .approvalResolved(let id, _, _):
             approvals.removeAll { $0.id == id }
         case .questionAsked(let id, let turnId, let text, let choices, let routedTo, let reason):
+            if questions.isEmpty { questionRun = 0 }
+            questionRun += 1
             questions.append(Pending(
                 id: id, turnId: turnId, kind: .question(text: text, choices: choices),
                 routedTo: routedTo, reason: reason, since: at))
@@ -291,7 +309,7 @@ struct SessionModel {
             moments.append(Moment(id: event.seq, at: at, turn: turn, kind: kind))
         }
         switch event.body {
-        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _, _): add(.created(branch: branch))
+        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _): add(.created(branch: branch))
         case .branchCheckedOut(let branch): add(.setting("Checked out \(branch)"))
         case .permissionModeChanged(let mode): add(.setting("Permissions set to \(mode.label.lowercased())"))
         case .turnCompleted(let turnId, _), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
@@ -403,7 +421,7 @@ struct SessionModel {
     /// An event as one line of the session's history.
     static func describe(_ body: EventBody) -> String {
         switch body {
-        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _, _):
+        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _):
             return "Created \(branch.map { "on \($0)" } ?? "in the folder") · \(provider) \(model) · \(accountId)"
         case .branchCheckedOut(let branch): return "Checked out \(branch)"
         case .sessionStatusChanged(let status, _): return "Status: \(status)"
@@ -750,6 +768,8 @@ struct Outgoing: Hashable, Identifiable {
     let text: String
     /// The images sent with it, shown until the session takes it.
     var images: [Herder.Image] = []
+    /// The files sent with it, shown until the session takes it.
+    var files: [PromptFile] = []
     var state: State = .sending
 }
 

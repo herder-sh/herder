@@ -493,6 +493,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
         command,
         CommandBody::ListDirectory { .. }
             | CommandBody::AddProject { .. }
+            | CommandBody::CloneProject { .. }
             | CommandBody::SetProjectSettings { .. }
             | CommandBody::RemoveProject { .. }
             | CommandBody::SetProjectIcon { .. }

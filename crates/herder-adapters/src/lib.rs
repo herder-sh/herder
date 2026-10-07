@@ -82,6 +82,16 @@ pub trait Adapter: Send + Sync {
 /// What [`Adapter::start`] returns: owns everything it needs, so the daemon can spawn it.
 pub type StartFuture = Pin<Box<dyn Future<Output = Result<AdapterSession, TurnError>> + Send>>;
 
+/// What a usage probe reads of an account: who its login is, and its limit windows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AccountUsage {
+    /// Email address the login is signed in as; absent when the CLI does not say, as for an
+    /// API key.
+    pub email: Option<String>,
+    /// Every limit window; empty for an account without plan limits.
+    pub windows: Vec<UsageWindow>,
+}
+
 /// Everything an adapter needs to run one session.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartRequest {
@@ -333,17 +343,20 @@ pub enum AdapterEvent {
 }
 
 /// A user message's text as a CLI gets it in a replayed transcript: the text, then a line
-/// naming each image the message carried. A seed holds attachment references only, never the
-/// bytes, so every adapter replays images this way.
+/// naming each image and file the message carried. A seed holds attachment references only,
+/// never the bytes nor where a file is kept, so every adapter replays attachments this way.
 pub(crate) fn seed_user_text(text: &str, attachments: &[Attachment]) -> String {
+    let why = "not part of this replay";
     let mut text = text.to_owned();
     for attachment in attachments {
         text.push('\n');
-        text.push_str(&image_placeholder(
-            &attachment.media_type,
-            attachment.size,
-            "not part of this replay",
-        ));
+        text.push_str(&match &attachment.name {
+            None => image_placeholder(&attachment.media_type, attachment.size, why),
+            Some(name) => format!(
+                "[file attached: {name}, {} KB; {why}]",
+                attachment.size.div_ceil(1024)
+            ),
+        });
     }
     text
 }

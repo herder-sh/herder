@@ -18,8 +18,8 @@ use serde_json::{Map, Value};
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, EscalateArgs, EscalateInput,
     EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput,
-    WaitForOutput,
+    SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput, StatusInput,
+    StatusOutput, WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -39,11 +39,13 @@ pub enum Tool {
     Answer,
     /// Hand a child's question or approval request to the user.
     Escalate,
+    /// Show an HTML page inline in the caller's thread.
+    ShowHtml,
 }
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 8] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -51,6 +53,7 @@ impl Tool {
         Tool::WaitFor,
         Tool::Answer,
         Tool::Escalate,
+        Tool::ShowHtml,
     ];
 
     /// Name the agent calls the tool by.
@@ -63,6 +66,7 @@ impl Tool {
             Tool::WaitFor => "wait_for",
             Tool::Answer => "answer",
             Tool::Escalate => "escalate",
+            Tool::ShowHtml => "show_html",
         }
     }
 
@@ -81,11 +85,11 @@ impl Tool {
                  folder that is not a git repository with a commit, it shares the folder with \
                  you and has no branch), and it does not see your conversation, so `prompt` must say everything it needs. \
                  Returns at once with the child's id and branch while the child works in the \
-                 background; call wait_for to get its report. Children cannot spawn children, \
-                 and a task has a limit on live children (5 unless the user changed it). A \
-                 child that completes a turn with nothing queued and a clean worktree is \
-                 archived automatically right after it reports: its worktree is removed three \
-                 days later, its branch kept, and it stops counting toward the limit. When this \
+                 background; call wait_for to get its report. Children cannot spawn children; \
+                 spawn as many as the work needs, rather than reusing a child for unrelated \
+                 work. A child is archived automatically once every pull request it opened is \
+                 merged and it is idle: its worktree is removed three days later, its branch \
+                 kept. When this \
                  machine is too loaded for another agent, fails with `host_busy` and \
                  `retry_after_secs`: keep working or call wait_for, then retry."
             }
@@ -102,14 +106,13 @@ impl Tool {
                  its report. An idle child starts its next turn on it at once; a working child \
                  gets it after its current turn ends, in the order sent, and `queued` is then \
                  true. Either way its report comes through wait_for. An archived child is \
-                 unarchived first, with its worktree back on its branch, and counts toward your \
-                 limit on children again. To unblock a child waiting on a question or approval, \
+                 unarchived first, with its worktree back on its branch. To unblock a child waiting on a question or approval, \
                  use answer instead."
             }
             Tool::Status => {
                 "Snapshot of your children: each one's task, branch, status, latest report, and \
-                 the questions and approval requests waiting for your answer. Children archived \
-                 after they finished are listed too, as `archived`, with their latest report. \
+                 the questions and approval requests waiting for your answer. Archived children \
+                 are listed too, as `archived`, with their latest report. \
                  Returns at once; use wait_for to block until something changes."
             }
             Tool::WaitFor => {
@@ -119,11 +122,11 @@ impl Tool {
                  is already waiting; each event is returned once. Pass `child` to wait for that \
                  child only, or omit it to wait for any. Returns `timeout` when `timeout_secs` \
                  pass first, and `idle` at once when no awaited child is working and nothing \
-                 waits for you. A child that completed its turn with nothing queued is archived by \
-                 the time you get its report, with `status` `archived`; one whose worktree has \
-                 uncommitted or untracked changes stays `idle`, and its summary says so. A \
-                 child whose turn failed or was interrupted, or that waits on a question or \
-                 approval, is never archived automatically."
+                 waits for you. A child that completed its turn with nothing queued and every \
+                 pull request it opened merged is archived by the time you get its report, with \
+                 `status` `archived`; otherwise it stays `idle`. A child whose turn failed or \
+                 was interrupted, or that waits on a question or approval, is never archived \
+                 automatically."
             }
             Tool::Answer => {
                 "Answer a question or approval request that a child put to you, unblocking it. \
@@ -141,6 +144,21 @@ impl Tool {
                  `approval_id`, and a `note` with \
                  what the user should know to decide."
             }
+            Tool::ShowHtml => {
+                "Show a self-contained HTML page inline in this thread, where the call happens, \
+                 so the user sees it rendered live. Use it when something reads better as a \
+                 visual than as prose: data as a chart or table, a diagram or code map, \
+                 side-by-side mocks of several UI options, or an interactive exploration. Do not \
+                 use it for ordinary answers. Write one complete HTML document with all CSS, \
+                 JavaScript, SVG and data inline. The page has no network: remote scripts, \
+                 stylesheets, fonts and images do not load and fetches fail, so use no CDN \
+                 libraries and embed the data in the page. Support light and dark with \
+                 `prefers-color-scheme` (dark is the common case). Make it responsive: readable \
+                 in a column about 700px wide and on a phone, with no fixed widths that \
+                 overflow. Keep it under 1 MiB. `title` is a short label shown above the page. \
+                 Returns at once; still write a short text reply that summarises what the page \
+                 shows, adding what it does not say."
+            }
         }
     }
 
@@ -154,6 +172,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForInput>(),
             Tool::Answer => tool_schema::<AnswerInput>(),
             Tool::Escalate => tool_schema::<EscalateInput>(),
+            Tool::ShowHtml => tool_schema::<ShowHtmlInput>(),
         }
     }
 
@@ -167,6 +186,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForOutput>(),
             Tool::Answer => tool_schema::<AnswerOutput>(),
             Tool::Escalate => tool_schema::<EscalateOutput>(),
+            Tool::ShowHtml => tool_schema::<ShowHtmlOutput>(),
         }
     }
 
@@ -244,6 +264,8 @@ pub enum ToolCall {
     Answer(AnswerInput),
     /// `escalate`.
     Escalate(EscalateInput),
+    /// `show_html`.
+    ShowHtml(ShowHtmlInput),
 }
 
 impl ToolCall {
@@ -259,6 +281,7 @@ impl ToolCall {
             Tool::WaitFor => serde_json::from_value(arguments).map(ToolCall::WaitFor),
             Tool::Answer => serde_json::from_value(arguments).map(ToolCall::Answer),
             Tool::Escalate => serde_json::from_value(arguments).map(ToolCall::Escalate),
+            Tool::ShowHtml => serde_json::from_value(arguments).map(ToolCall::ShowHtml),
         };
         call.map_err(|error| ToolError::new(ErrorCode::InvalidArguments, error.to_string()))
     }
@@ -273,6 +296,7 @@ impl ToolCall {
             ToolCall::WaitFor(_) => Tool::WaitFor,
             ToolCall::Answer(_) => Tool::Answer,
             ToolCall::Escalate(_) => Tool::Escalate,
+            ToolCall::ShowHtml(_) => Tool::ShowHtml,
         }
     }
 }
@@ -281,10 +305,8 @@ impl ToolCall {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    /// The arguments do not match the tool's schema.
+    /// The arguments do not match the tool's schema, or break a limit it states.
     InvalidArguments,
-    /// `spawn` would exceed the task's limit on children.
-    LimitExceeded,
     /// `spawn` was called by a child; children cannot spawn children.
     DepthExceeded,
     /// `spawn` asked for a provider outside the task's providers or a permission mode above the

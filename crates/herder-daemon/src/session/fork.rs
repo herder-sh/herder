@@ -16,12 +16,12 @@
 //! `account_switched` when the original's is not here. Its journal marks the fork with
 //! `session_forked`, naming the original and its host, and both that and the account switch
 //! are `by` the user who forked it; its next prompt starts the CLI seeded with the transcript,
-//! as after any switch. The images its prompts carried are kept for it under their ids, so
+//! as after any switch. The images and files its prompts carried are kept for it under their ids, so
 //! `get_attachment` answers as for the original.
 //!
 //! A turn the original had open is failed on the fork, its open approvals expired, as after a
 //! restart, but saying it was handed off. When a user's prompt opened it, that prompt, with its
-//! images, runs again on the fork right away, as failover retries a turn: queued `by` the
+//! images and files, runs again on the fork right away, as failover retries a turn: queued `by` the
 //! same user, it starts the CLI seeded with the transcript, which holds the failed turn's
 //! partial items. A turn opened otherwise, by an agent's message or a follow-up,
 //! which belong to the host they were sent to, leaves the fork `needs_you`. The original is not
@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use herder_protocol::{
-    AccountId, AttachmentId, ErrorCode, ErrorInfo, Event, EventBody, HistoryPart, HostId, Image,
+    AccountId, Attachment, Bytes, ErrorCode, ErrorInfo, Event, EventBody, HistoryPart, HostId,
     ItemBody, ProjectId, Provider, Relay, SessionId, SessionStatus, UserId,
 };
 use herder_store::QueuedPrompt;
@@ -86,8 +86,8 @@ pub struct Forks {
 pub struct Source {
     /// Its whole journal.
     pub events: Vec<Event>,
-    /// The images its prompts carried, by attachment id.
-    pub images: Vec<(AttachmentId, Image)>,
+    /// The images and files its prompts carried, with their bytes.
+    pub attachments: Vec<(Attachment, Bytes)>,
     /// Its project, whose clone here the fork works in; `None` for a session of this host,
     /// whose fork works in the same repository.
     pub project_id: Option<ProjectId>,
@@ -104,7 +104,7 @@ pub(super) struct Uploads(Mutex<HashMap<(UserId, SessionId), Upload>>);
 
 struct Upload {
     events: Vec<Event>,
-    images: Vec<(AttachmentId, Image)>,
+    attachments: Vec<(Attachment, Bytes)>,
     touched: Instant,
 }
 
@@ -136,7 +136,7 @@ impl SessionManager {
                 key.clone(),
                 Upload {
                     events: Vec::new(),
-                    images: Vec::new(),
+                    attachments: Vec::new(),
                     touched: Instant::now(),
                 },
             );
@@ -153,7 +153,16 @@ impl SessionManager {
             HistoryPart::Image {
                 attachment_id,
                 image,
-            } => upload.images.push((attachment_id, image)),
+            } => {
+                let attachment = Attachment {
+                    attachment_id,
+                    media_type: image.media_type,
+                    size: image.data.0.len() as u64,
+                    name: None,
+                };
+                upload.attachments.push((attachment, image.data));
+            }
+            HistoryPart::File { attachment, data } => upload.attachments.push((attachment, data)),
         }
         Ok(())
     }
@@ -255,7 +264,7 @@ impl SessionManager {
         }
         Ok(Source {
             events: upload.events,
-            images: upload.images,
+            attachments: upload.attachments,
             project_id: Some(relay.project_id),
             host_id: relay.host_id,
         })
@@ -271,7 +280,7 @@ impl SessionManager {
             .read_since(session_id, 0, usize::MAX)
             .await
             .map_err(internal)?;
-        let mut images = Vec::new();
+        let mut kept = Vec::new();
         for event in &events {
             let EventBody::ItemAdded { item } = &event.body else {
                 continue;
@@ -281,13 +290,13 @@ impl SessionManager {
             };
             for attachment in attachments {
                 let id = &attachment.attachment_id;
-                let image = attachments::fetch(&self.inner.attachments, session_id, id).await?;
-                images.push((id.clone(), image));
+                let (_, data) = attachments::fetch(&self.inner.attachments, session_id, id).await?;
+                kept.push((attachment.clone(), data));
             }
         }
         Ok(Source {
             events,
-            images,
+            attachments: kept,
             project_id: None,
             host_id: host.clone(),
         })
@@ -389,7 +398,7 @@ impl SessionManager {
             .restore(repo_path, &slug, checkpoint.as_deref())
             .await
             .map_err(worktree_error)?;
-        attachments::keep(&inner.attachments, &session_id, source.images).await?;
+        attachments::keep(&inner.attachments, &session_id, source.attachments).await?;
         // The fork tracks none of the original's pull requests, and owns only its own branch.
         let mut events: Vec<Event> = source
             .events

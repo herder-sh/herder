@@ -34,6 +34,8 @@ enum Theme {
     static let failure = Color(light: 0x5A5A58, dark: 0xD55E00)
     static let success = Color(light: 0x1C1C1C, dark: 0x009E73)
     static let merged = Color(light: 0x5A5A58, dark: 0xCC79A7)
+    /// Links in prose, which are underlined too, as light mode has no colour to spare.
+    static let link = Color(light: 0x1C1C1C, dark: 0x7FA6F5)
     /// Marks a child session: its banner, header edge and composer.
     static let child = Color(light: 0x3C3C3A, dark: 0x9D8CF0)
 

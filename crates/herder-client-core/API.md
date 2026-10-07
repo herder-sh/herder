@@ -47,6 +47,10 @@ says what exists, why, and how it maps to foreign languages.
   `SkillsStatus.accounts` (`AccountSkills`) and `SkillSource::Account`, the skills in each
   account's own config dir, were added compatibly, as was writing to a skill library with no
   repository, the machine's own.
+  P11.11 added, compatibly, files of any type on a prompt: `SendPrompt.files` (`PromptFile`),
+  `Attachment.name`, `QueuedPrompt.files` and `HistoryPart::File`, with `FILE_MEDIA_TYPE`,
+  `MAX_FILE_BYTES` and `MAX_FILE_NAME_BYTES`; `MAX_PROMPT_IMAGE_BYTES` became
+  `MAX_PROMPT_ATTACHMENT_BYTES`, covering a prompt's images and files together.
 
 ## Shape, and how it maps to UniFFI
 
@@ -92,8 +96,8 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Area      | Read                                                                 | Act                                                                                       |
 | --------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Machines  | `Client::machines`, `Client::changes`, `Machine::connection`, `quality`, `role` | `Client::pair`, `share`, `rename`, `set_addresses`, `reconnect`, `forget`, `suspend`, `wake`, `synced`; `PairingUri`, `PairingLink` |
-| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
-| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
+| Sessions  | `Machine::sessions`, `Client::subscribe_session` → `SessionUpdate`; a `UserMessage`'s `attachments`; `SessionHead::queue` | `send`: `CreateSession` (by account, by provider, or the project's default), `ArchiveSession`, `UnarchiveSession`, `SendPrompt` (with `images` and `files`), `GetAttachment` → `CommandResult::Attachment`, `Interrupt`, `RemoveQueued`, `MoveQueued`, `SendQueuedNow`, `MergeQueued` (see Prompt queue), `SetModel`, `SetPermissionMode`, `ComposeDown` |
+| Projects  | `Machine::projects`; a `Project`'s `icon`, the hash of its icon, to cache it by, `icon_uploaded`, whether an owner uploaded it, and `icon_background`, the colour behind it | anyone: `send`: `GetProjectIcon` → `CommandResult::ProjectIcon` (`not_found` when it has none; fetch again when `icon` changes). Owners: `send`: `ListDirectory` → `CommandResult::Directory`, `AddProject` → `CommandResult::ProjectAdded`, `CloneProject` (a git URL or GitHub `owner/repo`, into a new folder; `conflict` when it exists) → `CommandResult::ProjectAdded`, `SetProjectSettings`, `RemoveProject` (refused with `conflict` while it has live sessions; deletes nothing on disk), `SetProjectIcon` (an `Image` of one of `PROJECT_ICON_MEDIA_TYPES`, at most `MAX_PROJECT_ICON_BYTES`, else `bad_request`; `None` goes back to the icon found in the clone) |
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
@@ -369,7 +373,7 @@ and carry the same provenance so they cannot reset relay depth. A human prompt r
 
 A prompt sent while a turn runs waits in the daemon's queue for its session.
 `SessionHead.queue` lists the waiting prompts in the order they will run, each a
-`QueuedPrompt` with its `prompt_id`, `text`, image count, and sender: the user `by`, or the
+`QueuedPrompt` with its `prompt_id`, `text`, image and file counts, and sender: the user `by`, or the
 `agent_message` of another agent's message. A prompt leaves the queue as its turn starts. The
 queue arrives with the session list (`Machine::sessions`), which every client gets again
 whenever any session's queue changes; a vault lists none.
@@ -385,11 +389,12 @@ included:
   to reset).
 - `MergeQueued { session_id, prompt_ids }` merges the listed prompts into one, so they run
   as one turn: it keeps the first one's `prompt_id` and place, joins their texts in the
-  listed order with a blank line between them, and carries all their images in that order,
-  each prompt's `[Image #N]` markers renumbered to count across the merged prompt. The
-  daemon merges them because clients see only an image count. Fewer than two prompts, one
-  listed twice, a message from another agent (merging would lose who sent it), prompts
-  different users sent, or images over `MAX_PROMPT_IMAGE_BYTES` together are refused with
+  listed order with a blank line between them, and carries all their images and files in
+  that order, each prompt's `[Image #N]` markers renumbered to count across the merged
+  prompt's images. The daemon merges them because clients see only image and file counts.
+  Fewer than two prompts, one listed twice, a message from another agent (merging would lose
+  who sent it), prompts different users sent, or images and files over
+  `MAX_PROMPT_ATTACHMENT_BYTES` together are refused with
   `bad_request`. Listing the prompts the client saw, rather than "the whole queue", means a
   prompt queued or started meanwhile is never merged by surprise.
 

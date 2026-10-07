@@ -88,7 +88,7 @@ pub struct ChildStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String")]
     pub branch: Option<String>,
-    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when herder archived it after it finished a turn (send unarchives it).
+    /// `running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when it was archived, by herder once all its pull requests merged or by hand (send unarchives it).
     pub status: SessionStatus,
     /// Summary of its latest finished turn; absent before the first one ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,7 +145,8 @@ pub enum WaitForOutput {
         turn_id: TurnId,
         /// The child's final message of that turn, or what went wrong.
         summary: String,
-        /// The child's status now: `archived` when herder archived it after this turn.
+        /// The child's status now: `archived` when herder archived it after this turn, as all
+        /// its pull requests are merged.
         status: SessionStatus,
     },
     /// A child is blocked on a question or approval request waiting for your answer.
@@ -407,4 +408,21 @@ pub struct SendSessionOutput {
     pub queued: bool,
     /// True when this sender/key was already accepted; no second prompt was created.
     pub duplicate: bool,
+}
+
+/// Arguments of `show_html`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShowHtmlInput {
+    /// Short label shown above the page, e.g. "Request latency by endpoint".
+    pub title: String,
+    /// One complete, self-contained HTML document, at most 1 MiB, with all CSS, JavaScript, SVG and data inline.
+    pub html: String,
+}
+
+/// Result of `show_html`: the page is in the thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ShowHtmlOutput {
+    /// Always true.
+    pub shown: bool,
 }

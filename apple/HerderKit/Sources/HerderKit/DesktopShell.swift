@@ -161,7 +161,7 @@ private struct ListAndSession<List: View>: View {
 
     @ViewBuilder private var detail: some View {
         if let draft {
-            DraftSessionView(fleet: fleet, draft: draft, created: opened).id(draft.id)
+            DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }.id(draft.id)
         } else if let session {
             SessionView(fleet: fleet, key: session) { self.session = $0 }
         } else {
@@ -453,7 +453,8 @@ private struct SidebarRail: View {
         _ symbol: String, _ title: String, _ target: SidebarItem, badge: Int, state: SessionState? = nil,
         icon: ProjectIcon? = nil
     ) -> some View {
-        Button {
+        let shown = state.flatMap { $0.priority > SessionState.idle.priority ? $0 : nil }
+        return Button {
             if item != target { session = nil }
             item = target
         } label: {
@@ -467,8 +468,8 @@ private struct SidebarRail: View {
                     if badge > 0 { Circle().fill(Theme.accent).frame(width: 8, height: 8).offset(x: -4, y: 4) }
                 }
                 .overlay(alignment: .bottomTrailing) {
-                    if let state, state.priority > SessionState.idle.priority {
-                        StatusGlyph(state: state, size: 6, pulses: false)
+                    if let shown {
+                        StatusGlyph(state: shown, size: 6, pulses: false)
                             .background(Theme.surface, in: .circle)
                             .offset(x: 2, y: 2)
                     }
@@ -477,6 +478,9 @@ private struct SidebarRail: View {
         }
         .buttonStyle(.plain)
         .help(title)
+        // Named by its title, not the symbol or the state glyph it shows.
+        .accessibilityLabel(title)
+        .accessibilityValue(shown?.label ?? "")
     }
 }
 
@@ -584,7 +588,6 @@ struct ProjectSessions: View {
                     .foregroundStyle(Theme.secondary)
                     if showsArchived {
                         SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: selection, showsProject: false)
-                            .opacity(0.75)
                     }
                 }
             }

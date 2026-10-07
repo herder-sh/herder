@@ -381,6 +381,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             account_id: account.clone(),
             provider: Provider::Claude,
             label: "Work".into(),
+            email: None,
             usage: Vec::new(),
         }]
     );
@@ -396,7 +397,6 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         })
         .await
@@ -417,6 +417,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             session_id: session_id.clone(),
             text: PROMPT.into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     client

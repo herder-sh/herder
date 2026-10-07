@@ -33,11 +33,13 @@ struct SessionView: View {
     @State private var top = TranscriptTop()
     /// Bumped on every send, so the transcript jumps to its end.
     @State private var sent = 0
+    @State private var find = TranscriptFind()
 
     var body: some View {
         let model = fleet.sessions[key]
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
         let blocks = model.map(Transcript.blocks) ?? []
+        let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
             if let parent = model?.parent {
                 ChildBanner(fleet: fleet, parent: SessionKey(hostId: key.hostId, sessionId: parent), open: open)
@@ -57,7 +59,7 @@ struct SessionView: View {
             ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    if model?.loaded != true {
+                    if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
                     } else if blocks.isEmpty && model?.status != .waitingForCapacity {
                         Text("No turns yet. Send a prompt to start.").foregroundStyle(Theme.tertiary)
@@ -65,6 +67,7 @@ struct SessionView: View {
                     }
                     ForEach(blocks) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
+                            .environment(\.findHighlight, find.highlight(block.id))
                     }
                     if model?.loaded == true && model?.status == .waitingForCapacity {
                         let resources = fleet.machines.first { $0.hostId == key.hostId }?.resources
@@ -95,6 +98,12 @@ struct SessionView: View {
                     proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
                 }
             }
+            .onChange(of: find.current) { if let id = find.current { withAnimation { proxy.scrollTo(id, anchor: .center) } } }
+            .overlay(alignment: .topTrailing) {
+                if find.shown {
+                    FindBar(find: $find, matches: matches).padding(12)
+                }
+            }
             .overlay(alignment: .leading) {
                 let checkpoints = Checkpoints(blocks)
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
@@ -110,6 +119,7 @@ struct SessionView: View {
             }
             }
         }
+        .environment(\.prLinks, PRLinks(linkablePRs))
         .background(Theme.background)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -122,6 +132,7 @@ struct SessionView: View {
         }
         .onChange(of: key) { old, _ in
             showsTerminal = false
+            find = TranscriptFind()
             scroll.show(key)
             fleet.unwatch(old)
             fleet.watch(key)
@@ -244,6 +255,12 @@ struct SessionView: View {
                     .keyboardShortcut("`", modifiers: .command)
                     .help(showsTerminal ? "Back to the chat (⌘`)" : "A shell in this session's worktree (⌘`)")
             }
+            if !showsTerminal {
+                HeaderButton(symbol: "magnifyingglass", title: nil, selected: find.shown) { toggleFind() }
+                    .accessibilityLabel("Find in Transcript")
+                    .keyboardShortcut("f", modifiers: .command)
+                    .help("Find in the transcript (⌘F)")
+            }
             HeaderButton(symbol: "info.circle", title: nil, selected: inspector == .pane && inspectorShown) {
                 showInspector()
             }
@@ -269,6 +286,17 @@ struct SessionView: View {
 
     private var ownsTerminal: Bool {
         fleet.machines.first(where: { $0.hostId == key.hostId })?.role == .owner
+    }
+
+    private func toggleFind() { find.shown.toggle() }
+
+    /// The pull requests `#123` in the transcript can name: the session tree's, then the
+    /// project's, whose repository the rest are in.
+    private var linkablePRs: [PullRequest] {
+        let tree = PRRollup(of: key, sessions: fleet.sessions).groups.flatMap(\.prs)
+        let project = fleet.lists.projects.first { $0.sessions.contains { $0.key == key } }?
+            .sessions.flatMap(\.prs) ?? []
+        return tree + project
     }
 
     private func showInspector() {
@@ -320,6 +348,9 @@ struct SessionView: View {
                                systemImage: showsTerminal ? "text.bubble" : "terminal") { showsTerminal.toggle() }
                     }
                     Button("Events and Statistics", systemImage: "info.circle") { showInspector() }
+                    if !showsTerminal {
+                        Button("Find in Transcript", systemImage: "magnifyingglass") { toggleFind() }
+                    }
                 }
             }
             if model.state != .archived {
@@ -328,6 +359,9 @@ struct SessionView: View {
                 }
                 Button("Switch Account or Model…", systemImage: "arrow.left.arrow.right") { switching = true }
                 Button("Link Pull Request…", systemImage: "link") { linking = true }
+                if model.state.renamable {
+                    Button("Rename…", systemImage: "pencil") { fleet.renaming = key }
+                }
                 Divider()
                 Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(key) } }
                     .disabled(fleet.archiving.contains(key))
@@ -348,7 +382,13 @@ struct SessionView: View {
     private func controls(_ model: SessionModel, _ summary: SessionSummary?) -> some View {
         VStack(spacing: 8) {
             if let request = pinned(model, summary) {
-                RequestCard(request: request.request, fleet: fleet, showsSession: false, more: request.more)
+                // The composer takes the user's own answer, as it would with the card gone; each
+                // answer brings in the next question.
+                RequestCard(request: request.request, fleet: fleet, showsSession: false, more: request.more,
+                            step: request.step, answersInComposer: readOnly(model, summary) == nil)
+                    .id(request.request.requestId)
+                    .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                            removal: .opacity))
             }
             if let readOnly = readOnly(model, summary) {
                 Label(readOnly, systemImage: "lock")
@@ -367,6 +407,7 @@ struct SessionView: View {
                 .id(key)
             }
         }
+        .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.request.requestId)
         .frame(maxWidth: 784)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
@@ -376,7 +417,8 @@ struct SessionView: View {
     }
 
     /// The oldest approval, else the oldest question, on any route, as the TUI pins them.
-    private func pinned(_ model: SessionModel, _ summary: SessionSummary?) -> (request: PendingRequest, more: Int)? {
+    private func pinned(_ model: SessionModel, _ summary: SessionSummary?)
+        -> (request: PendingRequest, more: Int, step: (number: Int, of: Int)?)? {
         guard let summary, let pending = model.approvals.first ?? model.questions.first else { return nil }
         let kind: PendingRequest.Kind = switch pending.kind {
         case .approval(let summary): .approval(summary: summary)
@@ -387,7 +429,9 @@ struct SessionView: View {
             : pending.reason?.text
         return (PendingRequest(requestId: pending.id, session: summary, kind: kind, since: pending.since,
                                age: Timestamp.age(pending.since, now: .now), reason: reason, note: pending.note),
-                model.approvals.count + model.questions.count - 1)
+                model.approvals.count + model.questions.count - 1,
+                model.approvals.isEmpty && model.questionRun > 1
+                    ? (model.questionRun - model.questions.count + 1, model.questionRun) : nil)
     }
 
     /// Why the session cannot be driven from here, if it cannot.
@@ -469,6 +513,7 @@ private struct Composer: View {
     let handOff: (HostId, AccountId?) -> Void
     @State private var text = ""
     @State private var images: [Herder.Image] = []
+    @State private var files: [PromptFile] = []
 
     var body: some View {
         let machine = fleet.machines.first { $0.hostId == key.hostId }
@@ -481,13 +526,14 @@ private struct Composer: View {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
                     .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
             }
-            let queue = fleet.queue(of: key)
+            let queue = model.waiting(in: fleet.queue(of: key))
             if !queue.isEmpty {
                 QueueTray(fleet: fleet, key: key, queue: queue, running: model.turn != nil)
             }
             ComposerBox(
                 text: $text,
                 images: $images,
+                files: $files,
                 placeholder: placeholder,
                 tint: model.parent != nil ? Theme.child : nil,
                 models: fleet.modelGroups(on: key.hostId, providers: model.provider.map { [$0] } ?? [],
@@ -523,16 +569,21 @@ private struct Composer: View {
             if let kept = PromptDrafts.shared.load(PromptDrafts.key(key)) {
                 text = kept.text
                 images = kept.herderImages
+                files = kept.promptFiles
             }
         }
         // Kept a moment after the last keystroke, and at once on leaving.
-        .task(id: PromptDrafts.Content(text: text, images: images)) {
+        .task(id: draftContent) {
             guard (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
         }
         .onDisappear {
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: PromptDrafts.key(key))
+            PromptDrafts.shared.save(draftContent, for: PromptDrafts.key(key))
         }
+    }
+
+    private var draftContent: PromptDrafts.Content {
+        PromptDrafts.Content(text: text, images: images, files: files)
     }
 
     /// The provider's accounts on the machine; picking one moves the session to it.
@@ -562,7 +613,9 @@ private struct Composer: View {
     private var forkable: Bool { model.loaded && model.parent == nil }
 
     private var placeholder: String {
-        if !model.questions.isEmpty { return "Type an answer…" }
+        if case .question(_, let choices) = model.questions.first?.kind {
+            return choices.isEmpty ? "Type an answer…" : "Type your own answer…"
+        }
         if model.parent != nil {
             return model.turn != nil ? "Queue a message for this child session…" : "Message this child session…"
         }
@@ -571,16 +624,17 @@ private struct Composer: View {
 
     private func send() {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = images
-        guard !text.isEmpty || !images.isEmpty else { return }
+        let (images, files) = (images, files)
+        guard !text.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         self.text = ""
         self.images = []
+        self.files = []
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: PromptDrafts.key(key))
         sent()
         if model.state == .archived {
-            Task { await fleet.unarchiveAndSubmit(text, images: images, to: key) }
+            Task { await fleet.unarchiveAndSubmit(text, images: images, files: files, to: key) }
         } else {
-            Task { await fleet.submit(text, images: images, to: key) }
+            Task { await fleet.submit(text, images: images, files: files, to: key) }
         }
     }
 }
@@ -636,6 +690,8 @@ struct DraftSessionView: View {
     let fleet: Fleet
     let draft: Draft
     let created: (SessionKey) -> Void
+    /// Moves the draft to another project, picked from its heading.
+    let moved: (Draft) -> Void
     @State private var hostId: HostId = ""
     /// The provider and model it starts on; picking another provider's model switches to it.
     @State private var choice = ModelCatalog.Choice(provider: "", model: "")
@@ -645,9 +701,11 @@ struct DraftSessionView: View {
     @State private var mode: PermissionMode = .fullAccess
     @State private var text = ""
     @State private var images: [Herder.Image] = []
+    @State private var files: [PromptFile] = []
     @State private var error: String?
     /// The first message while the session is being created.
     @State private var starting: String?
+    @State private var picking = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// A phone's width: the chat sits closer to the edges and the footer says less.
@@ -696,16 +754,13 @@ struct DraftSessionView: View {
                     removal: .opacity
                 ))
             } else {
-                Text("What should we build in \(machine?.name ?? "")/\(place)?")
-                    .font(.system(size: compact ? 24 : 30, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                    .multilineTextAlignment(.center)
-                    .transition(.opacity)
+                heading.transition(.opacity)
             }
             // Always present, so on send it slides down to where the session's composer sits.
             ComposerBox(
                 text: $text,
                 images: $images,
+                files: $files,
                 placeholder: "Ask for changes, or describe what to build",
                 models: fleet.modelGroups(on: hostId, providers: fleet.providers(on: hostId), current: choice,
                                           offersDefault: true),
@@ -750,17 +805,65 @@ struct DraftSessionView: View {
             if let kept = PromptDrafts.shared.load(draft.key) {
                 text = kept.text
                 images = kept.herderImages
+                files = kept.promptFiles
             }
         }
         // Kept a moment after the last keystroke, and at once on leaving; not while the
         // session is starting, so a sent prompt is not kept again.
-        .task(id: PromptDrafts.Content(text: text, images: images)) {
+        .task(id: draftContent) {
             guard starting == nil, (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key)
+            PromptDrafts.shared.save(draftContent, for: draft.key)
         }
         .onDisappear {
-            if starting == nil { PromptDrafts.shared.save(PromptDrafts.Content(text: text, images: images), for: draft.key) }
+            if starting == nil { PromptDrafts.shared.save(draftContent, for: draft.key) }
         }
+        .sheet(isPresented: $picking) {
+            ProjectPicker(fleet: fleet, newProject: false, picked: move(to:))
+        }
+    }
+
+    /// What it asks, with where it runs as a button that picks another project.
+    private var heading: some View {
+        let font = Font.system(size: compact ? 24 : 30, weight: .medium)
+        let project = Button { picking = true } label: {
+            HStack(spacing: 8) {
+                ProjectIcon(projectId: draft.projectId ?? draft.repo, name: place,
+                            image: fleet.projectIcon(draft.projectId), size: compact ? 24 : 30)
+                Text("\(machine?.name ?? "")/\(place)").lineLimit(1).truncationMode(.middle)
+                SwiftUI.Image(systemName: "chevron.down").font(.system(size: compact ? 13 : 15, weight: .bold))
+                    .foregroundStyle(Theme.secondary)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Start in another project")
+        .accessibilityIdentifier("draft-project")
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                Text("What should we build in")
+                HStack(spacing: 2) { project; Text("?") }
+            }
+            VStack(spacing: 6) {
+                Text("What should we build in")
+                HStack(spacing: 2) { project; Text("?") }
+            }
+        }
+        .font(font)
+        .foregroundStyle(Theme.text)
+    }
+
+    /// Moves to the picked project, taking the prompt along; the draft left behind is forgotten.
+    private func move(to picked: Draft) {
+        guard picked.key != draft.key else { return }
+        PromptDrafts.shared.move(PromptDrafts.Content(text: text, images: images), from: draft.key, to: picked.key)
+        // Emptied, so leaving this draft does not keep the prompt here again.
+        text = ""
+        images = []
+        moved(picked)
+    }
+
+    private var draftContent: PromptDrafts.Content {
+        PromptDrafts.Content(text: text, images: images, files: files)
     }
 
     /// Every account on the machine, of each provider; picking another provider's account
@@ -787,33 +890,35 @@ struct DraftSessionView: View {
 
     private func start() async {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty || !images.isEmpty else { return }
+        guard !prompt.isEmpty || !images.isEmpty || !files.isEmpty else { return }
         guard let account else {
             error = "\(machine?.name ?? "This machine") has no \(ModelCatalog.providerName(choice.provider)) account."
             return
         }
         ModePreference.remember(mode, for: draft)
         if let projectId = draft.projectId { MachinePreference.remember(hostId, for: projectId) }
-        let sent = images
+        let (sent, sentFiles) = (images, files)
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
             error = nil
             text = ""
             images = []
+            files = []
         }
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
         do {
             created(try await fleet.createSession(
                 on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
-                model: choice.model, mode: mode, prompt: prompt, images: sent))
+                model: choice.model, mode: mode, prompt: prompt, images: sent, files: sentFiles))
         } catch {
             withAnimation(.smooth(duration: 0.4)) {
                 starting = nil
                 text = prompt
                 images = sent
+                files = sentFiles
                 self.error = describe(error)
             }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent), for: draft.key)
+            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent, files: sentFiles), for: draft.key)
         }
     }
 }

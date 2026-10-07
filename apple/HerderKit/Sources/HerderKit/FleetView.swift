@@ -78,7 +78,7 @@ struct FleetView: View {
         #if os(iOS)
         .fullScreenCover(item: Binding(get: { sizeClass == .compact ? draft : nil }, set: { draft = $0 })) { draft in
             NavigationStack {
-                DraftSessionView(fleet: fleet, draft: draft) { opened($0) }
+                DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }
                     .toolbar { Button("Cancel") { self.draft = nil } }
             }
         }
@@ -92,6 +92,13 @@ struct FleetView: View {
         } message: { refusal in
             Text(refusal.reason)
         }
+        .alert("Rename Session", isPresented: Binding(get: { fleet.renaming != nil }, set: { if !$0 { fleet.renaming = nil } })) {
+            RenameSessionField(title: fleet.renaming.flatMap { fleet.sessions[$0]?.title } ?? "") { title in
+                guard let key = fleet.renaming else { return }
+                Task { await fleet.rename(key, to: title) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .onChange(of: draft) {
             // A draft shows in a list's session pane; Machines has none.
             if let draft {
@@ -102,6 +109,10 @@ struct FleetView: View {
             }
         }
         .onChange(of: session) { if session != nil { draft = nil } }
+        // An archived session closes, wherever it was open.
+        .onChange(of: fleet.archiving) { before, _ in
+            for key in fleet.archived(since: before) { close(key) }
+        }
         // A removed project's pane has nothing left to show.
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .home }
@@ -130,6 +141,14 @@ struct FleetView: View {
         } else {
             tab = .home
             homePath = [.session(key)]
+        }
+    }
+
+    /// Closes a session's pane, and pops it and what was pushed over it on every tab.
+    private func close(_ key: SessionKey) {
+        if session == key { session = nil }
+        for path in [$homePath, $projectsPath, $boardPath] {
+            if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
 
@@ -298,7 +317,7 @@ struct SessionGroup: View {
 }
 
 /// A session row that opens the session, into `selection` when given, else by pushing it,
-/// with archiving at hand: a button on hover, and in the context menu.
+/// with archiving at hand: a button on hover, and in the context menu beside renaming.
 struct SessionLink: View {
     let session: SessionSummary
     let fleet: Fleet
@@ -319,7 +338,7 @@ struct SessionLink: View {
                     .buttonStyle(.plain)
             }
         }
-        .opacity(fleet.archiving.contains(session.key) ? 0.5 : 1)
+        .opacity(fleet.archiving.contains(session.key) ? 0.5 : session.state == .archived ? 0.75 : 1)
         .overlay(alignment: .topTrailing) {
             if fleet.archiving.contains(session.key) {
                 ArchivingLabel().padding(8)
@@ -330,6 +349,9 @@ struct SessionLink: View {
         }
         .onHover { hovering = $0 }
         .contextMenu {
+            if session.state.renamable {
+                Button("Rename…", systemImage: "pencil") { fleet.renaming = session.key }
+            }
             if session.state != .archived {
                 Button("Archive", systemImage: "archivebox") { Task { await fleet.archive(session.key) } }
             }
@@ -394,7 +416,8 @@ struct ProjectsView: View {
                         StatusGlyph(state: state, size: 7, pulses: false)
                     }
                 }
-                Text(([project.live.count == 1 ? "1 session" : "\(project.live.count) sessions"] + project.machines)
+                let count = project.live.filter { $0.state != .archived }.count
+                Text(([count == 1 ? "1 session" : "\(count) sessions"] + project.machines)
                     .joined(separator: " · "))
                     .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
             }
@@ -450,6 +473,22 @@ struct ProjectView: View {
                 Button("New Session", systemImage: "plus") { draft = started }
                     .disabled(started == nil)
             }
+        }
+    }
+}
+
+/// The field of the rename alert, starting from the session's current title.
+private struct RenameSessionField: View {
+    let title: String
+    let rename: (String) -> Void
+    @State private var typed = ""
+
+    var body: some View {
+        TextField("Title", text: $typed)
+            .onAppear { typed = title }
+        Button("Rename") {
+            let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && trimmed != title { rename(trimmed) }
         }
     }
 }

@@ -492,7 +492,6 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::AutoEdit),
-            max_children: None,
             failover_pin: None,
         })
         .await
@@ -505,6 +504,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             session_id: primary.clone(),
             text: "Plan.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         })
         .await;
     client
@@ -571,12 +571,13 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
         panic!("expected the answer applied");
     };
 
-    // Both children report, each once, archived as they finished; then no child works.
+    // Both children report, each once, idle as they have no pull requests; then no child
+    // works.
     let mut reports = BTreeSet::new();
     for _ in 0..2 {
         let event = tools.call("wait_for", json!({ "timeout_secs": 10 })).await;
         assert_eq!(event["kind"], "report", "{event}");
-        assert_eq!(event["status"], "archived", "{event}");
+        assert_eq!(event["status"], "idle", "{event}");
         reports.insert((
             SessionId::new(event["child"].as_str().unwrap()),
             event["summary"].as_str().unwrap().to_owned(),

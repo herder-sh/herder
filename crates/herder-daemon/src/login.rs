@@ -13,7 +13,7 @@
 //! - Claude: `claude` itself, whose first run in an empty config dir walks through `/login`;
 //!   the owner exits it once logged in.
 //! - Codex: `codex login --device-auth`.
-//! - Cursor: `agent login`.
+//! - Cursor: `cursor-agent login`.
 //! - OpenCode: `opencode auth login`, with `XDG_DATA_HOME` at the config dir, where it writes
 //!   `opencode/auth.json`. The owner picks a model provider and pastes its API key or follows
 //!   its device flow; a provider whose login waits for a browser callback to localhost only
@@ -22,7 +22,7 @@
 //! herder never takes a login's exit at its word: quitting `claude` before logging in exits with
 //! 0 too, and `claude` keeps running once logged in. It asks the provider's own CLI whether the
 //! config dir is logged in, with a check that changes nothing ([`LoginStatus`]): `claude auth
-//! status --json`, `codex login status`, `agent status --format json`, `opencode auth list`;
+//! status --json`, `codex login status`, `cursor-agent status --format json`, `opencode auth list`;
 //! every few seconds while the login runs, hanging the login up as soon as it says so, so a dir
 //! logged in already is added within seconds, and once more when the login ends, however it
 //! ends. Only when it says so is the account added: it is appended to the daemon's config file
@@ -126,7 +126,7 @@ pub fn programs(binaries: &HashMap<Provider, PathBuf>) -> HashMap<Provider, Logi
             &["CODEX_HOME"],
             (&["login", "status"], None),
         ),
-        // `agent status` exits with 0 logged out too.
+        // `cursor-agent status` exits with 0 logged out too.
         login(
             Provider::Cursor,
             &AgentProfile::cursor().program,
@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(
             argv(&Provider::Cursor),
             (
-                vec!["agent".into(), "login".into()],
+                vec!["cursor-agent".into(), "login".into()],
                 vec!["CURSOR_CONFIG_DIR".into(), "XDG_CONFIG_HOME".into()]
             )
         );
@@ -955,7 +955,7 @@ mod tests {
         let f = fixture().await;
         let login = f.start("cursor-2", Provider::Cursor, None).unwrap();
         let dir = f.home.path().join(".cursor-cursor-2");
-        assert_eq!(login.command.get_argv(), &["agent", "login"]);
+        assert_eq!(login.command.get_argv(), &["cursor-agent", "login"]);
         for var in ["CURSOR_CONFIG_DIR", "XDG_CONFIG_HOME"] {
             assert_eq!(login.command.get_env(var), Some(dir.as_os_str()));
         }
@@ -1231,7 +1231,6 @@ mod tests {
                     parent: None,
                     parent_host: None,
                     task: None,
-                    max_children: None,
                     failover_pin: None,
                 },
             })

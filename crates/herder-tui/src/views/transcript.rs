@@ -647,27 +647,31 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
     hits.wheel(area, Wheel::Transcript);
 }
 
-/// A prompt's images as chips, `image 1 · 340 KB`. The terminal shows no images: `o` opens
-/// them with the desktop's viewer, `w` saves them; the apps fetch and show them inline.
+/// A prompt's images and files as chips, `image 1 · 340 KB` and `report.xlsx · 12 KB`. The
+/// terminal shows no images: `o` opens them with the desktop's viewer, `w` saves them; the apps
+/// fetch and show them inline. Files are for the agent, which read them on the machine.
 fn image_chips(
     ui: Ui,
-    images: &[Attachment],
+    attachments: &[Attachment],
     not_backed_up: &HashSet<AttachmentId>,
 ) -> Vec<Span<'static>> {
-    images
+    let mut images = 0;
+    attachments
         .iter()
-        .zip(1..)
-        .map(|(image, n)| {
-            let (fact, style) = if not_backed_up.contains(&image.attachment_id) {
+        .map(|attachment| {
+            let (fact, style) = if not_backed_up.contains(&attachment.attachment_id) {
                 ("not backed up".to_owned(), ui.muted())
             } else {
-                (crate::attach::size(image.size), ui.text())
+                (crate::attach::size(attachment.size), ui.text())
             };
-            badge::chip(
-                ui,
-                &format!("image {n}{}{fact}", ui.glyphs.separator),
-                style,
-            )
+            let label = match &attachment.name {
+                Some(name) => name.clone(),
+                None => {
+                    images += 1;
+                    format!("image {images}")
+                }
+            };
+            badge::chip(ui, &format!("{label}{}{fact}", ui.glyphs.separator), style)
         })
         .collect()
 }

@@ -156,8 +156,8 @@ struct FollowUpTests {
             guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else { return }
             var host = machine("h", name: "h", sessions: [])
             host.accounts = [
-                Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, usage: []),
-                Account(accountId: "main", provider: "claude", label: "main", configDir: nil, usage: []),
+                Account(accountId: "gpt", provider: "codex", label: "gpt", configDir: nil, email: nil, usage: []),
+                Account(accountId: "main", provider: "claude", label: "main", configDir: nil, email: nil, usage: []),
             ]
             fleet.setMachinesForTesting([host])
             #expect(fleet.defaultProvider(on: "h", projectId: nil) == "claude")
@@ -297,6 +297,44 @@ struct ProjectIconLookupTests {
         #expect(ProjectIcon.isLight(0xE5E5E5))
         #expect(!ProjectIcon.isLight(0x2A2A2A))
         #expect(!ProjectIcon.isLight(0x000000))
+    }
+
+    @Test func everyDeviceShowsTheSameIconWhateverOrderItPairedTheMachinesIn() {
+        let found = Project(projectId: "github.com/acme/app", name: "app", paths: [], defaultPermissionMode: nil,
+                            defaultAccount: nil, setupCommand: nil, icon: "found")
+        var uploaded = found
+        uploaded.icon = "up"
+        uploaded.iconUploaded = true
+        var other = found
+        other.icon = "other"
+        let fetched = ["found": Data([1]), "up": Data([2]), "other": Data([3])]
+        let a = machine("a", name: "alpha", sessions: [], projects: [found])
+        let b = machine("b", name: "beta", sessions: [], projects: [uploaded])
+        let c = machine("c", name: "gamma", sessions: [], projects: [other])
+        // An uploaded icon wins over those found in clones, in either order.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, b], fetched: fetched)?.data == Data([2]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [b, a], fetched: fetched)?.data == Data([2]))
+        // Between found icons, the machine with the lowest id wins.
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [c, a], fetched: fetched)?.data == Data([1]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, c], fetched: fetched)?.data == Data([1]))
+    }
+
+    @Test func everyDeviceShowsTheSameNameWhateverOrderItPairedTheMachinesIn() {
+        let plain = Project(projectId: "github.com/acme/app", name: "app", paths: [], defaultPermissionMode: nil,
+                            defaultAccount: nil, setupCommand: nil, icon: nil)
+        var renamed = plain
+        renamed.name = "Acme"
+        var other = plain
+        other.name = "Other"
+        let a = machine("a", name: "alpha", sessions: [], projects: [plain])
+        let b = machine("b", name: "beta", sessions: [], projects: [renamed])
+        let c = machine("c", name: "gamma", sessions: [], projects: [other])
+        // A name an owner gave wins over the repository's, in either order.
+        #expect(Lists.projectName("github.com/acme/app", machines: [a, b]) == "Acme")
+        #expect(Lists.projectName("github.com/acme/app", machines: [b, a]) == "Acme")
+        // Between given names, the machine with the lowest id wins.
+        #expect(Lists.projectName("github.com/acme/app", machines: [c, b]) == "Acme")
+        #expect(Lists.projectName("github.com/acme/app", machines: [a]) == "app")
     }
 
     @Test func anIconBackgroundIsAColourOnlyAsRrggbb() {

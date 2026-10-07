@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use herder_client_core::PairResult;
 use herder_ffi::{
-    Client, HerderError, image_media_types, max_image_bytes, max_project_icon_bytes,
-    max_prompt_image_bytes, pairing_link_to_string, pairing_uri_to_string, parse_pairing_link,
-    parse_pairing_uri,
+    Client, HerderError, image_media_types, max_file_bytes, max_file_name_bytes, max_image_bytes,
+    max_project_icon_bytes, max_prompt_attachment_bytes, pairing_link_to_string,
+    pairing_uri_to_string, parse_pairing_link, parse_pairing_uri,
 };
 use herder_protocol::{
     AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
@@ -89,7 +89,6 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         },
     ))
@@ -106,6 +105,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
             session_id,
             text: "Say hello.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         },
     ))
     .unwrap();
@@ -277,12 +277,17 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
 }
 
 #[test]
-fn the_image_limits_are_the_protocols() {
+fn the_attachment_limits_are_the_protocols() {
     assert_eq!(image_media_types(), herder_protocol::IMAGE_MEDIA_TYPES);
     assert_eq!(max_image_bytes(), herder_protocol::MAX_IMAGE_BYTES as u64);
+    assert_eq!(max_file_bytes(), herder_protocol::MAX_FILE_BYTES as u64);
     assert_eq!(
-        max_prompt_image_bytes(),
-        herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
+        max_file_name_bytes(),
+        herder_protocol::MAX_FILE_NAME_BYTES as u64
+    );
+    assert_eq!(
+        max_prompt_attachment_bytes(),
+        herder_protocol::MAX_PROMPT_ATTACHMENT_BYTES as u64
     );
     assert_eq!(
         max_project_icon_bytes(),

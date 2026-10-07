@@ -13,8 +13,9 @@
 //! - [`parse_pairing_uri`] and [`pairing_uri_to_string`], `PairingUri`'s `FromStr` and
 //!   `Display`, and [`parse_pairing_link`] and [`pairing_link_to_string`], `PairingLink`'s,
 //!   which UniFFI cannot export as trait impls on a record.
-//! - [`image_media_types`], [`max_image_bytes`] and [`max_prompt_image_bytes`], the protocol's
-//!   limits on a prompt's images, which UniFFI cannot export as constants.
+//! - [`image_media_types`], [`max_image_bytes`], [`max_file_bytes`], [`max_file_name_bytes`]
+//!   and [`max_prompt_attachment_bytes`], the protocol's limits on a prompt's images and files,
+//!   which UniFFI cannot export as constants.
 
 mod types;
 
@@ -120,11 +121,23 @@ pub fn max_image_bytes() -> u64 {
     herder_protocol::MAX_IMAGE_BYTES as u64
 }
 
-/// The most bytes all images of one prompt may have together,
-/// `herder_protocol::MAX_PROMPT_IMAGE_BYTES`.
+/// The most bytes one file of a prompt may have, `herder_protocol::MAX_FILE_BYTES`.
 #[uniffi::export]
-pub fn max_prompt_image_bytes() -> u64 {
-    herder_protocol::MAX_PROMPT_IMAGE_BYTES as u64
+pub fn max_file_bytes() -> u64 {
+    herder_protocol::MAX_FILE_BYTES as u64
+}
+
+/// The most bytes the name of a prompt's file may have, `herder_protocol::MAX_FILE_NAME_BYTES`.
+#[uniffi::export]
+pub fn max_file_name_bytes() -> u64 {
+    herder_protocol::MAX_FILE_NAME_BYTES as u64
+}
+
+/// The most bytes all images and files of one prompt may have together,
+/// `herder_protocol::MAX_PROMPT_ATTACHMENT_BYTES`.
+#[uniffi::export]
+pub fn max_prompt_attachment_bytes() -> u64 {
+    herder_protocol::MAX_PROMPT_ATTACHMENT_BYTES as u64
 }
 
 /// The most bytes a project's icon may have, `herder_protocol::MAX_PROJECT_ICON_BYTES`.

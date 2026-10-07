@@ -32,7 +32,7 @@ struct MessagePicture: Hashable {
                                data: image.data, attachmentId: nil)
             }
         }
-        return attachments.enumerated().map { index, attachment in
+        return attachments.filter { !$0.isFile }.enumerated().map { index, attachment in
             MessagePicture(number: index + 1, mediaType: attachment.mediaType, size: Int64(attachment.size),
                            data: fleet.attachments[attachment.attachmentId], attachmentId: attachment.attachmentId)
         }

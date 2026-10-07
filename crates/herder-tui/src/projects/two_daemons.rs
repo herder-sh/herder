@@ -106,6 +106,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
+            data_dir: dir.join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -165,7 +166,6 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             provider: None,
             model: None,
             permission_mode: Some(PermissionMode::Ask),
-            max_children: None,
             failover_pin: None,
         };
         client.send(HostId::new(*id), command).await.unwrap();

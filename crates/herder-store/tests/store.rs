@@ -36,7 +36,6 @@ fn created() -> EventBody {
         parent: None,
         parent_host: None,
         task: None,
-        max_children: None,
         failover_pin: None,
     }
 }
@@ -67,7 +66,6 @@ fn child_created(parent: &SessionId, task: &str) -> EventBody {
         parent: Some(parent.clone()),
         parent_host: None,
         task: Some(task.into()),
-        max_children: None,
         failover_pin: None,
     }
 }
@@ -331,7 +329,6 @@ fn a_session_in_its_folder_itself_owns_no_branch() {
         parent: None,
         task: None,
         parent_host: None,
-        max_children: None,
         failover_pin: None,
     };
     store.append(new_event(&s, 0, body)).unwrap();
@@ -1263,11 +1260,20 @@ fn queued_prompts_survive_a_reopen_in_order() {
     };
     let with_image = QueuedPrompt {
         agent_message: None,
-        attachments: vec![Attachment {
-            attachment_id: AttachmentId::new("a1"),
-            media_type: "image/png".into(),
-            size: 8,
-        }],
+        attachments: vec![
+            Attachment {
+                attachment_id: AttachmentId::new("a1"),
+                media_type: "image/png".into(),
+                size: 8,
+                name: None,
+            },
+            Attachment {
+                attachment_id: AttachmentId::new("a2"),
+                media_type: "application/octet-stream".into(),
+                size: 3,
+                name: Some("data.csv".into()),
+            },
+        ],
         ..prompt(Some("bob"), "Like this.", false)
     };
     let queue = vec![

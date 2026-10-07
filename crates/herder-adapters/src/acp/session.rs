@@ -960,6 +960,7 @@ mod tests {
                         attachment_id: AttachmentId::new("a1"),
                         media_type: "image/png".into(),
                         size: 2048,
+                        name: None,
                     }],
                 },
             ),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, AttachmentId, Command, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event,
+    AccountId, Attachment, Bytes, Command, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event,
     EventBody, HistoryPart, HostId, Image, ItemBody, Relay, SessionId,
 };
 
@@ -56,7 +56,7 @@ pub(crate) async fn fork(
                 ),
             ));
         };
-        let (events, images) = tokio::time::timeout(READ_TIMEOUT, read(source, &session_id))
+        let (events, attachments) = tokio::time::timeout(READ_TIMEOUT, read(source, &session_id))
             .await
             .map_err(|_| {
                 rejected(
@@ -67,7 +67,7 @@ pub(crate) async fn fork(
                     ),
                 )
             })??;
-        upload(&destination, &session_id, events, images).await?;
+        upload(&destination, &session_id, events, attachments).await?;
         return send(
             &destination,
             fork(Some(Relay {
@@ -92,12 +92,12 @@ pub(crate) async fn fork(
     send(&destination, fork(None)).await
 }
 
-/// The whole journal of `session_id` as `source` holds it, and every image its prompts carried
-/// that `source` still has.
+/// The whole journal of `session_id` as `source` holds it, and every image and file its
+/// prompts carried that `source` still has.
 async fn read(
     source: &Arc<Supervisor>,
     session_id: &SessionId,
-) -> Result<(Vec<Event>, Vec<(AttachmentId, Image)>), Error> {
+) -> Result<(Vec<Event>, Vec<(Attachment, Bytes)>), Error> {
     let subscription = Subscription::new(Arc::clone(source), session_id.clone());
     source.synced().await?;
     let events = subscription.next().await.ok_or(Error::Closed)?.events;
@@ -111,7 +111,7 @@ async fn read(
             ),
         ));
     }
-    let mut images = Vec::new();
+    let mut kept = Vec::new();
     for event in &events {
         let EventBody::ItemAdded { item } = &event.body else {
             continue;
@@ -125,26 +125,38 @@ async fn read(
                 attachment_id: attachment.attachment_id.clone(),
             };
             match send(source, command).await {
-                Ok(CommandResult::Attachment { media_type, data }) => {
-                    images.push((attachment.attachment_id.clone(), Image { media_type, data }));
+                Ok(CommandResult::Attachment { data, .. }) => {
+                    kept.push((attachment.clone(), data));
                 }
-                // An image its machine lost is left out, as a vault copy leaves it out.
+                // One its machine lost is left out, as a vault copy leaves it out.
                 Err(Error::Rejected { info }) if info.code == ErrorCode::NotFound => {}
                 Err(err) => return Err(err),
                 Ok(_) => return Err(unexpected(source)),
             }
         }
     }
-    Ok((events, images))
+    Ok((events, kept))
 }
 
-/// Uploads a history to `destination` in parts: batches of events, then one image a part.
+/// Uploads a history to `destination` in [`parts`].
 async fn upload(
     destination: &Supervisor,
     session_id: &SessionId,
     events: Vec<Event>,
-    images: Vec<(AttachmentId, Image)>,
+    attachments: Vec<(Attachment, Bytes)>,
 ) -> Result<(), Error> {
+    for part in parts(events, attachments) {
+        let command = CommandBody::UploadHistory {
+            session_id: session_id.clone(),
+            part,
+        };
+        send(destination, command).await?;
+    }
+    Ok(())
+}
+
+/// A history's `upload_history` parts: batches of events, then one image or file a part.
+fn parts(events: Vec<Event>, attachments: Vec<(Attachment, Bytes)>) -> Vec<HistoryPart> {
     let mut parts = Vec::new();
     let (mut batch, mut bytes) = (Vec::new(), 0);
     for event in events {
@@ -159,22 +171,19 @@ async fn upload(
         bytes += size;
     }
     parts.push(HistoryPart::Events { events: batch });
-    parts.extend(
-        images
-            .into_iter()
-            .map(|(attachment_id, image)| HistoryPart::Image {
-                attachment_id,
-                image,
-            }),
-    );
-    for part in parts {
-        let command = CommandBody::UploadHistory {
-            session_id: session_id.clone(),
-            part,
-        };
-        send(destination, command).await?;
-    }
-    Ok(())
+    parts.extend(attachments.into_iter().map(|(attachment, data)| {
+        if attachment.name.is_some() {
+            return HistoryPart::File { attachment, data };
+        }
+        HistoryPart::Image {
+            attachment_id: attachment.attachment_id,
+            image: Image {
+                media_type: attachment.media_type,
+                data,
+            },
+        }
+    }));
+    parts
 }
 
 async fn send(machine: &Supervisor, body: CommandBody) -> Result<CommandResult, Error> {
@@ -204,4 +213,47 @@ fn unexpected(machine: &Supervisor) -> Error {
         ErrorCode::Internal,
         format!("{} sent an unexpected answer", machine.view().name),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use herder_protocol::{AttachmentId, FILE_MEDIA_TYPE};
+
+    use super::*;
+
+    #[test]
+    fn images_go_up_as_images_and_files_as_files() {
+        let image = Attachment {
+            attachment_id: AttachmentId::new("a1"),
+            media_type: "image/png".into(),
+            size: 4,
+            name: None,
+        };
+        let file = Attachment {
+            attachment_id: AttachmentId::new("a2"),
+            media_type: FILE_MEDIA_TYPE.into(),
+            size: 3,
+            name: Some("data.csv".into()),
+        };
+        let png = Bytes(b"\x89PNG".to_vec());
+        let csv = Bytes(b"a,b".to_vec());
+        let attachments = vec![(image, png.clone()), (file.clone(), csv.clone())];
+        assert_eq!(
+            parts(Vec::new(), attachments),
+            [
+                HistoryPart::Events { events: Vec::new() },
+                HistoryPart::Image {
+                    attachment_id: AttachmentId::new("a1"),
+                    image: Image {
+                        media_type: "image/png".into(),
+                        data: png,
+                    },
+                },
+                HistoryPart::File {
+                    attachment: file,
+                    data: csv,
+                },
+            ]
+        );
+    }
 }

@@ -178,6 +178,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
+            data_dir: dir.join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -240,7 +241,6 @@ async fn create(client: &Client, host: &str, repo: &str) -> SessionId {
         provider: None,
         model: None,
         permission_mode: Some(PermissionMode::Ask),
-        max_children: None,
         failover_pin: None,
     };
     let created = client.send(HostId::new(host), command).await.unwrap();
@@ -316,6 +316,7 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
                 session_id: session_id.clone(),
                 text: "First.".into(),
                 images: vec![image.clone()],
+                files: Vec::new(),
             },
         )
         .await

@@ -13,8 +13,8 @@ use herder_adapters::{
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
-    Item, ItemBody, ItemId, MAX_PROMPT_IMAGE_BYTES, PermissionMode, PromptId, QuestionId, Route,
-    SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
+    Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PrState, PromptFile,
+    PromptId, QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -62,11 +62,12 @@ pub(super) enum Request {
         text: String,
         follow_up: FollowUp,
     },
-    /// Queues a prompt, keeping its images; `queued` learns whether it waits behind a running
-    /// turn.
+    /// Queues a prompt, keeping its images and files; `queued` learns whether it waits behind
+    /// a running turn.
     SendPrompt {
         text: String,
         images: Vec<Image>,
+        files: Vec<PromptFile>,
         queued: Option<oneshot::Sender<bool>>,
     },
     Interrupt,
@@ -113,6 +114,8 @@ pub(super) enum Request {
     /// Stops the session and makes it read-only, leaving the worktree for
     /// [`Request::RemoveWorktree`].
     Archive,
+    /// Archives a child that is done ([`Actor::done`]); does nothing otherwise.
+    ArchiveIfDone,
     /// Removes an archived session's worktree, keeping its branches; does nothing once the
     /// session is not archived.
     RemoveWorktree,
@@ -160,7 +163,7 @@ struct Prompt {
     follow_up: Option<FollowUp>,
     by: Option<UserId>,
     text: String,
-    /// The images it carries, kept apart ([`attachments`]).
+    /// The images and files it carries, kept apart ([`attachments`]).
     attachments: Vec<Attachment>,
     /// Whether another immediate failover retry is disabled for this prompt.
     retry: bool,
@@ -200,9 +203,6 @@ pub(super) struct Actor {
     /// Agents the adapter runs in the background. They outlive their turn, so the session stays
     /// `running` between turns while any work.
     background: u32,
-    /// Other tasks the adapter runs in the background, such as shell commands. They keep a
-    /// finished child from being archived, which would remove the worktree they run in.
-    commands: u32,
     /// The host's admission of the running turn, or of the next one while it waits to start.
     permit: Option<Permit>,
     /// Where the next turn's permit arrives while the host has no room for it.
@@ -257,7 +257,6 @@ impl Actor {
             turn: None,
             cli_turn: None,
             background: 0,
-            commands: 0,
             permit: None,
             waiting: None,
             prompt: None,
@@ -606,9 +605,10 @@ impl Actor {
             Request::SendPrompt {
                 text,
                 images,
+                files,
                 queued,
             } => {
-                let attachments = self.keep(images).await?;
+                let attachments = self.keep(images, files).await?;
                 self.cancel_retry(false).await;
                 let busy = self.turn.is_some() || !self.queue.is_empty();
                 self.queue.push_back(Prompt {
@@ -722,6 +722,11 @@ impl Actor {
                     .map_err(super::internal)?;
             }
             Request::Archive => self.archive(by).await?,
+            Request::ArchiveIfDone => {
+                if self.turn.is_none() && self.done().await {
+                    self.archive(None).await?;
+                }
+            }
             Request::Switch { account_id, to } => {
                 self.switch(by, account_id, to).await?;
                 self.cancel_retry(true).await;
@@ -1237,20 +1242,22 @@ impl Actor {
             .flat_map(|prompt| prompt.attachments.iter().cloned())
             .collect();
         let bytes: u64 = attachments.iter().map(|attachment| attachment.size).sum();
-        if bytes > MAX_PROMPT_IMAGE_BYTES as u64 {
+        if bytes > MAX_PROMPT_ATTACHMENT_BYTES as u64 {
             return Err(error(
                 ErrorCode::BadRequest,
                 format!(
-                    "the merged prompt's images would have more than \
-                     {MAX_PROMPT_IMAGE_BYTES} bytes together"
+                    "the merged prompt's images and files would have more than \
+                     {MAX_PROMPT_ATTACHMENT_BYTES} bytes together"
                 ),
             ));
         }
-        let text = merge::merge_texts(
-            prompts
+        let text = merge::merge_texts(prompts.iter().map(|prompt| {
+            let images = prompt
+                .attachments
                 .iter()
-                .map(|prompt| (prompt.text.as_str(), prompt.attachments.len())),
-        );
+                .filter(|attachment| attachment.name.is_none());
+            (prompt.text.as_str(), images.count())
+        }));
         let first = indices[0];
         self.queue[first].text = text;
         self.queue[first].attachments = attachments;
@@ -1263,10 +1270,14 @@ impl Actor {
         Ok(())
     }
 
-    /// Checks a prompt's `images` and keeps them; refused when the session's adapter cannot
-    /// take images.
-    async fn keep(&self, images: Vec<Image>) -> Result<Vec<Attachment>, ErrorInfo> {
-        if images.is_empty() {
+    /// Checks a prompt's `images` and `files` and keeps them; images are refused when the
+    /// session's adapter cannot take them.
+    async fn keep(
+        &self,
+        images: Vec<Image>,
+        files: Vec<PromptFile>,
+    ) -> Result<Vec<Attachment>, ErrorInfo> {
+        if images.is_empty() && files.is_empty() {
             return Ok(Vec::new());
         }
         let provider = &self.session.provider;
@@ -1275,14 +1286,15 @@ impl Actor {
             .adapters
             .get(provider)
             .is_some_and(|adapter| adapter.accepts_images());
-        if !takes_images {
+        if !images.is_empty() && !takes_images {
             return Err(error(
                 ErrorCode::Unsupported,
                 format!("{} cannot take images with a prompt", provider.as_str()),
             ));
         }
-        attachments::validate(&images)?;
-        attachments::save(&self.inner.attachments, &self.session.session_id, images).await
+        attachments::validate(&images, &files)?;
+        let session_id = &self.session.session_id;
+        attachments::save(&self.inner.attachments, session_id, images, files).await
     }
 
     /// Removes the worktree of a session still archived, keeping its branches.
@@ -1654,6 +1666,7 @@ impl Actor {
                 }
             }
             let images = self.images(&attachments).await;
+            let prompt_text = self.with_files(&text, &attachments);
             if let Err(err) = self
                 .user_message(
                     by.clone(),
@@ -1678,7 +1691,7 @@ impl Actor {
                         .as_ref()
                         .map(|message| message.sender_session_id.clone()),
                     turn_id: turn_id.clone(),
-                    text: text.clone(),
+                    text: prompt_text,
                     images,
                 });
             }
@@ -1701,14 +1714,32 @@ impl Actor {
     /// logged and left out, as the turn can go on without it.
     async fn images(&self, attachments: &[Attachment]) -> Vec<Image> {
         let mut images = Vec::with_capacity(attachments.len());
-        for attachment in attachments {
+        for attachment in attachments.iter().filter(|a| a.name.is_none()) {
             let session_id = &self.session.session_id;
             match attachments::load(&self.inner.attachments, session_id, attachment).await {
-                Ok(image) => images.push(image),
+                Ok(data) => images.push(Image {
+                    media_type: attachment.media_type.clone(),
+                    data,
+                }),
                 Err(err) => warn!(%session_id, "leaving an image out: {}", err.message),
             }
         }
         images
+    }
+
+    /// `text` as the agent gets it: with a note naming where each file `attachments` name is
+    /// on this host, which the CLI runs on, so any agent can read them.
+    fn with_files(&self, text: &str, attachments: &[Attachment]) -> String {
+        let session_id = &self.session.session_id;
+        let paths: Vec<_> = attachments
+            .iter()
+            .filter(|attachment| attachment.name.is_some())
+            .filter_map(|attachment| {
+                attachments::path(&self.inner.attachments, session_id, attachment)
+            })
+            .map(|path| std::path::absolute(&path).unwrap_or(path))
+            .collect();
+        attachments::with_files(text, &paths)
     }
 
     /// Starts the setup command in the worktree, in the session's scope, as a turn of its own:
@@ -2058,7 +2089,6 @@ impl Actor {
                             tokio::spawn(stop(adapter));
                         }
                         self.background = 0;
-                        self.commands = 0;
                         settled = SessionStatus::Error;
                         oom
                     }
@@ -2194,14 +2224,14 @@ impl Actor {
                 self.background = running;
                 self.settle_background().await;
             }
-            AdapterEvent::BackgroundCommands { running } => self.commands = running,
+            // Shell commands left running in the background do not keep the session busy.
+            AdapterEvent::BackgroundCommands { .. } => {}
             AdapterEvent::Exited { error } => self.exited(error).await,
         }
     }
 
     /// The adapter was stopped, and its background agents with it.
     async fn background_gone(&mut self) {
-        self.commands = 0;
         if std::mem::take(&mut self.background) > 0 {
             self.settle_background().await;
         }
@@ -2240,16 +2270,14 @@ impl Actor {
     }
 
     /// Journals the end of the running turn and reports it as `summary`, then starts the next
-    /// queued prompt or settles on `settled`. A child that completed its turn with nothing
-    /// queued is archived once it reported, unless its worktree has changes or commands it
-    /// started in the background still run there, which its report then says. A worktree that
-    /// is gone, or is no longer a checkout, has no changes.
+    /// queued prompt or settles on `settled`. A child that completed its turn and is done
+    /// ([`Self::done`]) is archived once it reported.
     async fn turn_ended(
         &mut self,
         turn_id: TurnId,
         body: EventBody,
         settled: SessionStatus,
-        mut summary: String,
+        summary: String,
     ) {
         let completed = matches!(body, EventBody::TurnCompleted { .. });
         self.inner.turn_ended_on(&self.session.account_id, &body);
@@ -2269,32 +2297,40 @@ impl Actor {
             };
             self.set_status(status).await;
         }
-        let finished = completed
-            && self.session.parent.is_some()
-            && self.session.status == SessionStatus::Idle
-            && self.queue.is_empty()
-            && self.setup.is_none();
-        let mut archive = false;
-        if finished && self.commands > 0 {
-            summary.push_str(KEPT_RUNNING);
-        } else if finished && self.session.branch.is_none() {
-            // Archiving leaves the folder as it is.
-            archive = true;
-        } else if finished {
-            match worktree::dirty(Path::new(&self.session.worktree)).await {
-                Ok(false) => archive = true,
-                Ok(true) => summary.push_str(KEPT_DIRTY),
-                Err(err) => warn!(
-                    session_id = %self.session.session_id,
-                    "cannot tell whether the finished child's worktree has changes: {err}"
-                ),
-            }
-        }
+        let archive = completed && self.done().await;
         self.report(turn_id, summary, archive).await;
         if self.prompts == Some(titles::REFRESH_AFTER) {
             titles::auto(&self.inner, self.session.session_id.clone());
         }
         self.start_next().await;
+    }
+
+    /// Whether the session is a child whose work is done: idle with nothing queued, and every
+    /// pull request it has merged, at least one. A child without pull requests stays live until
+    /// archived by hand.
+    async fn done(&self) -> bool {
+        if self.session.parent.is_none()
+            || self.session.status != SessionStatus::Idle
+            || !self.queue.is_empty()
+            || self.setup.is_some()
+        {
+            return false;
+        }
+        match self
+            .inner
+            .journal
+            .prs(self.session.session_id.clone())
+            .await
+        {
+            Ok(prs) => !prs.is_empty() && prs.iter().all(|pr| pr.state == PrState::Merged),
+            Err(err) => {
+                warn!(
+                    session_id = %self.session.session_id,
+                    "cannot read the child's pull requests: {err:#}"
+                );
+                false
+            }
+        }
     }
 
     /// Whether the session stays on its account when it hits a limit: as it was created, else
@@ -2369,7 +2405,6 @@ impl Actor {
                 let _ = tokio::time::timeout(EXIT_GRACE, stop(adapter)).await;
             }
             self.background = 0;
-            self.commands = 0;
             self.queue.push_front(Prompt {
                 retry: true,
                 retry_at: Some(at),
@@ -2432,7 +2467,6 @@ impl Actor {
     async fn exited(&mut self, error: Option<TurnError>) {
         self.adapter = None;
         let background = std::mem::take(&mut self.background) > 0;
-        self.commands = 0;
         let oom = match &error {
             Some(error) => self.out_of_memory(error).await,
             None => None,
@@ -2633,18 +2667,6 @@ impl Actor {
         }
     }
 }
-
-/// Appended to the report of a child that finished with changes in its worktree, which keep it
-/// from being archived.
-const KEPT_DIRTY: &str = "\n\n(herder kept this child live instead of archiving it: its \
-                          worktree has uncommitted or untracked changes. Send it a follow-up to \
-                          commit or discard them.)";
-
-/// Appended to the report of a child that finished while commands it started in the background
-/// still run, which keep it from being archived: archiving would remove their worktree.
-const KEPT_RUNNING: &str = "\n\n(herder kept this child live instead of archiving it: commands \
-                            it started in the background still run in its worktree. It reports \
-                            again when it finishes after them.)";
 
 /// The journal event for `event` when it ends the turn `turn_id`.
 fn turn_end(event: &AdapterEvent, turn_id: &TurnId) -> Option<EventBody> {

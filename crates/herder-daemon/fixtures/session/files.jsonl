@@ -1,0 +1,2 @@
+# A prompt carrying files, to a CLI that takes no images. Where the daemon keeps them is known
+# only once it has, so the test checks the prompt the CLI got, which this script then refuses.

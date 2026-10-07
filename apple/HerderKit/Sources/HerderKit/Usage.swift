@@ -49,21 +49,56 @@ struct WindowLeft: Equatable {
     var percentLeft: Double { max(0, 100 - percentUsed) }
 }
 
-/// What the Usage screen shows: the machines' answers added up, overall, per account and per
+/// What the Usage screen shows: the machines' answers added up, overall, per login and per
 /// model, for all machines or one.
 struct UsageReport: Equatable {
+    /// One provider login: every account signed in to it, on any machine, added up. Accounts
+    /// with the same provider and email share a login and its plan windows; an account whose
+    /// email is unknown is a login of its own.
     struct AccountRow: Equatable, Identifiable {
-        var id: String { "\(hostId)/\(accountId)" }
-        let hostId: HostId
-        let accountId: AccountId
-        let label: String
+        /// The provider and email, or for an account without an email, its machine and id.
+        let id: String
         let provider: Provider
-        let machine: String
+        /// The email the login is signed in as, when its CLI reported one.
+        let email: String?
+        /// The labels of its accounts, and their machines, each once, in the order first met.
+        private(set) var labels: [String] = []
+        private(set) var machines: [String] = []
         var amount = UsageAmount()
         /// The plan's session window (five hours), when the provider reports one.
-        var session: WindowLeft?
+        private(set) var session: WindowLeft?
         /// The plan's weekly window, when the provider reports one.
-        var weekly: WindowLeft?
+        private(set) var weekly: WindowLeft?
+        /// Every window its accounts reported, as each account's machine last heard it.
+        fileprivate var windows: [UsageWindow] = []
+
+        /// The email, or the label of an account without one.
+        var title: String { email ?? labels.first ?? "" }
+
+        fileprivate init(id: String, provider: Provider, email: String?) {
+            self.id = id
+            self.provider = provider
+            self.email = email
+        }
+
+        fileprivate mutating func add(label: String, machine: String) {
+            if !labels.contains(label) { labels.append(label) }
+            if !machines.contains(machine) { machines.append(machine) }
+        }
+
+        /// The session and weekly windows: of each, the one that resets last, as the others
+        /// are older reports of it; the more used one when they reset together.
+        fileprivate mutating func settle(now: Date) {
+            func latest(_ label: String) -> WindowLeft? {
+                let reset = { (window: UsageWindow) in window.resetsAt.flatMap(Timestamp.date) ?? .distantPast }
+                return windows.filter { Lists.usageLabel($0.window) == label }
+                    .max { (reset($0), $0.usedPercent) < (reset($1), $1.usedPercent) }
+                    .map { WindowLeft(percentUsed: $0.usedPercent,
+                                      resets: Timestamp.until($0.resetsAt.flatMap(Timestamp.date), now: now)) }
+            }
+            session = latest("Session")
+            weekly = latest("Weekly")
+        }
     }
 
     struct ModelRow: Equatable, Identifiable {
@@ -75,7 +110,7 @@ struct UsageReport: Equatable {
     }
 
     private(set) var total = UsageAmount()
-    /// Every account with usage in the period or a plan window, most expensive first.
+    /// Every login with usage in the period or a plan window, most expensive first.
     private(set) var accounts: [AccountRow] = []
     /// Every model with usage in the period, most expensive first.
     private(set) var models: [ModelRow] = []
@@ -83,31 +118,41 @@ struct UsageReport: Equatable {
     /// Adds `machines` up; only `hostId`'s when given.
     init(_ machines: [MachineUsage], only hostId: HostId? = nil, now: Date = .now) {
         var models: [String: ModelRow] = [:]
+        var logins: [String: AccountRow] = [:]
+        func login(_ id: String, provider: Provider, email: String?) -> String {
+            if logins[id] == nil { logins[id] = AccountRow(id: id, provider: provider, email: email) }
+            return id
+        }
         for machine in machines where hostId == nil || machine.hostId == hostId {
-            var rows = machine.accounts.map { account in
-                AccountRow(
-                    hostId: machine.hostId, accountId: account.accountId, label: account.label,
-                    provider: account.provider, machine: machine.name,
-                    session: Self.window("Session", of: account, now: now),
-                    weekly: Self.window("Weekly", of: account, now: now))
+            // Each of the machine's accounts, by id, to its login.
+            var ids: [AccountId: String] = [:]
+            for account in machine.accounts {
+                let id = login(account.email.map { "\(account.provider)/\($0)" } ?? "\(machine.hostId)/\(account.accountId)",
+                               provider: account.provider, email: account.email)
+                ids[account.accountId] = id
+                logins[id]?.add(label: account.label, machine: machine.name)
+                logins[id]?.windows += account.usage
             }
             for total in machine.totals {
                 self.total.add(total)
                 let model = ModelRow(provider: total.provider, model: total.model)
                 models[model.id, default: model].amount.add(total)
-                if let index = rows.firstIndex(where: { $0.accountId == total.accountId }) {
-                    rows[index].amount.add(total)
-                } else {
+                let id = ids[total.accountId] ?? {
                     // An account the machine no longer lists keeps its usage.
-                    var row = AccountRow(hostId: machine.hostId, accountId: total.accountId, label: total.accountId,
-                                         provider: total.provider, machine: machine.name)
-                    row.amount.add(total)
-                    rows.append(row)
-                }
+                    let id = login("\(machine.hostId)/\(total.accountId)", provider: total.provider, email: nil)
+                    logins[id]?.add(label: total.accountId, machine: machine.name)
+                    return id
+                }()
+                logins[id]?.amount.add(total)
             }
-            accounts += rows.filter { $0.amount.turns > 0 || $0.session != nil || $0.weekly != nil }
         }
-        accounts.sort { Self.costlier($0.amount, $1.amount, $0.label, $1.label) }
+        accounts = logins.values.map { row in
+            var row = row
+            row.settle(now: now)
+            return row
+        }
+        .filter { $0.amount.turns > 0 || $0.session != nil || $0.weekly != nil }
+        .sorted { Self.costlier($0.amount, $1.amount, $0.title, $1.title) }
         self.models = models.values.sorted { Self.costlier($0.amount, $1.amount, $0.model, $1.model) }
     }
 
@@ -115,14 +160,6 @@ struct UsageReport: Equatable {
         if a.costUsd != b.costUsd { return a.costUsd > b.costUsd }
         if a.tokens != b.tokens { return a.tokens > b.tokens }
         return aName.localizedStandardCompare(bName) == .orderedAscending
-    }
-
-    /// The account's window that the Machines screen labels `label`.
-    private static func window(_ label: String, of account: Account, now: Date) -> WindowLeft? {
-        account.usage.first { Lists.usageLabel($0.window) == label }.map { window in
-            WindowLeft(percentUsed: window.usedPercent,
-                       resets: Timestamp.until(window.resetsAt.flatMap(Timestamp.date), now: now))
-        }
     }
 
     /// A token count, compactly: "950", "12.3K", "4.5M", "1.2B".

@@ -227,7 +227,7 @@ struct NativeAgentCard: View {
                     Text(agent.status).font(.caption).foregroundStyle(Theme.secondary)
                 }
                 Spacer(minLength: 8)
-                if agent.outcome == .running { ProgressView().controlSize(.small) }
+                if agent.outcome == .running { ProgressView().controlSize(.small).accessibilityHidden(true) }
                 if agent.outcome == .failed { Image(systemName: "exclamationmark.circle").foregroundStyle(Theme.failure) }
                 Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
             }
@@ -235,7 +235,7 @@ struct NativeAgentCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open sub-chat: \(agent.title), \(agent.status)")
+        .accessibilityLabel("Open sub-agent: \(agent.title), \(agent.status)")
         .sheet(isPresented: $showingChat) {
             NativeAgentChat(reference: agent.id, fleet: fleet, key: key)
         }
@@ -263,7 +263,7 @@ struct NativeAgentRow: View {
                     .overlay(Circle().strokeBorder(Theme.stroke))
                 Text(agent.title).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer(minLength: 6)
-                if agent.outcome == .running { ProgressView().controlSize(.mini) }
+                if agent.outcome == .running { ProgressView().controlSize(.mini).accessibilityHidden(true) }
                 Text(agent.badge.text).font(.caption.weight(.semibold)).foregroundStyle(agent.badge.color).fixedSize()
             }
             .padding(.vertical, 5)

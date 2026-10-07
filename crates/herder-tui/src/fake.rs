@@ -75,7 +75,6 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         parent: parent.map(SessionId::new),
         parent_host: None,
         task: task.map(str::to_owned),
-        max_children: None,
         failover_pin: None,
     }
 }
@@ -294,6 +293,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         account_id: AccountId::new(id),
         provider: Provider::Claude,
         label: label.to_owned(),
+        email: None,
         usage: Vec::new(),
     }
 }

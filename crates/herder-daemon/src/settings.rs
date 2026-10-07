@@ -210,14 +210,14 @@ mod tests {
         let config = Config::load_file(&path).unwrap();
         let settings = Settings::new(&config, None, CancellationToken::new());
         let mut new = config.settings();
-        new.tasks.max_children = 8;
+        new.failover.pin = true;
         let set = CommandBody::SetSettings {
             settings: Box::new(new),
         };
         settings.command(set).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            "listen = \"203.0.113.9:7447\"\n\n[tasks]\nmax_children = 8\n"
+            "listen = \"203.0.113.9:7447\"\n\n[failover]\npin = true\n"
         );
     }
 }

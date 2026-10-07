@@ -431,6 +431,13 @@
             "null"
           ]
         },
+        "email": {
+          "description": "Email address the provider login is signed in as, as its CLI last reported it; absent\nuntil it reports one, and for a login without one, such as an API key. Accounts with\nthe same provider and email share one login, and so its limits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "label": {
           "description": "Display label chosen by the owner.",
           "type": "string"
@@ -613,7 +620,7 @@
       ]
     },
     "Attachment": {
-      "description": "An image a prompt carried, kept on the session's host.",
+      "description": "An image or file a prompt carried, kept on the session's host.",
       "type": "object",
       "properties": {
         "attachment_id": {
@@ -621,11 +628,18 @@
           "$ref": "#/$defs/AttachmentId"
         },
         "media_type": {
-          "description": "One of [`IMAGE_MEDIA_TYPES`].",
+          "description": "One of [`IMAGE_MEDIA_TYPES`] for an image; [`FILE_MEDIA_TYPE`] for a file.",
           "type": "string"
         },
+        "name": {
+          "description": "The file's name, as sent; absent for an image.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "size": {
-          "description": "Size of the image in bytes.",
+          "description": "Size of the image or file in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -755,15 +769,15 @@
           ]
         },
         {
-          "description": "The bytes of an image, answering `get_attachment`.",
+          "description": "The bytes of an image or file, answering `get_attachment`.",
           "type": "object",
           "properties": {
             "data": {
-              "description": "The image file's bytes.",
+              "description": "The image's or file's bytes.",
               "$ref": "#/$defs/Bytes"
             },
             "media_type": {
-              "description": "The image's media type.",
+              "description": "The image's or file's media type.",
               "type": "string"
             },
             "type": {
@@ -837,7 +851,7 @@
           ]
         },
         {
-          "description": "A repository is a project of this daemon, answering `add_project`; the project list\nwith it follows.",
+          "description": "A repository is a project of this daemon, answering `add_project` or `clone_project`;\nthe project list with it follows.",
           "type": "object",
           "properties": {
             "project_id": {
@@ -1197,10 +1211,6 @@
           "description": "What every session's CLI may use, and the budget turns are admitted within.",
           "$ref": "#/$defs/ResourceSettings"
         },
-        "tasks": {
-          "description": "Limits on every task.",
-          "$ref": "#/$defs/TaskSettings"
-        },
         "titles": {
           "description": "How sessions are titled.",
           "$ref": "#/$defs/TitleSettings"
@@ -1210,7 +1220,6 @@
         "listen",
         "log",
         "binaries",
-        "tasks",
         "failover",
         "titles",
         "resources",
@@ -1414,15 +1423,6 @@
                 "boolean",
                 "null"
               ]
-            },
-            "max_children": {
-              "description": "Most live children this session may have as a task's primary; absent for the\ndaemon's limit.",
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint32",
-              "minimum": 0
             },
             "model": {
               "description": "Starting model, in the provider's own naming.",
@@ -2471,7 +2471,7 @@
           "type": "object",
           "properties": {
             "attachments": {
-              "description": "Images sent with the prompt, in order; `get_attachment` fetches their bytes.",
+              "description": "Images and files sent with the prompt, in order; `get_attachment` fetches their\nbytes.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/Attachment"
@@ -3026,6 +3026,13 @@
             }
           ]
         },
+        "files": {
+          "description": "How many files it carries.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 0,
+          "minimum": 0
+        },
         "images": {
           "description": "How many images it carries.",
           "type": "integer",
@@ -3532,21 +3539,6 @@
       "required": [
         "skills",
         "reload"
-      ]
-    },
-    "TaskSettings": {
-      "description": "The `[tasks]` table.",
-      "type": "object",
-      "properties": {
-        "max_children": {
-          "description": "Live (not archived) children a task's primary may have at once.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "max_children"
       ]
     },
     "Terminal": {

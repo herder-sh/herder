@@ -28,7 +28,7 @@ struct Script {
 func created(task: String? = nil, parent: SessionId? = nil, branch: String = "herder/abc", model: String = "opus") -> EventBody {
     .sessionCreated(
         repo: "/src/demo", worktree: "/wt/demo", branch: branch, provider: "claude", accountId: "main",
-        model: model, permissionMode: .ask, parent: parent, parentHost: nil, task: task, maxChildren: nil, failoverPin: nil)
+        model: model, permissionMode: .ask, parent: parent, parentHost: nil, task: task, failoverPin: nil)
 }
 
 struct SessionModelTests {
@@ -94,6 +94,22 @@ struct SessionModelTests {
             .sessionStatusChanged(status: .error, retryAt: nil),
         ])
         #expect(model.activity == "Turn failed: usage limit reached")
+    }
+
+    @Test func questionsAskedTogetherCountTheAnsweredOnes() {
+        var script = Script()
+        func ask(_ id: String) -> EventBody {
+            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], routedTo: .user, reason: nil)
+        }
+        func answer(_ id: String) -> EventBody {
+            .questionAnswered(questionId: id, answer: .choice(index: 0), answeredBy: .user)
+        }
+        var model = script.model([created(), .turnStarted(turnId: "t1"), ask("q1"), ask("q2"), ask("q3"), answer("q1")])
+        #expect(model.questionRun == 3 && model.questions.count == 2)
+        model.apply(script.event(answer("q2")))
+        model.apply(script.event(answer("q3")))
+        model.apply(script.event(ask("q4")))
+        #expect(model.questionRun == 1)
     }
 
     @Test func pullRequestsAreUpsertedByNumber() {

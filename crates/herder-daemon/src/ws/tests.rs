@@ -56,6 +56,7 @@ impl Backend for TestBackend {
             account_id: AccountId::new("claude-main"),
             provider: Provider::Claude,
             label: "Main".into(),
+            email: None,
             usage: Vec::new(),
         }]
     }
@@ -262,7 +263,6 @@ impl Daemon {
                 parent: None,
                 parent_host: None,
                 task: None,
-                max_children: None,
                 failover_pin: None,
             },
         );
@@ -567,6 +567,7 @@ async fn commands_are_answered_by_the_backend() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert_eq!(
@@ -581,6 +582,7 @@ async fn commands_are_answered_by_the_backend() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     client.send(&command("c1", prompt)).await;
     assert!(matches!(
@@ -1000,6 +1002,7 @@ async fn terminals_are_for_owners_only() {
                 session_id: session.clone(),
                 text: "hi".into(),
                 images: Vec::new(),
+                files: Vec::new(),
             },
         }))
         .await;
@@ -1053,6 +1056,7 @@ async fn terminals_are_for_owners_only() {
         session_id: session.clone(),
         text: "hi".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     assert!(matches!(
         member.command("c4", prompt).await,
@@ -1420,11 +1424,11 @@ async fn an_owner_changes_the_settings_which_apply_on_restart() {
     let (settings, restart_required) =
         settings_answer(client.command("c1", CommandBody::GetSettings).await);
     assert!(!restart_required);
-    assert_eq!(settings.tasks.max_children, 5);
+    assert!(!settings.failover.pin);
 
     let mut changed = settings.clone();
     changed.listen = vec!["127.0.0.1:7999".into(), "[::1]:7999".into()];
-    changed.tasks.max_children = 8;
+    changed.failover.pin = true;
     let set = CommandBody::SetSettings {
         settings: Box::new(changed.clone()),
     };
@@ -1434,7 +1438,7 @@ async fn an_owner_changes_the_settings_which_apply_on_restart() {
     assert_eq!(
         std::fs::read_to_string(&daemon.config).unwrap(),
         CONFIG.replace("\"0.0.0.0:7447\"", "[\"127.0.0.1:7999\", \"[::1]:7999\"]")
-            + "\n[tasks]\nmax_children = 8\n"
+            + "\n[failover]\npin = true\n"
     );
     // Still not in effect for whoever asks next.
     let (_, restart_required) =

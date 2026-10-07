@@ -51,14 +51,14 @@ struct Sample {
             hostId: host,
             command: .createSession(
                 repo: repo, projectId: nil, branch: nil, accountId: account, provider: nil,
-                model: nil, permissionMode: .ask, maxChildren: nil, failoverPin: nil))
+                model: nil, permissionMode: .ask, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = created else {
             throw Failure(description: "expected a session, got \(created)")
         }
         print("created session \(sessionId)")
         let subscription = try client.subscribeSession(hostId: host, sessionId: sessionId)
         let sent = try await client.send(
-            hostId: host, command: .sendPrompt(sessionId: sessionId, text: "Say hello.", images: []))
+            hostId: host, command: .sendPrompt(sessionId: sessionId, text: "Say hello.", images: [], files: []))
         try check(sent == .applied, "the prompt was applied")
 
         var events: [EventBody] = []

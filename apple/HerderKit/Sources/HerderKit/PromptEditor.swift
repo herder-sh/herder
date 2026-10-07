@@ -1,5 +1,6 @@
 import Herder
 import SwiftUI
+import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
 #else
@@ -19,6 +20,8 @@ struct PromptEditor: NSViewRepresentable {
     var skills: [SessionSkill] = []
     /// Attaches pasted or dropped images; returns their markers, to go in at the caret.
     let addImages: ([Herder.Image]) -> String
+    /// Attaches pasted or dropped files that are not pictures.
+    let addFiles: ([URL]) -> Void
     /// Takes long pasted text; returns its marker, to go in at the caret.
     let addPaste: (String) -> String
     /// Return without Shift.
@@ -236,7 +239,8 @@ struct PromptEditor: NSViewRepresentable {
     }
 }
 
-/// The text view: pastes and drops of images become chips, as do long pastes of text.
+/// The text view: pastes and drops of images become chips, as do long pastes of text; other
+/// files pasted or dropped are attached.
 final class ChipTextView: NSTextView {
     weak var coordinator: PromptEditor.Coordinator?
 
@@ -252,9 +256,8 @@ final class ChipTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         guard let coordinator else { return super.paste(sender) }
-        let images = ImageAttachment.from()
-        if !images.isEmpty {
-            coordinator.insert(coordinator.parent.addImages(images), in: self)
+        if take(.general) {
+            return
         } else if let pasted = NSPasteboard.general.string(forType: .string), PromptText.isLong(pasted) {
             coordinator.insert(coordinator.parent.addPaste(pasted), in: self)
         } else {
@@ -285,11 +288,19 @@ final class ChipTextView: NSTextView {
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard let coordinator else { return super.performDragOperation(sender) }
-        let images = ImageAttachment.from(sender.draggingPasteboard)
-        guard !images.isEmpty else { return super.performDragOperation(sender) }
-        coordinator.insert(coordinator.parent.addImages(images), in: self)
-        return true
+        take(sender.draggingPasteboard) || super.performDragOperation(sender)
+    }
+
+    /// Attaches a pasteboard's images, their markers at the caret, and its other files; whether
+    /// it held any.
+    private func take(_ board: NSPasteboard) -> Bool {
+        guard let coordinator else { return false }
+        let images = ImageAttachment.from(board)
+        let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let others = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) != true }
+        if !images.isEmpty { coordinator.insert(coordinator.parent.addImages(images), in: self) }
+        if !others.isEmpty { coordinator.parent.addFiles(others) }
+        return !images.isEmpty || !others.isEmpty
     }
 }
 

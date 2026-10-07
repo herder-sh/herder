@@ -22,10 +22,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use herder_protocol::{
-    AccountId, AttachmentData, AttachmentId, Batch, Bytes, Cursor, DeviceId, HostId,
-    HostReplication, IMAGE_MEDIA_TYPES, Image, JournalRecord, MAX_BATCH_EVENTS, MAX_IMAGE_BYTES,
-    RawEventBody, RejectReason, Seq, SessionHead, SessionId, SessionStatus, SessionSummary,
-    Timestamp, UserId, VaultStatus,
+    AccountId, AttachmentData, AttachmentId, Batch, Bytes, Cursor, DeviceId, FILE_MEDIA_TYPE,
+    HostId, HostReplication, IMAGE_MEDIA_TYPES, Image, JournalRecord, MAX_BATCH_EVENTS,
+    MAX_FILE_BYTES, MAX_IMAGE_BYTES, RawEventBody, RejectReason, Seq, SessionHead, SessionId,
+    SessionStatus, SessionSummary, Timestamp, UserId, VaultStatus,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -616,10 +616,16 @@ impl VaultStore {
     ) -> Result<Kept> {
         let attachment = &image.attachment;
         let data = &image.data.0;
-        if !IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) {
-            return Err(BadBatch("an attachment's media type is not an image type").into());
-        }
-        if attachment.size != data.len() as u64 || data.len() > MAX_IMAGE_BYTES {
+        let max = if attachment.media_type == FILE_MEDIA_TYPE {
+            MAX_FILE_BYTES
+        } else if IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) {
+            MAX_IMAGE_BYTES
+        } else {
+            return Err(
+                BadBatch("an attachment's media type is neither an image's nor a file's").into(),
+            );
+        };
+        if attachment.size != data.len() as u64 || data.len() > max {
             return Err(
                 BadBatch("an attachment's size is not that of its bytes, or too big").into(),
             );
@@ -971,6 +977,7 @@ mod tests {
                 attachment_id: AttachmentId::new("img1"),
                 media_type: media_type.into(),
                 size: data.len() as u64,
+                name: None,
             },
             data: Bytes(data.to_vec()),
         };
@@ -1009,6 +1016,24 @@ mod tests {
         let mut wrong_size = png.clone();
         wrong_size.attachment.size += 1;
         assert!(refused(&mut store, wrong_size));
+
+        // A file may be bigger than an image, never bigger than a file.
+        let file = |id: &str, len: usize| AttachmentData {
+            session_id: session.clone(),
+            attachment: herder_protocol::Attachment {
+                attachment_id: AttachmentId::new(id),
+                media_type: FILE_MEDIA_TYPE.into(),
+                size: len as u64,
+                name: Some("data.bin".into()),
+            },
+            data: Bytes(vec![0; len]),
+        };
+        let big = file("file1", MAX_IMAGE_BYTES + 1);
+        store.put_attachment(&host, &big, None).unwrap();
+        assert!(refused(&mut store, file("file2", MAX_FILE_BYTES + 1)));
+        let mut big_image = big.clone();
+        big_image.attachment.media_type = "image/png".into();
+        assert!(refused(&mut store, big_image));
     }
 
     fn summary(id: &str, parent: Option<&str>, status: SessionStatus) -> SessionSummary {
@@ -1252,6 +1277,7 @@ mod tests {
                 attachment_id: AttachmentId::new(id),
                 media_type: "image/png".into(),
                 size: len as u64,
+                name: None,
             },
             data: Bytes(data),
         }

@@ -291,12 +291,16 @@ impl Replicator {
                     Vec::new()
                 };
                 for attachment in images {
-                    match self.sessions.image(&session_id, &attachment).await {
-                        Ok(image) => {
+                    match self
+                        .sessions
+                        .attachment_data(&session_id, &attachment)
+                        .await
+                    {
+                        Ok(data) => {
                             let image = AttachmentData {
                                 session_id: session_id.clone(),
                                 attachment,
-                                data: image.data,
+                                data,
                             };
                             send(ws, HostMessage::Attachment(image)).await?;
                         }

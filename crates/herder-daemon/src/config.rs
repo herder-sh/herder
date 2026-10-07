@@ -89,15 +89,6 @@
 //! pointed there is not Claude's default login, so omit `config_dir` for that. An account added
 //! from a client naming `~/.claude` is saved without one.
 //!
-//! # Tasks
-//!
-//! The `[tasks]` table limits every task a session runs through the task tools:
-//!
-//! ```toml
-//! [tasks]
-//! max_children = 5 # live (not archived) children a primary may have at once
-//! ```
-//!
 //! # Projects
 //!
 //! The daemon finds repositories in its sessions, under the `[projects]` roots and at the
@@ -149,11 +140,11 @@
 //! address = "vault.example.com:7447"
 //! fingerprint = "3f9a..."    # the vault's certificate SHA-256, as `herder pair` prints it
 //! pairing_code = "ABCDE-FGHJK" # from `herder pair` on the vault; only read until paired
-//! attachments = true           # back up prompt images too; off by default
-//! attachments_cap = 1073741824 # most bytes of images the vault keeps; 1 GiB by default
+//! attachments = true           # back up prompt images and files too; off by default
+//! attachments_cap = 1073741824 # most bytes of them the vault keeps; 1 GiB by default
 //! ```
 //!
-//! With `attachments`, the vault keeps this host's images up to `attachments_cap` bytes,
+//! With `attachments`, the vault keeps this host's images and files up to `attachments_cap` bytes,
 //! evicting the oldest first; without it the host sends none.
 //!
 //! A vault's own `[vault]` table sets how long it keeps archived sessions:
@@ -174,15 +165,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use herder_protocol::{
     AccountId, BackupSettings, DaemonSettings, FollowUpSettings, LogSettings, PermissionMode,
-    ProjectDiscovery, ProjectId, Provider, ProviderBinary, ResourceSettings, TaskSettings,
-    TitleSettings,
+    ProjectDiscovery, ProjectId, Provider, ProviderBinary, ResourceSettings, TitleSettings,
 };
 use serde::Deserialize;
 
 use crate::accounts;
 use crate::projects::{ProjectEntry, ProjectsConfig};
 use crate::resources::ResourcesConfig;
-use crate::session::{AccountConfig, Accounts, FailoverConfig, TaskLimits, TitlesConfig};
+use crate::session::{AccountConfig, Accounts, FailoverConfig, TitlesConfig};
 
 /// Port the daemon listens on unless configured otherwise.
 pub const DEFAULT_PORT: u16 = 7447;
@@ -202,8 +192,6 @@ pub struct Config {
     pub accounts: Accounts,
     /// The CLI to run per provider, where it is not the provider's own name on `PATH`.
     pub binaries: HashMap<Provider, PathBuf>,
-    /// Limits on every task.
-    pub tasks: TaskLimits,
     /// How sessions fail over when their account hits a limit.
     pub failover: FailoverConfig,
     /// How sessions are titled.
@@ -361,7 +349,6 @@ struct ConfigFile {
     log: LogConfig,
     accounts: Vec<AccountFile>,
     providers: BTreeMap<String, ProviderFile>,
-    tasks: TaskLimits,
     failover: FailoverConfig,
     titles: TitlesFile,
     follow_ups: FollowUpsConfig,
@@ -383,7 +370,6 @@ impl Default for ConfigFile {
             log: LogConfig::default(),
             accounts: Vec::new(),
             providers: BTreeMap::new(),
-            tasks: TaskLimits::default(),
             failover: FailoverConfig::default(),
             titles: TitlesFile::default(),
             follow_ups: FollowUpsConfig::default(),
@@ -543,9 +529,6 @@ impl Config {
                 },
             },
             binaries,
-            tasks: TaskSettings {
-                max_children: self.tasks.max_children,
-            },
             failover: self.failover.settings(),
             titles: TitleSettings {
                 enabled: self.titles.enabled,
@@ -607,7 +590,6 @@ fn resolve(
         log: file.log,
         accounts,
         binaries: resolve_binaries(file.providers, env)?,
-        tasks: file.tasks,
         failover: file.failover,
         titles,
         follow_ups: file.follow_ups,
@@ -1180,13 +1162,6 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
                 )?;
             }
         }
-        if old.tasks.max_children != new.tasks.max_children {
-            edit.set(
-                &["tasks"],
-                "max_children",
-                Some(int(new.tasks.max_children)?),
-            )?;
-        }
         if old.failover.pin != new.failover.pin {
             edit.set(&["failover"], "pin", Some(new.failover.pin.into()))?;
         }
@@ -1677,7 +1652,6 @@ mod tests {
         assert_eq!(config.data_dir, Path::new(home).join(".local/share/herder"));
         assert_eq!(config.log, LogConfig::default());
         assert_eq!(config.log.format, LogFormat::Pretty);
-        assert_eq!(config.tasks.max_children, 5);
     }
 
     #[test]
@@ -1755,8 +1729,6 @@ mod tests {
             level = "debug"
             format = "json"
 
-            [tasks]
-            max_children = 2
             [failover]
             pin = true
             [follow_ups]
@@ -1788,7 +1760,6 @@ mod tests {
                 },
                 accounts: Accounts::new(),
                 binaries: HashMap::new(),
-                tasks: TaskLimits { max_children: 2 },
                 failover: FailoverConfig { pin: true },
                 titles: TitlesConfig::default(),
                 follow_ups: FollowUpsConfig {
@@ -1977,7 +1948,7 @@ mod tests {
             "port = 1\n",
             "[log]\ncolour = true\n",
             "[tls]\n",
-            "[tasks]\nmax_depth = 2\n",
+            "[tasks]\n",
             "[follow_ups]\nnudges = 2\n",
         ] {
             let path = write(tmp.path(), text);
@@ -1997,7 +1968,6 @@ mod tests {
             .settings();
         assert_eq!(settings.listen, ["0.0.0.0:7447"]);
         assert_eq!(settings.log.format, herder_protocol::LogFormat::Pretty);
-        assert_eq!(settings.tasks.max_children, 5);
         assert!(settings.titles.enabled);
         assert_eq!(settings.resources.max_turns, None);
         assert_eq!(settings.resources.nice, 10);

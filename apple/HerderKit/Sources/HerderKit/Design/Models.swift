@@ -19,6 +19,9 @@ enum SessionState: Hashable {
         case .moved: "Moved"
         }
     }
+
+    /// Whether the machine takes a new title: archived and moved sessions are read-only.
+    var renamable: Bool { self != .archived && self != .moved }
 }
 
 /// One row of a session list.

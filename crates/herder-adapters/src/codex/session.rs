@@ -20,7 +20,9 @@ use super::wire::{self, Incoming, RpcError, ThreadItem, ToolStatus};
 use super::{classify, policy, sandbox_policy};
 use crate::price;
 use crate::transport::{Exit, Transport};
-use crate::{AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest};
+use crate::{
+    AccountUsage, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest,
+};
 
 /// Events buffered before the session waits for the daemon to read.
 const EVENT_BUFFER: usize = 64;
@@ -73,12 +75,12 @@ pub(super) async fn start(
     })
 }
 
-/// The account's limit windows: `initialize`, `initialized` and `account/rateLimits/read`,
-/// then stdin is closed. No thread is opened.
+/// The account's email and limit windows: `initialize`, `initialized`, `account/read` and
+/// `account/rateLimits/read`, then stdin is closed. No thread is opened.
 pub(super) async fn read_usage(
     transport: Transport,
     request: &StartRequest,
-) -> Result<Vec<UsageWindow>, TurnError> {
+) -> Result<AccountUsage, TurnError> {
     let Transport {
         stdin,
         mut stdout,
@@ -87,10 +89,16 @@ pub(super) async fn read_usage(
     // Nobody reads the events: sending to the closed channel drops them.
     let (event_tx, _) = mpsc::channel(1);
     let mut session = Session::new(stdin, event_tx, request);
-    let windows = match session.initialize(&mut stdout, &mut exit).await {
-        Ok(()) => session.rate_limits(&mut stdout, &mut exit).await,
-        Err(err) => Err(err),
+    let usage = async {
+        session.initialize(&mut stdout, &mut exit).await?;
+        let account = session.account(&mut stdout, &mut exit).await?;
+        let windows = session.rate_limits(&mut stdout, &mut exit).await?;
+        Ok::<_, StartError>(AccountUsage {
+            email: account.email(),
+            windows,
+        })
     }
+    .await
     .map_err(|err| match err {
         StartError::Turn(error) => error,
         StartError::Gone(reason) => fatal(format!(
@@ -104,7 +112,7 @@ pub(super) async fn read_usage(
     })
     .await;
     let _ = gone(&mut exit).await;
-    Ok(windows)
+    Ok(usage)
 }
 
 /// Why starting failed.
@@ -203,18 +211,7 @@ impl Session {
     ) -> Result<(), StartError> {
         self.initialize(stdout, exit).await?;
 
-        let account = self
-            .call(
-                stdout,
-                exit,
-                "account/read",
-                wire::AccountReadParams {
-                    refresh_token: false,
-                },
-            )
-            .await?
-            .map_err(|err| refused("account/read", &err))?;
-        let account: wire::AccountReadResult = decode("account/read", account)?;
+        let account = self.account(stdout, exit).await?;
         if account.account.is_none() && account.requires_openai_auth {
             return Err(StartError::Turn(TurnError {
                 class: ErrorClass::Auth,
@@ -312,6 +309,26 @@ impl Session {
         })
         .await;
         Ok(())
+    }
+
+    /// The login `account/read` answers with.
+    async fn account(
+        &mut self,
+        stdout: &mut mpsc::Receiver<String>,
+        exit: &mut oneshot::Receiver<Exit>,
+    ) -> Result<wire::AccountReadResult, StartError> {
+        let account = self
+            .call(
+                stdout,
+                exit,
+                "account/read",
+                wire::AccountReadParams {
+                    refresh_token: false,
+                },
+            )
+            .await?
+            .map_err(|err| refused("account/read", &err))?;
+        decode("account/read", account)
     }
 
     /// The windows `account/rateLimits/read` answers with. Accounts without ChatGPT plan
@@ -1205,6 +1222,7 @@ mod tests {
                     attachment_id: AttachmentId::new("a1"),
                     media_type: "image/png".into(),
                     size: 2048,
+                    name: None,
                 }],
             }),
             item(ItemBody::Reasoning { text: "hmm".into() }),

@@ -566,7 +566,6 @@ impl World {
                     provider: None,
                     model: None,
                     permission_mode: Some(PermissionMode::Ask),
-                    max_children: None,
                     failover_pin: None,
                 },
             )
@@ -590,6 +589,7 @@ impl World {
             session_id: session_id.clone(),
             text: "Go.".into(),
             images: Vec::new(),
+            files: Vec::new(),
         };
         assert_eq!(self.command(command).await, Ok(CommandResult::Applied));
         for _ in 0..500 {
@@ -1282,6 +1282,7 @@ async fn a_follow_up_waits_while_the_session_needs_the_user() {
         session_id: session_id.clone(),
         text: "Go.".into(),
         images: Vec::new(),
+        files: Vec::new(),
     };
     assert_eq!(world.command(prompt).await, Ok(CommandResult::Applied));
     world.settled(&session_id, 1, SessionStatus::NeedsYou).await;

@@ -8,7 +8,7 @@ struct HandoffTests {
     let source = SessionKey(hostId: "source", sessionId: "original")
 
     func account(_ id: String, _ provider: Provider = "claude") -> Account {
-        Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, usage: [])
+        Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, email: nil, usage: [])
     }
 
     /// The source, a machine with one Claude account, one with two, and one with none.

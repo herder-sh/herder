@@ -14,6 +14,9 @@ struct ComposerBox<Footer: View>: View {
     @Binding var text: String
     /// Images going with the prompt: pasted, dropped or attached.
     @Binding var images: [Herder.Image]
+    /// Files of any other type going with the prompt: dropped or attached. The agent gets them
+    /// as paths on the session's machine, so they have no marker in the text.
+    @Binding var files: [PromptFile]
     let placeholder: String
     /// Edges the box in a colour of its own, as in a child session.
     var tint: Color?
@@ -42,6 +45,7 @@ struct ComposerBox<Footer: View>: View {
     #if os(iOS)
     /// Photos picked to attach, until they load.
     @State private var picked: [PhotosPickerItem] = []
+    @State private var importing = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
@@ -60,10 +64,11 @@ struct ComposerBox<Footer: View>: View {
                         .accessibilityIdentifier("skill-picker-empty")
                     Rectangle().fill(Theme.stroke).frame(height: 1)
                 }
+                if !files.isEmpty { FileStrip(files: files) { files.remove(at: $0) } }
                 #if os(macOS)
                 PromptEditor(
                     text: $text, focused: $editing, images: images, pastes: pastes, skills: skills,
-                    addImages: add, addPaste: addPaste, submit: submit)
+                    addImages: add, addFiles: attach, addPaste: addPaste, submit: submit)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
                     }
@@ -98,8 +103,17 @@ struct ComposerBox<Footer: View>: View {
                 tint.map { $0.opacity(isFocused ? 0.7 : 0.4) } ?? (isFocused ? Theme.secondary.opacity(0.5) : Theme.stroke)))
             .contentShape(.rect)
             .onTapGesture { focus() }
-            .onDrop(of: [.image], isTargeted: nil) { providers in
-                Task { text += add(await ImageAttachment.load(providers)) }
+            .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                Task {
+                    // A file on this device goes by its URL, as picked; an image dragged out of
+                    // an app, by its bytes.
+                    let urls = await FileAttachment.urls(providers)
+                    if urls.isEmpty {
+                        text += add(await ImageAttachment.load(providers))
+                    } else {
+                        attach(urls)
+                    }
+                }
                 return true
             }
             HStack(spacing: compact ? 10 : 14) { footer }
@@ -147,25 +161,40 @@ struct ComposerBox<Footer: View>: View {
             #if os(macOS)
             Button(action: attach) { attachLabel }
                 .buttonStyle(.plain)
-                .help("Attach images (or paste or drop them)")
+                .help("Attach files and images (or paste or drop them)")
             #else
-            PhotosPicker(selection: $picked, matching: .images, preferredItemEncoding: .compatible) { attachLabel }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Attach images")
-                .accessibilityIdentifier("attach-images")
-                .onChange(of: picked) {
-                    guard !picked.isEmpty else { return }
-                    let items = picked
-                    picked = []
-                    Task { await attach(items) }
+            Menu {
+                PhotosPicker(selection: $picked, matching: .images, preferredItemEncoding: .compatible) {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
                 }
+                .accessibilityIdentifier("attach-images")
+                Button { importing = true } label: { Label("Choose Files", systemImage: "folder") }
+                    .accessibilityIdentifier("attach-files")
+            } label: {
+                attachLabel
+            }
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+            .accessibilityLabel("Attach")
+            .accessibilityIdentifier("attach")
+            .onChange(of: picked) {
+                guard !picked.isEmpty else { return }
+                let items = picked
+                picked = []
+                Task { await attach(items) }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): attach(urls)
+                case .failure(let error): imageError = error.localizedDescription
+                }
+            }
             #endif
-            if running && trimmed.isEmpty && images.isEmpty {
+            if running && nothingToSend {
                 CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
             } else {
                 CircleButton(symbol: "arrow.up", help: "Send", action: submit)
-                    .disabled(trimmed.isEmpty && images.isEmpty)
-                    .opacity(trimmed.isEmpty && images.isEmpty ? 0.35 : 1)
+                    .disabled(nothingToSend)
+                    .opacity(nothingToSend ? 0.35 : 1)
                     .keyboardShortcut(.return, modifiers: .command)
             }
         }
@@ -201,6 +230,8 @@ struct ComposerBox<Footer: View>: View {
     private func focus() { editing = true }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var nothingToSend: Bool { trimmed.isEmpty && images.isEmpty && files.isEmpty }
 
     /// The skills the `$` mention being typed picks.
     private var skillMatches: [SessionSkill] {
@@ -249,6 +280,21 @@ struct ComposerBox<Footer: View>: View {
         .joined()
     }
 
+    /// Attaches files picked, imported or dropped: pictures as images, with their markers at
+    /// the end of the text, anything else as files. Says why one could not go.
+    private func attach(_ urls: [URL]) {
+        // Files imported on iOS are outside the app's sandbox until it asks.
+        let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+        defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+        let sorted = FileAttachment.sort(urls)
+        let carried = images.reduce(0) { $0 + $1.data.count } + files.reduce(0) { $0 + $1.data.count }
+            + sorted.images.reduce(0) { $0 + $1.data.count }
+        let fitting = FileAttachment.fitting(sorted.files, carried: carried)
+        text += add(sorted.images)
+        files += fitting.files
+        imageError = fitting.refused ?? sorted.refused
+    }
+
     /// Keeps a long paste; returns its `[Pasted text #N]` marker.
     private func addPaste(_ pasted: String) -> String {
         pastes.append(pasted)
@@ -256,19 +302,13 @@ struct ComposerBox<Footer: View>: View {
     }
 
     #if os(macOS)
+    /// Picks files of any type to attach, several at once.
     private func attach() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
         guard panel.runModal() == .OK else { return }
-        do {
-            text += add(try panel.urls.map { url in
-                try ImageAttachment.make(try Data(contentsOf: url), type: UTType(filenameExtension: url.pathExtension))
-            })
-            imageError = nil
-        } catch {
-            imageError = error.localizedDescription
-        }
+        attach(panel.urls)
     }
     #else
     /// Attaches photos picked from the library, in the order they were picked.

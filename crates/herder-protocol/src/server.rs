@@ -308,6 +308,9 @@ pub struct QueuedPrompt {
     pub text: String,
     /// How many images it carries.
     pub images: u32,
+    /// How many files it carries.
+    #[serde(default)]
+    pub files: u32,
     /// User who sent it; absent when an agent did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<UserId>,
@@ -329,6 +332,11 @@ pub struct Account {
     /// Config directory on the host; absent for the provider default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_dir: Option<String>,
+    /// Email address the provider login is signed in as, as its CLI last reported it; absent
+    /// until it reports one, and for a login without one, such as an API key. Accounts with
+    /// the same provider and email share one login, and so its limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
 }
@@ -396,11 +404,11 @@ pub enum CommandResult {
         /// The new terminal.
         terminal_id: TerminalId,
     },
-    /// The bytes of an image, answering `get_attachment`.
+    /// The bytes of an image or file, answering `get_attachment`.
     Attachment {
-        /// The image's media type.
+        /// The image's or file's media type.
         media_type: String,
-        /// The image file's bytes.
+        /// The image's or file's bytes.
         data: Bytes,
     },
     /// A folder's entries, answering `list_directory`.
@@ -422,8 +430,8 @@ pub enum CommandResult {
         /// The host that session ran on.
         from_host_id: HostId,
     },
-    /// A repository is a project of this daemon, answering `add_project`; the project list
-    /// with it follows.
+    /// A repository is a project of this daemon, answering `add_project` or `clone_project`;
+    /// the project list with it follows.
     ProjectAdded {
         /// The project the repository belongs to.
         project_id: ProjectId,
