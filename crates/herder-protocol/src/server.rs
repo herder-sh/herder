@@ -45,6 +45,12 @@ pub enum ServerMessage {
         /// How this daemon's sessions fail over.
         failover: FailoverSettings,
     },
+    /// Each runnable provider's CLI on this host; sent after hello and whenever the set
+    /// changes (a probe, an install finishing, a binary appearing).
+    Providers {
+        /// The providers herder can run sessions on, in a stable order.
+        providers: Vec<ProviderStatus>,
+    },
     /// Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.
     Terminals {
         /// The open terminals.
@@ -320,6 +326,25 @@ pub struct QueuedPrompt {
     pub agent_message: Option<AgentMessage>,
 }
 
+/// Whether a provider's CLI is on this host, and whether herder can install or update it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderStatus {
+    /// The provider.
+    pub provider: Provider,
+    /// Whether its CLI ran `--version` successfully.
+    pub installed: bool,
+    /// The first line of `--version`, when it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The binary herder would run, as a path or a name on `PATH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Whether this OS has an install recipe herder will run in a terminal.
+    pub can_install: bool,
+    /// Whether this OS has an update recipe, or the vendor's dedicated updater.
+    pub can_update: bool,
+}
+
 /// A provider login on this host, used through its own config dir.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
@@ -384,6 +409,11 @@ pub enum TerminalPurpose {
     Login {
         /// The account being added or logged in again.
         account_id: AccountId,
+    },
+    /// A provider's documented installer or updater, run for the owner.
+    Install {
+        /// The provider being installed or updated.
+        provider: Provider,
     },
 }
 

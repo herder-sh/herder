@@ -121,6 +121,27 @@
       ]
     },
     {
+      "description": "Each runnable provider's CLI on this host; sent after hello and whenever the set\nchanges (a probe, an install finishing, a binary appearing).",
+      "type": "object",
+      "properties": {
+        "providers": {
+          "description": "The providers herder can run sessions on, in a stable order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderStatus"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "providers"
+        }
+      },
+      "required": [
+        "type",
+        "providers"
+      ]
+    },
+    {
       "description": "Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.",
       "type": "object",
       "properties": {
@@ -2928,6 +2949,48 @@
         "reload"
       ]
     },
+    "ProviderStatus": {
+      "description": "Whether a provider's CLI is on this host, and whether herder can install or update it.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "The binary herder would run, as a path or a name on `PATH`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "can_install": {
+          "description": "Whether this OS has an install recipe herder will run in a terminal.",
+          "type": "boolean"
+        },
+        "can_update": {
+          "description": "Whether this OS has an update recipe, or the vendor's dedicated updater.",
+          "type": "boolean"
+        },
+        "installed": {
+          "description": "Whether its CLI ran `--version` successfully.",
+          "type": "boolean"
+        },
+        "provider": {
+          "description": "The provider.",
+          "$ref": "#/$defs/Provider"
+        },
+        "version": {
+          "description": "The first line of `--version`, when it ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "installed",
+        "can_install",
+        "can_update"
+      ]
+    },
     "PullRequest": {
       "description": "A GitHub pull request tracked for a session.",
       "type": "object",
@@ -3600,6 +3663,24 @@
           "required": [
             "type",
             "account_id"
+          ]
+        },
+        {
+          "description": "A provider's documented installer or updater, run for the owner.",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "description": "The provider being installed or updated.",
+              "$ref": "#/$defs/Provider"
+            },
+            "type": {
+              "type": "string",
+              "const": "install"
+            }
+          },
+          "required": [
+            "type",
+            "provider"
           ]
         }
       ]

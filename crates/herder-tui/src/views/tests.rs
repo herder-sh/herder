@@ -870,6 +870,10 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
     press(&mut app, KeyCode::Char('n'));
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Tab);
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    )));
     typed(&mut app, "codex-2");
     insta::assert_snapshot!(render(&mut app, 90, 20).backend());
 }
@@ -1219,6 +1223,9 @@ pub(super) fn add_accounts(app: &mut App) {
     laptop.connection = ConnectionState::Disconnected {
         error: "connection refused".into(),
     };
+    let mut cursor = fake::account("cursor", "Cursor");
+    cursor.provider = Provider::Cursor;
+    laptop.accounts = vec![cursor];
     machines.push(laptop);
     app.update(Msg::Machines(machines));
 }

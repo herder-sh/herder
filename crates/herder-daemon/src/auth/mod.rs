@@ -460,6 +460,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
         command,
         CommandBody::OpenTerminal { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
@@ -897,6 +898,24 @@ mod tests {
             account_id: herder_protocol::AccountId::new("work"),
             label: "Work".into(),
             config_dir: None,
+        };
+        assert!(authorize(&alice, &command).is_ok());
+        alice.role = Role::Member;
+        assert_eq!(
+            authorize(&alice, &command).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn only_owners_may_install_a_provider() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let command = CommandBody::InstallProvider {
+            provider: herder_protocol::Provider::Cursor,
+            cols: 80,
+            rows: 24,
         };
         assert!(authorize(&alice, &command).is_ok());
         alice.role = Role::Member;

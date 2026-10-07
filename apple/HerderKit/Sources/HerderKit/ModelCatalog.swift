@@ -32,6 +32,18 @@ enum ModelCatalog {
                 Model(id: "grok-4.6", name: "Grok 4.6", detail: "Most capable"),
                 Model(id: "grok-4.5", name: "Grok 4.5"),
             ]
+        case "cursor":
+            [
+                Model(id: "auto", name: "Auto", detail: "Picks for the task"),
+                Model(id: "composer-2.5", name: "Composer 2.5", detail: "Cursor's agent"),
+                Model(id: "composer-2.5-fast", name: "Composer 2.5 Fast"),
+            ]
+        case "opencode":
+            [
+                Model(id: "opencode/grok-code", name: "Grok Code"),
+                Model(id: "opencode/claude", name: "Claude"),
+                Model(id: "opencode/gpt", name: "GPT"),
+            ]
         default:
             []
         }
@@ -39,7 +51,11 @@ enum ModelCatalog {
 
     /// The model new sessions of a provider start on; `""` is the provider's own default.
     static func defaultModel(_ provider: Provider) -> String {
-        provider == "claude" ? "claude-opus-5-5" : ""
+        switch provider {
+        case "claude": "claude-opus-5-5"
+        case "cursor": "auto"
+        default: ""
+        }
     }
 
     /// A model's name for the menu: the catalog's, else its id.

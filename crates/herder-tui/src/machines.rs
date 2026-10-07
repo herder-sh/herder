@@ -19,7 +19,7 @@ use crate::accounts::{self, AddAccount};
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
 use crate::backup::{self, Backup, Links};
-use crate::terminal::{self, Target};
+use crate::terminal;
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it; added
 /// to a typed address without one.
@@ -333,11 +333,9 @@ impl App {
                 accounts::Outcome::Closed => panel.account = None,
                 accounts::Outcome::Login(new) => {
                     let host_id = account.host_id.clone();
+                    let target = terminal::login_or_install(&self.machines, &host_id, new);
                     self.machine_panel = None;
-                    return vec![Effect::AttachTerminal {
-                        host_id,
-                        target: Target::Login(new),
-                    }];
+                    return vec![Effect::AttachTerminal { host_id, target }];
                 }
             }
             return Vec::new();
@@ -395,7 +393,10 @@ impl App {
                         Some(refusal) => {
                             self.notice = Some(format!("adding accounts: {refusal}"));
                         }
-                        None => panel.account = Some(AddAccount::new(host_id)),
+                        None => {
+                            panel.account =
+                                Some(AddAccount::for_provider(host_id, 0, &self.machines))
+                        }
                     }
                 }
                 Input::Up | Input::Down | Input::Top | Input::Bottom => {
@@ -530,6 +531,7 @@ mod tests {
     use super::*;
     use crate::app::Msg;
     use crate::fake::machine;
+    use crate::terminal::Target;
 
     const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -770,15 +772,16 @@ mod tests {
         assert_eq!(account(&app).host_id, HostId::new("h2"));
         // The provider is picked with the arrows or space, wrapping around.
         press(&mut app, KeyCode::Left);
-        assert_eq!(*account(&app).provider(), Provider::Cursor);
+        assert_eq!(*account(&app).provider(), Provider::Opencode);
         typed(&mut app, " ");
         assert_eq!(*account(&app).provider(), Provider::Claude);
         press(&mut app, KeyCode::Right);
-        assert_eq!(account(&app).default_config_dir(), "~/.codex-<id>");
-        // An id is needed.
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
-        assert_eq!(account(&app).focus, crate::accounts::Field::Id);
-        assert!(account(&app).error.is_some());
+        assert_eq!(account(&app).default_config_dir(), "~/.codex-codex");
+        press(&mut app, KeyCode::Tab);
+        app.update(Msg::Key(KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        )));
         typed(&mut app, "work");
         assert_eq!(account(&app).default_config_dir(), "~/.codex-work");
         press(&mut app, KeyCode::Tab);
@@ -799,6 +802,30 @@ mod tests {
             }]
         );
         assert_eq!(app.machine_panel, None);
+    }
+
+    #[test]
+    fn a_missing_cli_starts_the_installer() {
+        let mut app = App::default();
+        let mut host = machine("h1", "box", &[]);
+        host.providers = vec![herder_protocol::ProviderStatus {
+            provider: Provider::Claude,
+            installed: false,
+            version: None,
+            binary: Some("claude".into()),
+            can_install: true,
+            can_update: false,
+        }];
+        app.update(Msg::Machines(vec![host]));
+        press(&mut app, KeyCode::Char('m'));
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Effect::AttachTerminal {
+                host_id: HostId::new("h1"),
+                target: Target::Install(Provider::Claude),
+            }]
+        );
     }
 
     #[test]

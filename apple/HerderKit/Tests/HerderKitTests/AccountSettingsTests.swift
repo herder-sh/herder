@@ -23,6 +23,8 @@ struct AccountSettingsTests {
         #expect(draft.account.configDir == "~/.claude-work")
         draft.configDir = " "
         #expect(draft.account.configDir == nil)
+        #expect(AccountDraft.nextId(provider: "cursor", taken: []) == "cursor")
+        #expect(AccountDraft.nextId(provider: "cursor", taken: ["cursor", "cursor-2"]) == "cursor-3")
     }
 
     @MainActor

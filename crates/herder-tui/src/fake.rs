@@ -43,6 +43,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         projects: Vec::new(),
         accounts: Vec::new(),
         failover: Default::default(),
+        providers: Vec::new(),
         terminals: Vec::new(),
         resources: None,
         session_usage: Default::default(),
