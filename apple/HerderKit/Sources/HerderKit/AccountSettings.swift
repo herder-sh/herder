@@ -46,6 +46,10 @@ struct AddAccountSheet: View {
     private var connection: TerminalConnection? { fleet.accountLogins[hostId] }
     private var problem: String? { draft.problem(existing: machine?.accounts.map(\.accountId) ?? []) }
     private var canManage: Bool { machine?.role == .owner && machine?.connection == .connected }
+    private var configDirHint: String {
+        let defaultLogin = draft.provider == "claude" ? "; ~/.claude adds Claude’s default login" : ""
+        return "A new directory, or one already logged in\(defaultLogin). Leave empty to let herder choose. The account appears once the provider reports it logged in."
+    }
 
     var body: some View {
         SheetScaffold(title: connection?.relogin == nil ? "Add Account" : "Log In Again",
@@ -65,13 +69,12 @@ struct AddAccountSheet: View {
                                           ("cursor", "Cursor", ""), ("opencode", "OpenCode", "")],
                                 selection: $draft.provider)
                 }
-                Field(label: "Account ID", hint: "A unique name on this machine, such as claude-work.") {
-                    InputBox(placeholder: "claude-work", text: $draft.id, mono: true)
+                Field(label: "Account ID", hint: "A unique name on this machine, such as \(draft.provider)-work.") {
+                    InputBox(placeholder: "\(draft.provider)-work", text: $draft.id, mono: true)
                 }
                 Field(label: "Display label") { InputBox(placeholder: "Work", text: $draft.label) }
-                Field(label: "Config directory (optional)",
-                      hint: "A new directory, or one already logged in; ~/.claude adds Claude’s default login. Leave empty to let herder choose. The account appears once the provider reports it logged in.") {
-                    InputBox(placeholder: "~/.claude-work", text: $draft.configDir, mono: true)
+                Field(label: "Config directory (optional)", hint: configDirHint) {
+                    InputBox(placeholder: "~/.\(draft.provider)-work", text: $draft.configDir, mono: true)
                 }
                 if !draft.id.isEmpty, let problem {
                     Text(problem).font(.footnote).foregroundStyle(Theme.failure)
