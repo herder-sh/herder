@@ -62,7 +62,7 @@ struct SessionModel {
     /// The transcript: completed items, events worth a line, and spawned children, in order.
     var log: [LogEntry] = []
     /// What the user sent from this device, until the session takes it as a user message or
-    /// the machine's queue lists it.
+    /// the machine's queue lists it behind a running turn.
     var outbox: [Outgoing] = []
     /// When the running turn started.
     var turnStartedAt: Date?
@@ -82,13 +82,26 @@ struct SessionModel {
         self.key = key
     }
 
-    /// Hands what this device sent over to the machine's queue once it lists it: the queue
-    /// tray shows it from then on.
+    /// Hands what this device sent over to the machine's queue once it lists it behind a
+    /// running turn: the queue tray shows it from then on. With no turn running, a listed prompt
+    /// is about to start, and the machine takes it off the queue before it journals it; it stays
+    /// here till then, so it does not vanish while the CLI starts.
     mutating func settle(_ queue: [QueuedPrompt]) {
+        guard turn != nil else { return }
         for prompt in queue where prompt.agentMessage == nil {
             if let index = outbox.firstIndex(where: { $0.state == .delivered && $0.text == prompt.text }) {
                 outbox.remove(at: index)
             }
+        }
+    }
+
+    /// The prompts of the machine's queue the transcript does not show from the outbox.
+    func waiting(in queue: [QueuedPrompt]) -> [QueuedPrompt] {
+        var shown = outbox.filter { $0.state == .delivered }.map(\.text)
+        return queue.filter { prompt in
+            guard prompt.agentMessage == nil, let index = shown.firstIndex(of: prompt.text) else { return true }
+            shown.remove(at: index)
+            return false
         }
     }
 

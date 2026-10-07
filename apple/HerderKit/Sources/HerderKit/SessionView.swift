@@ -526,7 +526,7 @@ private struct Composer: View {
                 Label("Archived · sending a message brings it back", systemImage: "archivebox")
                     .font(.caption).foregroundStyle(Theme.tertiary).padding(.horizontal, 18)
             }
-            let queue = fleet.queue(of: key)
+            let queue = model.waiting(in: fleet.queue(of: key))
             if !queue.isEmpty {
                 QueueTray(fleet: fleet, key: key, queue: queue, running: model.turn != nil)
             }

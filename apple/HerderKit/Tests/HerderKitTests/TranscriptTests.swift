@@ -195,6 +195,20 @@ struct TranscriptTests {
         #expect(model.outbox.isEmpty)
     }
 
+    @Test func aPromptAboutToStartStaysInTheTranscriptNotTheTray() {
+        var script = Script()
+        var model = script.model([created()])
+        let outgoing = Outgoing(text: "first", state: .delivered)
+        model.outbox = [outgoing]
+        // No turn runs: the machine lists the prompt only until it takes it to start the CLI.
+        let queue = [QueuedPrompt(promptId: "p1", text: "first", images: 0, by: "sample", agentMessage: nil)]
+        model.settle(queue)
+        #expect(model.outbox == [outgoing])
+        #expect(model.waiting(in: queue).isEmpty)
+        model.settle([])
+        #expect(Transcript.blocks(model).contains(.user(id: outgoing.id.uuidString, text: "first", outgoing: outgoing)))
+    }
+
     @Test func claudeSessionsStartOnOpus() {
         #expect(ModelCatalog.defaultModel("claude") == "claude-opus-5-5")
         #expect(ModelCatalog.name("claude-opus-5-5", provider: "claude") == "Claude Opus 5.5")
@@ -249,6 +263,7 @@ struct DefaultAccountTests {
 
     @Test func onlyTheQueuedCopyOfADeliveredMessageSettlesIt() {
         var model = SessionModel(key: SessionKey(hostId: "h", sessionId: "s"))
+        model.turn = "t1"
         let typing = Outgoing(text: "next", images: [], state: .sending)
         let failed = Outgoing(text: "next", images: [], state: .failed("refused"))
         let delivered = Outgoing(text: "next", images: [], state: .delivered)
