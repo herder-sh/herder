@@ -851,7 +851,7 @@
           ]
         },
         {
-          "description": "A repository is a project of this daemon, answering `add_project`; the project list\nwith it follows.",
+          "description": "A repository is a project of this daemon, answering `add_project` or `clone_project`;\nthe project list with it follows.",
           "type": "object",
           "properties": {
             "project_id": {

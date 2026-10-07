@@ -402,6 +402,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UploadHistory { .. }
         | CommandBody::ListDirectory { .. }
         | CommandBody::AddProject { .. }
+        | CommandBody::CloneProject { .. }
         | CommandBody::SetProjectSettings { .. }
         | CommandBody::RemoveProject { .. }
         | CommandBody::SetProjectIcon { .. }

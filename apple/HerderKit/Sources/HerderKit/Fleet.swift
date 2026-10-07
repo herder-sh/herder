@@ -356,6 +356,14 @@ public final class Fleet {
         return projectId
     }
 
+    /// Clones a repository, a git URL or GitHub `owner/repo`, into a new folder on a machine and
+    /// registers the clone as a project; owners only.
+    func cloneProject(_ url: String, into path: String, on hostId: HostId) async throws -> ProjectId {
+        guard case .projectAdded(let projectId) = try await client.send(hostId: hostId, command: .cloneProject(url: url, path: path))
+        else { throw HerderError.Local(detail: "the machine did not clone the project") }
+        return projectId
+    }
+
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
         _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,

@@ -639,6 +639,9 @@ impl SessionManager {
                     .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
             }
             CommandBody::AddProject { path } => return self.add_project(&path).await,
+            CommandBody::CloneProject { url, path } => {
+                return self.clone_project(&url, &path).await;
+            }
             CommandBody::UploadHistory { session_id, part } => {
                 self.upload_history(by, session_id, part).await?;
                 return Ok(CommandResult::Applied);
@@ -1084,6 +1087,15 @@ impl SessionManager {
         .map_err(|err| error(ErrorCode::Internal, format!("{err}")))?;
         let project_id = added?;
         Ok(CommandResult::ProjectAdded { project_id })
+    }
+
+    /// Clones `url` into the new folder `path` and declares the clone as a project
+    /// ([`Self::add_project`]).
+    async fn clone_project(&self, url: &str, path: &str) -> Result<CommandResult, ErrorInfo> {
+        self.projects()?;
+        let repo = crate::browse::absolute(path)?;
+        crate::projects::clone::clone(url, &repo).await?;
+        self.add_project(path).await
     }
 
     /// Replaces the settings of `project_id`, one of the listed projects

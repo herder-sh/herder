@@ -234,7 +234,7 @@ struct Draft: Hashable, Identifiable {
 }
 
 /// Picks where a new session runs, as a palette: one row per project, across machines, then a
-/// repository path on a machine for a new project. The chat opens on the machine last picked
+/// repository on a machine for a new project: one there already, or one the machine clones. The chat opens on the machine last picked
 /// for a new session in the project, else the one the project was used on last; it can change there.
 struct ProjectPicker: View {
     let fleet: Fleet
@@ -245,6 +245,9 @@ struct ProjectPicker: View {
     @State private var other = false
     @State private var hostId: HostId = ""
     @State private var repo = ""
+    @State private var cloning = false
+    @State private var url = ""
+    @State private var into = ""
     @State private var addError: String?
     @FocusState private var searching: Bool
 
@@ -325,21 +328,37 @@ struct ProjectPicker: View {
         }
     }
 
-    /// A repository path on a machine, for a new project.
+    /// A repository on a machine, for a new project: a path there, or a repository to clone.
     private var pathForm: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("New project").font(.headline).foregroundStyle(Theme.text)
             Field(label: "Machine") {
                 ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
             }
-            Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
-                VStack(spacing: 8) {
-                    InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
-                    FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
-                        .id(hostId)
-                        .frame(height: 220)
-                        // Another machine's path means nothing here: start at its home.
-                        .onChange(of: hostId) { repo = "" }
+            Field(label: "Source") {
+                ChoiceChips(options: [(false, "On the machine", ""), (true, "Clone from GitHub", "")], selection: $cloning)
+            }
+            if cloning {
+                Field(label: "Repository", hint: "A GitHub `owner/repo`, or any git URL. The machine clones it with its own git login.") {
+                    InputBox(placeholder: "owner/repo", text: $url, mono: true)
+                        // Follows the repository's name until it is edited.
+                        .onChange(of: url) { old, new in
+                            if into.isEmpty || into == Self.cloneFolder(old) { into = Self.cloneFolder(new) }
+                        }
+                }
+                Field(label: "Clone into", hint: "A new folder on the machine.") {
+                    InputBox(placeholder: "~/src/project", text: $into, mono: true)
+                }
+            } else {
+                Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
+                    VStack(spacing: 8) {
+                        InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
+                        FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
+                            .id(hostId)
+                            .frame(height: 220)
+                            // Another machine's path means nothing here: start at its home.
+                            .onChange(of: hostId) { repo = "" }
+                    }
                 }
             }
             if let addError {
@@ -347,7 +366,7 @@ struct ProjectPicker: View {
             }
             HStack {
                 Spacer()
-                ActionButton(title: "Add Project", style: .primary) { await submitPath() }
+                ActionButton(title: cloning ? "Clone Project" : "Add Project", style: .primary) { await submitPath() }
                     .frame(maxWidth: 160)
                     .disabled(!pathReady)
                     .opacity(pathReady ? 1 : 0.4)
@@ -364,15 +383,29 @@ struct ProjectPicker: View {
     }
 
     private var pathReady: Bool {
-        let path = repo.trimmingCharacters(in: .whitespaces)
-        return !hostId.isEmpty && (path.hasPrefix("/") || path.hasPrefix("~/"))
+        let path = (cloning ? into : repo).trimmingCharacters(in: .whitespaces)
+        let source = cloning ? !url.trimmingCharacters(in: .whitespaces).isEmpty : true
+        return !hostId.isEmpty && source && (path.hasPrefix("/") || path.hasPrefix("~/"))
     }
 
-    /// Registers the repository as a project on the machine, then opens a chat in it.
+    /// The folder a clone of `url` goes into by default: one named after the repository, in `~/src`.
+    nonisolated static func cloneFolder(_ url: String) -> String {
+        var name = url.trimmingCharacters(in: .whitespaces)
+        while name.hasSuffix("/") { name.removeLast() }
+        name = String(name.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "")
+        if name.hasSuffix(".git") { name.removeLast(4) }
+        return name.isEmpty ? "" : "~/src/\(name)"
+    }
+
+    /// Registers the repository as a project on the machine, cloning it there first when asked,
+    /// then opens a chat in it.
     private func submitPath() async {
-        let path = repo.trimmingCharacters(in: .whitespaces)
+        let path = (cloning ? into : repo).trimmingCharacters(in: .whitespaces)
+        let url = url.trimmingCharacters(in: .whitespaces)
         do {
-            let projectId = try await fleet.addProject(path, on: hostId)
+            let projectId = cloning
+                ? try await fleet.cloneProject(url, into: path, on: hostId)
+                : try await fleet.addProject(path, on: hostId)
             picked(Draft(hostId: hostId, projectId: projectId, repo: path))
             dismiss()
         } catch {

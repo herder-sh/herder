@@ -191,6 +191,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::AddProject {
             path: "/home/dev/herder".into(),
         }),
+        command(CommandBody::CloneProject {
+            url: "herder-sh/herder".into(),
+            path: "~/src/herder".into(),
+        }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
             name: Some("herder".into()),

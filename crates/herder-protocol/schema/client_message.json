@@ -1273,6 +1273,29 @@
           ]
         },
         {
+          "description": "Clone a git repository into a new folder on the host and register the clone as a\nproject, as `add_project` does; owners only. Answered with `project_added`. git\nauthenticates as the host's user does, with its SSH keys or credential helpers. Refused\nwith `conflict` when `path` exists, and with `bad_request` when the clone fails; either\nway nothing is left behind.",
+          "type": "object",
+          "properties": {
+            "path": {
+              "description": "Absolute path of the folder to clone into, or one starting with `~/`.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "clone_project"
+            },
+            "url": {
+              "description": "The repository: a git URL, or `owner/repo` for one on GitHub.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "path"
+          ]
+        },
+        {
           "description": "Replace a project's settings on this host, kept in its `[[project]]` entry of the\ndaemon's config; owners only. An absent setting is cleared.",
           "type": "object",
           "properties": {

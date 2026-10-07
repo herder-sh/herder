@@ -434,6 +434,17 @@ pub enum CommandBody {
         /// Absolute path of the folder, or one starting with `~/`.
         path: String,
     },
+    /// Clone a git repository into a new folder on the host and register the clone as a
+    /// project, as `add_project` does; owners only. Answered with `project_added`. git
+    /// authenticates as the host's user does, with its SSH keys or credential helpers. Refused
+    /// with `conflict` when `path` exists, and with `bad_request` when the clone fails; either
+    /// way nothing is left behind.
+    CloneProject {
+        /// The repository: a git URL, or `owner/repo` for one on GitHub.
+        url: String,
+        /// Absolute path of the folder to clone into, or one starting with `~/`.
+        path: String,
+    },
     /// Replace a project's settings on this host, kept in its `[[project]]` entry of the
     /// daemon's config; owners only. An absent setting is cleared.
     SetProjectSettings {

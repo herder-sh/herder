@@ -589,6 +589,46 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         ]
     );
 
+    // A repository is cloned into a new folder and declared as a project.
+    let upstream = tmp.path().join("upstream.git");
+    let init = std::process::Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&upstream)
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let cloned = tmp.path().join("src/cloned");
+    let clone = |url: &Path| herder_protocol::CommandBody::CloneProject {
+        url: url.to_string_lossy().into_owned(),
+        path: cloned.to_string_lossy().into_owned(),
+    };
+    let added = handle(clone(&upstream)).await;
+    assert!(
+        matches!(
+            added,
+            Ok(herder_protocol::CommandResult::ProjectAdded { .. })
+        ),
+        "{added:?}"
+    );
+    assert!(cloned.join(".git").is_dir());
+    let entries = crate::config::read_projects(&file).unwrap().entries;
+    assert_eq!(entries.last().unwrap().paths, std::slice::from_ref(&cloned));
+    // Nothing is cloned over a folder that exists.
+    let error = handle(clone(&upstream)).await.unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::Conflict);
+    // A clone that fails leaves nothing behind.
+    fs::remove_dir_all(&cloned).unwrap();
+    let error = handle(clone(&tmp.path().join("nowhere.git")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, herder_protocol::ErrorCode::BadRequest);
+    assert!(
+        error.message.starts_with("cannot clone "),
+        "{}",
+        error.message
+    );
+    assert!(!cloned.exists());
+
     shutdown.cancel();
     task.await.unwrap();
 }

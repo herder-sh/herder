@@ -630,6 +630,10 @@ pub enum CommandBody {
     AddProject {
         path: String,
     },
+    CloneProject {
+        url: String,
+        path: String,
+    },
     SetProjectSettings {
         project_id: ProjectId,
         name: Option<String>,

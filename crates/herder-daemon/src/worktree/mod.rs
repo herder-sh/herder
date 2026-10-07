@@ -454,7 +454,7 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn command<I, S>(dir: &Path, args: I) -> Command
+pub(crate) fn command<I, S>(dir: &Path, args: I) -> Command
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,

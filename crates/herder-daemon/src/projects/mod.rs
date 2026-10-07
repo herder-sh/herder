@@ -11,6 +11,7 @@
 //! list differs from the last, it goes to every client through [`Hub::projects_changed`].
 //!
 //! Owners change the `[[project]]` entries from a client: `add_project` declares a repository,
+//! `clone_project` clones one onto the host first ([`clone`]) and declares the clone,
 //! `set_project_settings` replaces a project's settings and `remove_project` drops a project:
 //! its clones leave the entries and go into `[projects] exclude`, which discovery leaves out
 //! wherever it finds them, until `add_project` declares one again. Each rewrites the daemon's
@@ -22,6 +23,7 @@
 //! it on every full scan, and `get_project_icon` reads it again when asked. Setting or
 //! clearing an upload rescans and publishes the list at once, as changing the entries does.
 
+pub(crate) mod clone;
 pub mod icon;
 pub mod scan;
 #[cfg(test)]
