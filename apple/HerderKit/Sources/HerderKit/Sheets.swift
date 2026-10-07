@@ -830,6 +830,20 @@ struct MachineSettingsSheet: View {
                             Text("Only the machine owner can add accounts.")
                                 .font(.footnote).foregroundStyle(Theme.tertiary)
                         }
+                        ForEach(ModelCatalog.machineHints(fleet.machines, hostId: hostId), id: \.self) { hint in
+                            Text(hint).font(.footnote).foregroundStyle(Theme.tertiary)
+                        }
+                        if machine.role == .owner {
+                            ForEach(machine.providers.filter { !$0.installed && $0.canInstall }, id: \.provider) { status in
+                                ActionButton(title: "Install \(ModelCatalog.providerName(status.provider))",
+                                             style: .secondary) {
+                                    fleet.accountLogins[hostId] = TerminalConnection(
+                                        hostId: hostId, terminalId: nil, install: status.provider)
+                                    addingAccount = true
+                                }
+                                .disabled(machine.connection != .connected)
+                            }
+                        }
                         if machine.failover.pin {
                             Label("Failover pinned: sessions stay on their account", systemImage: "pin")
                                 .font(.footnote).foregroundStyle(Theme.tertiary)

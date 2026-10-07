@@ -75,7 +75,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
             // Under the model field's text, past its label and padding.
             format!(
                 "{:<w$}",
-                "recent",
+                "models",
                 w = usize::from(label_width("search")) + 1
             ),
             ui.muted(),

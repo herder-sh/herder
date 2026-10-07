@@ -114,6 +114,7 @@
 mod address;
 pub mod auth;
 mod cache;
+mod catalog;
 mod fork;
 mod offline;
 mod pairing;
@@ -138,6 +139,10 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use auth::DeviceKey;
+pub use catalog::{
+    CatalogModel, default_model, model_name, models, newer_elsewhere, next_account_id,
+    provider_name, status_on, used_elsewhere, used_on, version_newer,
+};
 pub use pairing::{PairingLink, PairingUri};
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
@@ -146,7 +151,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 10;
+pub const CLIENT_API_VERSION: u32 = 11;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +260,9 @@ pub struct Machine {
     pub skills: Option<SkillsStatus>,
     /// The skills each live session's agent may use, as last sent; empty while not connected.
     pub session_skills: HashMap<SessionId, Vec<SessionSkill>>,
+    /// Runnable provider CLIs on the host, as last sent; empty until the daemon sends them,
+    /// and on a vault.
+    pub providers: Vec<herder_protocol::ProviderStatus>,
 }
 
 /// What pairing with one machine of a link came to; see [`Client::pair`].
@@ -814,6 +822,24 @@ impl Client {
                 provider,
                 label,
                 config_dir,
+                cols,
+                rows,
+            })
+            .await
+    }
+
+    /// Installs or updates a provider's CLI on a machine: runs the vendor's installer or
+    /// updater in a terminal of `cols` by `rows` and streams it; owners only.
+    pub async fn install_provider(
+        &self,
+        host_id: HostId,
+        provider: Provider,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(&host_id)?
+            .open_terminal(CommandBody::InstallProvider {
+                provider,
                 cols,
                 rows,
             })

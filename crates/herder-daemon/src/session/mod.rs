@@ -764,6 +764,7 @@ impl SessionManager {
             CommandBody::OpenTerminal { .. }
             | CommandBody::SetAccountSettings { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }

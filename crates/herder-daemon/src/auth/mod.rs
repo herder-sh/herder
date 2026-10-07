@@ -460,6 +460,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
         command,
         CommandBody::OpenTerminal { .. }
             | CommandBody::AddAccount { .. }
+            | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }

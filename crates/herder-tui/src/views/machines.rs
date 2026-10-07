@@ -609,22 +609,37 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     );
     top.push(Line::default());
     let mut bottom = vec![Line::default()];
-    bottom.extend(wrapped(
-        accounts::login_hint(account.provider()),
-        ui.muted(),
-    ));
-    bottom.extend(wrapped(
-        "The account is added once the login succeeds. ctrl+] d detaches.",
-        ui.muted(),
-    ));
+    for note in accounts::dialog_notes(&app.machines, &account.host_id, account.provider()) {
+        bottom.extend(wrapped(&note, ui.muted()));
+    }
+    if accounts::will_install(&app.machines, &account.host_id, account.provider()) {
+        bottom.extend(wrapped(
+            "herder runs the vendor's installer in a terminal here. Then add the account again.",
+            ui.muted(),
+        ));
+    } else {
+        bottom.extend(wrapped(
+            accounts::login_hint(account.provider()),
+            ui.muted(),
+        ));
+        bottom.extend(wrapped(
+            "The account is added once the login succeeds. ctrl+] d detaches.",
+            ui.muted(),
+        ));
+    }
     if let Some(error) = &account.error {
         bottom.push(Line::default());
         bottom.extend(super::failure(ui, error, body_width));
     }
     let fields = 4;
     let height = u16::try_from(top.len() + fields + bottom.len()).unwrap_or(u16::MAX);
+    let enter = if accounts::will_install(&app.machines, &account.host_id, account.provider()) {
+        "install"
+    } else {
+        "log in"
+    };
     let hints = [
-        Hint::new("enter", "log in"),
+        Hint::new("enter", enter),
         Hint::new("tab", "field"),
         Hint::new("←/→", "provider"),
         Hint::new("esc", "cancel"),
@@ -658,7 +673,16 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
     y += 1;
     let default_dir = account.default_config_dir();
     for (field, name, value, placeholder) in [
-        (accounts::Field::Id, "id", &account.id, "e.g. work"),
+        (
+            accounts::Field::Id,
+            "id",
+            &account.id,
+            if account.suggested_id.is_empty() {
+                "e.g. work"
+            } else {
+                account.suggested_id.as_str()
+            },
+        ),
         (accounts::Field::Label, "label", &account.label, "the id"),
         (
             accounts::Field::ConfigDir,

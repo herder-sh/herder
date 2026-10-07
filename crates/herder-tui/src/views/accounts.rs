@@ -93,7 +93,7 @@ pub(super) fn draw(
                     rows.push(Row::Gap);
                     of_row.push(None);
                 }
-                machine_row(ui, machine)
+                machine_row(ui, &app.machines, machine)
             }
             Pick::Account(_, account_id) => {
                 let Some(account) = machine
@@ -157,7 +157,7 @@ pub(super) fn draw(
 
 /// A machine: its connection and name, whether it pins sessions to their account, and why it
 /// is not connected.
-fn machine_row(ui: Ui, machine: &Machine) -> Row<'static> {
+fn machine_row(ui: Ui, machines: &[Machine], machine: &Machine) -> Row<'static> {
     let (mark, color) = super::add_machine::connection_mark(ui, machine);
     let left = Line::from(vec![
         Span::styled(mark, ratatui::style::Style::new().fg(color)),
@@ -171,9 +171,29 @@ fn machine_row(ui: Ui, machine: &Machine) -> Row<'static> {
     if machine.failover.pin {
         right.push(Span::styled("sessions pinned", ui.muted()));
     }
-    let mut row = Row::item(left).right(Line::from(ui.joined(right)));
+    let mut body = Vec::new();
     if machine.accounts.is_empty() {
-        row = row.body(vec![Line::styled("no accounts: n adds one", ui.muted())]);
+        body.push(Line::styled("no accounts: n adds one", ui.muted()));
+    }
+    if let Some(line) = crate::accounts::elsewhere_line(machines, &machine.host_id) {
+        body.push(Line::styled(format!("  {line}"), ui.muted()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for provider in machine
+        .accounts
+        .iter()
+        .map(|account| &account.provider)
+        .chain(machine.providers.iter().map(|status| &status.provider))
+    {
+        if seen.insert(provider.clone())
+            && let Some(line) = crate::accounts::update_line(machines, &machine.host_id, provider)
+        {
+            body.push(Line::styled(format!("  {line}"), ui.muted()));
+        }
+    }
+    let mut row = Row::item(left).right(Line::from(ui.joined(right)));
+    if !body.is_empty() {
+        row = row.body(body);
     }
     row
 }

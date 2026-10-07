@@ -121,6 +121,27 @@
       ]
     },
     {
+      "description": "Every runnable provider's CLI on this host: whether it is installed, its version, and\nwhether this daemon can install or update it. Sent after hello and whenever it changes.\nA vault never sends it.",
+      "type": "object",
+      "properties": {
+        "providers": {
+          "description": "The providers herder can run sessions on, in a stable order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProviderStatus"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "providers"
+        }
+      },
+      "required": [
+        "type",
+        "providers"
+      ]
+    },
+    {
       "description": "Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.",
       "type": "object",
       "properties": {
@@ -737,7 +758,7 @@
           ]
         },
         {
-          "description": "A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this\nconnection attached to it.",
+          "description": "A terminal was opened, by `open_terminal`, `add_account`, `log_in_account` or\n`install_provider`, and this connection attached to it.",
           "type": "object",
           "properties": {
             "terminal_id": {
@@ -2928,6 +2949,48 @@
         "reload"
       ]
     },
+    "ProviderStatus": {
+      "description": "Whether a runnable provider's CLI is on this host, and whether herder can install or\nupdate it there.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "Path of the CLI this daemon would run, as configured or on `PATH`; absent when herder\ncannot run this provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "can_install": {
+          "description": "Whether this daemon can run the vendor's installer for this OS in a terminal.",
+          "type": "boolean"
+        },
+        "can_update": {
+          "description": "Whether this daemon can run the vendor's updater (or installer again) in a terminal.",
+          "type": "boolean"
+        },
+        "installed": {
+          "description": "Whether its CLI runs (`--version` succeeded).",
+          "type": "boolean"
+        },
+        "provider": {
+          "description": "The provider.",
+          "$ref": "#/$defs/Provider"
+        },
+        "version": {
+          "description": "What `--version` printed, first line; absent when it is not installed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "installed",
+        "can_install",
+        "can_update"
+      ]
+    },
     "PullRequest": {
       "description": "A GitHub pull request tracked for a session.",
       "type": "object",
@@ -3608,6 +3671,24 @@
           "required": [
             "type",
             "account_id"
+          ]
+        },
+        {
+          "description": "A provider's own installer or updater, run on this host.",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "description": "The provider being installed or updated.",
+              "$ref": "#/$defs/Provider"
+            },
+            "type": {
+              "type": "string",
+              "const": "install"
+            }
+          },
+          "required": [
+            "type",
+            "provider"
           ]
         }
       ]

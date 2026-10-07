@@ -186,6 +186,9 @@ struct MachineCard: View {
                 if machine.connected && machine.accounts.isEmpty && machine.hosts.isEmpty {
                     Text("No accounts yet").font(.footnote).foregroundStyle(Theme.tertiary)
                 }
+                ForEach(machine.hints, id: \.self) { hint in
+                    Text(hint).font(.caption).foregroundStyle(Theme.tertiary)
+                }
                 if machine.pinned {
                     Label("Failover pinned: sessions stay on their account", systemImage: "pin")
                         .font(.caption)

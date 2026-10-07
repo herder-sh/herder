@@ -19,6 +19,8 @@ final class TerminalConnection {
     let account: NewAccount?
     /// The existing account whose login this terminal runs again.
     let relogin: AccountId?
+    /// The provider whose CLI this terminal installs or updates.
+    let install: Provider?
     private(set) var terminalId: TerminalId?
     private(set) var state: State = .connecting
     @ObservationIgnored private var stream: TerminalStream?
@@ -28,9 +30,13 @@ final class TerminalConnection {
     @ObservationIgnored private var emulator: SwiftTerm.TerminalView?
     @ObservationIgnored private var delegate: EmulatorDelegate?
 
-    init(hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil, relogin: AccountId? = nil) {
+    init(
+        hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil, relogin: AccountId? = nil,
+        install: Provider? = nil
+    ) {
         self.account = account
         self.relogin = relogin
+        self.install = install
         self.hostId = hostId
         self.terminalId = terminalId
     }
@@ -40,7 +46,7 @@ final class TerminalConnection {
         guard pump == nil else { return }
         pump = Task {
             do {
-                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account, relogin] in
+                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account, relogin, install] in
                     if let terminalId {
                         try await client.attachTerminal(hostId: hostId, terminalId: terminalId)
                     } else if let account {
@@ -49,6 +55,9 @@ final class TerminalConnection {
                     } else if let relogin {
                         try await client.logInAccount(
                             hostId: hostId, accountId: relogin, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+                    } else if let install {
+                        try await client.installProvider(
+                            hostId: hostId, provider: install, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
                     } else if let sessionId {
                         try await client.openTerminal(
                             hostId: hostId, sessionId: sessionId, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))

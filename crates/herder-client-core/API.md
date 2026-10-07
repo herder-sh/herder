@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 10`
+`CLIENT_API_VERSION = 11`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -98,6 +98,7 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
 | Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal), `log_in_account` (a login terminal for an account whose login expired); `send`: `SwitchAccount`, `SwitchProvider` |
+| Providers | `Machine::providers` (`ProviderStatus`: whether the CLI is installed, its `--version`, whether this daemon can install or update it); empty until the daemon sends them, and on a vault | `Client::install_provider` (a login-style terminal that runs the vendor's installer or updater; owners only). Catalog helpers: `provider_name`, `default_model`, `models` (`CatalogModel`), `model_name`, `used_elsewhere`, `used_on`, `version_newer`, `newer_elsewhere`, `status_on`, `next_account_id` |
 | Skills    | `Machine::skills` (the library as that daemon has it: `repo`, `head`, `last_pull`, `pull_error`, each skill's `name`, `description`, whether `enabled` there and the `providers` it reaches, and per provider when a running session sees a change: `live`, `next_turn` or `next_session`), `Machine::session_skills` (per live session, the library, project and account skills its agent may use, each with its `source`); `SkillsStatus::accounts` lists each account's own skills, for a session not started yet | owners: `send`: `SetSkillsRepo`, `PutSkill`, `DeleteSkill`, `ImportSkill`, `PullSkills`, `SetSkillEnabled` (per machine); members are refused with `forbidden`. A write commits and pushes through the one daemon it is sent to. The client keeps every machine where the user is owner on one library: an accepted `SetSkillsRepo` is sent on to the others, and to any that connects later naming another repository or none (as one paired since); a repository set from another device on a connected machine becomes the library; after an accepted write every other machine gets `PullSkills`, at once or once it reconnects. Each machine's `skills` (`head`, `last_pull`, `pull_error`) shows where it stands |
 | Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from the session's machine while that is connected, else lets the destination read its vault |
 
@@ -130,6 +131,7 @@ everything stops once the last clone is dropped.
 | `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
 | `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
 | `async add_account(host_id: HostId, account: NewAccount, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs a provider login in a login terminal; owners only. |
+| `async install_provider(host_id: HostId, provider: Provider, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs the vendor's installer or updater in a login-style terminal; owners only. |
 | `async log_in_account(host_id: HostId, account_id: AccountId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs the provider login of an existing account again, in its own config dir, in a login terminal; owners only. `bad_request` for an unknown account. |
 | `async attach_terminal(host_id: HostId, terminal_id: TerminalId) -> Result<TerminalStream, Error>` | Attaches to an open terminal; owners only, one stream per terminal per client. |
 
@@ -153,7 +155,8 @@ everything stops once the last clone is dropped.
   `None` for a daemon and while not connected), `skills` (`Option<SkillsStatus>`: the skill
   library as the daemon has it; `None` until it sends it and while not connected),
   `session_skills` (`HashMap<SessionId, Vec<SessionSkill>>`: the skills each live session's
-  agent may use; empty while not connected).
+  agent may use; empty while not connected), `providers` (`Vec<ProviderStatus>`: runnable
+  provider CLIs on the host; empty until the daemon sends them, and on a vault).
 - `ConnectionQuality` — `connected_since: Option<Timestamp>` (when the current connection
   was established; `None` while not connected), `reconnects: u32` (connections established
   after the first, since the client opened), `last_rtt_ms`, `average_rtt_ms`, `min_rtt_ms`,
@@ -163,6 +166,10 @@ everything stops once the last clone is dropped.
 - `SessionUpdate` — `events: Vec<Event>` (new durable events, in seq order) and
   `streaming: Vec<Item>` (every item streaming now; replaces the previous list).
 - `NewAccount` — `account_id`, `provider`, `label: Option<String>`, `config_dir: Option<String>`.
+- `CatalogModel` — a model the menus offer: `id` (CLI name; empty is the provider's own
+  default), `name`, `detail: Option<String>`. Helpers: `provider_name`, `default_model`,
+  `models`, `model_name`, `used_elsewhere`, `used_on`, `version_newer`, `newer_elsewhere`,
+  `status_on`, `next_account_id`.
 - `PairingUri` — one machine of a link: `hosts: Vec<String>`, `fingerprint: String`,
   `code: String`; `FromStr` (fails with `Error::InvalidLink`, also for a link of several
   machines) and `Display` (`herder://pair?…`).

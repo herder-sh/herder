@@ -40,18 +40,25 @@ struct AddAccountSheet: View {
     let fleet: Fleet
     let hostId: HostId
     @State private var draft = AccountDraft()
+    @State private var suggestedId = ""
+    @State private var formError: String?
     @Environment(\.dismiss) private var dismiss
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
     private var connection: TerminalConnection? { fleet.accountLogins[hostId] }
     private var problem: String? { draft.problem(existing: machine?.accounts.map(\.accountId) ?? []) }
     private var canManage: Bool { machine?.role == .owner && machine?.connection == .connected }
+    private var status: ProviderStatus? {
+        ModelCatalog.statusOn(fleet.machines, hostId: hostId, provider: draft.provider)
+    }
+    private var willInstall: Bool { status.map { !$0.installed && $0.canInstall } ?? false }
 
     var body: some View {
-        SheetScaffold(title: connection?.relogin == nil ? "Add Account" : "Log In Again",
-                      subtitle: machine?.name ?? "Machine", height: 680) {
+        SheetScaffold(title: sheetTitle, subtitle: machine?.name ?? "Machine", height: 680) {
             if let connection {
-                Text("Complete the provider’s login below. You can close this sheet and return to it from machine settings.")
+                Text(connection.install == nil
+                     ? "Complete the provider’s login below. You can close this sheet and return to it from machine settings."
+                     : "herder runs the vendor’s installer in this terminal. Then add the account again.")
                     .font(.footnote).foregroundStyle(Theme.secondary)
                 TerminalSurface(connection: connection, client: fleet.client, sessionId: nil)
                     .frame(height: 390).background(.black)
@@ -66,15 +73,21 @@ struct AddAccountSheet: View {
                                 selection: $draft.provider)
                 }
                 Field(label: "Account ID", hint: "A unique name on this machine, such as claude-work.") {
-                    InputBox(placeholder: "claude-work", text: $draft.id, mono: true)
+                    InputBox(placeholder: suggestedId.isEmpty ? "claude-work" : suggestedId, text: $draft.id, mono: true)
                 }
                 Field(label: "Display label") { InputBox(placeholder: "Work", text: $draft.label) }
                 Field(label: "Config directory (optional)",
                       hint: "A new directory, or one already logged in; ~/.claude adds Claude’s default login. Leave empty to let herder choose. The account appears once the provider reports it logged in.") {
                     InputBox(placeholder: "~/.claude-work", text: $draft.configDir, mono: true)
                 }
+                ForEach(providerNotes, id: \.self) { note in
+                    Text(note).font(.footnote).foregroundStyle(Theme.secondary)
+                }
                 if !draft.id.isEmpty, let problem {
                     Text(problem).font(.footnote).foregroundStyle(Theme.failure)
+                }
+                if let formError {
+                    Text(formError).font(.footnote).foregroundStyle(Theme.failure)
                 }
                 if !canManage {
                     Text("Connect as the machine owner to add an account.").foregroundStyle(Theme.secondary)
@@ -86,17 +99,71 @@ struct AddAccountSheet: View {
                 case .exited, .failed:
                     ActionButton(title: "Back", style: .secondary) { fleet.accountLogins[hostId] = nil }
                 case .connecting, .attached:
-                    Text("Login runs on the selected machine.").font(.footnote).foregroundStyle(Theme.tertiary)
+                    Text(connection.install == nil
+                         ? "Login runs on the selected machine."
+                         : "Install runs on the selected machine.")
+                        .font(.footnote).foregroundStyle(Theme.tertiary)
                 }
                 ActionButton(title: "Done", style: .primary) { dismiss() }
             } else {
                 Spacer()
-                ActionButton(title: "Start Login", style: .primary) {
-                    guard canManage, problem == nil else { return }
-                    fleet.accountLogins[hostId] = TerminalConnection(hostId: hostId, terminalId: nil, account: draft.account)
-                }.frame(maxWidth: 180).disabled(!canManage || problem != nil)
+                ActionButton(title: willInstall ? "Install" : "Start Login", style: .primary) {
+                    start()
+                }.frame(maxWidth: 180).disabled(!canManage || (!willInstall && problem != nil))
             }
         }
+        .onAppear { refreshSuggestion() }
+        .onChange(of: draft.provider) { refreshSuggestion(clearingId: true) }
+    }
+
+    private var sheetTitle: String {
+        if connection?.install != nil { return "Install Provider" }
+        return connection?.relogin == nil ? "Add Account" : "Log In Again"
+    }
+
+    private var providerNotes: [String] {
+        var notes: [String] = []
+        let on = ModelCatalog.usedOn(fleet.machines, hostId: hostId, provider: draft.provider)
+        if !on.isEmpty { notes.append("also on " + on.joined(separator: ", ")) }
+        if let status {
+            if status.installed {
+                if let version = status.version { notes.append(version) }
+                if let other = ModelCatalog.newerElsewhere(fleet.machines, hostId: hostId, provider: draft.provider) {
+                    notes.append("\(draft.provider): newer on \(other.name)")
+                }
+            } else if status.canInstall {
+                notes.append("not installed here; Install runs the vendor’s installer")
+            } else {
+                notes.append("not installed on this machine")
+            }
+        }
+        return notes
+    }
+
+    private func refreshSuggestion(clearingId: Bool = false) {
+        let next = ModelCatalog.nextAccountId(machine?.accounts ?? [], provider: draft.provider)
+        if clearingId && (draft.id.isEmpty || draft.id == suggestedId) { draft.id = "" }
+        suggestedId = next
+    }
+
+    private func start() {
+        formError = nil
+        guard canManage else { return }
+        if willInstall {
+            fleet.accountLogins[hostId] = TerminalConnection(
+                hostId: hostId, terminalId: nil, install: draft.provider)
+            return
+        }
+        if let status, !status.installed, !status.canInstall {
+            formError = "install \(draft.provider) on this machine first"
+            return
+        }
+        if draft.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft.id = suggestedId
+        }
+        guard problem == nil else { return }
+        fleet.accountLogins[hostId] = TerminalConnection(
+            hostId: hostId, terminalId: nil, account: draft.account)
     }
 }
 

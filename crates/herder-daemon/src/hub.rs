@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
-    Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill, SessionUsage,
-    SkillsStatus, Terminal, TerminalId, VaultStatus,
+    Project, ProviderStatus, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill,
+    SessionUsage, SkillsStatus, Terminal, TerminalId, VaultStatus,
 };
 
 use crate::session::EventSink;
@@ -79,6 +79,8 @@ struct State {
     vault: Option<VaultStatus>,
     /// The skill library's latest status; `None` until the daemon publishes one.
     skills: Option<SkillsStatus>,
+    /// Runnable provider CLIs on this host; `None` until the first probe, and on a vault.
+    providers: Option<Vec<ProviderStatus>>,
     /// The skills of each session that has any.
     session_skills: HashMap<SessionId, Vec<SessionSkill>>,
     /// The latest project list; `None` until discovery publishes its first.
@@ -228,6 +230,11 @@ impl Hub {
         if let Some(status) = &state.skills {
             inner.push(ServerMessage::SkillsStatus(status.clone()));
         }
+        if let Some(providers) = &state.providers {
+            inner.push(ServerMessage::Providers {
+                providers: providers.clone(),
+            });
+        }
         for (session_id, skills) in &state.session_skills {
             inner.push(ServerMessage::SessionSkills {
                 session_id: session_id.clone(),
@@ -291,6 +298,19 @@ impl Hub {
         }
         let message = ServerMessage::VaultStatus(status.clone());
         state.vault = Some(status);
+        for outbox in &state.outboxes {
+            outbox.lock().push(message.clone());
+            outbox.wake();
+        }
+    }
+
+    /// Sends the provider CLI list to every client, and to clients that connect later.
+    pub fn providers_changed(&self, providers: Vec<ProviderStatus>) {
+        let mut state = self.lock();
+        let message = ServerMessage::Providers {
+            providers: providers.clone(),
+        };
+        state.providers = Some(providers);
         for outbox in &state.outboxes {
             outbox.lock().push(message.clone());
             outbox.wake();
@@ -1047,6 +1067,30 @@ mod tests {
         let last = Arc::new(Outbox::default());
         hub.connect(&last, Role::Member);
         assert!(drain(&last).is_empty());
+    }
+
+    #[test]
+    fn providers_reach_every_client_and_later_ones() {
+        let hub = Hub::default();
+        let listed = vec![ProviderStatus {
+            provider: herder_protocol::Provider::Claude,
+            installed: true,
+            version: Some("2.1.0".into()),
+            binary: Some("claude".into()),
+            can_install: true,
+            can_update: true,
+        }];
+        let member = Arc::new(Outbox::default());
+        hub.connect(&member, Role::Member);
+        hub.providers_changed(listed.clone());
+        let message = ServerMessage::Providers {
+            providers: listed.clone(),
+        };
+        assert_eq!(drain(&member), std::slice::from_ref(&message));
+
+        let later = Arc::new(Outbox::default());
+        hub.connect(&later, Role::Member);
+        assert_eq!(drain(&later), [message]);
     }
 
     #[test]

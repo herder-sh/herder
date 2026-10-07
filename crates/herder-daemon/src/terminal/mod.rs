@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use herder_protocol::{
-    Account, AccountId, Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, ServerMessage,
-    SessionHead, SessionId, SessionStatus, Terminal, TerminalId, TerminalPurpose,
+    Account, AccountId, Bytes, ErrorCode, ErrorInfo, Event, EventBody, Item, ItemId, Provider,
+    ServerMessage, SessionHead, SessionId, SessionStatus, Terminal, TerminalId, TerminalPurpose,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tracing::{debug, info, warn};
@@ -166,6 +166,21 @@ impl Terminals {
             warn!(%terminal_id, "cannot watch the login; it adds its account once it exits: {err}");
         }
         Ok(terminal_id)
+    }
+
+    /// Opens a terminal of `cols` by `rows` running `command`, the installer or updater of
+    /// `provider`, and attaches `outbox`. Once it exits, `on_exit` runs.
+    pub(crate) fn open_install(
+        &self,
+        provider: Provider,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+        outbox: &Arc<Outbox>,
+        on_exit: OnExit,
+    ) -> Result<TerminalId, ErrorInfo> {
+        let purpose = TerminalPurpose::Install { provider };
+        self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))
     }
 
     fn spawn(

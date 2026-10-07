@@ -126,16 +126,18 @@ impl App {
                 return Vec::new();
             };
             match adding.input(input) {
-                Outcome::Open => {}
-                Outcome::Closed => screen.adding = None,
-                Outcome::Login(new) => {
-                    let host_id = adding.host_id.clone();
-                    screen.adding = None;
-                    return vec![Effect::AttachTerminal {
-                        host_id,
-                        target: Target::Login(new),
-                    }];
+                Outcome::Open => {
+                    accounts::refresh_id(&self.machines, adding);
                 }
+                Outcome::Closed => screen.adding = None,
+                Outcome::Login(new) => match accounts::after_submit(&self.machines, adding, new) {
+                    Ok(target) => {
+                        let host_id = adding.host_id.clone();
+                        screen.adding = None;
+                        return vec![Effect::AttachTerminal { host_id, target }];
+                    }
+                    Err(error) => adding.error = Some(error),
+                },
             }
             return Vec::new();
         }
@@ -155,7 +157,7 @@ impl App {
                 };
                 match terminal::refusal(&self.machines, &host_id) {
                     Some(refusal) => self.notice = Some(format!("adding accounts: {refusal}")),
-                    None => screen.adding = Some(AddAccount::new(host_id)),
+                    None => screen.adding = Some(accounts::start(&self.machines, host_id)),
                 }
             }
             Input::LogInAgain => {
@@ -374,6 +376,63 @@ mod tests {
         assert_eq!(
             app.notice.as_deref(),
             Some("logging in again: terminals are owner-only")
+        );
+    }
+
+    #[test]
+    fn n_installs_when_the_cli_is_missing() {
+        let mut app = app();
+        let mut machines = app.machines.clone();
+        machines[1].providers = vec![herder_protocol::ProviderStatus {
+            provider: Provider::Codex,
+            installed: false,
+            version: None,
+            binary: None,
+            can_install: true,
+            can_update: false,
+        }];
+        app.update(Msg::Machines(machines));
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('G'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [Effect::AttachTerminal {
+                host_id: HostId::new("h2"),
+                target: Target::Install(Provider::Codex),
+            }]
+        );
+    }
+
+    #[test]
+    fn n_refuses_when_the_cli_cannot_be_installed() {
+        let mut app = app();
+        let mut machines = app.machines.clone();
+        machines[1].providers = vec![herder_protocol::ProviderStatus {
+            provider: Provider::Codex,
+            installed: false,
+            version: None,
+            binary: None,
+            can_install: false,
+            can_update: false,
+        }];
+        app.update(Msg::Machines(machines));
+        press(&mut app, KeyCode::Char('A'));
+        press(&mut app, KeyCode::Char('G'));
+        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(press(&mut app, KeyCode::Enter), []);
+        let adding = app
+            .account_screen
+            .as_ref()
+            .unwrap()
+            .adding
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            adding.error.as_deref(),
+            Some("install codex on this machine first")
         );
     }
 

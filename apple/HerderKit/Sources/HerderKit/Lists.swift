@@ -108,7 +108,7 @@ struct Lists: Equatable {
             return a.requestId < b.requestId
         }
 
-        self.machines = machines.map { Self.summary($0, entries: entries, now: now) }
+        self.machines = machines.map { Self.summary($0, fleet: machines, entries: entries, now: now) }
     }
 
     /// Home's task trees, newest first by when the top session was created: the top session
@@ -223,7 +223,7 @@ struct Lists: Equatable {
         return children
     }
 
-    private static func summary(_ machine: Machine, entries: [Entry], now: Date) -> MachineSummary {
+    private static func summary(_ machine: Machine, fleet: [Machine], entries: [Entry], now: Date) -> MachineSummary {
         let own = entries.filter { $0.key.hostId == machine.hostId }
         let memory = machine.resources.flatMap { resources -> Double? in
             guard resources.memoryTotalBytes > 0 else { return nil }
@@ -251,7 +251,8 @@ struct Lists: Equatable {
                     lastSeen: Timestamp.age(Timestamp.date(host.lastSeen), now: now),
                     sessions: machine.sessions.filter { $0.hostId == host.hostId }.count)
             },
-            pinned: machine.failover.pin)
+            pinned: machine.failover.pin,
+            hints: ModelCatalog.machineHints(fleet, hostId: machine.hostId))
     }
 
     /// A usage window's name as the TUI labels it (crates/herder-tui/src/account_screen.rs).

@@ -1104,6 +1104,40 @@
           ]
         },
         {
+          "description": "Install or update a provider's CLI on this host: run the vendor's own installer or\nupdater in a terminal this connection is attached to; owners only. Refused with\n`unsupported` when herder has no recipe for this OS, or cannot run the provider, and\nwith `bad_request` on a vault.",
+          "type": "object",
+          "properties": {
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "provider": {
+              "description": "Provider whose CLI to install or update.",
+              "$ref": "#/$defs/Provider"
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "install_provider"
+            }
+          },
+          "required": [
+            "type",
+            "provider",
+            "cols",
+            "rows"
+          ]
+        },
+        {
           "description": "Log an existing account in again: run the provider's own login in the account's\nconfig dir, or the CLI's default one when it has none, in a login terminal this\nconnection is attached to; owners only. It never creates or removes the dir nor changes\nthe daemon's config. Once the provider reports the dir logged in, failover may choose\nthe account again and its usage is read afresh. Refused with `bad_request` for an\nunknown account and `unsupported` for a provider herder cannot log in to.",
           "type": "object",
           "properties": {

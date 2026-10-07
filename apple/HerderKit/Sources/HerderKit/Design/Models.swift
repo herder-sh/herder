@@ -101,6 +101,8 @@ struct MachineSummary: Hashable, Identifiable {
     let accounts: [AccountSummary]
     let hosts: [FleetHostSummary]
     let pinned: Bool
+    /// Quiet “used elsewhere” / “newer on …” lines.
+    let hints: [String]
 
     var connected: Bool { connection == .connected }
 }

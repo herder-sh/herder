@@ -19,6 +19,7 @@ pub mod settings;
 pub mod skills;
 pub mod stalls;
 pub mod terminal;
+pub mod tooling;
 pub mod usage;
 pub mod vault;
 pub mod worktree;
@@ -283,9 +284,15 @@ pub async fn serve(
         config.path.clone(),
         sessions.clone(),
     );
+    let tooling = Arc::new(tooling::Tooling::start(
+        config.binaries.clone(),
+        Arc::clone(&hub),
+        shutdown.clone(),
+    ));
     let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
     server.link_vault(link)?;
     server.manage_settings(settings)?;
+    server.manage_tooling(tooling)?;
     server.run(listeners, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");

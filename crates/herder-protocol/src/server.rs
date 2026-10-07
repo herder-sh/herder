@@ -45,6 +45,13 @@ pub enum ServerMessage {
         /// How this daemon's sessions fail over.
         failover: FailoverSettings,
     },
+    /// Every runnable provider's CLI on this host: whether it is installed, its version, and
+    /// whether this daemon can install or update it. Sent after hello and whenever it changes.
+    /// A vault never sends it.
+    Providers {
+        /// The providers herder can run sessions on, in a stable order.
+        providers: Vec<ProviderStatus>,
+    },
     /// Every open terminal on this daemon; sent to owners only, after hello and whenever the set changes.
     Terminals {
         /// The open terminals.
@@ -317,6 +324,27 @@ pub struct QueuedPrompt {
     pub agent_message: Option<AgentMessage>,
 }
 
+/// Whether a runnable provider's CLI is on this host, and whether herder can install or
+/// update it there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderStatus {
+    /// The provider.
+    pub provider: Provider,
+    /// Whether its CLI runs (`--version` succeeded).
+    pub installed: bool,
+    /// What `--version` printed, first line; absent when it is not installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Path of the CLI this daemon would run, as configured or on `PATH`; absent when herder
+    /// cannot run this provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Whether this daemon can run the vendor's installer for this OS in a terminal.
+    pub can_install: bool,
+    /// Whether this daemon can run the vendor's updater (or installer again) in a terminal.
+    pub can_update: bool,
+}
+
 /// A provider login on this host, used through its own config dir.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Account {
@@ -377,6 +405,11 @@ pub enum TerminalPurpose {
         /// The account being added or logged in again.
         account_id: AccountId,
     },
+    /// A provider's own installer or updater, run on this host.
+    Install {
+        /// The provider being installed or updated.
+        provider: Provider,
+    },
 }
 
 /// What an accepted command produced.
@@ -390,8 +423,8 @@ pub enum CommandResult {
         /// The new session.
         session_id: SessionId,
     },
-    /// A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this
-    /// connection attached to it.
+    /// A terminal was opened, by `open_terminal`, `add_account`, `log_in_account` or
+    /// `install_provider`, and this connection attached to it.
     TerminalOpened {
         /// The new terminal.
         terminal_id: TerminalId,

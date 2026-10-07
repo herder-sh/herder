@@ -46,6 +46,8 @@ pub enum Target {
     Login(NewAccount),
     /// The login of an existing account, again.
     LogInAgain(AccountId),
+    /// A provider's installer or updater.
+    Install(herder_protocol::Provider),
 }
 
 /// How an attach ended.
@@ -211,7 +213,10 @@ pub async fn attach(
     terminal: &mut crate::backend::Tui,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
-    let login = matches!(target, Target::Login(_) | Target::LogInAgain(_));
+    let login = matches!(
+        target,
+        Target::Login(_) | Target::LogInAgain(_) | Target::Install(_)
+    );
     let stream = match target {
         Target::New(session_id) => {
             tokio::time::timeout(
@@ -238,6 +243,13 @@ pub async fn attach(
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
                 client.log_in_account(host_id.clone(), account_id, cols, rows),
+            )
+            .await
+        }
+        Target::Install(provider) => {
+            tokio::time::timeout(
+                ATTACH_TIMEOUT,
+                client.install_provider(host_id.clone(), provider, cols, rows),
             )
             .await
         }

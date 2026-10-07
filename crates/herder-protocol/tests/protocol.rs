@@ -293,6 +293,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::InstallProvider {
+            provider: Provider::Cursor,
+            cols: 120,
+            rows: 40,
+        }),
         command(CommandBody::LogInAccount {
             account_id: AccountId::new("claude-work"),
             cols: 120,
@@ -907,6 +912,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         account_id: AccountId::new("claude-work"),
                     },
                 },
+                Terminal {
+                    terminal_id: TerminalId::new("01J9TERMINAL3"),
+                    purpose: TerminalPurpose::Install {
+                        provider: Provider::Cursor,
+                    },
+                },
             ],
         },
     ];
@@ -1063,6 +1074,26 @@ fn server_fixtures() -> Vec<ServerMessage> {
         })
         .collect(),
         failover: FailoverSettings { pin: true },
+    });
+    messages.push(ServerMessage::Providers {
+        providers: vec![
+            ProviderStatus {
+                provider: Provider::Claude,
+                installed: true,
+                version: Some("2.1.0 (Claude Code)".into()),
+                binary: Some("claude".into()),
+                can_install: true,
+                can_update: true,
+            },
+            ProviderStatus {
+                provider: Provider::Cursor,
+                installed: false,
+                version: None,
+                binary: Some("agent".into()),
+                can_install: true,
+                can_update: false,
+            },
+        ],
     });
     for code in [
         ErrorCode::BadRequest,
@@ -2475,6 +2506,16 @@ fn terminal_purpose_is_tagged() {
     assert_eq!(
         serde_json::to_value(&terminal).unwrap(),
         json!({"terminal_id": "t", "purpose": {"type": "login", "account_id": "a"}})
+    );
+    let install = Terminal {
+        terminal_id: TerminalId::new("i"),
+        purpose: TerminalPurpose::Install {
+            provider: Provider::Cursor,
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&install).unwrap(),
+        json!({"terminal_id": "i", "purpose": {"type": "install", "provider": "cursor"}})
     );
 }
 

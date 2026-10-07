@@ -32,6 +32,14 @@ enum ModelCatalog {
                 Model(id: "grok-4.6", name: "Grok 4.6", detail: "Most capable"),
                 Model(id: "grok-4.5", name: "Grok 4.5"),
             ]
+        case "cursor":
+            [
+                Model(id: "", name: "Cursor Auto", detail: "Lets Cursor pick"),
+                Model(id: "composer-2.5", name: "Composer 2.5", detail: "Cursor's agent model"),
+                Model(id: "composer-2.5-fast", name: "Composer 2.5 Fast", detail: "Faster Composer"),
+            ]
+        case "opencode":
+            [Model(id: "", name: "OpenCode default")]
         default:
             []
         }
@@ -91,7 +99,8 @@ enum ModelCatalog {
             for id in extra where !id.isEmpty && !models.contains(where: { $0.id == id }) {
                 models.append(Model(id: id, name: id))
             }
-            if offersDefault || models.isEmpty || current == Choice(provider: provider, model: "") {
+            if (offersDefault || models.isEmpty || current == Choice(provider: provider, model: ""))
+                && !models.contains(where: { $0.id.isEmpty }) {
                 models.append(Model(id: "", name: name("", provider: provider)))
             }
             return Group(provider: provider, models: models)
@@ -111,5 +120,67 @@ enum ModelCatalog {
             }
             return models.isEmpty ? nil : Group(provider: group.provider, models: models)
         }
+    }
+
+    /// Providers that have an account on another machine but not on `hostId`.
+    static func usedElsewhere(_ machines: [Machine], hostId: HostId) -> [Provider] {
+        let here = Set(machines.first { $0.hostId == hostId }?.accounts.map(\.provider) ?? [])
+        return Array(Set(machines.filter { $0.hostId != hostId }.flatMap { $0.accounts.map(\.provider) })
+            .subtracting(here)).sorted()
+    }
+
+    /// Machine names that already have an account for `provider`, other than `hostId`.
+    static func usedOn(_ machines: [Machine], hostId: HostId, provider: Provider) -> [String] {
+        machines.filter { $0.hostId != hostId && $0.accounts.contains { $0.provider == provider } }.map(\.name)
+    }
+
+    /// Whether `newer` looks like a later `--version` than `older`.
+    static func versionNewer(_ newer: String, than older: String) -> Bool {
+        versionKey(newer) > versionKey(older)
+    }
+
+    /// A later version of `provider` reported on another machine, if this host has an older one.
+    static func newerElsewhere(_ machines: [Machine], hostId: HostId, provider: Provider) -> Machine? {
+        guard let here = statusOn(machines, hostId: hostId, provider: provider)?.version else { return nil }
+        return machines.first { machine in
+            machine.hostId != hostId
+                && statusOn(machines, hostId: machine.hostId, provider: provider)?.version
+                    .map { versionNewer($0, than: here) } == true
+        }
+    }
+
+    /// `provider`'s status on `hostId`, if that machine sent one.
+    static func statusOn(_ machines: [Machine], hostId: HostId, provider: Provider) -> ProviderStatus? {
+        machines.first { $0.hostId == hostId }?.providers.first { $0.provider == provider }
+    }
+
+    /// An unused account id for `provider` on this machine: `cursor`, then `cursor-2`.
+    static func nextAccountId(_ accounts: [Account], provider: Provider) -> String {
+        if !accounts.contains(where: { $0.accountId == provider }) { return provider }
+        return (2...).lazy.map { "\(provider)-\($0)" }.first { id in
+            !accounts.contains { $0.accountId == id }
+        } ?? "\(provider)-new"
+    }
+
+    /// Quiet lines for a machine: providers used elsewhere, and a newer CLI on another host.
+    static func machineHints(_ machines: [Machine], hostId: HostId) -> [String] {
+        var lines: [String] = []
+        let missing = usedElsewhere(machines, hostId: hostId)
+        if !missing.isEmpty {
+            lines.append("also used elsewhere: " + missing.joined(separator: ", "))
+        }
+        var seen = Set<Provider>()
+        let machine = machines.first { $0.hostId == hostId }
+        let providers = (machine?.accounts.map(\.provider) ?? []) + (machine?.providers.map(\.provider) ?? [])
+        for provider in providers where seen.insert(provider).inserted {
+            if let other = newerElsewhere(machines, hostId: hostId, provider: provider) {
+                lines.append("\(provider): newer on \(other.name)")
+            }
+        }
+        return lines
+    }
+
+    private static func versionKey(_ raw: String) -> [UInt64] {
+        raw.split { !$0.isNumber }.compactMap { UInt64($0) }
     }
 }

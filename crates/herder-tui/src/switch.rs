@@ -227,7 +227,17 @@ impl App {
         rows.get(switch.selected.min(rows.len().saturating_sub(1)))
             .and_then(|at| self.accounts_of(&switch.session).get(*at))
             .map_or_else(Vec::new, |account| {
-                self.recent_models(&switch.session, account)
+                let mut models: Vec<String> = herder_client_core::models(&account.provider)
+                    .into_iter()
+                    .map(|model| model.id)
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                for used in self.recent_models(&switch.session, account) {
+                    if !models.contains(&used) {
+                        models.push(used);
+                    }
+                }
+                models
             })
     }
 

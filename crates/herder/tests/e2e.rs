@@ -367,13 +367,32 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     // The daemon's first user is its owner; `by` names them by user id.
     assert_eq!(hello.role, Role::Owner);
     let alice = hello.user_id;
-    assert!(matches!(
-        client.recv().await,
-        ServerMessage::Sessions { .. }
-    ));
-    let ServerMessage::Accounts { accounts, failover } = client.recv().await else {
-        panic!("expected the accounts list");
-    };
+    let mut accounts = None;
+    let mut failover = None;
+    let mut saw_sessions = false;
+    for _ in 0..16 {
+        match client.recv().await {
+            ServerMessage::Sessions { .. } => saw_sessions = true,
+            ServerMessage::Accounts {
+                accounts: listed,
+                failover: settings,
+            } => {
+                accounts = Some(listed);
+                failover = Some(settings);
+            }
+            ServerMessage::Providers { .. }
+            | ServerMessage::HostResources(_)
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::Terminals { .. }
+            | ServerMessage::Projects { .. } => {}
+            other => panic!("unexpected after hello: {other:?}"),
+        }
+        if saw_sessions && accounts.is_some() {
+            break;
+        }
+    }
+    assert!(saw_sessions, "expected the sessions list");
+    let (accounts, failover) = (accounts.unwrap(), failover.unwrap());
     assert_eq!(
         accounts,
         [Account {

@@ -156,6 +156,7 @@ struct State {
     vault: Option<herder_protocol::VaultStatus>,
     skills: Option<herder_protocol::SkillsStatus>,
     session_skills: HashMap<SessionId, Vec<herder_protocol::SessionSkill>>,
+    providers: Vec<herder_protocol::ProviderStatus>,
     logs: HashMap<SessionId, Log>,
     /// Subscribers per session; the daemon streams the sessions with at least one.
     wanted: HashMap<SessionId, usize>,
@@ -435,6 +436,7 @@ impl Supervisor {
             vault: state.vault.clone(),
             skills: state.skills.clone(),
             session_skills: state.session_skills.clone(),
+            providers: state.providers.clone(),
         }
     }
 
@@ -830,6 +832,7 @@ impl Supervisor {
                 | ServerMessage::Hosts { .. }
                 | ServerMessage::Projects { .. }
                 | ServerMessage::Accounts { .. }
+                | ServerMessage::Providers { .. }
                 | ServerMessage::Event(_)
         ) {
             state.dirty = true;
@@ -866,6 +869,10 @@ impl Supervisor {
             }
             ServerMessage::SkillsStatus(status) => {
                 state.skills = Some(status);
+                return self.notify_after(state);
+            }
+            ServerMessage::Providers { providers } => {
+                state.providers = providers;
                 return self.notify_after(state);
             }
             ServerMessage::SessionSkills { session_id, skills } => {
@@ -1452,6 +1459,7 @@ fn answered(
         let size = match command.body {
             CommandBody::OpenTerminal { cols, rows, .. }
             | CommandBody::AddAccount { cols, rows, .. }
+            | CommandBody::InstallProvider { cols, rows, .. }
             | CommandBody::LogInAccount { cols, rows, .. } => Some((cols, rows)),
             _ => None,
         };

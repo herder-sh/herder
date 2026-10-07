@@ -49,6 +49,7 @@ pub fn machine(host: &str, name: &str, sessions: &[&str]) -> Machine {
         vault: None,
         skills: None,
         session_skills: Default::default(),
+        providers: Vec::new(),
     }
 }
 

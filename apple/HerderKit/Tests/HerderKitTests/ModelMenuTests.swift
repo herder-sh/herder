@@ -45,6 +45,28 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.name("gpt-6-luna", provider: "codex") == "GPT-6 Luna")
         #expect(ModelCatalog.name("custom-1", provider: "codex") == "custom-1")
         #expect(ModelCatalog.name("", provider: "opencode") == "OpenCode default")
+        #expect(ModelCatalog.name("composer-2.5", provider: "cursor") == "Composer 2.5")
+        #expect(ModelCatalog.name("", provider: "cursor") == "Cursor default")
+    }
+
+    @Test func cursorAndOpencodeHaveCatalogModelsWithoutADuplicateDefault() {
+        let groups = ModelCatalog.groups(
+            providers: ["cursor", "opencode"], current: nil, used: [:], offersDefault: true)
+        #expect(groups[0].models.map(\.id) == ["", "composer-2.5", "composer-2.5-fast"])
+        #expect(groups[0].models[0].name == "Cursor Auto")
+        #expect(groups[1].models.map(\.id) == [""])
+        #expect(groups[1].models[0].name == "OpenCode default")
+    }
+
+    @Test func nextAccountIdSkipsOnesAlreadyThere() {
+        #expect(ModelCatalog.nextAccountId([], provider: "claude") == "claude")
+        let taken = Account(accountId: "cursor", provider: "cursor", label: "cursor", configDir: nil, usage: [])
+        #expect(ModelCatalog.nextAccountId([taken], provider: "cursor") == "cursor-2")
+    }
+
+    @Test func versionNewerComparesVersionNumbers() {
+        #expect(ModelCatalog.versionNewer("2.1.0", than: "2.0.9"))
+        #expect(!ModelCatalog.versionNewer("2.0.9", than: "2.1.0"))
     }
 
     @Test func providerLogosParseAndUnknownOnesHaveNone() {

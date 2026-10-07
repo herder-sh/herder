@@ -19,7 +19,7 @@ use crate::accounts::{self, AddAccount};
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
 use crate::backup::{self, Backup, Links};
-use crate::terminal::{self, Target};
+use crate::terminal;
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it; added
 /// to a typed address without one.
@@ -329,15 +329,19 @@ impl App {
         };
         if let Some(account) = &mut panel.account {
             match account.input(input) {
-                accounts::Outcome::Open => {}
+                accounts::Outcome::Open => {
+                    accounts::refresh_id(&self.machines, account);
+                }
                 accounts::Outcome::Closed => panel.account = None,
                 accounts::Outcome::Login(new) => {
-                    let host_id = account.host_id.clone();
-                    self.machine_panel = None;
-                    return vec![Effect::AttachTerminal {
-                        host_id,
-                        target: Target::Login(new),
-                    }];
+                    match accounts::after_submit(&self.machines, account, new) {
+                        Ok(target) => {
+                            let host_id = account.host_id.clone();
+                            self.machine_panel = None;
+                            return vec![Effect::AttachTerminal { host_id, target }];
+                        }
+                        Err(error) => account.error = Some(error),
+                    }
                 }
             }
             return Vec::new();
@@ -395,7 +399,7 @@ impl App {
                         Some(refusal) => {
                             self.notice = Some(format!("adding accounts: {refusal}"));
                         }
-                        None => panel.account = Some(AddAccount::new(host_id)),
+                        None => panel.account = Some(accounts::start(&self.machines, host_id)),
                     }
                 }
                 Input::Up | Input::Down | Input::Top | Input::Bottom => {
@@ -530,6 +534,7 @@ mod tests {
     use super::*;
     use crate::app::Msg;
     use crate::fake::machine;
+    use crate::terminal::Target;
 
     const FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -770,15 +775,12 @@ mod tests {
         assert_eq!(account(&app).host_id, HostId::new("h2"));
         // The provider is picked with the arrows or space, wrapping around.
         press(&mut app, KeyCode::Left);
-        assert_eq!(*account(&app).provider(), Provider::Cursor);
+        assert_eq!(*account(&app).provider(), Provider::Opencode);
         typed(&mut app, " ");
         assert_eq!(*account(&app).provider(), Provider::Claude);
         press(&mut app, KeyCode::Right);
         assert_eq!(account(&app).default_config_dir(), "~/.codex-<id>");
-        // An id is needed.
-        assert_eq!(press(&mut app, KeyCode::Enter), []);
-        assert_eq!(account(&app).focus, crate::accounts::Field::Id);
-        assert!(account(&app).error.is_some());
+        press(&mut app, KeyCode::Tab);
         typed(&mut app, "work");
         assert_eq!(account(&app).default_config_dir(), "~/.codex-work");
         press(&mut app, KeyCode::Tab);

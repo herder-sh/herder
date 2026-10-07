@@ -27,7 +27,7 @@ use herder_client_core::{
     TerminalEvent,
 };
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId,
+    AccountId, CommandBody, CommandResult, ErrorInfo, HostId, Provider, SessionId, TerminalId,
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -372,6 +372,22 @@ impl Client {
         let client = self.inner.clone();
         let stream = call(&self.handle, async move {
             client.add_account(host_id, account, cols, rows).await
+        })
+        .await?;
+        Ok(self.terminal(stream))
+    }
+
+    /// Installs or updates a provider CLI in a terminal; owners only.
+    pub async fn install_provider(
+        &self,
+        host_id: HostId,
+        provider: Provider,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<TerminalStream>, HerderError> {
+        let client = self.inner.clone();
+        let stream = call(&self.handle, async move {
+            client.install_provider(host_id, provider, cols, rows).await
         })
         .await?;
         Ok(self.terminal(stream))

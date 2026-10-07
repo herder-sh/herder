@@ -40,6 +40,7 @@ use crate::login::{Login, Logins, NewAccount};
 use crate::session::SessionManager;
 use crate::settings::Settings;
 use crate::terminal::{LoginHooks, Terminals};
+use crate::tooling::Tooling;
 use crate::vault::Link;
 use commands::Commands;
 
@@ -163,6 +164,8 @@ struct Shared<B> {
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
+    /// Provider CLI status and install, once the host has started probing.
+    tooling: OnceLock<Arc<Tooling>>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -202,6 +205,31 @@ impl<B: Backend> Shared<B> {
                 };
                 let login = self.logins.start(&account, &logging_in(terminals))?;
                 return open_login(terminals, account_id, login, cols, rows, outbox);
+            }
+            CommandBody::InstallProvider {
+                provider,
+                cols,
+                rows,
+            } => {
+                let Some(tooling) = self.tooling.get() else {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Unsupported,
+                        message: "this daemon does not install provider CLIs".into(),
+                    });
+                };
+                let command = tooling.command(&provider)?;
+                let tooling = Arc::clone(tooling);
+                let on_exit = Box::new(move |code: Option<i32>| {
+                    tooling.refresh();
+                    match code {
+                        Some(0) => "install finished".into(),
+                        Some(code) => format!("install exited {code}"),
+                        None => "install ended".into(),
+                    }
+                });
+                let terminal_id =
+                    terminals.open_install(provider, command, cols, rows, outbox, on_exit)?;
+                return Ok(CommandResult::TerminalOpened { terminal_id });
             }
             CommandBody::LogInAccount {
                 account_id,
@@ -291,7 +319,7 @@ fn logging_in(terminals: &Terminals) -> Vec<AccountId> {
         .into_iter()
         .filter_map(|terminal| match terminal.purpose {
             TerminalPurpose::Login { account_id } => Some(account_id),
-            TerminalPurpose::Shell { .. } => None,
+            TerminalPurpose::Shell { .. } | TerminalPurpose::Install { .. } => None,
         })
         .collect()
 }
@@ -339,8 +367,17 @@ impl<B: Backend> Server<B> {
                 link: OnceLock::new(),
                 listen: OnceLock::new(),
                 settings: OnceLock::new(),
+                tooling: OnceLock::new(),
             }),
         }
+    }
+
+    /// Answers `install_provider` with `tooling`; once per server.
+    pub fn manage_tooling(&self, tooling: Arc<Tooling>) -> anyhow::Result<()> {
+        self.shared
+            .tooling
+            .set(tooling)
+            .map_err(|_| anyhow::anyhow!("the provider tooling is managed already"))
     }
 
     /// Answers the settings commands with `settings`; once per server.

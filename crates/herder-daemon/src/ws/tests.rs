@@ -436,12 +436,34 @@ impl Client {
         let ServerMessage::Hello(hello) = self.recv().await else {
             panic!("expected a hello");
         };
-        assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
-        assert!(matches!(self.recv().await, ServerMessage::Accounts { .. }));
-        if hello.role == Role::Owner {
-            assert!(matches!(self.recv().await, ServerMessage::Terminals { .. }));
-        }
+        self.after_hello(hello.role).await;
         hello
+    }
+
+    /// Reads the lists that follow hello: sessions and accounts, and terminals for an owner.
+    /// Provider and resource snapshots may arrive among them.
+    async fn after_hello(&mut self, role: Role) {
+        let mut sessions = false;
+        let mut accounts = false;
+        let mut terminals = role != Role::Owner;
+        for _ in 0..16 {
+            match self.recv().await {
+                ServerMessage::Sessions { .. } => sessions = true,
+                ServerMessage::Accounts { .. } => accounts = true,
+                ServerMessage::Terminals { .. } => terminals = true,
+                ServerMessage::Providers { .. }
+                | ServerMessage::HostResources(_)
+                | ServerMessage::SkillsStatus(_)
+                | ServerMessage::Projects { .. } => {}
+                other => panic!("unexpected after hello: {other:?}"),
+            }
+            if sessions && accounts && terminals {
+                return;
+            }
+        }
+        panic!(
+            "hello lists incomplete: sessions={sessions} accounts={accounts} terminals={terminals}"
+        );
     }
 
     async fn command(&mut self, id: &str, body: CommandBody) -> ServerMessage {
@@ -495,17 +517,32 @@ async fn hello_is_answered_with_the_protocol_version_and_lists() {
     };
     assert_eq!(hello.protocol_version, PROTOCOL_VERSION);
     assert_eq!(hello.host_id, HostId::new("host"));
-    let ServerMessage::Sessions { sessions } = client.recv().await else {
-        panic!("expected the sessions list");
-    };
+    let mut sessions = None;
+    let mut accounts = None;
+    for _ in 0..16 {
+        match client.recv().await {
+            ServerMessage::Sessions { sessions: listed } => sessions = Some(listed),
+            ServerMessage::Accounts {
+                accounts: listed, ..
+            } => accounts = Some(listed),
+            ServerMessage::Providers { .. }
+            | ServerMessage::HostResources(_)
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::Terminals { .. }
+            | ServerMessage::Projects { .. } => {}
+            other => panic!("unexpected after hello: {other:?}"),
+        }
+        if sessions.is_some() && accounts.is_some() {
+            break;
+        }
+    }
+    let sessions = sessions.expect("expected the sessions list");
     assert_eq!(sessions.len(), 1);
     assert_eq!(
         (&sessions[0].session_id, sessions[0].head_seq),
         (&session, 1)
     );
-    let ServerMessage::Accounts { accounts, .. } = client.recv().await else {
-        panic!("expected the accounts list");
-    };
+    let accounts = accounts.expect("expected the accounts list");
     let ids: Vec<_> = accounts.iter().map(|a| a.account_id.as_str()).collect();
     assert_eq!(ids, ["claude-main"]);
 }
@@ -1319,19 +1356,27 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
         }))
         .await;
     assert!(matches!(client.recv().await, ServerMessage::Hello(_)));
-    assert!(matches!(
-        client.recv().await,
-        ServerMessage::Sessions { .. }
-    ));
-    assert!(matches!(
-        client.recv().await,
-        ServerMessage::Accounts { .. }
-    ));
-    assert_eq!(
-        client.recv().await,
-        ServerMessage::Terminals {
-            terminals: vec![listed]
+    let mut terminals = None;
+    for _ in 0..16 {
+        match client.recv().await {
+            ServerMessage::Terminals {
+                terminals: listed_now,
+            } => {
+                terminals = Some(listed_now);
+                break;
+            }
+            ServerMessage::Sessions { .. }
+            | ServerMessage::Accounts { .. }
+            | ServerMessage::Providers { .. }
+            | ServerMessage::HostResources(_)
+            | ServerMessage::SkillsStatus(_)
+            | ServerMessage::Projects { .. } => {}
+            other => panic!("unexpected after hello: {other:?}"),
         }
+    }
+    assert_eq!(
+        terminals.expect("expected the terminals list"),
+        vec![listed]
     );
     let attach = CommandBody::AttachTerminal {
         terminal_id: terminal_id.clone(),
