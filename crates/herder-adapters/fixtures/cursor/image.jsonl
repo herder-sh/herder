@@ -1,0 +1,12 @@
+# initialize recorded from cursor-agent acp 2026.10.01-e373342, logged out in an isolated
+# config directory. Session and image turn hand-built; no provider prompt was sent.
+{"header":{"provider":"cursor","cli_version":"2026.10.01-e373342","ignore_keys":["clientInfo"]}}
+{"dir":"in","line":"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":1,\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false},\"terminal\":false},\"clientInfo\":{\"name\":\"herder\",\"version\":\"0.0.0\"}}}"}
+{"dir":"out","line":"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true,\"mcpCapabilities\":{\"http\":true,\"sse\":true},\"promptCapabilities\":{\"audio\":false,\"embeddedContext\":false,\"image\":true},\"sessionCapabilities\":{\"list\":{}}},\"authMethods\":[{\"id\":\"cursor_login\",\"name\":\"Cursor Login\",\"description\":\"Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in.\"}]}}"}
+{"dir":"in","line":"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/new\",\"params\":{\"cwd\":\"/tmp/acpwork/repo\",\"mcpServers\":[]}}"}
+{"dir":"out","line":"{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"cursor-image-session\"}}"}
+{"dir":"in","line":"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"cursor-image-session\",\"prompt\":[{\"type\":\"image\",\"mimeType\":\"image/png\",\"data\":\"iVBORw0KGgpwbmc=\"},{\"type\":\"text\",\"text\":\"reply with the word ok\"}]}}"}
+{"dir":"out","line":"{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"cursor-image-session\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ok\"}}}}"}
+{"dir":"out","line":"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}"}
+{"dir":"in","eof":true}
+{"exit":0}
