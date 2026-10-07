@@ -409,3 +409,20 @@ pub struct SendSessionOutput {
     /// True when this sender/key was already accepted; no second prompt was created.
     pub duplicate: bool,
 }
+
+/// Arguments of `show_html`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ShowHtmlInput {
+    /// Short label shown above the page, e.g. "Request latency by endpoint".
+    pub title: String,
+    /// One complete, self-contained HTML document, at most 1 MiB, with all CSS, JavaScript, SVG and data inline.
+    pub html: String,
+}
+
+/// Result of `show_html`: the page is in the thread.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ShowHtmlOutput {
+    /// Always true.
+    pub shown: bool,
+}
