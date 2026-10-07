@@ -42,7 +42,8 @@ fn tools_list_is_the_mcp_shape() {
             "status",
             "wait_for",
             "answer",
-            "escalate"
+            "escalate",
+            "show_html"
         ]
     );
     for tool in tools {
@@ -218,6 +219,13 @@ fn calls_parse_validate_and_round_trip() {
                 note: Some("It drops the staging table.".into()),
             }),
         ),
+        (
+            json!({ "title": "Latency", "html": "<!doctype html><p>p50</p>" }),
+            ToolCall::ShowHtml(ShowHtmlInput {
+                title: "Latency".into(),
+                html: "<!doctype html><p>p50</p>".into(),
+            }),
+        ),
     ];
     for (arguments, expected) in cases {
         let tool = expected.tool();
@@ -231,6 +239,7 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::WaitFor(input) => serde_json::to_value(input),
             ToolCall::Answer(input) => serde_json::to_value(input),
             ToolCall::Escalate(input) => serde_json::to_value(input),
+            ToolCall::ShowHtml(input) => serde_json::to_value(input),
         };
         assert_eq!(back.unwrap(), arguments);
     }
@@ -299,6 +308,12 @@ fn malformed_calls_are_invalid_arguments() {
             json!({ "question_id": "01J9Q", "text": "yes" }),
         ),
         (Tool::Escalate, json!({ "question_id": "01J9Q" })),
+        (Tool::ShowHtml, json!({ "title": "No page" })),
+        (Tool::ShowHtml, json!({ "html": "<p>untitled</p>" })),
+        (
+            Tool::ShowHtml,
+            json!({ "title": "t", "html": "<p></p>", "height": 400 }),
+        ),
     ];
     for (tool, arguments) in cases {
         let error = call(tool, arguments.clone()).unwrap_err();
@@ -386,6 +401,10 @@ fn outputs_match_their_schemas() {
         (Tool::WaitFor, serde_json::to_value(WaitForOutput::Idle)),
         (Tool::Answer, serde_json::to_value(AnswerOutput {})),
         (Tool::Escalate, serde_json::to_value(EscalateOutput {})),
+        (
+            Tool::ShowHtml,
+            serde_json::to_value(ShowHtmlOutput { shown: true }),
+        ),
     ];
     for (tool, output) in outputs {
         let output = output.unwrap();

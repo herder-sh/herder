@@ -39,8 +39,8 @@ use herder_store::Session;
 use herder_tasktools::{
     AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
     EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, ToolCall, ToolError,
-    WaitForInput, WaitForOutput,
+    SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput, StatusInput,
+    StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
 };
 use serde::Serialize;
 use tokio::sync::{oneshot, watch};
@@ -254,10 +254,34 @@ impl ToolHandler for TaskTools {
                 }
                 ToolCall::Answer(input) => success(manager.answer(caller, input).await),
                 ToolCall::Escalate(input) => success(manager.escalate(caller, input).await),
+                ToolCall::ShowHtml(input) => success(show_html(&input)),
             };
             result.unwrap_or_else(CallToolResult::from)
         })
     }
+}
+
+/// Largest page `show_html` takes, in bytes.
+const MAX_HTML_BYTES: usize = 1 << 20;
+
+/// `show_html` only checks the page: the call itself, journaled as the session's tool call
+/// with the page as its input, is what clients render.
+fn show_html(input: &ShowHtmlInput) -> Result<ShowHtmlOutput, ToolError> {
+    let invalid = |message: &str| Err(ToolError::new(ErrorCode::InvalidArguments, message));
+    if input.title.trim().is_empty() {
+        return invalid("`title` is empty; pass a short label for the page");
+    }
+    if input.html.trim().is_empty() {
+        return invalid("`html` is empty; pass a complete HTML document");
+    }
+    if input.html.len() > MAX_HTML_BYTES {
+        return invalid(&format!(
+            "`html` is {} bytes, over the 1 MiB limit ({MAX_HTML_BYTES} bytes); make the page \
+             smaller, e.g. with less embedded data",
+            input.html.len()
+        ));
+    }
+    Ok(ShowHtmlOutput { shown: true })
 }
 
 fn success<T: Serialize>(output: Result<T, ToolError>) -> Result<CallToolResult, ToolError> {

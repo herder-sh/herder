@@ -604,6 +604,40 @@
       "outputSchema": {
         "type": "object"
       }
+    },
+    {
+      "name": "show_html",
+      "description": "Show a self-contained HTML page inline in this thread, where the call happens, so the user sees it rendered live. Use it when something reads better as a visual than as prose: data as a chart or table, a diagram or code map, side-by-side mocks of several UI options, or an interactive exploration. Do not use it for ordinary answers. Write one complete HTML document with all CSS, JavaScript, SVG and data inline. The page has no network: remote scripts, stylesheets, fonts and images do not load and fetches fail, so use no CDN libraries and embed the data in the page. Support light and dark with `prefers-color-scheme` (dark is the common case). Make it responsive: readable in a column about 700px wide and on a phone, with no fixed widths that overflow. Keep it under 1 MiB. `title` is a short label shown above the page. Returns at once; still write a short text reply that summarises what the page shows, adding what it does not say.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "html": {
+            "description": "One complete, self-contained HTML document, at most 1 MiB, with all CSS, JavaScript, SVG and data inline.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Short label shown above the page, e.g. \"Request latency by endpoint\".",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "html"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "shown": {
+            "description": "Always true.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shown"
+        ]
+      }
     }
   ]
 }
