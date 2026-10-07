@@ -1150,7 +1150,7 @@ fn repo_name(url: &str) -> &str {
 }
 
 /// `url` without any credentials it holds, as `https://user:token@host/...` does.
-fn redact(url: &str) -> String {
+pub(crate) fn redact(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();
     };
@@ -1162,7 +1162,7 @@ fn redact(url: &str) -> String {
 }
 
 /// `message` with `url` in it redacted.
-fn redact_in(message: &str, url: &str) -> String {
+pub(crate) fn redact_in(message: &str, url: &str) -> String {
     message.replace(url, &redact(url))
 }
 

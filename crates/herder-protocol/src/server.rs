@@ -430,8 +430,8 @@ pub enum CommandResult {
         /// The host that session ran on.
         from_host_id: HostId,
     },
-    /// A repository is a project of this daemon, answering `add_project`; the project list
-    /// with it follows.
+    /// A repository is a project of this daemon, answering `add_project` or `clone_project`;
+    /// the project list with it follows.
     ProjectAdded {
         /// The project the repository belongs to.
         project_id: ProjectId,
