@@ -3,8 +3,8 @@
 //! `fixtures/opencode/` was recorded from `opencode acp` 1.18.21 with `herder dev record`, except
 //! the files whose first line says they are hand-built; `fixtures/grok/auth_required.jsonl` from
 //! `grok agent stdio` 1.0.46, logged out. The other Grok fixtures are hand-built around that
-//! recorded `initialize`, since no Grok login was available. `fixtures/cursor/` is hand-built
-//! from an OpenCode recording, since no Cursor CLI was available.
+//! recorded `initialize`, since no Grok login was available. Cursor's image fixture uses its
+//! recorded `initialize` with a hand-built turn; its skill fixture is hand-built from OpenCode.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -666,6 +666,22 @@ async fn an_agent_that_advertises_images_gets_them_as_image_blocks() {
 }
 
 #[tokio::test]
+async fn cursor_accepts_images_before_start_and_forwards_image_blocks() {
+    let adapter = AcpAdapter::replaying(AgentProfile::cursor(), fixture("cursor/image.jsonl"));
+    // The daemon checks this before starting the first agent session.
+    assert!(adapter.accepts_images());
+    let events = prompt_with_image(&adapter).await;
+    assert_eq!(
+        events.last(),
+        Some(&AdapterEvent::TurnCompleted {
+            turn_id: turn(),
+            usage: None,
+        })
+    );
+    assert!(adapter.accepts_images());
+}
+
+#[tokio::test]
 async fn an_agent_that_takes_no_images_gets_a_line_naming_each_and_is_believed() {
     // A profile that guesses wrong is corrected by what the agent says in `initialize`.
     let profile = AgentProfile {
@@ -685,7 +701,6 @@ async fn an_agent_that_takes_no_images_gets_a_line_naming_each_and_is_believed()
     );
     assert!(!adapter.accepts_images());
     assert!(!AcpAdapter::new(AgentProfile::grok()).accepts_images());
-    assert!(!AcpAdapter::new(AgentProfile::cursor()).accepts_images());
 }
 
 /// An OpenCode turn's tokens. Its `usage_update` puts the session's cost at $0 on the free
