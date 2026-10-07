@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 10`
+`CLIENT_API_VERSION = 11`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -101,11 +101,28 @@ the daemon does not remember it, so a resend after a reconnect asks again.
 | Approvals | `ApprovalRequested` / `QuestionAsked` / `…Escalated` / `…Resolved` / `QuestionAnswered` events; `SessionHead::children_need_you` | `send`: `AnswerApproval`, `AnswerQuestion`                                               |
 | Terminals | `Machine::terminals`; `TerminalStream::next` → `TerminalEvent`       | `Client::open_terminal`, `attach_terminal`; `TerminalStream::input`, `resize`; drop = detach |
 | PRs       | `PrLinked` / `PrUpdated` / `PrUnlinked` events                       | `send`: `LinkPr`, `UnlinkPr`                                                              |
-| Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal), `log_in_account` (a login terminal for an account whose login expired); `send`: `SwitchAccount`, `SwitchProvider` |
+| Accounts  | `Machine::accounts`, `failover` (the pin; every account takes part in rotation), `Machine::providers` (each runnable CLI on the machine); `AccountSwitched` / `ProviderSwitched` events | `Client::add_account` with `NewAccount` (a login terminal), `install_provider` (an install terminal; owners only), `log_in_account` (a login terminal for an account whose login expired); `send`: `SwitchAccount`, `SwitchProvider`. `provider_catalog`, `catalog_entry`, `next_account_id` and `provider_hints` are the shared add-account and model lists |
 | Skills    | `Machine::skills` (the library as that daemon has it: `repo`, `head`, `last_pull`, `pull_error`, each skill's `name`, `description`, whether `enabled` there and the `providers` it reaches, and per provider when a running session sees a change: `live`, `next_turn` or `next_session`), `Machine::session_skills` (per live session, the library, project and account skills its agent may use, each with its `source`); `SkillsStatus::accounts` lists each account's own skills, for a session not started yet | owners: `send`: `SetSkillsRepo`, `PutSkill`, `DeleteSkill`, `ImportSkill`, `PullSkills`, `SetSkillEnabled` (per machine); members are refused with `forbidden`. A write commits and pushes through the one daemon it is sent to. The client keeps every machine where the user is owner on one library: an accepted `SetSkillsRepo` is sent on to the others, and to any that connects later naming another repository or none (as one paired since); a repository set from another device on a connected machine becomes the library; after an accepted write every other machine gets `PullSkills`, at once or once it reconnects. Each machine's `skills` (`head`, `last_pull`, `pull_error`) shows where it stands |
 | Fleet     | `Machine::hosts` (a vault), `Machine::vault` (what it holds of each host, live), `SessionHead::host_id`, `Machine::projects`, `resources`, `session_usage` | read-only: a vault rejects commands with `read_only`. To fork any session (its host up or gone) onto a host, call `Client::fork_session` with the machine that lists it and the destination (owners of the destination only) → `CommandResult::SessionForked`; the new session joins the destination's list, the original is left as it is. It forks a session of the destination from its own journal, else relays the history from the session's machine while that is connected, else lets the destination read its vault |
 
 ## Reference
+
+### Catalog
+
+Shared provider and model names so the TUI and the apps do not drift. These are functions at
+the crate root, not methods on `Client`.
+
+- `provider_catalog() -> &'static [CatalogEntry]` — Claude, Codex, Cursor, OpenCode, Grok, in
+  that order. Gemini is omitted: herder cannot run its sessions.
+- `catalog_entry(provider: &Provider) -> Option<&'static CatalogEntry>` — that row, if named.
+- `next_account_id(provider: &Provider, taken) -> String` — `cursor`, then `cursor-2`.
+- `provider_hints(machine: &Machine, all: &[Machine]) -> Vec<ProviderHint>` — quiet
+  used-elsewhere and update lines for `machine`, inferred from the other machines you own.
+  An update line appears only when another machine reports a newer `--version`.
+
+`CatalogEntry` is `provider`, `display_name`, `default_model` (empty is the provider's own
+default), `models` (`CatalogModel`: `id`, `name`, `detail`). `ProviderHint` is `provider` and
+`kind`: `Missing { on }` or `Update { version, newer }`.
 
 ### Constants
 
@@ -134,6 +151,7 @@ everything stops once the last clone is dropped.
 | `async send(host_id: HostId, command: CommandBody) -> Result<CommandResult, Error>` | Sends a command and waits for the answer; resent with the same id after a reconnect. |
 | `async open_terminal(host_id: HostId, session_id: SessionId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Opens a shell in a session's worktree; owners only. |
 | `async add_account(host_id: HostId, account: NewAccount, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs a provider login in a login terminal; owners only. |
+| `async install_provider(host_id: HostId, provider: Provider, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Installs or updates a provider's CLI in a terminal; owners only. Refused when this OS has no recipe or the caller is a member. |
 | `async log_in_account(host_id: HostId, account_id: AccountId, cols: u16, rows: u16) -> Result<TerminalStream, Error>` | Runs the provider login of an existing account again, in its own config dir, in a login terminal; owners only. `bad_request` for an unknown account. |
 | `async attach_terminal(host_id: HostId, terminal_id: TerminalId) -> Result<TerminalStream, Error>` | Attaches to an open terminal; owners only, one stream per terminal per client. |
 
@@ -152,7 +170,8 @@ everything stops once the last clone is dropped.
 - `Machine` — `host_id`, `name`, `addresses` (in order of preference), `address:
   Option<String>` (the one the current connection uses; `None` while not connected),
   `fingerprint`, `connection`, `quality`, `role`,
-  `sessions`, `hosts`, `projects`, `accounts`, `failover`, `terminals`, `resources`,
+  `sessions`, `hosts`, `projects`, `accounts`, `failover`, `providers` (`Vec<ProviderStatus>`:
+  each runnable provider's CLI on the machine, as last listed), `terminals`, `resources`,
   `session_usage`, `vault` (`Option<VaultStatus>`: a vault's totals and per-host replication;
   `None` for a daemon and while not connected), `skills` (`Option<SkillsStatus>`: the skill
   library as the daemon has it; `None` until it sends it and while not connected),
@@ -264,6 +283,14 @@ sharer may do; members still get no terminals) and the addresses that daemon adv
 not the ones the sharer reached it on. The new device gets its own key on every machine,
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
+
+## Changes in version 11
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| — | `Machine::providers: Vec<ProviderStatus>` | Apps show whether each CLI is on the machine and whether herder can install or update it. A new field breaks code that builds a `Machine`. |
+| — | `Client::install_provider` | Owners install or update a provider in a relayed terminal, never silently. |
+| — | `provider_catalog`, `catalog_entry`, `CatalogEntry`, `CatalogModel`, `next_account_id`, `provider_hints`, `ProviderHint`, `ProviderHintKind` | The TUI and the apps share one provider and model list, and the same used-elsewhere lines. |
 
 ## Changes in version 10
 

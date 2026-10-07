@@ -17,11 +17,11 @@ use herder_protocol::{
     HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
     LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project,
     ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
-    PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route,
-    SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload,
-    SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings,
-    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId,
-    VaultStatus, VaultVolume,
+    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
+    Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile,
+    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp,
+    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow,
+    UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -95,6 +95,8 @@ pub struct Machine {
     pub projects: Vec<Project>,
     pub accounts: Vec<Account>,
     pub failover: FailoverSettings,
+    #[uniffi(default)]
+    pub providers: Vec<ProviderStatus>,
     pub terminals: Vec<Terminal>,
     pub resources: Option<HostResources>,
     pub session_usage: HashMap<SessionId, SessionUsage>,
@@ -709,6 +711,11 @@ pub enum CommandBody {
         cols: u16,
         rows: u16,
     },
+    InstallProvider {
+        provider: Provider,
+        cols: u16,
+        rows: u16,
+    },
     LogInAccount {
         account_id: AccountId,
         cols: u16,
@@ -1005,6 +1012,16 @@ pub struct Account {
 }
 
 #[uniffi::remote(Record)]
+pub struct ProviderStatus {
+    pub provider: Provider,
+    pub installed: bool,
+    pub version: Option<String>,
+    pub binary: Option<String>,
+    pub can_install: bool,
+    pub can_update: bool,
+}
+
+#[uniffi::remote(Record)]
 pub struct FailoverSettings {
     pub pin: bool,
 }
@@ -1131,6 +1148,7 @@ pub struct Terminal {
 pub enum TerminalPurpose {
     Shell { session_id: SessionId },
     Login { account_id: AccountId },
+    Install { provider: Provider },
 }
 
 #[uniffi::remote(Record)]

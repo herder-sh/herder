@@ -12,6 +12,7 @@ pub mod logging;
 pub mod login;
 pub mod mcp;
 pub mod projects;
+pub mod providers;
 pub mod prs;
 pub mod resources;
 pub mod session;
@@ -281,7 +282,15 @@ pub async fn serve(
         config.path.clone(),
         sessions.clone(),
     );
+    let providers = providers::Providers::new(config.binaries.clone());
+    providers.publish_to(Arc::clone(&hub));
+    tokio::spawn({
+        let providers = providers.clone();
+        let shutdown = shutdown.clone();
+        async move { providers.run(shutdown).await }
+    });
     let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
+    server.manage_providers(providers)?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
     server.run(listeners, shutdown).await;

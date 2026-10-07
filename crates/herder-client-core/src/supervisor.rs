@@ -150,6 +150,7 @@ struct State {
     projects: Vec<Project>,
     accounts: Vec<herder_protocol::Account>,
     failover: FailoverSettings,
+    providers: Vec<herder_protocol::ProviderStatus>,
     terminals: Vec<herder_protocol::Terminal>,
     resources: Option<herder_protocol::HostResources>,
     session_usage: HashMap<SessionId, herder_protocol::SessionUsage>,
@@ -187,6 +188,7 @@ impl State {
             projects: cached.projects,
             accounts: cached.accounts,
             failover: cached.failover,
+            providers: cached.providers,
             logs,
             ..Self::default()
         }
@@ -211,6 +213,7 @@ impl State {
             projects: self.projects.clone(),
             accounts: self.accounts.clone(),
             failover: self.failover.clone(),
+            providers: self.providers.clone(),
             logs: logs.into_iter().map(<[_]>::to_vec).collect(),
         }
     }
@@ -429,6 +432,7 @@ impl Supervisor {
             projects: state.projects.clone(),
             accounts: state.accounts.clone(),
             failover: state.failover.clone(),
+            providers: state.providers.clone(),
             terminals: state.terminals.clone(),
             resources: state.resources.clone(),
             session_usage: state.session_usage.clone(),
@@ -830,6 +834,7 @@ impl Supervisor {
                 | ServerMessage::Hosts { .. }
                 | ServerMessage::Projects { .. }
                 | ServerMessage::Accounts { .. }
+                | ServerMessage::Providers { .. }
                 | ServerMessage::Event(_)
         ) {
             state.dirty = true;
@@ -850,6 +855,10 @@ impl Supervisor {
             ServerMessage::Accounts { accounts, failover } => {
                 state.accounts = accounts;
                 state.failover = failover;
+                return self.notify_after(state);
+            }
+            ServerMessage::Providers { providers } => {
+                state.providers = providers;
                 return self.notify_after(state);
             }
             ServerMessage::Terminals { terminals } => {
@@ -1452,6 +1461,7 @@ fn answered(
         let size = match command.body {
             CommandBody::OpenTerminal { cols, rows, .. }
             | CommandBody::AddAccount { cols, rows, .. }
+            | CommandBody::InstallProvider { cols, rows, .. }
             | CommandBody::LogInAccount { cols, rows, .. } => Some((cols, rows)),
             _ => None,
         };

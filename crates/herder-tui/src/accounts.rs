@@ -4,14 +4,19 @@
 //! herder only relays that terminal. The account is added once the login exits successfully,
 //! and shows in the machine's account list. The accounts screen opens the same dialog.
 
-use herder_client_core::NewAccount;
+use herder_client_core::{Machine, NewAccount, next_account_id};
 use herder_protocol::{AccountId, HostId, Provider};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::machines::Input;
 
 /// The providers whose logins the daemon runs, in the dialog's order.
-pub const PROVIDERS: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Cursor];
+pub const PROVIDERS: [Provider; 4] = [
+    Provider::Claude,
+    Provider::Codex,
+    Provider::Cursor,
+    Provider::Opencode,
+];
 
 /// The add-account dialog.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,12 +63,23 @@ impl Field {
 }
 
 impl AddAccount {
-    /// An empty form for `host_id`.
-    pub fn new(host_id: HostId) -> Self {
+    /// A form for `host_id` on `provider`, prefilling an id that `machines` do not use.
+    pub fn for_provider(host_id: HostId, provider: usize, machines: &[Machine]) -> Self {
+        let provider = provider % PROVIDERS.len();
+        let taken: Vec<&str> = machines
+            .iter()
+            .filter(|machine| machine.host_id == host_id)
+            .flat_map(|machine| {
+                machine
+                    .accounts
+                    .iter()
+                    .map(|account| account.account_id.as_str())
+            })
+            .collect();
         Self {
             host_id,
-            provider: 0,
-            id: String::new(),
+            provider,
+            id: next_account_id(&PROVIDERS[provider], taken),
             label: String::new(),
             config_dir: String::new(),
             focus: Field::default(),
@@ -84,12 +100,17 @@ impl AddAccount {
 
     /// Picks the next or previous provider.
     pub(crate) fn cycle(&mut self, forward: bool) {
+        let old = self.provider().as_str().to_owned();
+        let auto = self.id.is_empty() || self.id == old;
         let len = PROVIDERS.len();
         self.provider = if forward {
             (self.provider + 1) % len
         } else {
             (self.provider + len - 1) % len
         };
+        if auto {
+            self.id = self.provider().as_str().to_owned();
+        }
     }
 
     /// The text field being edited; `None` on the provider.

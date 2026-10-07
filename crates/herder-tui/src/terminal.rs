@@ -46,6 +46,8 @@ pub enum Target {
     Login(NewAccount),
     /// The login of an existing account, again.
     LogInAgain(AccountId),
+    /// A provider's installer or updater.
+    Install(herder_protocol::Provider),
 }
 
 /// How an attach ended.
@@ -83,6 +85,25 @@ pub struct Picker {
     pub session: SessionKey,
     /// Index into [`rows`].
     pub selected: usize,
+}
+
+/// Login, or the installer first when this machine's CLI is missing and herder can install it.
+pub fn login_or_install(machines: &[Machine], host_id: &HostId, new: NewAccount) -> Target {
+    let missing = machines
+        .iter()
+        .find(|machine| machine.host_id == *host_id)
+        .and_then(|machine| {
+            machine
+                .providers
+                .iter()
+                .find(|status| status.provider == new.provider)
+        })
+        .is_some_and(|status| !status.installed && status.can_install);
+    if missing {
+        Target::Install(new.provider)
+    } else {
+        Target::Login(new)
+    }
 }
 
 /// Why a session's terminals cannot be offered, if they cannot.
@@ -211,7 +232,10 @@ pub async fn attach(
     terminal: &mut crate::backend::Tui,
 ) -> Ended {
     let (cols, rows) = ratatui::crossterm::terminal::size().unwrap_or((80, 24));
-    let login = matches!(target, Target::Login(_) | Target::LogInAgain(_));
+    let login = matches!(
+        target,
+        Target::Login(_) | Target::LogInAgain(_) | Target::Install(_)
+    );
     let stream = match target {
         Target::New(session_id) => {
             tokio::time::timeout(
@@ -238,6 +262,13 @@ pub async fn attach(
             tokio::time::timeout(
                 ATTACH_TIMEOUT,
                 client.log_in_account(host_id.clone(), account_id, cols, rows),
+            )
+            .await
+        }
+        Target::Install(provider) => {
+            tokio::time::timeout(
+                ATTACH_TIMEOUT,
+                client.install_provider(host_id.clone(), provider, cols, rows),
             )
             .await
         }

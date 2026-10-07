@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use herder_protocol::{
     Account, Event, EventBody, FailoverSettings, FleetHost, HostResources, Item, ItemBody, ItemId,
-    Project, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill, SessionUsage,
-    SkillsStatus, Terminal, TerminalId, VaultStatus,
+    Project, ProviderStatus, Role, Seq, ServerMessage, SessionHead, SessionId, SessionSkill,
+    SessionUsage, SkillsStatus, Terminal, TerminalId, VaultStatus,
 };
 
 use crate::session::EventSink;
@@ -447,6 +447,33 @@ impl Hub {
         outbox.wake();
     }
 
+    /// Queues the provider list read after [`Hub::connect`], unless a change already reached
+    /// the client, as [`Hub::initial_accounts`] does for accounts.
+    pub(crate) fn initial_providers(&self, outbox: &Outbox, providers: Vec<ProviderStatus>) {
+        let _state = self.lock();
+        let mut inner = outbox.lock();
+        if !inner.providers_sent {
+            inner.push(ServerMessage::Providers { providers });
+        }
+        drop(inner);
+        outbox.wake();
+    }
+
+    /// Sends the provider list to every client whenever a probe or install changes it.
+    pub fn providers_changed(&self, providers: &[ProviderStatus]) {
+        let message = ServerMessage::Providers {
+            providers: providers.to_vec(),
+        };
+        let state = self.lock();
+        for outbox in &state.outboxes {
+            let mut inner = outbox.lock();
+            inner.push(message.clone());
+            inner.providers_sent = true;
+            drop(inner);
+            outbox.wake();
+        }
+    }
+
     pub(crate) fn disconnect(&self, outbox: &Arc<Outbox>) {
         self.lock()
             .outboxes
@@ -549,6 +576,8 @@ struct Inner {
     sessions_sent: bool,
     /// Whether an account list change has been queued since the client connected.
     accounts_sent: bool,
+    /// Whether a provider list change has been queued since the client connected.
+    providers_sent: bool,
     /// Whether the client's user is an owner, and so sees terminals.
     owner: bool,
     /// Whether a terminal list change has been queued since the client connected.

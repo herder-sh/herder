@@ -10,8 +10,8 @@
 //!      Weekly          ██░░░░░░░░░░░░░░░░░░  12%   resets in 5d 3h
 //! ```
 
-use herder_client_core::Machine;
-use herder_protocol::{Account, SessionStatus, Timestamp, UsageWindow};
+use herder_client_core::{Machine, provider_hints};
+use herder_protocol::{Account, HostId, SessionStatus, Timestamp, UsageWindow};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -83,16 +83,24 @@ pub(super) fn draw(
     // The pick of each row; gaps have none.
     let mut of_row = Vec::new();
     let mut selected_row = None;
+    let mut hinted: Option<HostId> = None;
     for (at, pick) in picks.iter().enumerate() {
         let Some(machine) = app.machines.iter().find(|m| m.host_id == *pick.host_id()) else {
             continue;
         };
+        if matches!(pick, Pick::Machine(_))
+            && let Some(host_id) = hinted.take()
+            && let Some(previous) = app.machines.iter().find(|m| m.host_id == host_id)
+        {
+            push_hints(ui, previous, &app.machines, &mut rows, &mut of_row);
+        }
         let row = match pick {
             Pick::Machine(_) => {
                 if !rows.is_empty() {
                     rows.push(Row::Gap);
                     of_row.push(None);
                 }
+                hinted = Some(machine.host_id.clone());
                 machine_row(ui, machine)
             }
             Pick::Account(_, account_id) => {
@@ -111,6 +119,11 @@ pub(super) fn draw(
         }
         rows.push(row);
         of_row.push(Some(at));
+    }
+    if let Some(host_id) = hinted
+        && let Some(previous) = app.machines.iter().find(|m| m.host_id == host_id)
+    {
+        push_hints(ui, previous, &app.machines, &mut rows, &mut of_row);
     }
 
     // The note on failover follows the list, or sits at the bottom once the list fills the
@@ -284,4 +297,17 @@ fn window_lines(
         ));
     }
     lines
+}
+
+fn push_hints(
+    ui: Ui,
+    machine: &Machine,
+    machines: &[Machine],
+    rows: &mut Vec<Row<'static>>,
+    of_row: &mut Vec<Option<usize>>,
+) {
+    for hint in provider_hints(machine, machines) {
+        rows.push(Row::item(Line::styled(hint.text(), ui.muted())));
+        of_row.push(None);
+    }
 }

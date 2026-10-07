@@ -37,9 +37,10 @@ use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
 use crate::login::{Login, Logins, NewAccount};
+use crate::providers::Providers;
 use crate::session::SessionManager;
 use crate::settings::Settings;
-use crate::terminal::{LoginHooks, Terminals};
+use crate::terminal::{LoginHooks, OnExit, Terminals};
 use crate::vault::Link;
 use commands::Commands;
 
@@ -163,6 +164,8 @@ struct Shared<B> {
     listen: OnceLock<Vec<SocketAddr>>,
     /// The daemon's settings, which answer the settings commands, once set.
     settings: OnceLock<Arc<Settings>>,
+    /// The host's provider CLIs, which answer install and the providers list, once set.
+    providers: OnceLock<Arc<Providers>>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -210,6 +213,30 @@ impl<B: Backend> Shared<B> {
             } => {
                 let login = self.logins.again(&account_id, &logging_in(terminals))?;
                 return open_login(terminals, account_id, login, cols, rows, outbox);
+            }
+            CommandBody::InstallProvider {
+                provider,
+                cols,
+                rows,
+            } => {
+                let Some(providers) = self.providers.get() else {
+                    return Err(ErrorInfo {
+                        code: ErrorCode::Unsupported,
+                        message: "this daemon does not install providers".to_owned(),
+                    });
+                };
+                let command = providers.command(&provider)?;
+                let watching = providers.clone();
+                let name = provider.as_str().to_owned();
+                let on_exit: OnExit = Box::new(move |exit_code| {
+                    watching.refresh();
+                    match exit_code {
+                        Some(0) => format!("{name} install finished"),
+                        Some(code) => format!("{name} install exited {code}"),
+                        None => format!("{name} install ended"),
+                    }
+                });
+                return open_install(terminals, provider, command, cols, rows, outbox, on_exit);
             }
             CommandBody::SetAccountSettings {
                 account_id,
@@ -291,7 +318,7 @@ fn logging_in(terminals: &Terminals) -> Vec<AccountId> {
         .into_iter()
         .filter_map(|terminal| match terminal.purpose {
             TerminalPurpose::Login { account_id } => Some(account_id),
-            TerminalPurpose::Shell { .. } => None,
+            TerminalPurpose::Shell { .. } | TerminalPurpose::Install { .. } => None,
         })
         .collect()
 }
@@ -311,6 +338,20 @@ fn open_login(
         on_exit: Box::new(move |exit_code| pending.finish(exit_code)),
     };
     let terminal_id = terminals.open_login(account_id, login.command, cols, rows, outbox, hooks)?;
+    Ok(CommandResult::TerminalOpened { terminal_id })
+}
+
+/// Runs `command`, the installer of `provider`, in a terminal of `cols` by `rows`.
+fn open_install(
+    terminals: &Terminals,
+    provider: herder_protocol::Provider,
+    command: portable_pty::CommandBuilder,
+    cols: u16,
+    rows: u16,
+    outbox: &Arc<Outbox>,
+    on_exit: OnExit,
+) -> Result<CommandResult, ErrorInfo> {
+    let terminal_id = terminals.open_install(provider, command, cols, rows, outbox, on_exit)?;
     Ok(CommandResult::TerminalOpened { terminal_id })
 }
 
@@ -339,8 +380,17 @@ impl<B: Backend> Server<B> {
                 link: OnceLock::new(),
                 listen: OnceLock::new(),
                 settings: OnceLock::new(),
+                providers: OnceLock::new(),
             }),
         }
+    }
+
+    /// Answers install and the providers list with `providers`; once per server.
+    pub fn manage_providers(&self, providers: Providers) -> anyhow::Result<()> {
+        self.shared
+            .providers
+            .set(Arc::new(providers))
+            .map_err(|_| anyhow::anyhow!("the providers are managed already"))
     }
 
     /// Answers the settings commands with `settings`; once per server.
