@@ -18,8 +18,8 @@ use serde_json::{Map, Value};
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, EscalateArgs, EscalateInput,
     EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput,
-    WaitForOutput,
+    SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput, StatusInput,
+    StatusOutput, WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -39,11 +39,13 @@ pub enum Tool {
     Answer,
     /// Hand a child's question or approval request to the user.
     Escalate,
+    /// Show an HTML page inline in the caller's thread.
+    ShowHtml,
 }
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 8] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -51,6 +53,7 @@ impl Tool {
         Tool::WaitFor,
         Tool::Answer,
         Tool::Escalate,
+        Tool::ShowHtml,
     ];
 
     /// Name the agent calls the tool by.
@@ -63,6 +66,7 @@ impl Tool {
             Tool::WaitFor => "wait_for",
             Tool::Answer => "answer",
             Tool::Escalate => "escalate",
+            Tool::ShowHtml => "show_html",
         }
     }
 
@@ -140,6 +144,21 @@ impl Tool {
                  `approval_id`, and a `note` with \
                  what the user should know to decide."
             }
+            Tool::ShowHtml => {
+                "Show a self-contained HTML page inline in this thread, where the call happens, \
+                 so the user sees it rendered live. Use it when something reads better as a \
+                 visual than as prose: data as a chart or table, a diagram or code map, \
+                 side-by-side mocks of several UI options, or an interactive exploration. Do not \
+                 use it for ordinary answers. Write one complete HTML document with all CSS, \
+                 JavaScript, SVG and data inline. The page has no network: remote scripts, \
+                 stylesheets, fonts and images do not load and fetches fail, so use no CDN \
+                 libraries and embed the data in the page. Support light and dark with \
+                 `prefers-color-scheme` (dark is the common case). Make it responsive: readable \
+                 in a column about 700px wide and on a phone, with no fixed widths that \
+                 overflow. Keep it under 1 MiB. `title` is a short label shown above the page. \
+                 Returns at once; still write a short text reply that summarises what the page \
+                 shows, adding what it does not say."
+            }
         }
     }
 
@@ -153,6 +172,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForInput>(),
             Tool::Answer => tool_schema::<AnswerInput>(),
             Tool::Escalate => tool_schema::<EscalateInput>(),
+            Tool::ShowHtml => tool_schema::<ShowHtmlInput>(),
         }
     }
 
@@ -166,6 +186,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForOutput>(),
             Tool::Answer => tool_schema::<AnswerOutput>(),
             Tool::Escalate => tool_schema::<EscalateOutput>(),
+            Tool::ShowHtml => tool_schema::<ShowHtmlOutput>(),
         }
     }
 
@@ -243,6 +264,8 @@ pub enum ToolCall {
     Answer(AnswerInput),
     /// `escalate`.
     Escalate(EscalateInput),
+    /// `show_html`.
+    ShowHtml(ShowHtmlInput),
 }
 
 impl ToolCall {
@@ -258,6 +281,7 @@ impl ToolCall {
             Tool::WaitFor => serde_json::from_value(arguments).map(ToolCall::WaitFor),
             Tool::Answer => serde_json::from_value(arguments).map(ToolCall::Answer),
             Tool::Escalate => serde_json::from_value(arguments).map(ToolCall::Escalate),
+            Tool::ShowHtml => serde_json::from_value(arguments).map(ToolCall::ShowHtml),
         };
         call.map_err(|error| ToolError::new(ErrorCode::InvalidArguments, error.to_string()))
     }
@@ -272,6 +296,7 @@ impl ToolCall {
             ToolCall::WaitFor(_) => Tool::WaitFor,
             ToolCall::Answer(_) => Tool::Answer,
             ToolCall::Escalate(_) => Tool::Escalate,
+            ToolCall::ShowHtml(_) => Tool::ShowHtml,
         }
     }
 }
@@ -280,7 +305,7 @@ impl ToolCall {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    /// The arguments do not match the tool's schema.
+    /// The arguments do not match the tool's schema, or break a limit it states.
     InvalidArguments,
     /// `spawn` was called by a child; children cannot spawn children.
     DepthExceeded,
