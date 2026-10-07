@@ -171,6 +171,14 @@ async fn read<B: Backend>(
     shared
         .hub
         .initial_accounts(outbox, shared.backend.accounts());
+    shared.hub.initial_providers(
+        outbox,
+        shared
+            .providers
+            .get()
+            .map(|providers| providers.snapshot())
+            .unwrap_or_default(),
+    );
     shared.backend.refresh_usage();
     shared.backend.refresh_skills();
     shared

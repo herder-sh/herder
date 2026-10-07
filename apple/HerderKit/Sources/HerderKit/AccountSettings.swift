@@ -7,6 +7,17 @@ struct AccountDraft {
     var label = ""
     var configDir = ""
 
+    mutating func fillId(taken: [String]) {
+        id = Self.nextId(provider: provider, taken: taken)
+    }
+
+    static func nextId(provider: String, taken: [String]) -> String {
+        if !taken.contains(provider) { return provider }
+        var n = 2
+        while taken.contains("\(provider)-\(n)") { n += 1 }
+        return "\(provider)-\(n)"
+    }
+
     var account: NewAccount {
         NewAccount(accountId: id.trimmingCharacters(in: .whitespacesAndNewlines), provider: provider,
                    label: clean(label), configDir: clean(configDir))
@@ -39,12 +50,14 @@ struct AccountDraft {
 struct AddAccountSheet: View {
     let fleet: Fleet
     let hostId: HostId
+    var initialProvider: Provider = "claude"
     @State private var draft = AccountDraft()
     @Environment(\.dismiss) private var dismiss
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
     private var connection: TerminalConnection? { fleet.accountLogins[hostId] }
-    private var problem: String? { draft.problem(existing: machine?.accounts.map(\.accountId) ?? []) }
+    private var taken: [String] { machine?.accounts.map(\.accountId) ?? [] }
+    private var problem: String? { draft.problem(existing: taken) }
     private var canManage: Bool { machine?.role == .owner && machine?.connection == .connected }
     private var configDirHint: String {
         let defaultLogin = draft.provider == "claude" ? "; ~/.claude adds Claude’s default login" : ""
@@ -52,10 +65,11 @@ struct AddAccountSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(title: connection?.relogin == nil ? "Add Account" : "Log In Again",
-                      subtitle: machine?.name ?? "Machine", height: 680) {
+        SheetScaffold(title: sheetTitle, subtitle: machine?.name ?? "Machine", height: 680) {
             if let connection {
-                Text("Complete the provider’s login below. You can close this sheet and return to it from machine settings.")
+                Text(connection.install == nil
+                     ? "Complete the provider’s login below. You can close this sheet and return to it from machine settings."
+                     : "The vendor installer runs below. herder never installs silently. You can close this sheet and return to it from machine settings.")
                     .font(.footnote).foregroundStyle(Theme.secondary)
                 TerminalSurface(connection: connection, client: fleet.client, sessionId: nil)
                     .frame(height: 390).background(.black)
@@ -100,6 +114,24 @@ struct AddAccountSheet: View {
                 }.frame(maxWidth: 180).disabled(!canManage || problem != nil)
             }
         }
+        .onAppear {
+            if draft.id.isEmpty {
+                draft.provider = initialProvider
+                draft.fillId(taken: taken)
+            }
+        }
+        .onChange(of: draft.provider) { old, new in
+            if draft.id.isEmpty || draft.id == old || draft.id.hasPrefix(old + "-") {
+                draft.fillId(taken: taken)
+            }
+            _ = new
+        }
+    }
+
+    private var sheetTitle: String {
+        if connection?.install != nil { return "Install Provider" }
+        if connection?.relogin != nil { return "Log In Again" }
+        return "Add Account"
     }
 }
 

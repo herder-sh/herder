@@ -114,6 +114,7 @@
 mod address;
 pub mod auth;
 mod cache;
+mod catalog;
 mod fork;
 mod offline;
 mod pairing;
@@ -138,6 +139,10 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use auth::DeviceKey;
+pub use catalog::{
+    CatalogEntry, CatalogModel, ProviderHint, ProviderHintKind, catalog_entry, next_account_id,
+    provider_catalog, provider_hints,
+};
 pub use pairing::{PairingLink, PairingUri};
 use profile::SavedMachine;
 use supervisor::{Subscription, Supervisor};
@@ -146,7 +151,7 @@ pub use terminal::{TerminalEvent, TerminalStream};
 /// The version of this crate's public API, `API.md`. It goes up by one with every change
 /// that can break a client: anything removed, renamed or changed in what is listed there.
 /// Additions keep it.
-pub const CLIENT_API_VERSION: u32 = 10;
+pub const CLIENT_API_VERSION: u32 = 11;
 
 /// An account to add with [`Client::add_account`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,6 +245,8 @@ pub struct Machine {
     pub accounts: Vec<Account>,
     /// How the daemon's sessions fail over, as sent with the accounts.
     pub failover: FailoverSettings,
+    /// Each runnable provider's CLI on the machine, as last listed.
+    pub providers: Vec<herder_protocol::ProviderStatus>,
     /// Open terminals, as last listed; owners only, so empty for members.
     pub terminals: Vec<Terminal>,
     /// The host's load and turn admission, as last sent; `None` while not connected.
@@ -814,6 +821,25 @@ impl Client {
                 provider,
                 label,
                 config_dir,
+                cols,
+                rows,
+            })
+            .await
+    }
+
+    /// Installs or updates a provider's CLI on a machine, in a terminal of `cols` by `rows`;
+    /// owners only. The owner watches the vendor's installer. Refused when this OS has no
+    /// recipe or the caller is a member.
+    pub async fn install_provider(
+        &self,
+        host_id: HostId,
+        provider: Provider,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(&host_id)?
+            .open_terminal(CommandBody::InstallProvider {
+                provider,
                 cols,
                 rows,
             })

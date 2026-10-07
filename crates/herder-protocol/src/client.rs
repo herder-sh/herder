@@ -370,6 +370,18 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
+    /// Install or update a provider's CLI on this host, in a terminal this connection is
+    /// attached to; owners only. The command is the vendor's documented installer or updater.
+    /// Refused with `forbidden` for members, `unsupported` when this OS has no recipe, and
+    /// `bad_request` for a provider herder cannot run.
+    InstallProvider {
+        /// Provider whose CLI to install or update.
+        provider: Provider,
+        /// Width in columns.
+        cols: u16,
+        /// Height in rows.
+        rows: u16,
+    },
     /// Log an existing account in again: run the provider's own login in the account's
     /// config dir, or the CLI's default one when it has none, in a login terminal this
     /// connection is attached to; owners only. It never creates or removes the dir nor changes

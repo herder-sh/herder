@@ -2658,12 +2658,16 @@ mod tests {
                 .starts_with("# keep this comment")
         );
         let saved = std::fs::read_to_string(&path).unwrap();
+        // Under this test's temp dir, so a leftover `/tmp/herder-new` file cannot
+        // make `allowed = true` fail with "is not a directory".
+        let new_dir = dir.path().join("herder-new");
+        let new = new_dir.to_str().unwrap();
         for (id, label, directory, allowed) in [
             ("work", "", None, true),
             ("missing", "Work", None, true),
             ("work", "Work", Some("relative"), true),
             ("work", "Work", Some("/tmp/herder-other"), true),
-            ("work", "Work", Some("/tmp/herder-new"), false),
+            ("work", "Work", Some(new), false),
         ] {
             assert!(
                 set_account_settings(
@@ -2678,10 +2682,8 @@ mod tests {
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         }
-        let updated =
-            set_account_settings(&path, &id, &renamed, "Work", Some("/tmp/herder-new"), true)
-                .unwrap();
-        assert_eq!(updated.config_dir, Some(PathBuf::from("/tmp/herder-new")));
+        let updated = set_account_settings(&path, &id, &renamed, "Work", Some(new), true).unwrap();
+        assert_eq!(updated.config_dir, Some(new_dir));
         let loaded: ConfigFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             resolve_accounts(loaded.accounts, &|key| std::env::var_os(key)).unwrap()[&id],
