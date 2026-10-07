@@ -30,6 +30,8 @@ enum TranscriptBlock: Hashable, Identifiable {
     case assistant(id: String, text: String, streaming: Bool)
     case reasoning(id: String, text: String, streaming: Bool)
     case tools(id: String, calls: [ToolCall])
+    /// A page the agent showed with `show_html`, in its own card.
+    case visual(HtmlVisual)
     case children(id: String, [ChildRef])
     case report(ChildReport)
     case agents(id: String, [NativeAgent])
@@ -42,6 +44,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .user(let id, _, _, _, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
         case .agents(let id, _): id
+        case .visual(let visual): "visual-\(visual.id)"
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
         case .question(let question): "question-\(question.seq)"
@@ -100,6 +103,9 @@ enum Transcript {
             // Adapters number items per turn, so an item id alone repeats across turns.
             let id = "\(item.turnId)/\(item.id)"
             switch item.body {
+            case .toolCall(let name, let input) where HtmlVisual.isShowHtml(name):
+                flushCalls(); flushChildren(); flushAgents()
+                blocks.append(.visual(HtmlVisual(id: id, input: input, streaming: streaming)))
             case .toolCall(let name, let input):
                 flushChildren()
                 if NativeAgent.isAgent(name) || items.contains(where: {
