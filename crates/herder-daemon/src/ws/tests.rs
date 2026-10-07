@@ -438,6 +438,7 @@ impl Client {
         };
         assert!(matches!(self.recv().await, ServerMessage::Sessions { .. }));
         assert!(matches!(self.recv().await, ServerMessage::Accounts { .. }));
+        assert!(matches!(self.recv().await, ServerMessage::Providers { .. }));
         if hello.role == Role::Owner {
             assert!(matches!(self.recv().await, ServerMessage::Terminals { .. }));
         }
@@ -1330,6 +1331,10 @@ async fn terminal_output_survives_a_disconnect_in_the_scrollback() {
     assert!(matches!(
         client.recv().await,
         ServerMessage::Accounts { .. }
+    ));
+    assert!(matches!(
+        client.recv().await,
+        ServerMessage::Providers { .. }
     ));
     assert_eq!(
         client.recv().await,

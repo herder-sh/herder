@@ -47,6 +47,25 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.name("", provider: "opencode") == "OpenCode default")
     }
 
+    @Test func hintsNameAProviderUsedOnAnotherMachine() {
+        var laptop = machine("a", name: "laptop", sessions: [])
+        laptop.accounts = [
+            Account(accountId: "cursor", provider: "cursor", label: "Cursor", configDir: nil, email: nil, usage: []),
+        ]
+        var box = machine("b", name: "box", sessions: [])
+        #expect(ProviderHints.lines(for: box, in: [laptop, box]) == ["also on laptop: cursor"])
+        #expect(ProviderHints.lines(for: laptop, in: [laptop, box]).isEmpty)
+    }
+
+    @Test func cursorOffersNamedModelsNotOnlyTheDefault() {
+        let models = ModelCatalog.models("cursor")
+        #expect(models.count > 1)
+        #expect(models.map(\.id).contains("composer-2.5"))
+        #expect(ModelCatalog.defaultModel("cursor") == "auto")
+        let opencode = ModelCatalog.models("opencode")
+        #expect(opencode.count > 1)
+    }
+
     @Test func providerLogosParseAndUnknownOnesHaveNone() {
         for provider in ["claude", "codex", "gemini", "cursor", "opencode"] {
             let logo = ProviderLogo(provider)

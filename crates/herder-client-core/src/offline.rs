@@ -40,6 +40,8 @@ pub(crate) struct Cached {
     pub(crate) projects: Vec<Project>,
     pub(crate) accounts: Vec<Account>,
     pub(crate) failover: FailoverSettings,
+    #[serde(default)]
+    pub(crate) providers: Vec<herder_protocol::ProviderStatus>,
     /// Each cached session's events, in seq order from its first.
     pub(crate) logs: Vec<Vec<Event>>,
 }

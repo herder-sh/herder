@@ -218,6 +218,25 @@ impl App {
         models
     }
 
+    /// Catalog models for `account`'s provider, then the ones this machine has used.
+    pub fn catalog_models(&self, key: &SessionKey, account: &Account) -> Vec<String> {
+        let mut models: Vec<String> = herder_client_core::catalog_entry(&account.provider)
+            .map(|entry| {
+                entry
+                    .models
+                    .iter()
+                    .map(|model| model.id.to_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for recent in self.recent_models(key, account) {
+            if !models.contains(&recent) {
+                models.push(recent);
+            }
+        }
+        models
+    }
+
     /// The models offered for the account under the picker's cursor.
     pub fn switch_recent(&self) -> Vec<String> {
         let Some(switch) = &self.switch else {
@@ -227,7 +246,7 @@ impl App {
         rows.get(switch.selected.min(rows.len().saturating_sub(1)))
             .and_then(|at| self.accounts_of(&switch.session).get(*at))
             .map_or_else(Vec::new, |account| {
-                self.recent_models(&switch.session, account)
+                self.catalog_models(&switch.session, account)
             })
     }
 

@@ -390,6 +390,22 @@ impl Client {
         Ok(self.terminal(stream))
     }
 
+    /// Installs or updates a provider's CLI in a terminal; owners only.
+    pub async fn install_provider(
+        &self,
+        host_id: HostId,
+        provider: herder_protocol::Provider,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<TerminalStream>, HerderError> {
+        let client = self.inner.clone();
+        let stream = call(&self.handle, async move {
+            client.install_provider(host_id, provider, cols, rows).await
+        })
+        .await?;
+        Ok(self.terminal(stream))
+    }
+
     /// Logs an existing account in again in a login terminal; owners only.
     pub async fn log_in_account(
         &self,
@@ -497,4 +513,80 @@ impl TerminalStream {
     pub fn resize(&self, cols: u16, rows: u16) {
         self.inner.resize(cols, rows);
     }
+}
+
+/// A named model in the shared catalog.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct CatalogModel {
+    /// The id the CLI takes.
+    pub id: String,
+    /// The name shown in pickers.
+    pub name: String,
+    /// A few words on when to pick it.
+    pub detail: Option<String>,
+}
+
+/// One provider in the shared catalog.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct CatalogEntry {
+    /// The provider.
+    pub provider: herder_protocol::Provider,
+    /// How people write its name.
+    pub display_name: String,
+    /// The model a new session starts on; empty is the provider's own default.
+    pub default_model: String,
+    /// Named models the switch picker offers.
+    pub models: Vec<CatalogModel>,
+}
+
+/// A quiet used-elsewhere or version line for one machine.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ProviderHint {
+    /// The provider the line is about.
+    pub provider: herder_protocol::Provider,
+    /// The muted line.
+    pub text: String,
+    /// Whether this is a missing-elsewhere hint; otherwise an update.
+    pub missing: bool,
+}
+
+/// The providers and models the TUI and apps share.
+#[uniffi::export]
+pub fn provider_catalog() -> Vec<CatalogEntry> {
+    client_core::provider_catalog()
+        .iter()
+        .map(|entry| CatalogEntry {
+            provider: entry.provider.clone(),
+            display_name: entry.display_name.into(),
+            default_model: entry.default_model.into(),
+            models: entry
+                .models
+                .iter()
+                .map(|model| CatalogModel {
+                    id: model.id.into(),
+                    name: model.name.into(),
+                    detail: model.detail.map(str::to_owned),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The next account id for `provider` that is not in `taken`.
+#[uniffi::export]
+pub fn next_account_id(provider: herder_protocol::Provider, taken: Vec<String>) -> String {
+    client_core::next_account_id(&provider, taken.iter().map(String::as_str))
+}
+
+/// Quiet hint lines for `machine`, from every machine you own.
+#[uniffi::export]
+pub fn provider_hints(machine: Machine, all: Vec<Machine>) -> Vec<ProviderHint> {
+    client_core::provider_hints(&machine, &all)
+        .into_iter()
+        .map(|hint| ProviderHint {
+            provider: hint.provider.clone(),
+            text: hint.text(),
+            missing: matches!(hint.kind, client_core::ProviderHintKind::Missing { .. }),
+        })
+        .collect()
 }

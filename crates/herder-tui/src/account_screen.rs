@@ -130,11 +130,9 @@ impl App {
                 Outcome::Closed => screen.adding = None,
                 Outcome::Login(new) => {
                     let host_id = adding.host_id.clone();
+                    let target = terminal::login_or_install(&self.machines, &host_id, new);
                     screen.adding = None;
-                    return vec![Effect::AttachTerminal {
-                        host_id,
-                        target: Target::Login(new),
-                    }];
+                    return vec![Effect::AttachTerminal { host_id, target }];
                 }
             }
             return Vec::new();
@@ -155,7 +153,9 @@ impl App {
                 };
                 match terminal::refusal(&self.machines, &host_id) {
                     Some(refusal) => self.notice = Some(format!("adding accounts: {refusal}")),
-                    None => screen.adding = Some(AddAccount::new(host_id)),
+                    None => {
+                        screen.adding = Some(AddAccount::for_provider(host_id, 0, &self.machines))
+                    }
                 }
             }
             Input::LogInAgain => {
@@ -319,14 +319,12 @@ mod tests {
 
         press(&mut app, KeyCode::Char('n'));
         press(&mut app, KeyCode::Right);
-        press(&mut app, KeyCode::Tab);
-        app.update(Msg::Paste("spare\n".into()));
         assert_eq!(
             press(&mut app, KeyCode::Enter),
             [Effect::AttachTerminal {
                 host_id: HostId::new("h2"),
                 target: Target::Login(herder_client_core::NewAccount {
-                    account_id: AccountId::new("spare"),
+                    account_id: AccountId::new("codex"),
                     provider: Provider::Codex,
                     label: None,
                     config_dir: None,

@@ -876,6 +876,20 @@ struct MachineSettingsSheet: View {
                             Text("Only the machine owner can add accounts.")
                                 .font(.footnote).foregroundStyle(Theme.tertiary)
                         }
+                        ForEach(ProviderHints.hints(for: machine, in: fleet.machines), id: \.provider) { hint in
+                            Button {
+                                let status = machine.providers.first { $0.provider == hint.provider }
+                                if !hint.missing || (status?.installed == false && status?.canInstall == true) {
+                                    fleet.accountLogins[hostId] = TerminalConnection(
+                                        hostId: hostId, terminalId: nil, install: hint.provider)
+                                }
+                                addingAccount = true
+                            } label: {
+                                Text(hint.text).font(.footnote).foregroundStyle(Theme.tertiary)
+                            }
+                            .disabled(machine.role != .owner || machine.connection != .connected)
+                            .buttonStyle(.plain)
+                        }
                         if machine.failover.pin {
                             Label("Failover pinned: sessions stay on their account", systemImage: "pin")
                                 .font(.footnote).foregroundStyle(Theme.tertiary)
@@ -897,7 +911,12 @@ struct MachineSettingsSheet: View {
         .sheet(isPresented: $showingAccountSettings) {
             if let editingAccount { EditAccountSheet(fleet: fleet, hostId: hostId, account: editingAccount) }
         }
-        .sheet(isPresented: $addingAccount) { AddAccountSheet(fleet: fleet, hostId: hostId) }
+        .sheet(isPresented: $addingAccount) {
+            AddAccountSheet(
+                fleet: fleet,
+                hostId: hostId,
+                initialProvider: fleet.accountLogins[hostId]?.install ?? "claude")
+        }
         .onAppear { name = machine?.name ?? "" }
         .confirmationDialog("Forget \(machine?.name ?? "") on this device?", isPresented: $confirmingForget,
                             titleVisibility: .visible) {

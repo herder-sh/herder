@@ -646,14 +646,31 @@ pub(super) fn account_dialog(frame: &mut Frame, area: Rect, app: &App, account: 
         line(text, &mut y, buf);
     }
     let label = label_width("config dir");
+    let provider = account.provider();
+    let status = app
+        .machines
+        .iter()
+        .find(|machine| machine.host_id == account.host_id)
+        .and_then(|machine| {
+            machine
+                .providers
+                .iter()
+                .find(|status| status.provider == *provider)
+        });
+    let shown = match status {
+        Some(status) if status.installed => match &status.version {
+            Some(version) => format!("{}  {version}", provider.as_str()),
+            None => format!("{}  installed", provider.as_str()),
+        },
+        Some(status) if status.can_install => {
+            format!("{}  not installed", provider.as_str())
+        }
+        _ => provider.as_str().to_owned(),
+    };
     if y < body.bottom() {
-        Choice::new(
-            ui,
-            "provider",
-            Span::styled(account.provider().as_str().to_owned(), ui.text()),
-        )
-        .focused(account.focus == accounts::Field::Provider)
-        .render(Rect::new(body.x, y, body.width, 1), buf, label);
+        Choice::new(ui, "provider", Span::styled(shown, ui.text()))
+            .focused(account.focus == accounts::Field::Provider)
+            .render(Rect::new(body.x, y, body.width, 1), buf, label);
     }
     y += 1;
     let default_dir = account.default_config_dir();

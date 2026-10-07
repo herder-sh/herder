@@ -1,4 +1,4 @@
-pub const CLIENT_API_VERSION: u32 = 10;
+pub const CLIENT_API_VERSION: u32 = 11;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewAccount {
@@ -34,6 +34,7 @@ pub struct Machine {
     pub projects: Vec<Project>,
     pub accounts: Vec<Account>,
     pub failover: FailoverSettings,
+    pub providers: Vec<herder_protocol::ProviderStatus>,
     pub terminals: Vec<Terminal>,
     pub resources: Option<HostResources>,
     pub session_usage: HashMap<SessionId, SessionUsage>,
@@ -189,6 +190,16 @@ impl Client {
 }
 
 impl Client {
+    pub async fn install_provider(
+        &self,
+        host_id: HostId,
+        provider: Provider,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
     pub async fn log_in_account(
         &self,
         host_id: HostId,
@@ -249,6 +260,48 @@ pub fn client_config(
     daemon_fingerprint: &str,
     device: &DeviceKey,
 ) -> Result<ClientConfig> {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub detail: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogEntry {
+    pub provider: Provider,
+    pub display_name: &'static str,
+    pub default_model: &'static str,
+    pub models: &'static [CatalogModel],
+}
+
+pub fn provider_catalog() -> &'static [CatalogEntry] {}
+
+pub fn catalog_entry(provider: &Provider) -> Option<&'static CatalogEntry> {}
+
+pub fn next_account_id<'a>(
+    provider: &Provider,
+    taken: impl IntoIterator<Item = &'a str>,
+) -> String {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProviderHintKind {
+    Missing { on: Vec<String> },
+    Update { version: String, newer: Option<String> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderHint {
+    pub provider: Provider,
+    pub kind: ProviderHintKind,
+}
+
+impl ProviderHint {
+    pub fn text(&self) -> String {}
+}
+
+pub fn provider_hints(machine: &Machine, all: &[Machine]) -> Vec<ProviderHint> {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairingUri {

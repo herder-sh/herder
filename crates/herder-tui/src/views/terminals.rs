@@ -56,6 +56,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
             Target::LogInAgain(account_id) => {
                 Row::item(Line::styled(format!("login {account_id}"), ui.text()))
             }
+            Target::Install(provider) => Row::item(Line::styled(
+                format!("install {}", provider.as_str()),
+                ui.text(),
+            )),
         };
         if at == 1 {
             rows.push(Row::Gap);

@@ -318,6 +318,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::InstallProvider {
+            provider: Provider::Cursor,
+            cols: 120,
+            rows: 40,
+        }),
         command(CommandBody::LogInAccount {
             account_id: AccountId::new("claude-work"),
             cols: 120,
@@ -941,6 +946,32 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     purpose: TerminalPurpose::Login {
                         account_id: AccountId::new("claude-work"),
                     },
+                },
+                Terminal {
+                    terminal_id: TerminalId::new("01J9TERMINAL3"),
+                    purpose: TerminalPurpose::Install {
+                        provider: Provider::Cursor,
+                    },
+                },
+            ],
+        },
+        ServerMessage::Providers {
+            providers: vec![
+                ProviderStatus {
+                    provider: Provider::Claude,
+                    installed: true,
+                    version: Some("2.1.0 (Claude Code)".into()),
+                    binary: Some("claude".into()),
+                    can_install: true,
+                    can_update: true,
+                },
+                ProviderStatus {
+                    provider: Provider::Gemini,
+                    installed: false,
+                    version: None,
+                    binary: None,
+                    can_install: false,
+                    can_update: false,
                 },
             ],
         },
