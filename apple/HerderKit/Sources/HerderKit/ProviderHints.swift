@@ -33,7 +33,8 @@ enum ProviderHints {
     }
 
     static func version(_ left: String, isNewerThan right: String) -> Bool {
-        parts(left) > parts(right)
+        // Swift arrays are not Comparable; match Rust Vec lexicographic order.
+        parts(right).lexicographicallyPrecedes(parts(left))
     }
 
     private static func parts(_ text: String) -> [Int] {

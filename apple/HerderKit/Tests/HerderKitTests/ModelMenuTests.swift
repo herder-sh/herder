@@ -57,6 +57,14 @@ struct ModelCatalogTests {
         #expect(ProviderHints.lines(for: laptop, in: [laptop, box]).isEmpty)
     }
 
+    @Test func versionCompareIsLexicographicOnDottedNumbers() {
+        #expect(ProviderHints.version("2.1.0", isNewerThan: "1.9.9"))
+        #expect(ProviderHints.version("1.2.1", isNewerThan: "1.2"))
+        #expect(!ProviderHints.version("1.2.0", isNewerThan: "1.2.0"))
+        #expect(!ProviderHints.version("1.0", isNewerThan: "1.0.1"))
+        #expect(ProviderHints.version("v2.0.0", isNewerThan: "1.9"))
+    }
+
     @Test func cursorOffersNamedModelsNotOnlyTheDefault() {
         let models = ModelCatalog.models("cursor")
         #expect(models.count > 1)
