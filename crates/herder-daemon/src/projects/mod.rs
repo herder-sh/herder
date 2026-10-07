@@ -398,6 +398,9 @@ pub struct Discovery {
     pub sessions: SessionManager,
     /// Notified when a session is created; see [`OnSessionsChanged`].
     pub sessions_changed: Arc<Notify>,
+    /// The daemon's data dir. The repositories in it, such as the skill library, are herder's
+    /// own and never a project, even when a root holds it.
+    pub data_dir: PathBuf,
 }
 
 impl Discovery {
@@ -435,7 +438,7 @@ impl Discovery {
                     });
                 repos.clear();
             }
-            let wanted = wanted(&config, &scanned, session_repos);
+            let wanted = wanted(&config, &self.data_dir, &scanned, session_repos);
             repos.retain(|path, _| wanted.contains(path));
             let new: Vec<PathBuf> = wanted
                 .into_iter()
@@ -506,9 +509,10 @@ async fn with_icons(
 }
 
 /// Every repository to resolve: those `scanned`, the session repos still there and the paths
-/// `config` declares that are directories, but none `config` excludes.
+/// `config` declares that are directories, but none `config` excludes or `data_dir` holds.
 fn wanted(
     config: &ProjectsConfig,
+    data_dir: &Path,
     scanned: &[PathBuf],
     session_repos: Vec<PathBuf>,
 ) -> BTreeSet<PathBuf> {
@@ -516,6 +520,6 @@ fn wanted(
     let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
     wanted.extend(session_repos.into_iter().filter(|path| path.is_dir()));
     wanted.extend(declared.filter(|path| path.is_dir()).cloned());
-    wanted.retain(|path| !config.exclude.contains(path));
+    wanted.retain(|path| !config.exclude.contains(path) && !path.starts_with(data_dir));
     wanted
 }

@@ -167,6 +167,7 @@ pub async fn serve(
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed,
+            data_dir: data_dir.root().to_owned(),
         }
         .run(shutdown.clone()),
     );

@@ -270,6 +270,9 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
         "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
     );
     let declared = tmp.path().join("notes");
+    // A data dir under a root: its repositories, such as the skill library, are no projects.
+    let data_dir = root.join("herder-data");
+    git_repo(&data_dir.join("skills"), "");
     let hub = Arc::new(Hub::default());
     let outbox = Arc::new(crate::hub::Outbox::default());
     hub.connect(&outbox, herder_protocol::Role::Member);
@@ -308,6 +311,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
             hub: Arc::clone(&hub),
             sessions,
             sessions_changed: Arc::clone(&sessions_changed),
+            data_dir: data_dir.clone(),
         }
         .run(shutdown.clone()),
     );
@@ -393,6 +397,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -470,6 +475,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -724,6 +730,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -867,6 +874,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
@@ -995,6 +1003,7 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
             hub: Arc::clone(&hub),
             sessions: sessions.clone(),
             sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
