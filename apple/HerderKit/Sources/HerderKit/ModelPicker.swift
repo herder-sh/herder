@@ -32,7 +32,9 @@ struct ModelPicker: View {
         .onHover { hovering = $0 }
         .help(sections.isEmpty ? "Model" : "Model, account and machine")
         .accessibilityIdentifier("model-picker")
-        .popover(isPresented: $open, arrowEdge: .top) {
+        // Opens upward: the composer sits at the bottom, and iOS keeps a popover on the edge
+        // it is given, so one opening downward is squeezed into the strip under the composer.
+        .popover(isPresented: $open, arrowEdge: .bottom) {
             ModelMenu(groups: groups, current: current, sections: sections) { choice in
                 open = false
                 choose(choice)
