@@ -1944,3 +1944,43 @@ async fn agent_delivery_receipts_survive_archive_and_scope_keys_by_sender() {
     );
     assert!(agent_messages(&daemon.journal(&b).await).is_empty());
 }
+
+#[tokio::test]
+async fn any_session_shows_an_html_page_within_its_limits() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let page = json!({ "title": "Latency", "html": "<!doctype html><p>p50: 12 ms</p>" });
+    assert_eq!(
+        tools.ok("show_html", page.clone()).await,
+        json!({ "shown": true })
+    );
+
+    // A child shows pages too.
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    let mut child_tools = daemon.connect(&child);
+    assert_eq!(
+        child_tools.ok("show_html", page).await,
+        json!({ "shown": true })
+    );
+
+    let largest = "a".repeat(1 << 20);
+    assert_eq!(
+        tools
+            .ok("show_html", json!({ "title": "Big", "html": largest }))
+            .await,
+        json!({ "shown": true })
+    );
+    for invalid in [
+        json!({ "title": " \n", "html": "<p>x</p>" }),
+        json!({ "title": "Empty", "html": "  " }),
+        json!({ "title": "Too big", "html": "a".repeat((1 << 20) + 1) }),
+    ] {
+        assert_eq!(tools.fails("show_html", invalid).await, "invalid_arguments");
+    }
+}
