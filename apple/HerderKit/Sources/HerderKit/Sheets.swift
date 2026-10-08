@@ -1172,6 +1172,11 @@ struct CopyButton: View {
         }
         .buttonStyle(.plain)
         .help("Copy")
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
     }
 }
 

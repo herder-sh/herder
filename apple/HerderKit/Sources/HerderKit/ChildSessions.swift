@@ -256,6 +256,7 @@ struct ChildReportCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+        .messageCopy(report.summary)
     }
 }
 
