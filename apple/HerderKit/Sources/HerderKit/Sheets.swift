@@ -240,20 +240,21 @@ struct ProjectPicker: View {
     let fleet: Fleet
     let newProject: Bool
     let picked: (Draft) -> Void
+    var existingProjectId: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var other = false
     @State private var hostId: HostId = ""
-    @State private var repo = ""
-    @State private var cloning = false
-    @State private var url = ""
-    @State private var into = ""
-    @State private var addError: String?
+    @State private var input = ProjectRepositoryInput()
+    @State private var submitting = false
     @FocusState private var searching: Bool
 
     /// Machines that run sessions: connected, and not a vault.
     private var machines: [Machine] {
-        fleet.machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
+        fleet.machines.filter { machine in
+            machine.connection == .connected && machine.hosts.isEmpty
+                && !machine.projects.contains { $0.projectId == existingProjectId }
+        }
     }
 
     /// Each project once, with the machines that have it.
@@ -324,56 +325,122 @@ struct ProjectPicker: View {
         .preferredColorScheme(.dark)
         .onAppear {
             hostId = machines.first?.hostId ?? ""
-            searching = true
+            searching = !newProject
         }
+        .onChange(of: hostId) {
+            input.changeMachine()
+        }
+        .onChange(of: input.cloning) { input.addError = nil }
+        .onChange(of: input.repo) { input.addError = nil }
+        .onChange(of: input.url) { input.addError = nil }
+        .onChange(of: input.into) { input.addError = nil }
     }
 
-    /// A repository on a machine, for a new project: a path there, or a repository to clone.
+    /// Choose the machine first; repository paths always belong to that machine.
     private var pathForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("New project").font(.headline).foregroundStyle(Theme.text)
-            Field(label: "Machine") {
-                ChoiceChips(options: machines.map { ($0.hostId, $0.name, "") }, selection: $hostId)
-            }
-            Field(label: "Source") {
-                ChoiceChips(options: [(false, "On the machine", ""), (true, "Clone from GitHub", "")], selection: $cloning)
-            }
-            if cloning {
-                Field(label: "Repository", hint: "A GitHub `owner/repo`, or any git URL. The machine clones it with its own git login.") {
-                    InputBox(placeholder: "owner/repo", text: $url, mono: true)
-                        // Follows the repository's name until it is edited.
-                        .onChange(of: url) { old, new in
-                            if into.isEmpty || into == Self.cloneFolder(old) { into = Self.cloneFolder(new) }
-                        }
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Add project").font(.title3.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text("Choose a repository on the machine where you’ll work.")
+                        .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
-                Field(label: "Clone into", hint: "A new folder on the machine.") {
-                    InputBox(placeholder: "~/src/project", text: $into, mono: true)
-                }
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.secondary)
+                    .accessibilityLabel("Cancel")
+                    .disabled(submitting)
+            }
+            if machines.isEmpty {
+                Text(existingProjectId == nil ? "Connect a machine to add a project." : "No other connected machine is available for this project.")
+                    .font(.subheadline).foregroundStyle(Theme.secondary)
             } else {
-                Field(label: "Repository", hint: "Pick a git repository on the machine, or type its path.") {
-                    VStack(spacing: 8) {
-                        InputBox(placeholder: "/home/you/src/project", text: $repo, mono: true)
-                        FolderBrowser(fleet: fleet, hostId: hostId, picked: $repo)
-                            .id(hostId)
-                            .frame(height: 220)
-                            // Another machine's path means nothing here: start at its home.
-                            .onChange(of: hostId) { repo = "" }
+                HStack {
+                    Label("Machine", systemImage: "desktopcomputer")
+                        .font(.subheadline).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    Picker("Machine", selection: $hostId) {
+                        ForEach(machines, id: \.hostId) { machine in
+                            Text(machine.name).tag(machine.hostId)
+                        }
+                    }
+                    .labelsHidden().pickerStyle(.menu)
+                }
+                .disabled(submitting)
+                Picker("Repository source", selection: $input.cloning) {
+                    Text("Use existing").tag(false)
+                    Text("Clone repository").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .disabled(submitting)
+                repositoryFields.disabled(submitting)
+            }
+            if let addError = input.addError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(addError, systemImage: "exclamationmark.circle")
+                        .font(.footnote).foregroundStyle(Theme.failure)
+                    if input.cloning {
+                        Text("If this folder already contains your repository, use it instead.")
+                            .font(.footnote).foregroundStyle(Theme.secondary)
+                        Button("Use existing repository") {
+                            input.useExistingRepository()
+                        }
+                        .disabled(submitting)
                     }
                 }
-            }
-            if let addError {
-                Text(addError).font(.footnote).foregroundStyle(Theme.failure)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.raised, in: .rect(cornerRadius: Theme.corner))
             }
             HStack {
+                Button("Cancel") { dismiss() }.disabled(submitting)
                 Spacer()
-                ActionButton(title: cloning ? "Clone Project" : "Add Project", style: .primary) { await submitPath() }
-                    .frame(maxWidth: 160)
-                    .disabled(!pathReady)
-                    .opacity(pathReady ? 1 : 0.4)
-                    .keyboardShortcut(.defaultAction)
+                ActionButton(title: input.cloning ? "Clone and add" : "Add project", style: .primary) {
+                    await submitPath()
+                }
+                .frame(width: 160)
+                .disabled(!pathReady || submitting)
+                .opacity(pathReady ? 1 : 0.4)
+                .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(24)
+        .interactiveDismissDisabled(submitting)
+    }
+
+    @ViewBuilder private var repositoryFields: some View {
+        if input.cloning {
+            Field(label: "Repository", hint: "GitHub owner/repo or a git URL. Uses this machine’s git login.") {
+                InputBox(placeholder: "owner/repo", text: $input.url, mono: true)
+                    .onChange(of: input.url) { old, new in
+                        input.updateCloneDestination(from: old, to: new)
+                    }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Location").font(.subheadline).foregroundStyle(Theme.secondary)
+                    Spacer()
+                    Button(input.changingLocation ? "Done" : "Change location") { input.changingLocation.toggle() }
+                        .font(.subheadline)
+                }
+                if input.changingLocation {
+                    InputBox(placeholder: "~/Projects/project", text: $input.into, mono: true)
+                } else {
+                    Text(input.into.isEmpty ? "Enter a repository to choose its folder" : input.into)
+                        .font(Theme.monoSmall).foregroundStyle(Theme.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+        } else {
+            Field(label: "Repository", hint: "Browse or enter a repository path on the selected machine.") {
+                VStack(spacing: 8) {
+                    InputBox(placeholder: "~/Projects/project", text: $input.repo, mono: true)
+                    FolderBrowser(fleet: fleet, hostId: hostId, picked: $input.repo)
+                        .id(hostId)
+                        .frame(height: 220)
+                }
+            }
+        }
     }
 
     private func pick(_ projectId: String, _ candidates: [Machine]) {
@@ -383,34 +450,68 @@ struct ProjectPicker: View {
     }
 
     private var pathReady: Bool {
-        let path = (cloning ? into : repo).trimmingCharacters(in: .whitespaces)
-        let source = cloning ? !url.trimmingCharacters(in: .whitespaces).isEmpty : true
-        return !hostId.isEmpty && source && (path.hasPrefix("/") || path.hasPrefix("~/"))
+        let path = (input.cloning ? input.into : input.repo).trimmingCharacters(in: .whitespaces)
+        let source = input.cloning ? !input.url.trimmingCharacters(in: .whitespaces).isEmpty : true
+        return machines.contains { $0.hostId == hostId } && source && (path.hasPrefix("/") || path.hasPrefix("~/"))
     }
 
-    /// The folder a clone of `url` goes into by default: one named after the repository, in `~/src`.
+    /// The folder a clone of `url` goes into by default: one named after the repository, in `~/Projects`.
     nonisolated static func cloneFolder(_ url: String) -> String {
         var name = url.trimmingCharacters(in: .whitespaces)
         while name.hasSuffix("/") { name.removeLast() }
         name = String(name.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "")
         if name.hasSuffix(".git") { name.removeLast(4) }
-        return name.isEmpty ? "" : "~/src/\(name)"
+        return name.isEmpty ? "" : "~/Projects/\(name)"
     }
 
     /// Registers the repository as a project on the machine, cloning it there first when asked,
     /// then opens a chat in it.
     private func submitPath() async {
-        let path = (cloning ? into : repo).trimmingCharacters(in: .whitespaces)
-        let url = url.trimmingCharacters(in: .whitespaces)
+        guard pathReady, !submitting else { return }
+        submitting = true
+        input.addError = nil
+        defer { submitting = false }
+        let path = (input.cloning ? input.into : input.repo).trimmingCharacters(in: .whitespaces)
+        let cloneURL = input.url.trimmingCharacters(in: .whitespaces)
         do {
-            let projectId = cloning
-                ? try await fleet.cloneProject(url, into: path, on: hostId)
+            let projectId = input.cloning
+                ? try await fleet.cloneProject(cloneURL, into: path, on: hostId)
                 : try await fleet.addProject(path, on: hostId)
             picked(Draft(hostId: hostId, projectId: projectId, repo: path))
             dismiss()
         } catch {
-            addError = describe(error)
+            input.addError = describe(error)
         }
+    }
+}
+
+/// Repository input belongs to one machine. Keep its transitions testable without a daemon.
+struct ProjectRepositoryInput {
+    var repo = ""
+    var cloning = false
+    var url = ""
+    var into = ""
+    var changingLocation = false
+    var addError: String?
+
+    mutating func changeMachine() {
+        repo = ""
+        into = ProjectPicker.cloneFolder(url)
+        changingLocation = false
+        addError = nil
+    }
+
+    mutating func updateCloneDestination(from old: String, to new: String) {
+        if into.isEmpty || into == ProjectPicker.cloneFolder(old) {
+            into = ProjectPicker.cloneFolder(new)
+        }
+    }
+
+    mutating func useExistingRepository() {
+        repo = into
+        cloning = false
+        changingLocation = false
+        addError = nil
     }
 }
 
@@ -450,6 +551,7 @@ private struct PickRow: View {
 struct ProjectSettingsSheet: View {
     let fleet: Fleet
     let projectId: String
+    @State private var addingMachine = false
     @State private var hostId: HostId?
     @Environment(\.dismiss) private var dismiss
 
@@ -467,6 +569,8 @@ struct ProjectSettingsSheet: View {
             } else {
                 Text("No connected machine has this project.").foregroundStyle(Theme.secondary)
             }
+            Button("Add to another machine…") { addingMachine = true }
+                .padding(.top, 8)
         } footer: {
             if let machine {
                 Label(machine.role == .owner ? "Saved on \(machine.name) as you change it"
@@ -475,6 +579,12 @@ struct ProjectSettingsSheet: View {
                     .font(.footnote).foregroundStyle(Theme.tertiary)
             }
             Spacer()
+        }
+        .sheet(isPresented: $addingMachine) {
+            ProjectPicker(fleet: fleet, newProject: true, picked: { selection in
+                hostId = selection.hostId
+                addingMachine = false
+            }, existingProjectId: projectId)
         }
         // Removed from its last machine: nothing is left to set.
         .onChange(of: machines.isEmpty) { if machines.isEmpty { dismiss() } }
