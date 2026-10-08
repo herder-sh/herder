@@ -75,6 +75,64 @@ struct SessionRow: View {
     }
 }
 
+/// The session being written and not sent yet, laid out as a session row but dashed and
+/// quiet, so it reads as a draft.
+struct DraftCard: View {
+    let draft: Draft
+    let fleet: Fleet
+    /// The prompt as typed so far.
+    let text: String
+
+    var body: some View {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "pencil")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Theme.tertiary)
+                .frame(width: 10, height: 10)
+                .padding(.top, 4)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(prompt.isEmpty ? "New session" : prompt.prefix { !$0.isNewline })
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(prompt.isEmpty ? Theme.tertiary : Theme.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text("Draft")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.tertiary)
+                }
+                Text("Not sent yet")
+                    .font(.subheadline)
+                    .italic()
+                    .foregroundStyle(Theme.tertiary)
+                if !project.isEmpty {
+                    Text(project)
+                        .font(.caption)
+                        .foregroundStyle(Theme.tertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface.opacity(0.5), in: .rect(cornerRadius: Theme.corner))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.corner)
+                .strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(prompt.isEmpty ? "New session draft" : "Draft: \(prompt)")
+    }
+
+    /// The draft's project, or the folder of its path.
+    private var project: String {
+        fleet.lists.projects.first { $0.id == draft.projectId }?.name
+            ?? draft.repo.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+    }
+}
+
 /// The elbow that ties a child session, or a provider agent, to its parent.
 struct TreeLine: View {
     var body: some View {
