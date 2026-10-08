@@ -211,11 +211,7 @@ struct MarkdownText: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 switch block.first {
                 case .code(let code, let language):
-                    Self.codeText(code, language: language)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-                        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
-                        .overlay(alignment: .topTrailing) { CopyButton(text: code).padding(4) }
+                    CodeBlock(code: code, language: language)
                 case .diagram(let source):
                     MermaidBlock(source: source)
                 case .table(let table):
@@ -406,6 +402,44 @@ struct MarkdownText: View {
         if let lines = code { parts.append(.code(lines.joined(separator: "\n"), language: language)) }
         if parts.isEmpty && streaming { parts.append(.line("")) }
         return parts
+    }
+}
+
+/// A fenced code block, under a header with its language and a copy button, as a diagram's.
+private struct CodeBlock: View {
+    let code: String
+    let language: String
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 2) {
+                Text(language.isEmpty ? "code" : language).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                Spacer()
+                Button {
+                    Clipboard.string = code
+                    copied = true
+                } label: {
+                    Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.tertiary)
+                        .frame(height: 22)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Copy code")
+            }
+            .padding(.leading, 12).padding(.trailing, 8).padding(.top, 6)
+            MarkdownText.codeText(code, language: language)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
     }
 }
 
