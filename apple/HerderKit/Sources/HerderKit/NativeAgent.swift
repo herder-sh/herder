@@ -424,6 +424,7 @@ struct NativeAgentDetail: View {
                 .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
                 .overlay(RoundedRectangle(cornerRadius: Theme.corner)
                     .strokeBorder(agent.outcome == .failed ? Theme.failure.opacity(0.5) : Theme.stroke))
+                .messageCopy(result)
         } else {
             let (symbol, text): (String, String) = switch (agent.outcome, agent.launched) {
             case (.running, false): ("", "Working. The result appears here when the agent finishes.")
