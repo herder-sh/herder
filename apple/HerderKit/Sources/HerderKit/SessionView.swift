@@ -85,7 +85,11 @@ struct SessionView: View {
             .accessibilityIdentifier("transcript")
             .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top))
             .id(key)
-            .onChange(of: sent) { withAnimation { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) } }
+            // To the last row, unanimated: a lazy stack lays that row out to scroll to it, while
+            // the end marker sits where estimated heights put it, which in a long transcript can
+            // be past every row drawn: blank until something scrolls it. What the send adds
+            // then stays in view by the bottom anchor.
+            .onChange(of: sent) { proxy.scrollTo(blocks.last?.id ?? TranscriptScroll.end, anchor: .bottom) }
             .task(id: model?.loaded == true) {
                 guard model?.loaded == true else { return }
                 // Once laid out, land where it was left, else at the end. The bottom anchor alone
