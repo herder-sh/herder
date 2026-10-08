@@ -364,7 +364,7 @@ struct Sidebar: View {
                         .frame(width: 24, height: 24).contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .help("New Project")
+                .help("Add Project")
             }
             .padding(.leading, 14)
             .padding(.trailing, 6)

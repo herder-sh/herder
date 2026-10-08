@@ -176,7 +176,7 @@ struct FleetView: View {
         case .projects:
             NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
-                    .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
+                    .toolbar { Button("Add Project", systemImage: "plus") { sheet = .newProject } }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $projectsPath)
