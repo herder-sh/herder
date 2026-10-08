@@ -692,6 +692,8 @@ struct DraftSessionView: View {
     let created: (SessionKey) -> Void
     /// Moves the draft to another project, picked from its heading.
     let moved: (Draft) -> Void
+    /// Where the prompt goes as it is typed, for the draft's card in the list beside it.
+    var typed: Binding<String>?
     @State private var hostId: HostId = ""
     /// The provider and model it starts on; picking another provider's model switches to it.
     @State private var choice = ModelCatalog.Choice(provider: "", model: "")
@@ -814,6 +816,7 @@ struct DraftSessionView: View {
             guard starting == nil, (try? await Task.sleep(for: .milliseconds(300))) != nil else { return }
             PromptDrafts.shared.save(draftContent, for: draft.key)
         }
+        .onChange(of: text, initial: true) { typed?.wrappedValue = text }
         .onDisappear {
             if starting == nil { PromptDrafts.shared.save(draftContent, for: draft.key) }
         }

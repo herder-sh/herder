@@ -13,6 +13,8 @@ struct DesktopShell: View {
     let opened: (SessionKey) -> Void
     @AppStorage("sidebarCollapsed") private var sidebarCollapsed = true
     @State private var query = ""
+    /// The open draft's prompt as typed, for its card.
+    @State private var typed = ""
 
     var body: some View {
         HStack(spacing: 0) {
@@ -40,25 +42,27 @@ struct DesktopShell: View {
         let lists = fleet.lists
         switch item {
         case .home:
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(title: "Home", subtitle: subtitle(lists), switcher: switcher, query: $query) {
-                    HomeView(fleet: fleet, sheet: $sheet, selection: $session, query: query)
+                    drafting { HomeView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
                     PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
                 }
             }
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
-                    ScrollView {
-                        if let project {
-                            ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
-                                            archived: project.archived.filter { $0.matches(query) },
-                                            selection: $session)
-                                .padding(16)
+                    drafting {
+                        ScrollView {
+                            if let project {
+                                ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
+                                                archived: project.archived.filter { $0.matches(query) },
+                                                selection: $session)
+                                    .padding(16)
+                            }
                         }
                     }
                 } actions: {
@@ -67,17 +71,17 @@ struct DesktopShell: View {
                 }
             }
         case .board:
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(title: "Board", subtitle: "Where each session's work stands", switcher: switcher, query: $query) {
-                    BoardView(fleet: fleet, selection: $session, query: query)
+                    drafting { BoardView(fleet: fleet, selection: $session, query: query) }
                 } actions: {
                     EmptyView()
                 }
             }
         case .pullRequests:
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, opened: opened) {
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
                 Pane(title: "Pull Requests", subtitle: "Linked to sessions", switcher: switcher, query: $query) {
-                    PullRequestsView(fleet: fleet, selection: $session, query: query)
+                    drafting { PullRequestsView(fleet: fleet, selection: $session, query: query) }
                 } actions: {
                     EmptyView()
                 }
@@ -110,6 +114,19 @@ struct DesktopShell: View {
         }
     }
 
+    /// A list under the open draft's card, so the session being written shows among the rest.
+    private func drafting<List: View>(@ViewBuilder _ list: () -> List) -> some View {
+        VStack(spacing: 0) {
+            if let draft {
+                DraftCard(draft: draft, fleet: fleet, text: typed)
+                    .frame(maxWidth: 760)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
+            list()
+        }
+    }
+
     private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session) }
 
     private func subtitle(_ lists: Lists) -> String {
@@ -126,6 +143,7 @@ private struct ListAndSession<List: View>: View {
     let fleet: Fleet
     @Binding var session: SessionKey?
     @Binding var draft: Draft?
+    @Binding var typed: String
     let opened: (SessionKey) -> Void
     @ViewBuilder var list: List
     @AppStorage("listHidden") private var listHidden = false
@@ -161,7 +179,8 @@ private struct ListAndSession<List: View>: View {
 
     @ViewBuilder private var detail: some View {
         if let draft {
-            DraftSessionView(fleet: fleet, draft: draft, created: opened) { self.draft = $0 }.id(draft.id)
+            DraftSessionView(fleet: fleet, draft: draft, created: opened, moved: { self.draft = $0 }, typed: $typed)
+                .id(draft.id)
         } else if let session {
             SessionView(fleet: fleet, key: session) { self.session = $0 }
         } else {
