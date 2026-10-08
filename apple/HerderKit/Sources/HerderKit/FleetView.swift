@@ -110,9 +110,11 @@ struct FleetView: View {
             Button("Cancel", role: .cancel) {}
         }
         .onChange(of: draft) {
-            // A draft shows in a list's session pane; Machines has none.
+            // A draft shows in a list's session pane; Machines has none. The Board and Pull
+            // Requests keep their list, so starting a session there stays there.
             if let draft {
                 session = nil
+                if showsEverySession { return }
                 // The list beside the chat is the draft's project, or Home for a path.
                 let shown = draft.projectId.map { id in fleet.lists.projects.contains { $0.id == id } } ?? false
                 item = shown ? .project(draft.projectId ?? "") : .home
@@ -130,19 +132,24 @@ struct FleetView: View {
         // A draft belongs to Home or its own project; leaving for elsewhere drops it.
         .onChange(of: item) {
             guard let draft else { return }
-            if item != .home && item != .project(draft.projectId ?? "") { self.draft = nil }
+            if item != .home && item != .project(draft.projectId ?? "") && !showsEverySession { self.draft = nil }
         }
     }
+
+    /// The Board and Pull Requests list every project's sessions, so a session started from
+    /// one opens beside it rather than in its project's pane.
+    private var showsEverySession: Bool { item == .board || item == .pullRequests }
 
     private var shell: some View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
     }
 
-    /// Shows a session just created from a draft: in its project's pane, or pushed on the
-    /// Projects tab it was started from, else on Home.
+    /// Shows a session just created from a draft: beside the Board or Pull Requests it was
+    /// started from, in its project's pane, or pushed on the Projects tab it was started from,
+    /// else on Home.
     private func opened(_ key: SessionKey) {
         draft = nil
-        if let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
+        if !showsEverySession, let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
             item = .project(projectId)
         }
         session = key
