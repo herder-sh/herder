@@ -37,10 +37,11 @@ struct TranscriptBlockView: View {
                 }
                     .font(.body)
                     .foregroundStyle(Theme.onBubble)
-                    .textSelection(.enabled)
+                    .messageSelection()
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.6), in: .rect(cornerRadius: 18))
+                    .messageCopy(text, alignment: .trailing)
                 if let outgoing {
                     DeliveryLine(outgoing: outgoing) {
                         fleet.discard(outgoing, from: key)
@@ -54,6 +55,7 @@ struct TranscriptBlockView: View {
             WorkingLine(since: since, waiting: waiting)
         case .assistant(_, let text, let streaming):
             MarkdownText(text: text, streaming: streaming)
+                .messageCopy(text)
         case .reasoning(_, let text, let streaming):
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "brain").foregroundStyle(Theme.tertiary)
@@ -189,8 +191,10 @@ struct MarkdownText: View {
                 switch part {
                 case .code(let code, let language):
                     Self.codeText(code, language: language)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
                         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+                        .overlay(alignment: .topTrailing) { CopyButton(text: code).padding(4) }
                 case .diagram(let source):
                     MermaidBlock(source: source)
                 case .table(let table):
@@ -201,13 +205,13 @@ struct MarkdownText: View {
             }
         }
         // Every line, heading and bullet can be selected and copied, not only code.
-        .textSelection(.enabled)
+        .messageSelection()
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     static func codeText(_ code: String, language: String) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
+            Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).messageSelection()
                 .padding(12)
         }
     }
