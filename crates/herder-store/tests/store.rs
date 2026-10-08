@@ -1384,7 +1384,7 @@ fn nested_item_ancestry_survives_journal_reopen() {
 }
 
 #[test]
-fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
+fn a_prompt_leaves_the_queue_with_its_transcript_item_and_keeps_its_provenance() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("herder.db");
     let mut store = Store::open(&path).unwrap();
@@ -1430,7 +1430,10 @@ fn agent_queue_to_journal_transition_is_atomic_and_preserves_provenance() {
         },
     };
     store
-        .append(new_event(&session, 1, EventBody::ItemAdded { item }))
+        .append_prompt(
+            new_event(&session, 1, EventBody::ItemAdded { item }),
+            &PromptId::new("p1"),
+        )
         .unwrap();
     drop(store);
     let mut store = Store::open(&path).unwrap();

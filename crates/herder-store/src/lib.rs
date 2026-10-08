@@ -186,6 +186,17 @@ impl Store {
     /// A session's first event must be `session_created`, and only its first; the parent it
     /// names, if any, must already exist, unless `parent_host` places it on another machine.
     pub fn append(&mut self, event: NewEvent) -> Result<Event> {
+        self.append_taking(event, None)
+    }
+
+    /// Appends `event`, the `user_message` item of the prompt `prompt_id`, as [`Store::append`]
+    /// does, and takes that prompt off its session's queue in the same transaction: a restart
+    /// in between can neither lose the prompt nor run it twice.
+    pub fn append_prompt(&mut self, event: NewEvent, prompt_id: &PromptId) -> Result<Event> {
+        self.append_taking(event, Some(prompt_id))
+    }
+
+    fn append_taking(&mut self, event: NewEvent, prompt_id: Option<&PromptId>) -> Result<Event> {
         let body = serde_json::to_value(&event.body)?;
         let event_type = match body.get("type") {
             Some(serde_json::Value::String(tag)) => tag.clone(),
@@ -234,22 +245,11 @@ impl Store {
             event_type,
             body.to_string(),
         ])?;
-        // Moving an agent prompt from queue to journal is atomic: replay/dedup cannot lose
-        // it in the crash window between queue removal and writing its transcript item.
-        if let EventBody::ItemAdded { item } = &stored.body
-            && matches!(item.body, herder_protocol::ItemBody::UserMessage { .. })
-            && let Some(message) = &item.agent_message
-        {
-            tx.execute(
-                "DELETE FROM queued_prompts WHERE session_id = ?1
-                AND json_extract(agent_message, '$.sender_session_id') = ?2
-                AND json_extract(agent_message, '$.message_id') = ?3",
-                params![
-                    stored.session_id.as_str(),
-                    message.sender_session_id.as_str(),
-                    message.message_id
-                ],
-            )?;
+        if let Some(prompt_id) = prompt_id {
+            tx.prepare_cached(
+                "DELETE FROM queued_prompts WHERE session_id = ?1 AND prompt_id = ?2",
+            )?
+            .execute(params![stored.session_id.as_str(), prompt_id.as_str()])?;
         }
         project::apply(&tx, &stored)?;
         tx.commit()?;
