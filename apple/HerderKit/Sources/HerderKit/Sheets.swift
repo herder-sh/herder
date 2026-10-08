@@ -233,9 +233,10 @@ struct Draft: Hashable, Identifiable {
     }
 }
 
-/// Picks where a new session runs, as a palette: one row per project, across machines, then a
-/// repository on a machine for a new project: one there already, or one the machine clones. The chat opens on the machine last picked
-/// for a new session in the project, else the one the project was used on last; it can change there.
+/// Picks where a new session runs, as a palette: one row per project, across machines, the most
+/// recently used first, then a repository on a machine for a new project: one there already, or
+/// one the machine clones. The chat opens on the machine last picked for a new session in the
+/// project, else the one the project was used on last; it can change there.
 struct ProjectPicker: View {
     let fleet: Fleet
     let newProject: Bool
@@ -257,8 +258,10 @@ struct ProjectPicker: View {
         }
     }
 
+    typealias Row = (id: String, name: String, machines: [Machine])
+
     /// Each project once, with the machines that have it.
-    private var projects: [(id: String, name: String, machines: [Machine])] {
+    private var projects: [Row] {
         var order: [String] = []
         var groups: [String: (name: String, machines: [Machine])] = [:]
         for machine in machines {
@@ -268,9 +271,18 @@ struct ProjectPicker: View {
             }
         }
         let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return order.compactMap { id in groups[id].map { (id, $0.name, $0.machines) } }
+        let rows: [Row] = order.compactMap { id in groups[id].map { (id, $0.name, $0.machines) } }
             .filter { needle.isEmpty || $0.name.lowercased().contains(needle) }
-            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+        return Self.ranked(rows, by: fleet.lists.projects)
+    }
+
+    /// `rows` with the project a session last did something in first, as `groups` rank them;
+    /// one no group ranks goes last, by name.
+    nonisolated static func ranked(_ rows: [Row], by groups: [ProjectGroup]) -> [Row] {
+        let recency = Dictionary(groups.map { ($0.id, $0.recency) }) { first, _ in first }
+        return rows.sorted { a, b in
+            (recency[a.id] ?? .max, a.name.lowercased()) < (recency[b.id] ?? .max, b.name.lowercased())
+        }
     }
 
     var body: some View {

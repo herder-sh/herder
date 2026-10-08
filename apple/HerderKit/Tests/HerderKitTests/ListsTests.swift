@@ -254,6 +254,15 @@ struct ListsTests {
         #expect(lists.projects.first { $0.name == "Beta" }?.paths == ["/src/beta-repo"])
     }
 
+    @Test func theProjectPickerListsTheMostRecentlyUsedProjectFirst() {
+        let groups = threeProjects().projects
+        let rows: [ProjectPicker.Row] = [
+            ("github.com/acme/alpha", "Alpha", []), ("github.com/acme/idle", "Idle", []),
+            ("github.com/acme/new", "New", []), ("github.com/acme/beta", "Beta", []),
+        ]
+        #expect(ProjectPicker.ranked(rows, by: groups).map(\.name) == ["Beta", "Alpha", "Idle", "New"])
+    }
+
     @Test func aSearchFindsProjectsByNameOrPathAndByTheirSessions() {
         let projects = threeProjects().projects
         func found(_ query: String) -> [String] { ProjectGroup.found(projects, query: query).map(\.name) }
