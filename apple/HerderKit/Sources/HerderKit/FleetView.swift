@@ -73,7 +73,17 @@ struct FleetView: View {
         .onChange(of: sizeClass) { if sizeClass == .compact { tab = CompactTab(item) } }
         #endif
         .sheet(item: $sheet) { sheet in
-            sheet.view(fleet: fleet) { draft = $0 }
+            sheet.view(fleet: fleet) { selection in
+                if sheet == .newProject, let projectId = selection.projectId {
+                    draft = nil
+                    session = nil
+                    item = .project(projectId)
+                    tab = .projects
+                    projectsPath = [.project(projectId)]
+                } else {
+                    draft = selection
+                }
+            }
         }
         #if os(iOS)
         .fullScreenCover(item: Binding(get: { sizeClass == .compact ? draft : nil }, set: { draft = $0 })) { draft in
@@ -176,7 +186,7 @@ struct FleetView: View {
         case .projects:
             NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
-                    .toolbar { Button("New Project", systemImage: "plus") { sheet = .newProject } }
+                    .toolbar { Button("Add Project", systemImage: "plus") { sheet = .newProject } }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $projectsPath)
