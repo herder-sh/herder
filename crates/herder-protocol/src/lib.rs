@@ -3,7 +3,7 @@
 //! One WebSocket carries JSON text frames: [`ClientMessage`] from client to daemon and
 //! [`ServerMessage`] from daemon to client. Both are internally tagged on `"type"`.
 //!
-//! Evolution rules (protocol version 4):
+//! Evolution rules (protocol version 5):
 //! - Adding a variant, or an optional field, is compatible and keeps [`PROTOCOL_VERSION`].
 //! - Renaming or removing anything, or changing a field's type, bumps [`PROTOCOL_VERSION`].
 //! - Receivers ignore unknown fields. Enums that grow over time ([`ServerMessage`],
@@ -63,7 +63,7 @@ pub use types::{PermissionMode, Provider, clean_title};
 pub use usage::{TurnUsage, UsagePeriod, UsageTotal};
 
 /// Wire protocol version, exchanged in both hellos; peers with different versions disconnect.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Most characters a session title may have.
 pub const MAX_TITLE_CHARS: usize = 80;

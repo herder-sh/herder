@@ -304,8 +304,9 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
     std::fs::write(
         &config_path,
         format!(
-            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n# Admission by the turn limit only, whatever the CI host's cores and load.\n[resources]\nmax_turns = 8\nmin_memory_available_mib = 0\nmax_memory_pressure = 100\nmax_load_percent = 10000\n",
-            data_dir.to_str().unwrap()
+            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n# Admission by the turn limit only, whatever the CI host's cores and load.\n[resources]\nmax_turns = 8\nmin_memory_available_mib = 0\nmax_memory_pressure = 100\nmax_load_percent = 10000\n\n[projects]\ndir = {:?}\n",
+            data_dir.to_str().unwrap(),
+            tmp.path().join("Projects").to_str().unwrap()
         ),
     )
     .unwrap();

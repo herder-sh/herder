@@ -577,7 +577,7 @@ impl Daemon {
                     dir.join("project-icons"),
                     // Every machine has every project, sessions or not.
                     ProjectsConfig {
-                        roots: vec![dir.join("src")],
+                        dir: dir.join("src"),
                         ..ProjectsConfig::default()
                     },
                 )),

@@ -643,7 +643,7 @@ impl SessionManager {
             }
             CommandBody::AddProject { path } => return self.add_project(&path).await,
             CommandBody::CloneProject { url, path } => {
-                return self.clone_project(&url, &path).await;
+                return self.clone_project(&url, path.as_deref()).await;
             }
             CommandBody::UploadHistory { session_id, part } => {
                 self.upload_history(by, session_id, part).await?;
@@ -1102,12 +1102,37 @@ impl SessionManager {
         Ok(CommandResult::ProjectAdded { project_id })
     }
 
-    /// Clones `url` into the new folder `path` and declares the clone as a project
+    /// Clones `url` into the new folder `path`, else into the projects dir ([`crate::projects::clone::folder`]),
+    /// and declares the clone as a project
     /// ([`Self::add_project`]).
-    async fn clone_project(&self, url: &str, path: &str) -> Result<CommandResult, ErrorInfo> {
-        self.projects()?;
-        let repo = crate::browse::absolute(path)?;
+    async fn clone_project(
+        &self,
+        url: &str,
+        path: Option<&str>,
+    ) -> Result<CommandResult, ErrorInfo> {
+        let (_, overrides) = self.projects()?;
+        let repo = match path {
+            Some(path) => crate::browse::absolute(path)?,
+            None => {
+                let dir = overrides.config().dir;
+                if !dir.is_absolute() {
+                    return Err(error(
+                        ErrorCode::Unsupported,
+                        "this host has no projects dir",
+                    ));
+                }
+                crate::projects::clone::folder(&dir, url).ok_or_else(|| {
+                    error(
+                        ErrorCode::BadRequest,
+                        format!("{url:?} names no repository to clone"),
+                    )
+                })?
+            }
+        };
         crate::projects::clone::clone(url, &repo).await?;
+        let path = repo
+            .to_str()
+            .ok_or_else(|| error(ErrorCode::BadRequest, "the clone's path is not UTF-8"))?;
         self.add_project(path).await
     }
 

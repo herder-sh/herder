@@ -1311,22 +1311,24 @@
           "type": "object",
           "properties": {
             "path": {
-              "description": "Absolute path of the folder to clone into, or one starting with `~/`.",
-              "type": "string"
+              "description": "Absolute path of the folder to clone into, or one starting with `~/`; absent, the\nfolder named after the repository in the host's projects dir.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "type": {
               "type": "string",
               "const": "clone_project"
             },
             "url": {
-              "description": "The repository: a git URL, or `owner/repo` for one on GitHub.",
+              "description": "The repository: a git URL, or `owner/repo` for one on GitHub; a project's `remote`\nclones it onto another host.",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "url",
-            "path"
+            "url"
           ]
         },
         {
@@ -3153,15 +3155,12 @@
       "description": "The `[projects]` table.",
       "type": "object",
       "properties": {
+        "dir": {
+          "description": "The projects dir, absolute or starting with `~/`: scanned for repositories, and where\n`clone_project` clones them unless told otherwise.",
+          "type": "string"
+        },
         "exclude": {
           "description": "Repositories left out wherever they are found.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "roots": {
-          "description": "Directories scanned for repositories, absolute or starting with `~/`.",
           "type": "array",
           "items": {
             "type": "string"
@@ -3175,7 +3174,7 @@
         }
       },
       "required": [
-        "roots",
+        "dir",
         "exclude",
         "setup_timeout_secs"
       ]

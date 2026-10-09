@@ -41,8 +41,9 @@ impl Daemon {
         std::fs::write(
             &config,
             format!(
-                "{extra}listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n{mode}",
-                data_dir.to_str().unwrap()
+                "{extra}listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n{mode}\n[projects]\ndir = {:?}\n",
+                data_dir.to_str().unwrap(),
+                dir.join("Projects").to_str().unwrap()
             ),
         )
         .unwrap();

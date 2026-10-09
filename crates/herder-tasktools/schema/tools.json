@@ -811,6 +811,13 @@
                   "description": "The project.",
                   "type": "string"
                 },
+                "remote": {
+                  "description": "The `origin` remote URL of its first clone that has one, without any password in it,\nto clone it onto another host with `clone_project`; absent for a project without a\nremote.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "setup_command": {
                   "description": "Shell command run in each new worktree of the project before its session starts;\nabsent when none is configured.",
                   "type": [

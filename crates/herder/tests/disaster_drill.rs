@@ -276,8 +276,9 @@ fn write_config(dir: &Path, port: u16, extra: &str) -> PathBuf {
     std::fs::write(
         &path,
         format!(
-            "listen = \"127.0.0.1:{port}\"\ndata_dir = {:?}\n\n{extra}",
-            dir.join("data").to_str().unwrap()
+            "listen = \"127.0.0.1:{port}\"\ndata_dir = {:?}\n\n{extra}\n[projects]\ndir = {:?}\n",
+            dir.join("data").to_str().unwrap(),
+            dir.join("Projects").to_str().unwrap()
         ),
     )
     .unwrap();

@@ -46,4 +46,19 @@ struct CloneFolderTests {
         input.updateCloneDestination(from: "team/second", to: "team/third")
         #expect(input.into == "/custom/location")
     }
+
+    @Test func aSuggestedLocationMovesToTheMachinesProjectsFolder() {
+        var input = ProjectRepositoryInput()
+        input.url = "team/app"
+        input.updateCloneDestination(from: "", to: input.url)
+        input.setProjectsDir("/srv/src/")
+        #expect(input.into == "/srv/src/app")
+        input.url = "team/lib"
+        input.updateCloneDestination(from: "team/app", to: input.url)
+        #expect(input.into == "/srv/src/lib")
+        // A location the user chose stays.
+        input.into = "/custom/lib"
+        input.setProjectsDir("/home/dev/Projects")
+        #expect(input.into == "/custom/lib")
+    }
 }

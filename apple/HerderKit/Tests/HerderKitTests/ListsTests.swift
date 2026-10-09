@@ -4,19 +4,21 @@ import Herder
 import Testing
 
 func machine(
-    _ hostId: HostId, name: String, sessions: [SessionId], projects: [Project] = [], hosts: [FleetHost] = []
+    _ hostId: HostId, name: String, sessions: [SessionId], projects: [Project] = [], hosts: [FleetHost] = [],
+    accounts: [Account] = [], providers: [ProviderStatus] = [], role: Role? = .owner,
+    connection: ConnectionState = .connected
 ) -> Machine {
     Machine(
-        hostId: hostId, name: name, addresses: [], fingerprint: "", connection: .connected,
+        hostId: hostId, name: name, addresses: [], fingerprint: "", connection: connection,
         quality: ConnectionQuality(connectedSince: nil, reconnects: 0, lastRttMs: nil, averageRttMs: nil, minRttMs: nil,
                                    maxRttMs: nil, missedPongs: 0),
-        role: .owner,
+        role: role,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, parentHost: nil, task: nil,
                         title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0, queue: [])
         },
-        hosts: hosts, projects: projects, accounts: [], failover: FailoverSettings(pin: false), terminals: [],
-        resources: nil, sessionUsage: [:], vault: nil)
+        hosts: hosts, projects: projects, accounts: accounts, failover: FailoverSettings(pin: false),
+        providers: providers, terminals: [], resources: nil, sessionUsage: [:], vault: nil)
 }
 
 struct ListsTests {

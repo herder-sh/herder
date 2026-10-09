@@ -342,6 +342,11 @@ struct ProjectPicker: View {
         .onChange(of: hostId) {
             input.changeMachine()
         }
+        // Clones go into the machine's own projects folder unless moved; owners only, as cloning is.
+        .task(id: hostId) {
+            guard !hostId.isEmpty, let dir = try? await fleet.projectsDir(on: hostId) else { return }
+            input.setProjectsDir(dir)
+        }
         .onChange(of: input.cloning) { input.addError = nil }
         .onChange(of: input.repo) { input.addError = nil }
         .onChange(of: input.url) { input.addError = nil }
@@ -467,13 +472,16 @@ struct ProjectPicker: View {
         return machines.contains { $0.hostId == hostId } && source && (path.hasPrefix("/") || path.hasPrefix("~/"))
     }
 
-    /// The folder a clone of `url` goes into by default: one named after the repository, in `~/Projects`.
-    nonisolated static func cloneFolder(_ url: String) -> String {
+    /// The folder a clone of `url` goes into by default: one named after the repository, in the
+    /// machine's projects folder `dir`.
+    nonisolated static func cloneFolder(_ url: String, in dir: String = "~/Projects") -> String {
         var name = url.trimmingCharacters(in: .whitespaces)
         while name.hasSuffix("/") { name.removeLast() }
         name = String(name.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "")
         if name.hasSuffix(".git") { name.removeLast(4) }
-        return name.isEmpty ? "" : "~/Projects/\(name)"
+        var dir = dir
+        while dir.hasSuffix("/") { dir.removeLast() }
+        return name.isEmpty ? "" : "\(dir)/\(name)"
     }
 
     /// Registers the repository as a project on the machine, cloning it there first when asked,
@@ -503,19 +511,22 @@ struct ProjectRepositoryInput {
     var cloning = false
     var url = ""
     var into = ""
+    /// The machine's projects folder, where a clone goes unless moved.
+    var projectsDir = "~/Projects"
     var changingLocation = false
     var addError: String?
 
     mutating func changeMachine() {
         repo = ""
-        into = ProjectPicker.cloneFolder(url)
+        projectsDir = "~/Projects"
+        into = ProjectPicker.cloneFolder(url, in: projectsDir)
         changingLocation = false
         addError = nil
     }
 
     mutating func updateCloneDestination(from old: String, to new: String) {
-        if into.isEmpty || into == ProjectPicker.cloneFolder(old) {
-            into = ProjectPicker.cloneFolder(new)
+        if into.isEmpty || into == ProjectPicker.cloneFolder(old, in: projectsDir) {
+            into = ProjectPicker.cloneFolder(new, in: projectsDir)
         }
     }
 
@@ -524,6 +535,14 @@ struct ProjectRepositoryInput {
         cloning = false
         changingLocation = false
         addError = nil
+    }
+
+    /// Moves a clone left in the projects folder to the machine's own, `dir`.
+    mutating func setProjectsDir(_ dir: String) {
+        if into.isEmpty || into == ProjectPicker.cloneFolder(url, in: projectsDir) {
+            into = ProjectPicker.cloneFolder(url, in: dir)
+        }
+        projectsDir = dir
     }
 }
 
@@ -581,6 +600,7 @@ struct ProjectSettingsSheet: View {
             } else {
                 Text("No connected machine has this project.").foregroundStyle(Theme.secondary)
             }
+            ProjectReachGroup(fleet: fleet, reach: ProjectReach(projectId: projectId, machines: fleet.machines))
             Button("Add to another machine…") { addingMachine = true }
                 .padding(.top, 8)
         } footer: {

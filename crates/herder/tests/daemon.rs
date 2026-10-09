@@ -18,8 +18,9 @@ fn write_config(dir: &Path) -> std::path::PathBuf {
     std::fs::write(
         &path,
         format!(
-            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n[log]\nformat = \"json\"\n",
-            data_dir.to_str().unwrap()
+            "listen = \"127.0.0.1:0\"\ndata_dir = {:?}\n\n[log]\nformat = \"json\"\n\n[projects]\ndir = {:?}\n",
+            data_dir.to_str().unwrap(),
+            dir.join("Projects").to_str().unwrap()
         ),
     )
     .unwrap();

@@ -246,6 +246,7 @@ impl HostDaemon {
                         project_id: project(),
                         name: "app".into(),
                         paths: vec![repo.to_str().unwrap().to_owned()],
+                        remote: None,
                         default_permission_mode: None,
                         default_account: None,
                         setup_command: None,

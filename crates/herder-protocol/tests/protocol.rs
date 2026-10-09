@@ -193,7 +193,11 @@ fn client_fixtures() -> Vec<ClientMessage> {
         }),
         command(CommandBody::CloneProject {
             url: "herder-sh/herder".into(),
-            path: "~/src/herder".into(),
+            path: Some("~/src/herder".into()),
+        }),
+        command(CommandBody::CloneProject {
+            url: "git@github.com:herder-sh/herder.git".into(),
+            path: None,
         }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
@@ -1314,6 +1318,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     project_id: ProjectId::new("github.com/herder-sh/herder"),
                     name: "herder".into(),
                     paths: vec!["/home/dev/herder".into(), "/srv/herder".into()],
+                    remote: Some("git@github.com:herder-sh/herder.git".into()),
                     default_permission_mode: Some(PermissionMode::AutoEdit),
                     default_account: Some(AccountId::new("01J9ACCOUNT")),
                     setup_command: Some("cargo fetch".into()),
@@ -1327,6 +1332,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
                     name: "scratch".into(),
                     paths: vec!["/home/dev/scratch".into()],
+                    remote: None,
                     default_permission_mode: None,
                     default_account: None,
                     setup_command: None,
@@ -3106,7 +3112,7 @@ fn settings() -> DaemonSettings {
             max_load_percent: 150,
         },
         projects: ProjectDiscovery {
-            roots: vec!["~/Projects".into()],
+            dir: "~/Projects".into(),
             exclude: vec!["~/Projects/old".into()],
             setup_timeout_secs: 900,
         },
