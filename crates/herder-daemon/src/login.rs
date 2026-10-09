@@ -721,6 +721,7 @@ mod tests {
             turn_ids: session::ulid_turn_ids(),
             worktrees: Worktrees::new(home.path().join("worktrees")),
             attachments: home.path().join("attachments"),
+            chats: home.path().join("chats"),
         };
         let sessions = SessionManager::open(setup, CancellationToken::new())
             .await
@@ -1240,6 +1241,7 @@ mod tests {
                     parent_host: None,
                     task: None,
                     failover_pin: None,
+                    chat: false,
                 },
             })
             .unwrap();

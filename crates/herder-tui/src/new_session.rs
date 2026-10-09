@@ -526,6 +526,7 @@ impl App {
             model: (!model.is_empty()).then_some(model),
             permission_mode: Some(dialog.mode),
             failover_pin: None,
+            chat: false,
         };
         vec![Effect::Send {
             host_id: dialog.host_id.clone(),
@@ -623,6 +624,7 @@ mod tests {
                 model: Some("claude-opus".into()),
                 permission_mode: Some(PermissionMode::ReadOnly),
                 failover_pin: None,
+                chat: false,
             },
             origin: Origin::NewSession(HostId::new("h1")),
         };

@@ -412,6 +412,7 @@ impl Scenario<'_> {
                     model: None,
                     permission_mode: Some(PermissionMode::AutoEdit),
                     failover_pin: None,
+                    chat: false,
                 },
             )
             .await?;
@@ -527,6 +528,7 @@ impl Daemon {
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
             attachments: dir.join("attachments"),
+            chats: dir.join("chats"),
         };
         let sessions = SessionManager::open(setup, shutdown.clone()).await?;
         sessions.checkpoint_turns(checkpoint::Config {

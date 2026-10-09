@@ -195,17 +195,32 @@ private func grouped(_ fingerprint: String) -> String {
 /// and permissions preselected; the first prompt creates it.
 struct Draft: Codable, Hashable, Identifiable {
     var hostId: HostId
-    /// The project to start in, or `nil` for `repo`.
+    /// The project to start in, or `nil` for `repo`; neither for a chat.
     var projectId: String?
     var repo: String?
-    var id: String { "\(hostId)/\(projectId ?? repo ?? "")" }
-    /// What the draft is kept on this device by: its project or path, on whichever machine.
-    var key: String { projectId ?? repo ?? "" }
+    var id: String { "\(hostId)/\(key)" }
+    /// What the draft is kept on this device by: its project or path, on whichever machine;
+    /// one key for every chat.
+    var key: String { projectId ?? repo ?? Self.chatKey }
+    /// Whether it starts a chat, a session about no project.
+    var isChat: Bool { projectId == nil && repo == nil }
+
+    /// What a chat draft is kept by; no project id or path is ever this.
+    static let chatKey = "chat"
 
     /// What creating its session names: the project when known, else the path; the daemon
     /// takes exactly one. A just-added project keeps its path only to show it.
     var createArguments: (repo: String?, projectId: String?) {
         projectId == nil ? (repo, nil) : (nil, projectId)
+    }
+
+    /// A chat on the connected machine, not a vault, last picked for a chat on this device, else
+    /// the first.
+    @MainActor
+    static func chat(fleet: Fleet) -> Draft? {
+        let candidates = fleet.machines.filter { $0.connection == .connected && $0.hosts.isEmpty }.map(\.hostId)
+        return machine(among: candidates, last: MachinePreference.last(for: chatKey), newest: nil)
+            .map { Draft(hostId: $0) }
     }
 
     /// A draft in a project, on the connected machine that has it that `machine` picks.

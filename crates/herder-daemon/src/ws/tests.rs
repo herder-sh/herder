@@ -82,6 +82,7 @@ impl Backend for TestBackend {
                 account_id: session.account_id,
                 children_need_you: 0,
                 queue: Vec::new(),
+                chat: false,
             })
             .collect())
     }
@@ -270,6 +271,7 @@ impl Daemon {
                 parent_host: None,
                 task: None,
                 failover_pin: None,
+                chat: false,
             },
         );
         session

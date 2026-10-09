@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 const LOCK_FILE: &str = "daemon.lock";
 const HOST_ID_FILE: &str = "host-id";
-const SUBDIRS: [&str; 3] = ["db", "tls", "sessions"];
+const CHATS: &str = "chats";
+const SUBDIRS: [&str; 4] = ["db", "tls", "sessions", CHATS];
 
 /// An opened data directory. Holds an exclusive lock on it until dropped.
 #[derive(Debug)]
@@ -40,6 +41,12 @@ impl DataDir {
     /// The data directory itself.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Where chats work, a folder per chat: under the data dir, so project discovery never
+    /// lists them.
+    pub fn chats(&self) -> PathBuf {
+        self.root.join(CHATS)
     }
 
     /// This host's stable id.

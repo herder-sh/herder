@@ -372,7 +372,8 @@ impl VaultStore {
                     parent_host: summary.parent_host.clone(),
                     task: summary.task.clone(),
                     title: summary.title.clone(),
-                    project_id: Some(summary.project_id.clone()),
+                    project_id: (!summary.chat).then(|| summary.project_id.clone()),
+                    chat: summary.chat,
                     account_id: account.as_ref()?.account_id.clone(),
                     children_need_you: need_you(&summary.session_id),
                     queue: Vec::new(),
@@ -1050,6 +1051,7 @@ mod tests {
             title: None,
             head_seq: 1,
             updated_at: "2027-01-15T08:00:00Z".parse().unwrap(),
+            chat: false,
         }
     }
 
@@ -1082,9 +1084,14 @@ mod tests {
         store.append(&host, &primary).unwrap();
         let child = Batch {
             session_id: SessionId::new("s2"),
-            events: vec![event(1, created)],
+            events: vec![event(1, created.clone())],
         };
         store.append(&host, &child).unwrap();
+        let chat = Batch {
+            session_id: SessionId::new("s4"),
+            events: vec![event(1, created)],
+        };
+        store.append(&host, &chat).unwrap();
         store
             .put_summary(&host, &summary("s1", None, SessionStatus::Idle))
             .unwrap();
@@ -1095,9 +1102,21 @@ mod tests {
         store
             .put_summary(&host, &summary("s3", None, SessionStatus::Idle))
             .unwrap();
+        let chat = SessionSummary {
+            chat: true,
+            ..summary("s4", None, SessionStatus::Idle)
+        };
+        store.put_summary(&host, &chat).unwrap();
 
         let heads = store.fleet().unwrap();
-        assert_eq!(heads.len(), 2);
+        assert_eq!(heads.len(), 3);
+        assert_eq!(
+            heads
+                .iter()
+                .map(|head| (head.chat, head.project_id.is_some()))
+                .collect::<Vec<_>>(),
+            [(false, true), (false, true), (true, false)]
+        );
         assert_eq!(heads[0].session_id.as_str(), "s1");
         assert_eq!(heads[0].host_id, Some(host.clone()));
         assert_eq!(heads[0].head_seq, 3);
