@@ -107,7 +107,7 @@ struct DesktopShell: View {
             }
         case .vault:
             Pane(title: "Vault", subtitle: "Replicated hosts and their sessions", switcher: switcher) {
-                VaultView(fleet: fleet)
+                VaultView(fleet: fleet, sheet: $sheet)
             } actions: {
                 EmptyView()
             }
@@ -286,7 +286,7 @@ struct Switcher {
         Button("Usage", systemImage: "chart.bar") { go(.usage) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
-        if !fleet.vaults.isEmpty { Button("Vault", systemImage: "archivebox") { go(.vault) } }
+        Button("Vault", systemImage: "archivebox") { go(.vault) }
         Divider()
         ForEach(fleet.lists.projects) { project in
             Button(project.name, systemImage: "shippingbox") { go(.project(project.id)) }
@@ -371,9 +371,7 @@ struct Sidebar: View {
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
-            if !fleet.vaults.isEmpty {
-                SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
-            }
+            SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
 
             HStack {
                 SectionHeading(title: "Projects")
@@ -452,7 +450,7 @@ private struct SidebarRail: View {
             rail("chart.bar", "Usage", .usage, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
-            if !fleet.vaults.isEmpty { rail("archivebox", "Vault", .vault, badge: 0) }
+            rail("archivebox", "Vault", .vault, badge: 0)
             ForEach(lists.projects) { project in
                 rail("shippingbox", project.name, .project(project.id), badge: 0, state: project.state,
                      icon: ProjectIcon(projectId: project.projectId, name: project.name, image: fleet.projectIcon(project.projectId), size: 22))

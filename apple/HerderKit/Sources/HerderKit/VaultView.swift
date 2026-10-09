@@ -99,10 +99,63 @@ struct VaultStats: Hashable, Identifiable {
     }
 }
 
+/// A vault that paired machines back up to while this device is not paired with it, so it
+/// has no statistics to show.
+struct UnpairedVault: Hashable, Identifiable {
+    var id: String { fingerprint }
+    let address: String
+    let fingerprint: String
+    /// The machines that back up to it, by name.
+    let hosts: [String]
+
+    /// The vaults `links` name, each machine's by its name, without those whose fingerprint
+    /// is in `paired`.
+    static func from(_ links: [(host: String, vault: LinkedVault)], paired: Set<String>) -> [UnpairedVault] {
+        Dictionary(grouping: links.filter { !paired.contains($0.vault.fingerprint) }, by: { $0.vault.fingerprint })
+            .map { fingerprint, links in
+                UnpairedVault(address: links[0].vault.address, fingerprint: fingerprint,
+                              hosts: links.map { $0.host }.sorted { $0.lowercased() < $1.lowercased() })
+            }
+            .sorted { $0.address < $1.address }
+    }
+
+    var backsUp: String {
+        "\(ListFormatter.localizedString(byJoining: hosts)) \(hosts.count == 1 ? "backs" : "back") up here"
+    }
+}
+
 extension Fleet {
+    /// How long a machine gets to say where it backs up.
+    static let vaultLinkTimeout: Duration = .seconds(10)
+
     /// The paired vaults' statistics.
     var vaults: [VaultStats] {
         machines.compactMap { VaultStats(machine: $0, sessions: sessions) }
+    }
+
+    /// The vaults the connected machines back up to that this device is not paired with. Only
+    /// an owner may ask a machine where it backs up; a machine that does not answer is left out.
+    func unpairedVaults() async -> [UnpairedVault] {
+        let asked = machines.filter { $0.connection == .connected && $0.hosts.isEmpty && $0.role == .owner }
+        let client = client
+        var links: [(host: String, vault: LinkedVault)] = []
+        await withTaskGroup(of: (String, LinkedVault?).self) { group in
+            for machine in asked {
+                let (hostId, name) = (machine.hostId, machine.name)
+                group.addTask {
+                    let vault = try? await answered(within: Self.vaultLinkTimeout, or: "did not say where it backs up") {
+                        guard case .vaultLink(_, let vault, _) = try await client.send(hostId: hostId, command: .getVaultLink)
+                        else { return nil as LinkedVault? }
+                        return vault
+                    }
+                    return (name, vault)
+                }
+            }
+            for await (name, vault) in group {
+                if let vault { links.append((name, vault)) }
+            }
+        }
+        return UnpairedVault.from(links, paired: Set(machines.map(\.fingerprint)))
     }
 }
 
@@ -110,21 +163,52 @@ extension Fleet {
 /// sessions by state.
 struct VaultView: View {
     let fleet: Fleet
+    @Binding var sheet: AppSheet?
+    @State private var unpaired: [UnpairedVault] = []
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 let vaults = fleet.vaults
-                if vaults.isEmpty {
+                if vaults.isEmpty && unpaired.isEmpty {
                     Text("No vault paired.").foregroundStyle(Theme.tertiary).padding(.top, 30)
                 }
                 ForEach(vaults) { VaultSection(vault: $0) }
+                ForEach(unpaired) { vault in UnpairedVaultCard(vault: vault) { sheet = .pair } }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
         .background(Theme.background)
         .refreshable { fleet.wake() }
+        // Asked again as machines connect, and as a vault gets paired.
+        .task(id: fleet.machines.filter { $0.connection == .connected }.map(\.hostId)) {
+            unpaired = await fleet.unpairedVaults()
+        }
+    }
+}
+
+/// A vault this device is not paired with: who backs up to it, and how to pair with it.
+private struct UnpairedVaultCard: View {
+    let vault: UnpairedVault
+    let pair: () -> Void
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "archivebox").font(.title3).foregroundStyle(Theme.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(vault.address).font(.headline).foregroundStyle(Theme.text)
+                        Text(vault.backsUp).font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                }
+                Text("This device is not paired with the vault, so its statistics do not show. On the vault, run `herder pair`, then add the link it prints as a machine.")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                PaneButton(title: "Add Machine", symbol: "plus", action: pair)
+            }
+        }
     }
 }
 
