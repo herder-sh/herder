@@ -193,7 +193,7 @@ private func grouped(_ fingerprint: String) -> String {
 
 /// A session about to start: where it runs. The chat opens empty, with its account, model
 /// and permissions preselected; the first prompt creates it.
-struct Draft: Hashable, Identifiable {
+struct Draft: Codable, Hashable, Identifiable {
     var hostId: HostId
     /// The project to start in, or `nil` for `repo`.
     var projectId: String?

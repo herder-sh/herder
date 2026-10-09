@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-/// The user's messages in a transcript, as places to jump back to.
+/// The user's messages in a transcript, as places to jump back to; not herder's follow-ups.
 struct Checkpoints: Equatable {
     struct Checkpoint: Equatable, Identifiable {
         /// The id of the user message's block.
@@ -18,7 +18,8 @@ struct Checkpoints: Equatable {
     init(_ blocks: [TranscriptBlock]) {
         for block in blocks {
             switch block {
-            case .user(let id, let text, _, _, _, _):
+            // herder's own follow-ups are not the user's to jump back to.
+            case .user(let id, let text, _, _, _, nil):
                 items.append(Checkpoint(id: id, prompt: Self.flat(text), reply: nil))
             case .assistant(_, let text, _):
                 if let last = items.indices.last, items[last].reply == nil, !text.isEmpty {

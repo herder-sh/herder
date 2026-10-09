@@ -14,17 +14,15 @@ struct TranscriptBlockView: View {
 
     var body: some View {
         switch block {
-        case .user(_, let text, let attachments, let outgoing, let agentMessage, let followUp):
+        case .user(_, let text, _, _, _, .some):
+            FollowUpCard(text: text)
+        case .user(_, let text, let attachments, let outgoing, let agentMessage, _):
             VStack(alignment: .trailing, spacing: 6) {
                 let pictures = MessagePicture.of(attachments: attachments, outgoing: outgoing, in: fleet)
                 // Images the text names by marker show as chips in it; others, above it.
                 let inline = MessageText.refers(text, to: pictures)
                 if let agentMessage {
                     AgentMessageSource(message: agentMessage, fleet: fleet, hostId: hostId, open: open)
-                }
-                if followUp != nil {
-                    Label("From herder", systemImage: "arrow.triangle.pull")
-                        .font(.caption).foregroundStyle(Theme.secondary)
                 }
                 let images = attachments.filter { !$0.isFile }
                 if !inline && !images.isEmpty {
@@ -97,6 +95,36 @@ struct TranscriptBlockView: View {
             HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [],
                            machineName: { fleet.machineName($0, of: key) })
         }
+    }
+}
+
+/// A prompt herder sent the agent on its own, such as a pull request's checks passing: a quiet
+/// card on the agent's side, so it never reads as the user's message.
+struct FollowUpCard: View {
+    let text: String
+    @Environment(\.prLinks) private var prLinks
+    @Environment(\.findHighlight) private var find
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("herder", systemImage: "arrow.triangle.pull")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.tertiary)
+            Text(MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find))
+                .font(.callout)
+                .foregroundStyle(Theme.secondary)
+                .tint(Theme.link)
+                .messageSelection()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.stroke, lineWidth: 1)
+        }
+        .messageCopy(text)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("herder: \(text)")
     }
 }
 
