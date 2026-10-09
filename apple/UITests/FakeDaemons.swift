@@ -10,11 +10,11 @@ extension XCUIApplication {
     /// Pairs with the fake daemons unless an earlier test did: the link pairs once, so
     /// `PairingUITests`, which runs first, leaves the app paired, and a test run on its own pairs.
     ///
-    /// The app reads its machines before its first frame, so once the tab bar shows, Home shows
+    /// The app reads its machines before its first frame, so once the tab bar shows, the Board shows
     /// "Add Machine" exactly when nothing is paired; no guess at how long a cold launch takes.
     @MainActor
     func pairUnlessPaired() throws {
-        XCTAssertTrue(tabBars.buttons["Home"].waitForExistence(timeout: 30), "the app did not show Home")
+        XCTAssertTrue(tabBars.buttons["Board"].waitForExistence(timeout: 30), "the app did not show the Board")
         let add = buttons["Add Machine"].firstMatch
         guard add.exists else { return }
         let link = try Self.pairLink()

@@ -269,11 +269,10 @@ struct NativeAgentTests {
             nestedItem("c-launch", .toolResult(callId: "c", output: launchMetadata, isError: false), turn: "t1"),
         ])
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [script.key: model])
-        let agents = lists.home.first?.agents ?? []
+        let agents = lists.projects.first?.live.first?.agents ?? []
         #expect(agents.map(\.title) == ["Review accounts", "Review colors", "Background scan"])
         #expect(agents.map(\.outcome) == [.ok, .running, .running])
         #expect(agents.map(\.badge.text) == ["Completed", "Running", "Background"])
-        #expect(lists.projects.first?.live.first?.agents == agents)
 
         // The turn ends; the session keeps running for the background agent alone.
         model.apply(script.event(nestedItem("b-result", .toolResult(callId: "b", output: "Contrast fine", isError: false))))

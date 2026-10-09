@@ -2,8 +2,8 @@ import Herder
 import SwiftUI
 
 /// iPad and the Mac: herder's own sidebar and panes, edge to edge, with no system chrome
-/// around them. Home and projects show their sessions beside the open one; Machines fills
-/// the width.
+/// around them. The Board, Pull Requests and projects show their sessions beside the open one;
+/// Machines fills the width.
 struct DesktopShell: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
@@ -41,14 +41,6 @@ struct DesktopShell: View {
     @ViewBuilder private var content: some View {
         let lists = fleet.lists
         switch item {
-        case .home:
-            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Home", subtitle: subtitle(lists), switcher: switcher, query: $query) {
-                    drafting { HomeView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
-                } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
-                }
-            }
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
@@ -72,10 +64,10 @@ struct DesktopShell: View {
             }
         case .board:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Board", subtitle: "Where each session's work stands", switcher: switcher, query: $query) {
-                    drafting { BoardView(fleet: fleet, selection: $session, query: query) }
+                Pane(title: "Board", subtitle: subtitle(lists), switcher: switcher, query: $query) {
+                    drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
-                    EmptyView()
+                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
                 }
             }
         case .pullRequests:
@@ -280,7 +272,6 @@ struct Switcher {
     let session: Binding<SessionKey?>
 
     @MainActor @ViewBuilder var items: some View {
-        Button("Home", systemImage: "tray.full") { go(.home) }
         Button("Board", systemImage: "checklist") { go(.board) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Usage", systemImage: "chart.bar") { go(.usage) }
@@ -361,9 +352,8 @@ struct Sidebar: View {
             .frame(height: Self.topBar)
             .padding(.horizontal, 10)
 
-            SidebarRow(title: "Home", symbol: "tray.full", badge: lists.requests.count, attention: true,
-                       selected: item == .home) { select(.home) }
-            SidebarRow(title: "Board", symbol: "checklist", selected: item == .board) { select(.board) }
+            SidebarRow(title: "Board", symbol: "checklist", badge: lists.requests.count, attention: true,
+                       selected: item == .board) { select(.board) }
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
@@ -444,8 +434,7 @@ private struct SidebarRail: View {
             IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
-            rail("tray.full", "Home", .home, badge: lists.requests.count)
-            rail("checklist", "Board", .board, badge: 0)
+            rail("checklist", "Board", .board, badge: lists.requests.count)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("chart.bar", "Usage", .usage, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)

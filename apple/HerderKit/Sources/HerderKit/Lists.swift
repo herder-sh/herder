@@ -59,10 +59,6 @@ struct ProjectGroup: Hashable, Identifiable {
 /// TUI builds its own (crates/herder-tui/src/app.rs, projects.rs, inbox.rs).
 struct Lists: Equatable {
     var requests: [PendingRequest] = []
-    /// Home's sessions: every task tree whose top is neither archived nor moved or that has a
-    /// working session, newest first by when it was created, so a session keeps its place as
-    /// it starts and stops working.
-    var home: [SessionSummary] = []
     var projects: [ProjectGroup] = []
     var machines: [MachineSummary] = []
 
@@ -89,7 +85,6 @@ struct Lists: Equatable {
         let children = Self.children(entries)
         projects = Self.projects(entries, machines: machines, now: now)
         let flat = entries.map { $0.summary(now: now, children: children) }
-        home = Self.home(entries, children: children, now: now)
 
         requests = zip(entries, flat).flatMap { entry, summary in
             entry.model.forUser.map { pending in
@@ -115,31 +110,6 @@ struct Lists: Equatable {
         }
 
         self.machines = machines.map { Self.summary($0, entries: entries, now: now) }
-    }
-
-    /// Home's task trees, newest first by when the top session was created: the top session
-    /// leads, its working children under it. Idle children are left to their parent, so they
-    /// never crowd Home. A tree whose top is archived or moved is left out unless it still
-    /// has a working session, which keeps its top in place to lead it.
-    private static func home(_ entries: [Entry], children: [SessionKey: [Entry]], now: Date) -> [SessionSummary] {
-        func isWorking(_ entry: Entry) -> Bool { [.running, .waiting, .needsYou].contains(entry.model.state) }
-        func descendants(_ entry: Entry, depth: Int = 0) -> [Entry] {
-            guard depth < 8 else { return [] }
-            return (children[entry.key] ?? []).sorted { $0.key.sessionId < $1.key.sessionId }
-                .flatMap { [$0] + descendants($0, depth: depth + 1) }
-        }
-        return forest(entries).filter { $0.1 == 0 }.map(\.0)
-            .map { top in (top, descendants(top).filter(isWorking)) }
-            .filter { top, working in ![.archived, .moved].contains(top.model.state) || !working.isEmpty }
-            // Session ids are ULIDs, which sort by creation time.
-            .sorted { ($0.0.key.sessionId, $0.0.key.hostId) > ($1.0.key.sessionId, $1.0.key.hostId) }
-            .flatMap { top, working in
-                [top.summary(now: now, children: children)] + working.map { child in
-                    var summary = child.summary(now: now, children: children)
-                    summary.depth = 1
-                    return summary
-                }
-            }
     }
 
     /// Every project a machine lists or a listed session is in, and the sessions no project

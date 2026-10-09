@@ -3,19 +3,18 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case home, board, pullRequests, usage, skills, machines, vault
+    case board, pullRequests, usage, skills, machines, vault
     case project(String)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
 /// Pull Requests inside the Board, and Skills and a vault inside Machines.
 enum CompactTab: Hashable, CaseIterable {
-    case home, projects, board, usage, machines
+    case board, projects, usage, machines
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
         switch item {
-        case .home: self = .home
         case .project: self = .projects
         case .board, .pullRequests: self = .board
         case .usage: self = .usage
@@ -25,9 +24,8 @@ enum CompactTab: Hashable, CaseIterable {
 
     var title: String {
         switch self {
-        case .home: "Home"
-        case .projects: "Projects"
         case .board: "Board"
+        case .projects: "Projects"
         case .usage: "Usage"
         case .machines: "Machines"
         }
@@ -35,9 +33,8 @@ enum CompactTab: Hashable, CaseIterable {
 
     var symbol: String {
         switch self {
-        case .home: "tray.full"
-        case .projects: "square.stack.3d.up"
         case .board: "checklist"
+        case .projects: "square.stack.3d.up"
         case .usage: "chart.bar"
         case .machines: "server.rack"
         }
@@ -48,11 +45,10 @@ enum CompactTab: Hashable, CaseIterable {
 struct FleetView: View {
     let fleet: Fleet
     @State private var sheet: AppSheet?
-    @State private var item: SidebarItem = .home
+    @State private var item: SidebarItem = .board
     @State private var session: SessionKey?
     @State private var draft: Draft?
-    @State private var tab = CompactTab.home
-    @State private var homePath: [NavRoute] = []
+    @State private var tab = CompactTab.board
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
     #if os(iOS)
@@ -115,9 +111,9 @@ struct FleetView: View {
             if let draft {
                 session = nil
                 if showsEverySession { return }
-                // The list beside the chat is the draft's project, or Home for a path.
+                // The list beside the chat is the draft's project, or the Board for a path.
                 let shown = draft.projectId.map { id in fleet.lists.projects.contains { $0.id == id } } ?? false
-                item = shown ? .project(draft.projectId ?? "") : .home
+                item = shown ? .project(draft.projectId ?? "") : .board
             }
         }
         .onChange(of: session) { if session != nil { draft = nil } }
@@ -127,12 +123,13 @@ struct FleetView: View {
         }
         // A removed project's pane has nothing left to show.
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
-            if case .project(let id) = item, !ids.contains(id) { item = .home }
+            if case .project(let id) = item, !ids.contains(id) { item = .board }
         }
-        // A draft belongs to Home or its own project; leaving for elsewhere drops it.
+        // A draft belongs to the Board, Pull Requests or its own project; leaving for elsewhere
+        // drops it.
         .onChange(of: item) {
             guard let draft else { return }
-            if item != .home && item != .project(draft.projectId ?? "") && !showsEverySession { self.draft = nil }
+            if item != .project(draft.projectId ?? "") && !showsEverySession { self.draft = nil }
         }
     }
 
@@ -146,7 +143,7 @@ struct FleetView: View {
 
     /// Shows a session just created from a draft: beside the Board or Pull Requests it was
     /// started from, in its project's pane, or pushed on the Projects tab it was started from,
-    /// else on Home.
+    /// else on the Board.
     private func opened(_ key: SessionKey) {
         draft = nil
         if !showsEverySession, let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
@@ -156,15 +153,15 @@ struct FleetView: View {
         if tab == .projects {
             projectsPath.append(.session(key))
         } else {
-            tab = .home
-            homePath = [.session(key)]
+            tab = .board
+            boardPath = [.session(key)]
         }
     }
 
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$homePath, $projectsPath, $boardPath] {
+        for path in [$projectsPath, $boardPath] {
             if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
@@ -175,7 +172,7 @@ struct FleetView: View {
             ForEach(CompactTab.allCases, id: \.self) { tab in
                 self.tab(tab)
                     .tabItem { Label(tab.title, systemImage: tab.symbol) }
-                    .badge(tab == .home ? fleet.lists.requests.count : 0)
+                    .badge(tab == .board ? fleet.lists.requests.count : 0)
                     .tag(tab)
             }
         }
@@ -183,13 +180,6 @@ struct FleetView: View {
 
     @ViewBuilder private func tab(_ tab: CompactTab) -> some View {
         switch tab {
-        case .home:
-            NavigationStack(path: $homePath) {
-                HomeView(fleet: fleet, sheet: $sheet)
-                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
-                    .navigationDestination(for: NavRoute.self, destination: destination)
-            }
-            .environment(\.sessionPath, $homePath)
         case .projects:
             NavigationStack(path: $projectsPath) {
                 ProjectsView(fleet: fleet, draft: $draft, projects: fleet.lists.projects)
@@ -199,7 +189,8 @@ struct FleetView: View {
             .environment(\.sessionPath, $projectsPath)
         case .board:
             NavigationStack(path: $boardPath) {
-                BoardView(fleet: fleet, showsPullRequests: true)
+                BoardView(fleet: fleet, sheet: $sheet, showsPullRequests: true)
+                    .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $boardPath)
@@ -219,50 +210,8 @@ struct FleetView: View {
     #endif
 }
 
-/// What needs you, then every session that is not archived, in the order they were created.
-struct HomeView: View {
-    let fleet: Fleet
-    @Binding var sheet: AppSheet?
-    /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
-    var selection: Binding<SessionKey?>?
-    /// Keeps the sessions that match.
-    var query = ""
-
-    var body: some View {
-        let lists = fleet.lists
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
-                #if os(iOS)
-                ConnectionLine(machines: lists.machines)
-                #endif
-                if lists.machines.isEmpty {
-                    EmptyFleet { sheet = .pair }
-                }
-                if !lists.requests.isEmpty && query.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SectionHeading(title: "Needs you", count: lists.requests.count, tint: Theme.accent)
-                        ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet, selection: selection) }
-                    }
-                }
-                SessionGroup(title: "Sessions", sessions: lists.home.filter { $0.matches(query) }, fleet: fleet,
-                             selection: selection)
-            }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
-        }
-        .background(Theme.background)
-        .refreshable { fleet.wake() }
-        .navigationTitle("herder")
-        #if os(macOS)
-        .navigationSubtitle(ConnectionLine.text(lists.machines))
-        #endif
-    }
-}
-
 /// "2 of 3 machines connected".
-private struct ConnectionLine: View {
+struct ConnectionLine: View {
     let machines: [MachineSummary]
 
     static func text(_ machines: [MachineSummary]) -> String {
@@ -286,7 +235,7 @@ private struct ConnectionLine: View {
     }
 }
 
-private struct EmptyFleet: View {
+struct EmptyFleet: View {
     let add: () -> Void
 
     var body: some View {

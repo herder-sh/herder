@@ -77,12 +77,12 @@ struct FleetTests {
         let sessionId = key.sessionId
 
         #expect(await eventually {
-            fleet.lists.home.contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
+            fleet.lists.projects.flatMap(\.sessions).contains { $0.key.sessionId == sessionId && $0.activity == "Hello, world." }
         })
         #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == [sessionId])
 
         await fleet.rename(key, to: "Greeting")
-        #expect(await eventually { fleet.lists.home.contains { $0.key == key && $0.title == "Greeting" } })
+        #expect(await eventually { fleet.lists.projects.flatMap(\.sessions).contains { $0.key == key && $0.title == "Greeting" } })
         #expect(fleet.toast == nil)
 
         await fleet.archive(key)
