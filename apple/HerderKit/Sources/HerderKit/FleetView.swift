@@ -3,21 +3,20 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, pullRequests, usage, skills, providers, machines, vault
+    case board, pullRequests, skills, providers, machines, vault
     case project(String)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
 /// Pull Requests inside the Board, and Skills, Providers and a vault inside Machines.
 enum CompactTab: Hashable, CaseIterable {
-    case board, projects, usage, machines
+    case board, projects, machines
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
         switch item {
         case .project: self = .projects
         case .board, .pullRequests: self = .board
-        case .usage: self = .usage
         case .skills, .providers, .machines, .vault: self = .machines
         }
     }
@@ -26,7 +25,6 @@ enum CompactTab: Hashable, CaseIterable {
         switch self {
         case .board: "Board"
         case .projects: "Projects"
-        case .usage: "Usage"
         case .machines: "Machines"
         }
     }
@@ -35,7 +33,6 @@ enum CompactTab: Hashable, CaseIterable {
         switch self {
         case .board: "checklist"
         case .projects: "square.stack.3d.up"
-        case .usage: "chart.bar"
         case .machines: "server.rack"
         }
     }
@@ -194,8 +191,6 @@ struct FleetView: View {
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $boardPath)
-        case .usage:
-            NavigationStack { UsageView(fleet: fleet) }
         case .machines:
             NavigationStack { MachinesView(fleet: fleet, sheet: $sheet, showsVaults: true, showsSections: true) }
         }

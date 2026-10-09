@@ -363,13 +363,14 @@ struct ProjectIconLookupTests {
 
 struct CompactTabTests {
     @Test func compactWidthReachesEverySidebarSection() {
-        #expect(CompactTab.allCases.map(\.title) == ["Board", "Projects", "Usage", "Machines"])
+        #expect(CompactTab.allCases.map(\.title) == ["Board", "Projects", "Machines"])
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.board) == .board)
         // Pull Requests has no tab of its own: it opens from the Board.
         #expect(CompactTab(.pullRequests) == .board)
-        #expect(CompactTab(.usage) == .usage)
         #expect(CompactTab(.skills) == .machines)
+        // Usage shows on Providers, inside Machines.
+        #expect(CompactTab(.providers) == .machines)
         #expect(CompactTab(.machines) == .machines)
         // A vault has no tab of its own: it shows inside Machines.
         #expect(CompactTab(.vault) == .machines)
