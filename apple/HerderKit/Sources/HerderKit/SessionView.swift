@@ -34,11 +34,13 @@ struct SessionView: View {
     /// Bumped on every send, so the transcript jumps to its end.
     @State private var sent = 0
     @State private var find = TranscriptFind()
+    /// The folded blocks shown open, by id; outside the lazy rows, so scrolling keeps them.
+    @State private var expanded: Set<String> = []
 
     var body: some View {
         let model = fleet.sessions[key]
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
-        let blocks = model.map(Transcript.blocks) ?? []
+        let blocks = model.map(Transcript.collapsed) ?? []
         let matches = find.shown ? find.matches(blocks) : []
         VStack(spacing: 0) {
             if let parent = model?.parent {
@@ -105,7 +107,12 @@ struct SessionView: View {
                     proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
                 }
             }
-            .onChange(of: find.current) { if let id = find.current { withAnimation { proxy.scrollTo(id, anchor: .center) } } }
+            .onChange(of: find.current) {
+                guard let id = find.current else { return }
+                // A match in a turn's folded work opens it.
+                if case .work? = blocks.first(where: { $0.id == id }) { expanded.insert(id) }
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
+            }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
                     FindBar(find: $find, matches: matches).padding(12)
@@ -127,6 +134,7 @@ struct SessionView: View {
             }
         }
         .environment(\.prLinks, PRLinks(linkablePRs))
+        .environment(\.transcriptExpanded, $expanded)
         .background(Theme.background)
         .overlay(alignment: .trailing) { EmptyView() }
         .safeAreaInset(edge: .trailing, spacing: 0) {
@@ -140,6 +148,7 @@ struct SessionView: View {
         .onChange(of: key) { old, _ in
             showsTerminal = false
             find = TranscriptFind()
+            expanded = []
             scroll.show(key)
             fleet.unwatch(old)
             fleet.watch(key)

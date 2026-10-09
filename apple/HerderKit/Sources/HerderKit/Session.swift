@@ -66,6 +66,8 @@ struct SessionModel {
     var outbox: [Outgoing] = []
     /// When the running turn started.
     var turnStartedAt: Date?
+    /// When each turn started and ended, for how long it worked.
+    var turnTimes: [TurnId: TurnTime] = [:]
     /// Every event, worded, oldest first.
     var timeline: [TimelineEntry] = []
     /// The events that matter, oldest first, with a turn's tool calls folded into one.
@@ -137,16 +139,17 @@ struct SessionModel {
         case .turnStarted(let turnId):
             turn = turnId
             turnStartedAt = at
+            turnTimes[turnId] = TurnTime(started: at)
             lastTool = nil
             failure = nil
         case .turnCompleted(let turnId, _):
-            endTurn(turnId)
+            endTurn(turnId, at: at)
             turnEnds[turnId] = .completed
         case .turnInterrupted(let turnId):
-            endTurn(turnId)
+            endTurn(turnId, at: at)
             turnEnds[turnId] = .interrupted
         case .turnFailed(let turnId, let error):
-            endTurn(turnId)
+            endTurn(turnId, at: at)
             turnEnds[turnId] = .failed
             failure = error.message
         case .itemAdded(let item) where item.parentCallId == nil:
@@ -464,8 +467,9 @@ struct SessionModel {
         }
     }
 
-    private mutating func endTurn(_ turnId: TurnId) {
+    private mutating func endTurn(_ turnId: TurnId, at: Date) {
         if turn == turnId { turn = nil }
+        turnTimes[turnId, default: TurnTime()].ended = at
         questions.removeAll { $0.turnId == turnId }
     }
 
@@ -644,6 +648,17 @@ enum Timestamp {
         if days > 0 { return "\(days)d \(hours)h" }
         if hours > 0 { return "\(hours)h \(minutes % 60)m" }
         return "\(minutes)m"
+    }
+}
+
+/// When a turn started and ended, either missing when the journal lacks its event.
+struct TurnTime: Hashable {
+    var started: Date?
+    var ended: Date?
+
+    var duration: TimeInterval? {
+        guard let started, let ended else { return nil }
+        return max(0, ended.timeIntervalSince(started))
     }
 }
 

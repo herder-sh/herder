@@ -38,6 +38,8 @@ enum TranscriptBlock: Hashable, Identifiable {
     case notice(Notice)
     case question(AskedQuestion)
     case handoff(Handoff)
+    /// A finished turn's tool calls, reasoning and passing prose, behind one line.
+    case work(TurnWork)
 
     var id: String {
         switch self {
@@ -50,9 +52,30 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .question(let question): "question-\(question.seq)"
         case .handoff(let handoff): "handoff-\(handoff.id)"
         case .report(let report): "report-\(report.id)"
+        case .work(let work): work.id
         }
     }
 
+}
+
+/// What a finished turn did on the way to its answer, in order.
+struct TurnWork: Hashable, Identifiable {
+    let turnId: TurnId
+    /// From the turn's start to its end; `nil` when the journal lacks either.
+    let duration: TimeInterval?
+    let blocks: [TranscriptBlock]
+
+    var id: String { "work-\(turnId)" }
+
+    /// "Worked for 1m 5s", or "Worked" without a duration.
+    var title: String {
+        guard let duration else { return "Worked" }
+        let seconds = Int(duration.rounded())
+        let (hours, minutes) = (seconds / 3600, seconds % 3600 / 60)
+        if hours > 0 { return "Worked for \(hours)h \(minutes)m" }
+        if minutes > 0 { return "Worked for \(minutes)m \(seconds % 60)s" }
+        return "Worked for \(seconds)s"
+    }
 }
 
 /// A child session the agent spawned.
@@ -67,7 +90,53 @@ enum Transcript {
     static func blocks(_ model: SessionModel) -> [TranscriptBlock] { blocks(model, parent: nil) }
 
     static func blocks(_ model: SessionModel, parent: NativeAgent.ID?) -> [TranscriptBlock] {
+        build(model, parent: parent).blocks
+    }
+
+    /// The session's transcript with each finished turn's work folded behind a `.work` block:
+    /// what stays in view is the user's messages, each turn's last reply, and what needs the user.
+    static func collapsed(_ model: SessionModel) -> [TranscriptBlock] {
+        let (blocks, turns) = build(model, parent: nil)
+        var hidden: [TurnId: [Int]] = [:]
+        var replies: [TurnId: Int] = [:]
+        for (index, block) in blocks.enumerated() {
+            guard let turn = turns[index], turn != model.turn else { continue }
+            switch block {
+            case .assistant:
+                if let reply = replies[turn] { hidden[turn, default: []].append(reply) }
+                replies[turn] = index
+            case .tools, .reasoning, .agents:
+                hidden[turn, default: []].append(index)
+            default:
+                break
+            }
+        }
+        // The work sits above the turn's last reply, or where it starts when it follows that reply.
+        var folds: [Int: TurnWork] = [:]
+        for (turn, indices) in hidden {
+            let indices = indices.sorted()
+            guard let first = indices.first else { continue }
+            let reply = replies[turn].flatMap { $0 > first ? $0 : nil }
+            folds[reply ?? first] = TurnWork(turnId: turn, duration: model.turnTimes[turn]?.duration,
+                                             blocks: indices.map { blocks[$0] })
+        }
+        let folded = Set(hidden.values.joined())
+        var result: [TranscriptBlock] = []
+        for (index, block) in blocks.enumerated() {
+            if let work = folds[index] { result.append(.work(work)) }
+            if !folded.contains(index) { result.append(block) }
+        }
+        return result
+    }
+
+    /// The blocks, each with the turn of the items it shows, if any.
+    private static func build(_ model: SessionModel, parent: NativeAgent.ID?) -> (blocks: [TranscriptBlock], turns: [TurnId?]) {
         var blocks: [TranscriptBlock] = []
+        var turns: [TurnId?] = []
+        func append(_ block: TranscriptBlock, turn: TurnId? = nil) {
+            blocks.append(block)
+            turns.append(turn)
+        }
         var calls: [ToolCall] = []
         var callsTurn = ""
         var completedGroups: [TurnId: [ItemId: Int]] = [:]
@@ -77,17 +146,17 @@ enum Transcript {
         func flushCalls() {
             if let first = calls.first {
                 for call in calls { completedGroups[callsTurn, default: [:]][call.id] = blocks.count }
-                blocks.append(.tools(id: "tools-\(callsTurn)/\(first.id)", calls: calls))
+                append(.tools(id: "tools-\(callsTurn)/\(first.id)", calls: calls), turn: callsTurn)
             }
             calls = []
         }
         func flushChildren() {
-            if let first = children.first { blocks.append(.children(id: "children-\(first.sessionId)", children)) }
+            if let first = children.first { append(.children(id: "children-\(first.sessionId)", children)) }
             children = []
         }
         func flushAgents() {
             if let first = agents.first {
-                blocks.append(.agents(id: "agents-\(first.id.turnId)-\(first.id.callId)", agents))
+                append(.agents(id: "agents-\(first.id.turnId)-\(first.id.callId)", agents), turn: first.id.turnId)
             }
             agents = []
         }
@@ -105,7 +174,7 @@ enum Transcript {
             switch item.body {
             case .toolCall(let name, let input) where HtmlVisual.isShowHtml(name):
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.visual(HtmlVisual(id: id, input: input, streaming: streaming)))
+                append(.visual(HtmlVisual(id: id, input: input, streaming: streaming)), turn: item.turnId)
             case .toolCall(let name, let input):
                 flushChildren()
                 if NativeAgent.isAgent(name) || items.contains(where: {
@@ -142,14 +211,14 @@ enum Transcript {
                 }
             case .userMessage(let text, let attachments):
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.user(id: id, text: text, attachments: attachments, outgoing: nil, agentMessage: item.agentMessage,
-                                    followUp: item.followUp))
+                append(.user(id: id, text: text, attachments: attachments, outgoing: nil, agentMessage: item.agentMessage,
+                             followUp: item.followUp), turn: item.turnId)
             case .assistantMessage(let text):
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.assistant(id: id, text: text, streaming: streaming))
+                append(.assistant(id: id, text: text, streaming: streaming), turn: item.turnId)
             case .reasoning(let text):
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.reasoning(id: id, text: text, streaming: streaming))
+                append(.reasoning(id: id, text: text, streaming: streaming), turn: item.turnId)
             case .unknown:
                 break
             }
@@ -161,19 +230,19 @@ enum Transcript {
             case .notice(let notice):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.notice(notice))
+                append(.notice(notice))
             case .question(let question):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.question(question))
+                append(.question(question))
             case .handoff(let handoff):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.handoff(handoff))
+                append(.handoff(handoff))
             case .report(let report):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
-                blocks.append(.report(report))
+                append(.report(report))
             case .child(let sessionId, let task):
                 guard parent == nil else { continue }
                 flushCalls(); flushAgents()
@@ -184,21 +253,21 @@ enum Transcript {
         flushCalls()
         flushChildren()
         flushAgents()
-        if parent != nil { return blocks }
+        if parent != nil { return (blocks, turns) }
         // The turn running now, then what waits behind it; or, idle, what was sent and the wait
         // for the agent to take it.
         let streamingVisible = model.streaming.contains { $0.parentCallId == nil && $0.body.text?.isEmpty == false }
         if model.turn != nil && !streamingVisible {
-            blocks.append(.working(since: model.turnStartedAt, waiting: false))
+            append(.working(since: model.turnStartedAt, waiting: false))
         }
         // What the machine queued shows above the composer, from its queue, not here.
         for outgoing in model.outbox {
-            blocks.append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
+            append(.user(id: outgoing.id.uuidString, text: outgoing.text, outgoing: outgoing))
         }
         if model.turn == nil && model.outbox.contains(where: { $0.state == .delivered }) {
-            blocks.append(.working(since: nil, waiting: true))
+            append(.working(since: nil, waiting: true))
         }
-        return blocks
+        return (blocks, turns)
     }
 
     static func toolCall(id: ItemId, name: String, input: Json, running: Bool) -> ToolCall {
@@ -214,6 +283,28 @@ enum Transcript {
             call.added = lineCount(content)
         }
         return call
+    }
+
+    /// A run of tool calls in a line, by kind in the order they first ran: "Ran 4 commands,
+    /// edited 2 files". Edits and reads count the files they touched.
+    static func summary(_ calls: [ToolCall]) -> String {
+        var kinds: [ToolCall.Kind] = []
+        for call in calls where !kinds.contains(call.kind) { kinds.append(call.kind) }
+        let parts = kinds.map { kind -> String in
+            let of = calls.filter { $0.kind == kind }
+            let files = Set(of.map(\.summary)).count
+            func counted(_ count: Int, _ one: String, _ many: String) -> String { "\(count) \(count == 1 ? one : many)" }
+            return switch kind {
+            case .command: "ran " + counted(of.count, "command", "commands")
+            case .edit: "edited " + counted(files, "file", "files")
+            case .read: "read " + counted(files, "file", "files")
+            case .search: "searched " + counted(of.count, "time", "times")
+            case .web: "fetched " + counted(of.count, "page", "pages")
+            case .other: "used " + counted(of.count, "tool", "tools")
+            }
+        }
+        let line = parts.joined(separator: ", ")
+        return line.prefix(1).uppercased() + line.dropFirst()
     }
 
     static func kind(_ name: String) -> ToolCall.Kind {

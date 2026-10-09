@@ -1,6 +1,12 @@
 import Herder
 import SwiftUI
 
+extension EnvironmentValues {
+    /// The ids of the folded blocks a transcript shows open: a turn's work, a run of tool calls.
+    /// Kept by the transcript's view, so a row scrolled out and back stays as it was.
+    @Entry var transcriptExpanded: Binding<Set<String>> = .constant([])
+}
+
 /// One block of a transcript: prose in focus, tool calls as quiet one-line rows.
 struct TranscriptBlockView: View {
     let block: TranscriptBlock
@@ -91,10 +97,68 @@ struct TranscriptBlockView: View {
             NoticeLine(notice: notice)
         case .question(let question):
             QuestionRecord(question: question)
+        case .work(let work):
+            TurnWorkView(work: work, fleet: fleet, key: key, open: open)
         case .handoff(let handoff):
             HandoffDivider(handoff: handoff, accounts: fleet.machines.first { $0.hostId == hostId }?.accounts ?? [],
                            machineName: { fleet.machineName($0, of: key) })
         }
+    }
+}
+
+/// A finished turn's work as one quiet line, "Worked for 48s ›"; a click lays out its tool
+/// calls, reasoning and passing prose in order.
+private struct TurnWorkView: View {
+    let work: TurnWork
+    let fleet: Fleet
+    let key: SessionKey
+    let open: ((SessionKey) -> Void)?
+    @Environment(\.transcriptExpanded) private var expanded
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Disclosure(title: work.title, id: work.id)
+                .accessibilityIdentifier("turn-work")
+            if expanded.wrappedValue.contains(work.id) {
+                ForEach(work.blocks) { block in
+                    if case .tools(let id, let calls) = block, calls.count > 1 {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Disclosure(title: Transcript.summary(calls), id: id)
+                            if expanded.wrappedValue.contains(id) { ToolGroup(calls: calls) }
+                        }
+                    } else {
+                        TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A line in secondary text with a chevron that opens what it folds, kept by id.
+private struct Disclosure: View {
+    let title: String
+    let id: String
+    @Environment(\.transcriptExpanded) private var expanded
+
+    var body: some View {
+        let open = expanded.wrappedValue.contains(id)
+        Button {
+            if open { expanded.wrappedValue.remove(id) } else { expanded.wrappedValue.insert(id) }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.secondary)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(open ? "Expanded" : "Collapsed")
     }
 }
 
