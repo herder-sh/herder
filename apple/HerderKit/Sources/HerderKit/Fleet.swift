@@ -120,9 +120,11 @@ public final class Fleet {
                 sessions[SessionKey(hostId: machine.hostId, sessionId: head.sessionId)]?.settle(head.queue)
             }
         }
+        // A copy another copy stands for is not followed: a vault's copy of every session would
+        // stream each one twice.
         let listed = Set(machines.flatMap { machine in
             machine.sessions.map { SessionKey(hostId: machine.hostId, sessionId: $0.sessionId) }
-        })
+        }).subtracting(Lists.shadowed(machines))
         for key in listed where subscriptions[key] == nil {
             subscriptions[key] = Task { await self.stream(key) }
         }
