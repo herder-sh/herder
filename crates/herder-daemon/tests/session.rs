@@ -3391,6 +3391,60 @@ async fn restart_keeps_a_prompt_waiting_for_capacity_and_runs_it_once_there_is_r
     daemon.stop().await;
 }
 
+/// A CLI that never finishes starting.
+struct Starting;
+
+impl Adapter for Starting {
+    fn start(&self, _: StartRequest) -> StartFuture {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn restart_while_the_cli_starts_runs_the_prompt_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open_with(
+        dir.path(),
+        Arc::new(Starting),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Default::default(),
+    )
+    .await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Running).await;
+    daemon.stop().await;
+
+    // The turn id the first daemon drew was never journaled.
+    let turns = Arc::new(AtomicU64::new(0));
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", turns.clone()).await;
+    daemon.manager.resume().await.unwrap();
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(
+        describe(&daemon.journal(&session).await),
+        [
+            "alice: session_created",
+            "-: status Running",
+            "alice: user turn-1 First.",
+            "-: turn_started turn-1",
+            "-: assistant turn-1 One.",
+            "-: turn_completed turn-1",
+            "-: status Idle",
+        ]
+    );
+    daemon.stop().await;
+
+    // Nothing is left queued to run again.
+    let daemon = Daemon::open(dir.path(), "first.jsonl", turns).await;
+    daemon.manager.resume().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(daemon.starts.lock().unwrap().is_empty());
+    assert_eq!(daemon.journal(&session).await.len(), 7);
+    daemon.stop().await;
+}
+
 #[tokio::test]
 async fn restart_mid_queue_fails_the_open_turn_then_runs_the_queued_prompt_once() {
     let dir = tempfile::tempdir().unwrap();

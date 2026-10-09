@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
     CommandId, CommandResult, Event, EventBody, HostId, JournalRecord, Project, ProjectId,
-    PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp, UsageTotal,
-    UserId,
+    PromptId, PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
+    UsageTotal, UserId,
 };
 use herder_store::{NativeSession, NewEvent, QueuedPrompt, Session, Store};
 
@@ -67,6 +67,28 @@ impl Journal {
         by: Option<UserId>,
         body: EventBody,
     ) -> Result<Event> {
+        self.append(session_id, by, body, None).await
+    }
+
+    /// Records `body`, the `user_message` item of the queued prompt `prompt_id`, and takes that
+    /// prompt off the stored queue with it ([`Store::append_prompt`]).
+    pub(super) async fn record_prompt(
+        &self,
+        session_id: SessionId,
+        by: Option<UserId>,
+        body: EventBody,
+        prompt_id: PromptId,
+    ) -> Result<Event> {
+        self.append(session_id, by, body, Some(prompt_id)).await
+    }
+
+    async fn append(
+        &self,
+        session_id: SessionId,
+        by: Option<UserId>,
+        body: EventBody,
+        prompt_id: Option<PromptId>,
+    ) -> Result<Event> {
         let lists = matches!(
             body,
             EventBody::SessionCreated { .. }
@@ -84,7 +106,10 @@ impl Journal {
         let sink = self.sink.clone();
         let projects = self.projects.clone();
         self.with_store(move |store| {
-            let stored = store.append(event)?;
+            let stored = match &prompt_id {
+                Some(prompt_id) => store.append_prompt(event, prompt_id)?,
+                None => store.append(event)?,
+            };
             // Usage is recorded here and not on import: a forked history's turns ran, and
             // were counted, on the host it came from.
             if let EventBody::TurnCompleted {

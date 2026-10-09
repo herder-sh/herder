@@ -1585,10 +1585,8 @@ impl Actor {
             };
             self.started.insert(prompt.prompt_id.clone());
             let original = prompt.clone();
-            // Agent queue removal happens atomically with its durable transcript item.
-            if prompt.agent_message.is_none() {
-                self.save_queue().await;
-            }
+            // The stored queue keeps the prompt until its transcript item takes it off, in one
+            // transaction: a restart while the CLI starts runs it then, and never twice.
             let Prompt {
                 prompt_id,
                 agent_message,
@@ -1605,10 +1603,7 @@ impl Actor {
                 super::tasks::rank(self.session.permission_mode)
                     > super::tasks::rank(message.permission_ceiling)
             }) {
-                if let Err(err) = self
-                    .user_message(by, &turn_id, text, attachments, agent_message, follow_up)
-                    .await
-                {
+                if let Err(err) = self.user_message(&turn_id, &original).await {
                     warn!("cannot journal rejected agent message: {err:#}");
                     self.queue.push_front(original);
                     self.set_status(SessionStatus::Error).await;
@@ -1636,10 +1631,7 @@ impl Actor {
                 match self.start_adapter().await {
                     Ok(adapter) => self.adapter = Some(adapter),
                     Err(error) => {
-                        if let Err(err) = self
-                            .user_message(by, &turn_id, text, attachments, agent_message, follow_up)
-                            .await
-                        {
+                        if let Err(err) = self.user_message(&turn_id, &original).await {
                             warn!("cannot journal prompt: {err:#}");
                             self.queue.push_front(original);
                             self.set_status(SessionStatus::Error).await;
@@ -1667,17 +1659,7 @@ impl Actor {
             }
             let images = self.images(&attachments).await;
             let prompt_text = self.with_files(&text, &attachments);
-            if let Err(err) = self
-                .user_message(
-                    by.clone(),
-                    &turn_id,
-                    text.clone(),
-                    attachments.clone(),
-                    agent_message.clone(),
-                    follow_up.clone(),
-                )
-                .await
-            {
+            if let Err(err) = self.user_message(&turn_id, &original).await {
                 warn!("cannot journal prompt: {err:#}");
                 self.queue.push_front(original);
                 self.set_status(SessionStatus::Error).await;
@@ -2589,24 +2571,28 @@ impl Actor {
         }
     }
 
-    async fn user_message(
-        &mut self,
-        by: Option<UserId>,
-        turn_id: &TurnId,
-        text: String,
-        attachments: Vec<Attachment>,
-        agent_message: Option<herder_protocol::AgentMessage>,
-        follow_up: Option<FollowUp>,
-    ) -> Result<()> {
+    /// Journals `prompt` as the user message that starts `turn_id`.
+    async fn user_message(&mut self, turn_id: &TurnId, prompt: &Prompt) -> Result<()> {
         let item = Item {
-            agent_message,
-            follow_up,
+            agent_message: prompt.agent_message.clone(),
+            follow_up: prompt.follow_up.clone(),
             parent_call_id: None,
             id: ItemId::new(ulid::Ulid::new().to_string()),
             turn_id: turn_id.clone(),
-            body: ItemBody::UserMessage { text, attachments },
+            body: ItemBody::UserMessage {
+                text: prompt.text.clone(),
+                attachments: prompt.attachments.clone(),
+            },
         };
-        self.record(by, EventBody::ItemAdded { item }).await?;
+        self.inner
+            .journal
+            .record_prompt(
+                self.session.session_id.clone(),
+                prompt.by.clone(),
+                EventBody::ItemAdded { item },
+                prompt.prompt_id.clone(),
+            )
+            .await?;
         if !titles::enabled(&self.inner) {
             return Ok(());
         }
