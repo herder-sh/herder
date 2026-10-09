@@ -68,6 +68,7 @@ impl Host {
             title: None,
             head_seq: self.journals[session_id].len() as Seq,
             updated_at: at(),
+            chat: false,
         }
     }
 

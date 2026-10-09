@@ -385,11 +385,11 @@
       "description": "What a command asks for.",
       "oneOf": [
         {
-          "description": "Create a session on a new worktree and branch of a repository, named by exactly one of\n`repo` and `project_id`. A folder that is not a git repository with a commit gets no\nworktree or branch: the session works in the folder itself.",
+          "description": "Create a session on a new worktree and branch of a repository, named by exactly one of\n`repo` and `project_id`; or, with `chat`, a chat. A folder that is not a git repository\nwith a commit gets no worktree or branch: the session works in the folder itself.",
           "type": "object",
           "properties": {
             "account_id": {
-              "description": "Account to run on. When absent: the available account of `provider` with the most\nroom left in its usage windows, when `provider` is set; else the project's\n`default_account`, which then must be set.",
+              "description": "Account to run on. When absent: the available account of `provider` with the most\nroom left in its usage windows, when `provider` is set; else the project's\n`default_account`, which then must be set; for a chat, the available account with\nthe most room left of the first provider, in the daemon's account order, that has\none.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/AccountId"
@@ -405,6 +405,10 @@
                 "string",
                 "null"
               ]
+            },
+            "chat": {
+              "description": "Whether the session is a chat, about no project: it works in a new folder of its\nown under the daemon's data dir, without a worktree or branch. Refused with `repo`,\n`project_id` or `branch`.",
+              "type": "boolean"
             },
             "failover_pin": {
               "description": "Whether the session stays on its account when it hits a limit instead of rotating\nto another account of its provider; the daemon's `[failover] pin` when absent.",
@@ -1997,6 +2001,10 @@
                 "string",
                 "null"
               ]
+            },
+            "chat": {
+              "description": "Whether the session is a chat, about no project, working in a folder of its own\nunder the daemon's data dir.",
+              "type": "boolean"
             },
             "failover_pin": {
               "description": "Whether the session stays on its account when it hits a limit; absent for the\ndaemon's `[failover] pin`.",

@@ -232,6 +232,7 @@ impl HostDaemon {
                     }),
                     worktrees: Worktrees::new(dir.join("worktrees")),
                     attachments: dir.join("attachments"),
+                    chats: dir.join("chats"),
                 };
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -486,6 +487,7 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         })
         .await
         .unwrap();
@@ -784,6 +786,7 @@ async fn a_relayed_history_forks_onto_another_host_without_the_vault() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         })
         .await
         .unwrap();
@@ -1002,6 +1005,7 @@ async fn a_session_handed_off_mid_turn_runs_its_prompt_again_on_the_fork() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         })
         .await
         .unwrap();

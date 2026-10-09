@@ -122,6 +122,7 @@ mod tests {
                 account_id: AccountId::new("a"),
                 children_need_you: 0,
                 queue: Vec::new(),
+                chat: false,
             }],
             logs: vec![vec![Event {
                 session_id,

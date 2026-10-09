@@ -1038,6 +1038,7 @@ mod tests {
                 account_id: herder_protocol::AccountId::new("claude"),
                 children_need_you: 0,
                 queue: Vec::new(),
+                chat: false,
             }]
         };
         let first = Arc::new(Outbox::default());
