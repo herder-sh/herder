@@ -606,6 +606,8 @@ impl App {
         let prompt = self.expand_pastes(typed);
         let images = std::mem::take(&mut self.compose.images);
         self.compose.clear();
+        // What is sent shows at the transcript's end: follow it there.
+        self.scroll.top = None;
         let Some(session) = self.sessions.get_mut(&key) else {
             return Vec::new();
         };
@@ -835,6 +837,18 @@ mod tests {
 
     fn error(app: &App) -> Option<&str> {
         app.compose.errors.get(&key("h1", "s2")).map(String::as_str)
+    }
+
+    #[test]
+    fn sending_scrolls_the_transcript_back_to_its_end() {
+        let mut app = writing();
+        app.scroll.top = Some(0);
+        type_text(&mut app, "and the tests?");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            [prompt("and the tests?", vec![])]
+        );
+        assert_eq!(app.scroll.top, None, "follows the end");
     }
 
     #[test]

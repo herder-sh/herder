@@ -87,9 +87,12 @@ struct SessionView: View {
             .id(key)
             // To the last row, unanimated: a lazy stack lays that row out to scroll to it, while
             // the end marker sits where estimated heights put it, which in a long transcript can
-            // be past every row drawn: blank until something scrolls it. What the send adds
-            // then stays in view by the bottom anchor.
+            // be past every row drawn: blank until something scrolls it.
             .onChange(of: sent) { proxy.scrollTo(blocks.last?.id ?? TranscriptScroll.end, anchor: .bottom) }
+            // The prompt joins the transcript only once the send is under way, after `sent`.
+            .onChange(of: model?.outbox.count ?? 0) { old, new in
+                if new > old { proxy.scrollTo(blocks.last?.id ?? TranscriptScroll.end, anchor: .bottom) }
+            }
             .task(id: model?.loaded == true) {
                 guard model?.loaded == true else { return }
                 // Once laid out, land where it was left, else at the end. The bottom anchor alone
