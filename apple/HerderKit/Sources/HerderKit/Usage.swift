@@ -221,7 +221,7 @@ extension Fleet {
                     do {
                         let totals = try await answered(within: Self.usageTimeout,
                                                       or: "did not answer; it may run an older herder") {
-                            guard case .usageSummary(_, _, let totals) = try await client.send(
+                            guard case .usageSummary(_, _, let totals, _) = try await client.send(
                                 hostId: hostId, command: .getUsageSummary(period: period))
                             else { throw HerderError.Local(detail: "the machine did not add its usage up") }
                             return totals

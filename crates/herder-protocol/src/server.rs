@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, HostId,
-    HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId,
+    AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
+    HostId, HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId,
     SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
 };
 
@@ -480,8 +480,8 @@ pub enum CommandResult {
         /// The image file's bytes, at most [`crate::MAX_PROJECT_ICON_BYTES`].
         data: Bytes,
     },
-    /// The tokens and cost of the turns completed on this daemon's host over a period,
-    /// answering `get_usage_summary`.
+    /// The tokens and cost of the turns completed on this daemon's host over a period, and
+    /// each account's limit hits and failovers, answering `get_usage_summary`.
     UsageSummary {
         /// The period asked for.
         period: UsagePeriod,
@@ -490,6 +490,10 @@ pub enum CommandResult {
         /// One total per account and model with a turn in the period, ordered by account,
         /// then model.
         totals: Vec<UsageTotal>,
+        /// One total per account with a limit hit or failover in the period, ordered by
+        /// account; empty from a daemon that does not count them.
+        #[serde(default)]
+        failovers: Vec<FailoverTotal>,
     },
     /// Where the daemon backs its sessions up, answering `get_vault_link`.
     VaultLink {

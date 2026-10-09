@@ -6,7 +6,7 @@ use crate::{Error, Result};
 
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only; never edit a shipped entry.
 const MIGRATIONS: &[&str] = &[
-    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15,
+    V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16,
 ];
 
 /// Schema version this build writes.
@@ -205,6 +205,9 @@ const V15: &str = "
 ALTER TABLE session_prs ADD COLUMN head_sha TEXT;
 ALTER TABLE session_prs ADD COLUMN unresolved_threads INTEGER;
 ";
+
+/// Events by type and time, for usage summaries that count limit hits and failovers.
+const V16: &str = "CREATE INDEX events_type_at ON events (event_type, at);";
 
 /// Brings the schema up to [`VERSION`] in one transaction, refusing a database from a newer build.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<()> {
