@@ -261,6 +261,98 @@ struct DefaultAccountTests {
         #expect(blocks.compactMap { if case .assistant(_, let text, _) = $0 { text } else { nil } } == ["First.", "Second."])
     }
 
+    @Test func aFinishedTurnFoldsItsWorkAboveItsLastReply() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("u", .userMessage(text: "Fix it", attachments: [])),
+            item("th", .reasoning(text: "Where is it?")),
+            item("a1", .assistantMessage(text: "Looking.")),
+            item("c1", .toolCall(name: "Bash", input: #"{"command":"cargo test"}"#)),
+            item("r1", .toolResult(callId: "c1", output: "ok", isError: false)),
+            item("c2", .toolCall(name: "Edit", input: #"{"file_path":"a.rs"}"#)),
+            item("a2", .assistantMessage(text: "Done.")),
+            .turnCompleted(turnId: "t1", usage: nil),
+        ])
+        let blocks = Transcript.collapsed(model)
+        guard blocks.count == 3, case .user = blocks[0], case .work(let work) = blocks[1],
+              case .assistant(_, "Done.", _) = blocks[2] else {
+            Issue.record("unexpected blocks: \(blocks)")
+            return
+        }
+        #expect(work.id == "work-t1")
+        #expect(work.blocks.map(\.id) == ["t1/th", "t1/a1", "tools-t1/c1"])
+        // From turn_started, the second event, to turn_completed, the tenth, a second apart.
+        #expect(work.duration == 8)
+        #expect(work.title == "Worked for 8s")
+    }
+
+    @Test func aReplyBeforeTheToolsStaysInViewAboveTheWork() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("u", .userMessage(text: "Fix it", attachments: [])),
+            item("a", .assistantMessage(text: "On it.")),
+            item("c1", .toolCall(name: "Bash", input: "{}")),
+            item("r1", .toolResult(callId: "c1", output: "ok", isError: false)),
+            .turnFailed(turnId: "t1", error: TurnError(class: .fatal, message: "boom")),
+        ])
+        let blocks = Transcript.collapsed(model)
+        guard blocks.count == 4, case .assistant(_, "On it.", _) = blocks[1], case .work(let work) = blocks[2],
+              case .notice(let notice) = blocks[3] else {
+            Issue.record("unexpected blocks: \(blocks)")
+            return
+        }
+        #expect(work.blocks.map(\.id) == ["tools-t1/c1"])
+        #expect(notice.text == "Turn failed: boom")
+    }
+
+    @Test func theRunningTurnShowsItsWorkAsItGoes() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("u", .userMessage(text: "Fix it", attachments: [])),
+            item("a", .assistantMessage(text: "Done.")),
+            .turnCompleted(turnId: "t1", usage: nil), .turnStarted(turnId: "t2"),
+            item("u", .userMessage(text: "Again", attachments: []), turn: "t2"),
+            item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
+            item("a", .assistantMessage(text: "Running it."), turn: "t2"),
+        ])
+        // A turn with only its reply has no work to fold, and the running one shows all of it.
+        #expect(Transcript.collapsed(model) == Transcript.blocks(model))
+    }
+
+    @Test func eachTurnKeepsHowLongItRan() {
+        var script = Script()
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"), .turnCompleted(turnId: "t1", usage: nil),
+            .turnStarted(turnId: "t2"), item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
+            .turnInterrupted(turnId: "t2"), .turnStarted(turnId: "t3"),
+        ])
+        #expect(model.turnTimes["t1"]?.duration == 1)
+        #expect(model.turnTimes["t2"]?.duration == 2)
+        #expect(model.turnTimes["t3"]?.started != nil)
+        #expect(model.turnTimes["t3"]?.duration == nil)
+    }
+
+    @Test func workReadsAsHowLongItTook() {
+        func title(_ duration: TimeInterval?) -> String { TurnWork(turnId: "t", duration: duration, blocks: []).title }
+        #expect(title(48) == "Worked for 48s")
+        #expect(title(125) == "Worked for 2m 5s")
+        #expect(title(3720) == "Worked for 1h 2m")
+        #expect(title(nil) == "Worked")
+    }
+
+    @Test func aRunOfToolCallsSumsUpByKind() {
+        func calls(_ name: String, _ inputs: [String]) -> [ToolCall] {
+            inputs.map { Transcript.toolCall(id: "\(name)-\($0)", name: name, input: #"{"file_path":"\#($0)","command":"\#($0)","pattern":"\#($0)"}"#, running: false) }
+        }
+        let run = calls("Bash", ["a", "b", "c", "d"]) + calls("Edit", ["x.rs", "y.rs", "x.rs"]) + calls("Read", ["1", "2", "3"])
+            + calls("Grep", ["p", "q"])
+        #expect(Transcript.summary(run) == "Ran 4 commands, edited 2 files, read 3 files, searched 2 times")
+        #expect(Transcript.summary(calls("WebFetch", ["u"])) == "Fetched 1 page")
+    }
+
     @Test func onlyTheQueuedCopyOfADeliveredMessageSettlesIt() {
         var model = SessionModel(key: SessionKey(hostId: "h", sessionId: "s"))
         model.turn = "t1"

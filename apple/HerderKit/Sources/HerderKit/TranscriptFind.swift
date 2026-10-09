@@ -92,6 +92,7 @@ extension TranscriptBlock {
         case .agents(_, let agents): agents.map { [$0.title, $0.prompt, $0.result ?? ""].joined(separator: "\n") }.joined(separator: "\n")
         case .notice(let notice): [notice.text, notice.detail ?? ""].joined(separator: "\n")
         case .question(let question): ([question.text] + question.choices).joined(separator: "\n")
+        case .work(let work): work.blocks.map(\.searchText).joined(separator: "\n")
         case .working, .handoff: ""
         }
     }
