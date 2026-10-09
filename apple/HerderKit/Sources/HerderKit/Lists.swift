@@ -60,6 +60,10 @@ struct ProjectGroup: Hashable, Identifiable {
 struct Lists: Equatable {
     var requests: [PendingRequest] = []
     var projects: [ProjectGroup] = []
+    /// The chats, sessions about no project, in task-tree order: the trees with a live
+    /// session, then those archived whole.
+    var chats: [SessionSummary] = []
+    var archivedChats: [SessionSummary] = []
     var machines: [MachineSummary] = []
 
     init() {}
@@ -93,7 +97,8 @@ struct Lists: Equatable {
         // Each session's children, found once: the lists are rebuilt as sessions stream, so
         // looking them up per session, over every session, would grow with the square of them.
         let children = Self.children(entries)
-        projects = Self.projects(entries, machines: machines, now: now)
+        projects = Self.projects(entries.filter { !$0.head.chat }, machines: machines, now: now)
+        (chats, archivedChats) = Self.split(entries.filter(\.head.chat), now: now)
         let flat = entries.map { $0.summary(now: now, children: children) }
 
         requests = zip(entries, flat).flatMap { entry, summary in
@@ -137,23 +142,7 @@ struct Lists: Equatable {
         }
         let groups = grouped.map { projectId, members -> (ProjectGroup, Date?) in
             let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
-            let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
-            // A session counts only the children in its own project.
-            let children = Self.children(members)
-            var live: [SessionSummary] = []
-            var archived: [SessionSummary] = []
-            for tree in trees(forest(sorted)) {
-                let summaries = tree.map { entry, depth in
-                    var summary = entry.summary(now: now, children: children)
-                    summary.depth = depth
-                    return summary
-                }
-                if tree.allSatisfy({ $0.0.model.state == .archived }) {
-                    archived += summaries
-                } else {
-                    live += summaries
-                }
-            }
+            let (live, archived) = split(members, now: now)
             var machineNames = machines.filter { machine in
                 projectId != nil && machine.projects.contains { $0.projectId == projectId }
             }.map(\.name)
@@ -179,6 +168,28 @@ struct Lists: Equatable {
             if (a.projectId == nil) != (b.projectId == nil) { return b.projectId == nil }
             return (a.name.lowercased(), a.id) < (b.name.lowercased(), b.id)
         }
+    }
+
+    /// `members`' task trees with a live session, whole, then those archived whole. A session
+    /// counts only the children among `members`.
+    private static func split(_ members: [Entry], now: Date) -> (live: [SessionSummary], archived: [SessionSummary]) {
+        let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
+        let children = Self.children(members)
+        var live: [SessionSummary] = []
+        var archived: [SessionSummary] = []
+        for tree in trees(forest(sorted)) {
+            let summaries = tree.map { entry, depth in
+                var summary = entry.summary(now: now, children: children)
+                summary.depth = depth
+                return summary
+            }
+            if tree.allSatisfy({ $0.0.model.state == .archived }) {
+                archived += summaries
+            } else {
+                live += summaries
+            }
+        }
+        return (live, archived)
     }
 
     /// A project's name, the same on every device whatever order it paired its machines in: one

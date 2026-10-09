@@ -455,6 +455,8 @@ impl SessionManager {
             task: Some(input.task.clone()),
             // The task fails over, or stays put, as one.
             failover_pin: settings.failover_pin,
+            // A chat's child chats too, in a folder of its own.
+            chat: primary.chat,
         };
         let (child, branch) = self
             .create_session(None, request)

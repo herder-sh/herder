@@ -94,6 +94,7 @@ impl Daemon {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         };
         match self.manager.handle(alice(), command).await.unwrap() {
             CommandResult::SessionCreated { session_id } => session_id,
@@ -221,6 +222,7 @@ async fn start(
         }),
         worktrees: Worktrees::new(dir.join("worktrees")),
         attachments: dir.join("attachments"),
+        chats: dir.join("chats"),
     };
     let shutdown = CancellationToken::new();
     let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();

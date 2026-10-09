@@ -15,7 +15,7 @@ func machine(
         role: role,
         sessions: sessions.map {
             SessionHead(sessionId: $0, hostId: nil, headSeq: 0, status: .idle, parent: nil, parentHost: nil, task: nil,
-                        title: nil, projectId: nil, accountId: "main", childrenNeedYou: 0, queue: [])
+                        title: nil, projectId: nil, chat: false, accountId: "main", childrenNeedYou: 0, queue: [])
         },
         hosts: hosts, projects: projects, accounts: accounts, failover: FailoverSettings(pin: false),
         providers: providers, terminals: [], resources: nil, sessionUsage: [:], vault: nil)
@@ -179,6 +179,38 @@ struct ListsTests {
             archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
         ])
         #expect(withoutLive.projects.isEmpty)
+    }
+
+    @Test func chatsAreListedApartFromProjectsAndTheBoard() {
+        let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
+        var project = Script("01A")
+        var chat = Script("01B")
+        var archivedChat = Script("01C")
+        var chatChild = Script("01D")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])
+        for index in 1...3 { host.sessions[index].chat = true }
+        let lists = Lists(machines: [host], sessions: [
+            project.key: project.model([created(task: "Not in a project yet")]),
+            chat.key: chat.model([created(task: "What is a monad?")]),
+            archivedChat.key: archivedChat.model([created(task: "Old question"), archive]),
+            chatChild.key: chatChild.model([created(task: "Look it up", parent: "01B")]),
+        ])
+        // Only the session waiting for its project is in "No project yet".
+        #expect(lists.projects.map(\.name) == ["No project yet"])
+        #expect(lists.projects[0].sessions.map(\.title) == ["Not in a project yet"])
+        #expect(lists.chats.map(\.title) == ["What is a monad?", "Look it up"])
+        #expect(lists.chats.map(\.depth) == [0, 1])
+        #expect(lists.archivedChats.map(\.title) == ["Old question"])
+        #expect(lists.board.flatMap(\.trees).map(\.lead.title) == ["Not in a project yet"])
+    }
+
+    @Test func aChatDraftIsKeptApartFromProjectsAndPaths() {
+        let chat = Draft(hostId: "host-a")
+        #expect(chat.isChat)
+        #expect(chat.key == Draft.chatKey)
+        #expect(chat.createArguments.repo == nil && chat.createArguments.projectId == nil)
+        #expect(!Draft(hostId: "host-a", projectId: "github.com/acme/app").isChat)
+        #expect(!Draft(hostId: "host-a", repo: "/src/app").isChat)
     }
 
     @Test func aVaultSessionShowsItsHostAndWhetherItIsOffline() {

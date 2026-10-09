@@ -724,7 +724,8 @@ struct DraftSessionView: View {
     #endif
 
     private var machine: Machine? { fleet.machines.first { $0.hostId == hostId } }
-    /// Machines the draft can run on: the connected ones with the project, or any for a path.
+    /// Machines the draft can run on: the connected ones with the project, or any for a path
+    /// or a chat.
     private var machines: [Machine] {
         fleet.machines.filter { machine in
             machine.connection == .connected && machine.hosts.isEmpty
@@ -770,7 +771,7 @@ struct DraftSessionView: View {
                 text: $text,
                 images: $images,
                 files: $files,
-                placeholder: "Ask for changes, or describe what to build",
+                placeholder: draft.isChat ? "Ask anything" : "Ask for changes, or describe what to build",
                 models: fleet.modelGroups(on: hostId, providers: fleet.providers(on: hostId), current: choice,
                                           offersDefault: true),
                 current: choice,
@@ -786,10 +787,13 @@ struct DraftSessionView: View {
                 FooterMenu(section: machineSection, text: machine?.name ?? "", help: "Where it runs")
                 FooterMenu(section: accountSection, text: account?.label ?? "No account",
                            help: "The account it signs in with")
-                Label("New worktree", systemImage: "folder.badge.plus").lineLimit(1).fixedSize()
+                // A chat works in a folder of its own, with nothing to branch from.
+                if !draft.isChat {
+                    Label("New worktree", systemImage: "folder.badge.plus").lineLimit(1).fixedSize()
+                }
                 Spacer()
                 // Where it branches from goes without saying on a phone, which has no room for it.
-                if !compact {
+                if !compact && !draft.isChat {
                     Label("From the default branch", systemImage: "arrow.triangle.branch").lineLimit(1)
                 }
             }
@@ -832,9 +836,18 @@ struct DraftSessionView: View {
         }
     }
 
-    /// What it asks, with where it runs as a button that picks another project.
-    private var heading: some View {
+    /// What it asks, with where it runs as a button that picks another project; a chat just
+    /// asks, as it runs in no project.
+    @ViewBuilder private var heading: some View {
         let font = Font.system(size: compact ? 24 : 30, weight: .medium)
+        if draft.isChat {
+            Text("Ask anything").font(font).foregroundStyle(Theme.text)
+        } else {
+            projectHeading(font)
+        }
+    }
+
+    private func projectHeading(_ font: Font) -> some View {
         let project = Button { picking = true } label: {
             HStack(spacing: 8) {
                 ProjectIcon(projectId: draft.projectId ?? draft.repo, name: place,
@@ -896,7 +909,7 @@ struct DraftSessionView: View {
     private var machineSection: SettingsSection {
         SettingsSection(kind: .machine, options: SettingsOption.machines(machines, current: hostId) { _ in nil }) { id in
             hostId = id
-            if let projectId = draft.projectId { MachinePreference.remember(id, for: projectId) }
+            if draft.projectId != nil || draft.isChat { MachinePreference.remember(id, for: draft.key) }
             choice = fleet.draftChoice(choice, movedTo: id, projectId: draft.projectId)
         }
     }
@@ -909,7 +922,7 @@ struct DraftSessionView: View {
             return
         }
         ModePreference.remember(mode, for: draft)
-        if let projectId = draft.projectId { MachinePreference.remember(hostId, for: projectId) }
+        if draft.projectId != nil || draft.isChat { MachinePreference.remember(hostId, for: draft.key) }
         let (sent, sentFiles) = (images, files)
         withAnimation(.smooth(duration: 0.4)) {
             starting = prompt
@@ -921,7 +934,8 @@ struct DraftSessionView: View {
         PromptDrafts.shared.save(PromptDrafts.Content(text: "", images: []), for: draft.key)
         do {
             created(try await fleet.createSession(
-                on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId, accountId: account.accountId,
+                on: hostId, repo: draft.createArguments.repo, projectId: draft.createArguments.projectId,
+                chat: draft.isChat, accountId: account.accountId,
                 model: choice.model, mode: mode, prompt: prompt, images: sent, files: sentFiles))
         } catch {
             withAnimation(.smooth(duration: 0.4)) {
@@ -938,7 +952,7 @@ struct DraftSessionView: View {
 }
 
 /// The machine last picked for a new session in a project, or last started one in it on,
-/// remembered per project on this device, so one project's machine does not carry over to
+/// remembered per project on this device, and for chats by `Draft.chatKey`, so one project's machine does not carry over to
 /// another; its new sessions start there while it has the project.
 enum MachinePreference {
     private static func key(_ projectId: String) -> String { "machine." + projectId }

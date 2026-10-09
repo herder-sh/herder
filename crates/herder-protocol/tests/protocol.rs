@@ -92,6 +92,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             model: Some("opus".into()),
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: Some(true),
+            chat: false,
         }),
         command(CommandBody::CreateSession {
             repo: None,
@@ -102,6 +103,18 @@ fn client_fixtures() -> Vec<ClientMessage> {
             model: None,
             permission_mode: None,
             failover_pin: None,
+            chat: false,
+        }),
+        command(CommandBody::CreateSession {
+            repo: None,
+            project_id: None,
+            branch: None,
+            account_id: None,
+            provider: None,
+            model: None,
+            permission_mode: None,
+            failover_pin: None,
+            chat: true,
         }),
         ClientMessage::Sync {
             token: "01J9SYNC".into(),
@@ -500,6 +513,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                             }),
                         },
                     ],
+                    chat: false,
                 },
                 SessionHead {
                     session_id: SessionId::new("01J9CHILD"),
@@ -514,6 +528,22 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     account_id: account_id(),
                     children_need_you: 0,
                     queue: Vec::new(),
+                    chat: false,
+                },
+                SessionHead {
+                    session_id: SessionId::new("01J9CHAT"),
+                    host_id: None,
+                    head_seq: 2,
+                    status: SessionStatus::Idle,
+                    parent: None,
+                    parent_host: None,
+                    task: None,
+                    title: Some("What is a monad?".into()),
+                    project_id: None,
+                    account_id: account_id(),
+                    children_need_you: 0,
+                    queue: Vec::new(),
+                    chat: true,
                 },
             ],
         },
@@ -748,6 +778,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 parent_host: None,
                 task: None,
                 failover_pin: Some(false),
+                chat: false,
             },
         ),
         event(2, owner, EventBody::TurnStarted { turn_id: turn_id() }),
@@ -1449,6 +1480,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 parent_host: None,
                 task: Some("Store migration".into()),
                 failover_pin: None,
+                chat: false,
             },
         ),
         in_primary(
@@ -1484,6 +1516,27 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 parent_host: Some(HostId::new("01J9HOST")),
                 task: Some("Build the Mac app".into()),
                 failover_pin: None,
+                chat: false,
+            },
+        }),
+        ServerMessage::Event(Event {
+            session_id: SessionId::new("01J9CHAT"),
+            seq: 1,
+            at: at(),
+            by: Some(UserId::new("01J9OWNER")),
+            body: EventBody::SessionCreated {
+                repo: "/home/dev/.local/share/herder/chats/1a2b3c4d".into(),
+                worktree: "/home/dev/.local/share/herder/chats/1a2b3c4d".into(),
+                branch: None,
+                provider: Provider::Claude,
+                account_id: AccountId::new("01J9ACCOUNT"),
+                model: "opus".into(),
+                permission_mode: PermissionMode::Ask,
+                parent: None,
+                parent_host: None,
+                task: None,
+                failover_pin: None,
+                chat: true,
             },
         }),
         in_primary(
@@ -1798,6 +1851,7 @@ fn remote_parent_and_child_host_are_on_the_wire_only_when_set() {
         parent_host,
         task: None,
         failover_pin: None,
+        chat: false,
     };
     let spawned = |host_id: Option<HostId>| EventBody::ChildSpawned {
         child_session_id: SessionId::new("c"),
@@ -2156,6 +2210,7 @@ fn project_optional_fields_may_be_absent() {
             model: None,
             permission_mode: None,
             failover_pin: None,
+            chat: false,
         }
     );
 
@@ -2600,6 +2655,7 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
         title: None,
         head_seq: 17,
         updated_at: at(),
+        chat: false,
     }
 }
 

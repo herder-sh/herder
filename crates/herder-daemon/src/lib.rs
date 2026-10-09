@@ -136,6 +136,7 @@ pub async fn serve(
         turn_ids: session::ulid_turn_ids(),
         worktrees: worktree::Worktrees::new(data_dir.root().join("worktrees")),
         attachments: data_dir.root().join("attachments"),
+        chats: data_dir.chats(),
     };
     let sessions = session::SessionManager::open(setup, shutdown.clone()).await?;
     let projects = Arc::new(projects::Overrides::new(

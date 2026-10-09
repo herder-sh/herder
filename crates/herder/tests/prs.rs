@@ -567,6 +567,7 @@ impl World {
                     model: None,
                     permission_mode: Some(PermissionMode::Ask),
                     failover_pin: None,
+                    chat: false,
                 },
             )
             .await
@@ -689,6 +690,7 @@ async fn daemon(
         }),
         worktrees: Worktrees::new(data.join("worktrees")),
         attachments: data.join("attachments"),
+        chats: data.join("chats"),
     };
     let shutdown = CancellationToken::new();
     let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();

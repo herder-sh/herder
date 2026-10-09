@@ -72,6 +72,7 @@ async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching
         }),
         worktrees: Worktrees::new(dir.join("worktrees")),
         attachments: dir.join("attachments"),
+        chats: dir.join("chats"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -216,6 +217,18 @@ async fn a_script_runs_a_session_from_new_to_archive() {
     let status = session(&home, &["status", &by_provider], "", 0).await;
     assert_eq!(status["account_id"], "work");
     session(&home, &["archive", &by_provider], "", 0).await;
+
+    // A chat, about no project, in a folder of its own on the only account.
+    let created = session(&home, &["new", "--chat"], "", 0).await;
+    let chat = created["session_id"].as_str().unwrap().to_owned();
+    let status = session(&home, &["status", &chat], "", 0).await;
+    assert_eq!(status["account_id"], "work");
+    let folder = status["repo"].as_str().unwrap();
+    assert!(
+        Path::new(folder).starts_with(tmp.path().join("daemon/chats")),
+        "{folder}"
+    );
+    session(&home, &["archive", &chat], "", 0).await;
 
     // Failures exit 1 with a reason; a wait on an archived session is one.
     let unknown = herder(&home, &["session", "status", "nope"], "").await;

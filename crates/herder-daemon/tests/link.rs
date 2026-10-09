@@ -127,6 +127,7 @@ fn seed(data_dir: &Path, session: &str) {
                 parent_host: None,
                 task: None,
                 failover_pin: None,
+                chat: false,
             },
         })
         .unwrap();

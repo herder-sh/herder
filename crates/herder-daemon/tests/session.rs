@@ -218,6 +218,7 @@ impl Daemon {
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
             attachments: dir.join("attachments"),
+            chats: dir.join("chats"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -260,6 +261,7 @@ impl Daemon {
                     model: None,
                     permission_mode: Some(PermissionMode::Ask),
                     failover_pin: None,
+                    chat: false,
                 },
             )
             .await
@@ -569,6 +571,7 @@ async fn restart_lists_sessions_and_resumes_seeded_from_the_journal() {
             account_id: account(),
             children_need_you: 0,
             queue: Vec::new(),
+            chat: false,
         }]
     );
     // Nothing starts until the next prompt.
@@ -1330,6 +1333,7 @@ async fn commands_for_unknown_sessions_and_accounts_are_not_found() {
         model: None,
         permission_mode: Some(PermissionMode::Ask),
         failover_pin: None,
+        chat: false,
     };
     let error = daemon.manager.handle(alice(), create).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
@@ -1361,6 +1365,7 @@ async fn create_by_project_or_repo_falls_back_to_the_projects_default_account() 
         model: None,
         permission_mode: Some(PermissionMode::Ask),
         failover_pin: None,
+        chat: false,
     };
     let code = |result: Result<CommandResult, ErrorInfo>| result.unwrap_err().code;
 
@@ -1455,6 +1460,113 @@ async fn create_puts_the_session_on_its_own_worktree_and_branch() {
     );
 }
 
+/// A `create_session` for a chat, on `account_id` when given.
+fn create_chat(account_id: Option<&str>) -> CommandBody {
+    CommandBody::CreateSession {
+        repo: None,
+        project_id: None,
+        chat: true,
+        branch: None,
+        account_id: account_id.map(AccountId::new),
+        provider: None,
+        model: None,
+        permission_mode: None,
+        failover_pin: None,
+    }
+}
+
+#[tokio::test]
+async fn a_chat_works_in_a_folder_of_its_own_on_an_available_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let mut folders = Vec::new();
+    for _ in 0..2 {
+        // Neither account nor provider: the only available account.
+        let Ok(CommandResult::SessionCreated { session_id }) =
+            daemon.manager.handle(alice(), create_chat(None)).await
+        else {
+            panic!("expected a created chat");
+        };
+        let journal = daemon.journal(&session_id).await;
+        let EventBody::SessionCreated {
+            repo,
+            worktree,
+            branch,
+            account_id,
+            chat,
+            ..
+        } = &journal[0].body
+        else {
+            panic!("expected session_created, got {:?}", journal[0].body);
+        };
+        let slug = session_id.as_str()[18..].to_lowercase();
+        let folder = dir.path().join("chats").join(slug);
+        assert_eq!((Path::new(repo), Path::new(worktree)), (&*folder, &*folder));
+        assert_eq!((branch, account_id, chat), (&None, &account(), &true));
+        assert!(folder.is_dir());
+        folders.push((session_id, folder));
+    }
+    assert_ne!(folders[0].1, folders[1].1);
+
+    // Listed as a chat, about no project.
+    let heads = daemon.manager.sessions().await.unwrap();
+    assert!(
+        heads
+            .iter()
+            .all(|head| head.chat && head.project_id.is_none())
+    );
+
+    // The agent runs in the chat's folder.
+    let (chat, folder) = &folders[0];
+    daemon.prompt(alice(), chat, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+    assert_eq!(daemon.starts.lock().unwrap()[0].cwd, *folder);
+
+    // Archived and brought back like any session; its folder stays.
+    let archive = CommandBody::ArchiveSession {
+        session_id: chat.clone(),
+    };
+    let archived = daemon.manager.handle(alice(), archive).await;
+    assert_eq!(archived, Ok(CommandResult::Applied));
+    daemon
+        .manager
+        .remove_archived_worktrees(SignedDuration::ZERO)
+        .await
+        .unwrap();
+    assert!(folder.is_dir());
+    let unarchive = CommandBody::UnarchiveSession {
+        session_id: chat.clone(),
+    };
+    let unarchived = daemon.manager.handle(alice(), unarchive).await;
+    assert_eq!(unarchived, Ok(CommandResult::Applied));
+
+    // A chat names no repository, and is not forked.
+    let repo = daemon.repo.to_str().unwrap().to_owned();
+    for (repo, branch) in [(Some(repo), None), (None, Some("feature".to_owned()))] {
+        let command = CommandBody::CreateSession {
+            repo,
+            project_id: None,
+            chat: true,
+            branch,
+            account_id: None,
+            provider: None,
+            model: None,
+            permission_mode: None,
+            failover_pin: None,
+        };
+        let refused = daemon.manager.handle(alice(), command).await.unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+    }
+    let fork = CommandBody::ForkSession {
+        session_id: chat.clone(),
+        account_id: None,
+        relay: None,
+    };
+    let refused = daemon.manager.handle(alice(), fork).await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Unsupported, "{}", refused.message);
+    daemon.stop().await;
+}
+
 #[tokio::test]
 async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -1468,6 +1580,7 @@ async fn create_with_a_branch_name_uses_it_and_rejects_a_taken_one() {
         model: None,
         permission_mode: Some(PermissionMode::Ask),
         failover_pin: None,
+        chat: false,
     };
     let result = daemon.manager.handle(alice(), create("fix/login")).await;
     let Ok(CommandResult::SessionCreated { session_id }) = result else {
@@ -1728,6 +1841,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
         turn_ids: Box::new(|| TurnId::new("turn-1")),
         worktrees: Worktrees::new(dir.path().join("worktrees")),
         attachments: dir.path().join("attachments"),
+        chats: dir.path().join("chats"),
     };
     let shutdown = CancellationToken::new();
     let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -1770,6 +1884,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
             manager.handle(alice(), create).await
@@ -2265,6 +2380,7 @@ impl Switching {
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
             attachments: dir.join("attachments"),
+            chats: dir.join("chats"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -2305,6 +2421,7 @@ impl Switching {
             model: model.map(str::to_owned),
             permission_mode: Some(PermissionMode::Ask),
             failover_pin,
+            chat: false,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
             self.manager.handle(alice(), create).await
@@ -2919,6 +3036,7 @@ async fn a_child_switches_to_any_account_like_its_primary() {
         parent,
         parent_host: None,
         failover_pin: None,
+        chat: false,
     };
     let (primary, child) = (SessionId::new("primary"), SessionId::new("child"));
     let daemon = Switching::open(
@@ -3501,6 +3619,7 @@ async fn a_command_resent_after_a_restart_is_not_applied_again() {
         model: None,
         permission_mode: Some(PermissionMode::Ask),
         failover_pin: None,
+        chat: false,
     };
     let (c1, c2) = (CommandId::new("c1"), CommandId::new("c2"));
     let created = daemon
@@ -3642,6 +3761,43 @@ async fn a_limit_on_one_account_rotates_the_turn_to_another_of_its_provider() {
             "assistant: Splitting the lexer out."
         ]
     );
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn a_chat_fails_over_to_another_account_of_its_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let Ok(CommandResult::SessionCreated { session_id }) =
+        daemon.handle(create_chat(Some("claude-a"))).await
+    else {
+        panic!("expected a created chat");
+    };
+    daemon.send(&session_id, "Refactor the parser.").await;
+
+    let journal = daemon.settled(&session_id, SessionStatus::Idle).await;
+    let described = from_first_turn(&journal);
+    assert!(
+        described.contains(&"-: account_switched claude-b".to_owned()),
+        "{described:#?}"
+    );
+    assert_eq!(described.last().map(String::as_str), Some("-: status Idle"));
+    let starts = claude.starts();
+    let [on_a, on_b] = starts.as_slice() else {
+        panic!("expected two starts, got {starts:?}");
+    };
+    assert_eq!(on_b.config_dir, Some(dir.path().join("claude-b")));
+    assert_eq!(on_a.cwd, on_b.cwd);
     daemon.shutdown.cancel();
 }
 
@@ -4818,6 +4974,7 @@ async fn a_session_created_by_provider_starts_on_its_account_with_most_room() {
             model: None,
             permission_mode: None,
             failover_pin: None,
+            chat: false,
         };
     let Ok(CommandResult::SessionCreated { session_id }) =
         daemon.handle(create(None, Some(Provider::Claude))).await
@@ -4882,6 +5039,7 @@ async fn a_session_starts_in_its_projects_default_permission_mode_unless_given_o
             model: None,
             permission_mode: given,
             failover_pin: None,
+            chat: false,
         };
         let Ok(CommandResult::SessionCreated { session_id }) =
             daemon.manager.handle(alice(), create).await
@@ -5087,6 +5245,7 @@ async fn a_session_in_a_folder_that_is_not_a_git_repository_works_in_the_folder(
         model: None,
         permission_mode: None,
         failover_pin: None,
+        chat: false,
     };
     let error = daemon.manager.handle(alice(), named).await.unwrap_err();
     assert_eq!(error.code, ErrorCode::BadRequest, "{error:?}");

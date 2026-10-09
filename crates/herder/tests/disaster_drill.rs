@@ -605,6 +605,7 @@ async fn a_dead_hosts_session_is_forked_on_another_host_from_the_vault() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         })
         .await
         .unwrap();

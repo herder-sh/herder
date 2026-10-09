@@ -134,6 +134,7 @@ impl Daemon {
                 }),
                 worktrees: Worktrees::new(dir.join("worktrees")),
                 attachments: dir.join("attachments"),
+                chats: dir.join("chats"),
             };
             let shutdown = CancellationToken::new();
             let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -345,6 +346,7 @@ async fn a_daemon_killed_mid_turn_leaves_no_gap_and_no_duplicate() {
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
                 failover_pin: None,
+                chat: false,
             },
         )
         .await
@@ -452,6 +454,7 @@ async fn synced_waits_for_the_lists_and_the_replay() {
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
                 failover_pin: None,
+                chat: false,
             },
         )
         .await
@@ -870,6 +873,7 @@ async fn a_terminal_streams_across_a_cut_connection_until_its_exit() {
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
                 failover_pin: None,
+                chat: false,
             },
         )
         .await
@@ -1357,6 +1361,7 @@ async fn create_session(client: &Client, host: &HostId, repo: String) -> Session
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
                 failover_pin: None,
+                chat: false,
             },
         )
         .await

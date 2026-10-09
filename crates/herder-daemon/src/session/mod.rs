@@ -54,6 +54,14 @@
 //! still there, else adds it back at the path it had, on the session's own branch, and
 //! journals the `idle` status.
 //!
+//! # Chats
+//!
+//! A chat (`create_session` with `chat`) is a session about no project: it works in a new
+//! folder of its own, `<chats>/<slug>` under the data dir, with no worktree or branch, so
+//! concurrent chats never share files. Discovery never lists a folder under the data dir as a
+//! project, and archive leaves the folder as it is. Accounts, failover and archive work as for
+//! any session; a chat cannot be forked.
+//!
 //! # Images and files
 //!
 //! A prompt may carry images when its session's adapter takes them
@@ -264,7 +272,7 @@ use crate::resources::{Admission, Docker, Scopes};
 use crate::skills::Skills;
 use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
-use crate::worktree::{self, Worktrees, checkpoint};
+use crate::worktree::{self, Worktree, Worktrees, checkpoint};
 
 /// How long an archived session's worktree is kept before it is removed.
 pub const KEEP_ARCHIVED_WORKTREE: SignedDuration = SignedDuration::from_hours(3 * 24);
@@ -347,6 +355,8 @@ pub struct Setup {
     pub worktrees: Worktrees,
     /// Where the images prompts carry are kept, a directory per session.
     pub attachments: PathBuf,
+    /// Where chats work, a folder per chat.
+    pub chats: PathBuf,
 }
 
 impl Inner {
@@ -377,6 +387,8 @@ struct Inner {
     worktrees: Worktrees,
     /// Where prompts' images are kept ([`attachments`]).
     attachments: PathBuf,
+    /// Where chats work, a folder per chat.
+    chats: PathBuf,
     actors: Mutex<HashMap<SessionId, mpsc::UnboundedSender<SessionCommand>>>,
     /// Pull request tracking, once started.
     prs: OnceLock<Arc<PrTracker>>,
@@ -547,6 +559,7 @@ impl SessionManager {
                 turn_ids: setup.turn_ids,
                 worktrees: setup.worktrees,
                 attachments: setup.attachments,
+                chats: setup.chats,
                 actors: Mutex::new(HashMap::new()),
                 prs: OnceLock::new(),
                 stalls: OnceLock::new(),
@@ -591,6 +604,7 @@ impl SessionManager {
             CommandBody::CreateSession {
                 repo,
                 project_id,
+                chat,
                 branch,
                 account_id,
                 provider,
@@ -598,9 +612,20 @@ impl SessionManager {
                 permission_mode,
                 failover_pin,
             } => {
-                let (repo, project) = self.resolve_repo(repo, project_id)?;
-                let account_id =
-                    self.pick_account(account_id, provider, &repo, project.as_ref())?;
+                let (repo, project) = if chat {
+                    if repo.is_some() || project_id.is_some() || branch.is_some() {
+                        return Err(error(
+                            ErrorCode::BadRequest,
+                            "a chat is about no repository: drop `repo`, `project_id` and \
+                             `branch`",
+                        ));
+                    }
+                    (String::new(), None)
+                } else {
+                    self.resolve_repo(repo, project_id)?
+                };
+                let place = (!chat).then_some((repo.as_str(), project.as_ref()));
+                let account_id = self.pick_account(account_id, provider, place)?;
                 let permission_mode = permission_mode
                     .or(project.and_then(|project| project.default_permission_mode))
                     .unwrap_or(PermissionMode::Ask);
@@ -613,6 +638,7 @@ impl SessionManager {
                     parent: None,
                     task: None,
                     failover_pin,
+                    chat,
                 };
                 let (session_id, _) = self.create_session(Some(by), request).await?;
                 return Ok(CommandResult::SessionCreated { session_id });
@@ -1754,14 +1780,15 @@ impl SessionManager {
     }
 
     /// The account a `create_session` runs on: `account_id`, which must be of `provider` when
-    /// both are given; else the available account of `provider` with the most room left; else
-    /// the default account of `project`, the project of `repo`.
+    /// both are given; else the available account of `provider` with the most room left; else,
+    /// for a session in `repo`, the default account of its project, `None` when discovery
+    /// knows none; else, for a chat (`repo` `None`), the available account with the most room
+    /// left of the first provider, in account order, that has one.
     fn pick_account(
         &self,
         account_id: Option<AccountId>,
         provider: Option<Provider>,
-        repo: &str,
-        project: Option<&Project>,
+        repo: Option<(&str, Option<&Project>)>,
     ) -> Result<AccountId, ErrorInfo> {
         let inner = &self.inner;
         match (account_id, provider) {
@@ -1808,17 +1835,35 @@ impl SessionManager {
                     )
                 })
             }
-            (None, None) => project
-                .and_then(|project| project.default_account.clone())
-                .ok_or_else(|| {
-                    error(
-                        ErrorCode::BadRequest,
-                        format!(
-                            "pick an account or a provider: the project of {repo} has no \
-                             default_account"
-                        ),
-                    )
-                }),
+            (None, None) => {
+                if let Some((repo, project)) = repo {
+                    return project
+                        .and_then(|project| project.default_account.clone())
+                        .ok_or_else(|| {
+                            error(
+                                ErrorCode::BadRequest,
+                                format!(
+                                    "pick an account or a provider: the project of {repo} has \
+                                     no default_account"
+                                ),
+                            )
+                        });
+                }
+                let providers: Vec<Provider> = inner
+                    .accounts_lock()
+                    .values()
+                    .map(|account| account.provider.clone())
+                    .collect();
+                providers
+                    .iter()
+                    .find_map(|provider| inner.available_account(provider, None))
+                    .ok_or_else(|| {
+                        error(
+                            ErrorCode::Conflict,
+                            "no account is available; try again once one resets",
+                        )
+                    })
+            }
         }
     }
 
@@ -1901,19 +1946,34 @@ impl SessionManager {
             ));
         }
         let session_id = SessionId::new(ulid::Ulid::new().to_string());
-        let repo = PathBuf::from(&request.repo);
-        let worktree = inner
-            .worktrees
-            .create(
-                Path::new(&request.repo),
-                &worktree::slug(&session_id),
-                request.branch,
-            )
-            .await
-            .map_err(worktree_error)?;
+        let (repo, worktree) = if request.chat {
+            let folder = inner.chats.join(worktree::slug(&session_id));
+            tokio::fs::create_dir_all(&folder).await.map_err(|err| {
+                error(
+                    ErrorCode::Internal,
+                    format!("cannot create {}: {err}", folder.display()),
+                )
+            })?;
+            let worktree = Worktree {
+                path: folder.clone(),
+                branch: None,
+            };
+            (folder, worktree)
+        } else {
+            let worktree = inner
+                .worktrees
+                .create(
+                    Path::new(&request.repo),
+                    &worktree::slug(&session_id),
+                    request.branch,
+                )
+                .await
+                .map_err(worktree_error)?;
+            (PathBuf::from(&request.repo), worktree)
+        };
         let account_id = request.account_id.clone();
         let body = EventBody::SessionCreated {
-            repo: request.repo,
+            repo: repo.to_string_lossy().into_owned(),
             worktree: worktree.path.to_string_lossy().into_owned(),
             branch: worktree.branch.clone(),
             provider: account.provider.clone(),
@@ -1925,6 +1985,7 @@ impl SessionManager {
             parent_host: None,
             task: request.task,
             failover_pin: request.failover_pin,
+            chat: request.chat,
         };
         inner
             .journal
@@ -2051,6 +2112,7 @@ impl SessionManager {
 
 /// A `create_session` command, or a `spawn`.
 struct CreateRequest {
+    /// The repository; ignored for a chat, which gets a folder of its own.
     repo: String,
     branch: Option<String>,
     account_id: AccountId,
@@ -2062,6 +2124,8 @@ struct CreateRequest {
     task: Option<String>,
     /// The session's own failover pin.
     failover_pin: Option<bool>,
+    /// Whether the session is a chat.
+    chat: bool,
 }
 
 /// Whether `command` only reads: it changes nothing, so its answer, which may be large, is

@@ -204,6 +204,7 @@ impl HostDaemon {
                     turn_ids: Box::new(|| TurnId::new("turn")),
                     worktrees: Worktrees::new(dir.join("worktrees")),
                     attachments: dir.join("attachments"),
+                    chats: dir.join("chats"),
                 };
                 let shutdown = CancellationToken::new();
                 let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -260,6 +261,7 @@ fn seed(dir: &Path, sessions: usize, events: usize) {
                 parent_host: None,
                 task: None,
                 failover_pin: None,
+                chat: false,
             };
             append(&mut store, &session_id, body);
         }

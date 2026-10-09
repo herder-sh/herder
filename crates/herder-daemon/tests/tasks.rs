@@ -269,6 +269,7 @@ impl Daemon {
             turn_ids: ulid_turn_ids(),
             worktrees: Worktrees::new(dir.join("worktrees")),
             attachments: dir.join("attachments"),
+            chats: dir.join("chats"),
         };
         let shutdown = CancellationToken::new();
         let manager = SessionManager::open(setup, shutdown.clone()).await.unwrap();
@@ -314,6 +315,7 @@ impl Daemon {
             model: Some("echo-1".into()),
             permission_mode: Some(mode),
             failover_pin: None,
+            chat: false,
         };
         let CommandResult::SessionCreated { session_id } =
             self.manager.handle(alice(), create).await.unwrap()

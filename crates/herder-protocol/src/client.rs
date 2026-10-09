@@ -105,8 +105,8 @@ pub enum HistoryPart {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CommandBody {
     /// Create a session on a new worktree and branch of a repository, named by exactly one of
-    /// `repo` and `project_id`. A folder that is not a git repository with a commit gets no
-    /// worktree or branch: the session works in the folder itself.
+    /// `repo` and `project_id`; or, with `chat`, a chat. A folder that is not a git repository
+    /// with a commit gets no worktree or branch: the session works in the folder itself.
     CreateSession {
         /// Absolute path of the repository on the host.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,13 +114,20 @@ pub enum CommandBody {
         /// Project to work on, in its first clone on the host.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project_id: Option<ProjectId>,
+        /// Whether the session is a chat, about no project: it works in a new folder of its
+        /// own under the daemon's data dir, without a worktree or branch. Refused with `repo`,
+        /// `project_id` or `branch`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        chat: bool,
         /// Branch to create; the daemon picks a name when absent. Refused for a folder that is
         /// not a git repository with a commit.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
         /// Account to run on. When absent: the available account of `provider` with the most
         /// room left in its usage windows, when `provider` is set; else the project's
-        /// `default_account`, which then must be set.
+        /// `default_account`, which then must be set; for a chat, the available account with
+        /// the most room left of the first provider, in the daemon's account order, that has
+        /// one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<AccountId>,
         /// Provider to run on, when `account_id` is absent; with `account_id`, it must be that

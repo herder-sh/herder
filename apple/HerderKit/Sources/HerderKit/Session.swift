@@ -120,7 +120,7 @@ struct SessionModel {
         updatedAt = at
         if case .itemAdded(let item) = event.body { itemTimes["\(item.turnId)/\(item.id)"] = at }
         switch event.body {
-        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _):
+        case .sessionCreated(let repo, let worktree, let branch, let provider, let accountId, let model, let mode, let parent, _, let task, _, _):
             self.repo = repo
             self.worktree = worktree
             self.branch = branch
@@ -309,7 +309,7 @@ struct SessionModel {
             moments.append(Moment(id: event.seq, at: at, turn: turn, kind: kind))
         }
         switch event.body {
-        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _): add(.created(branch: branch))
+        case .sessionCreated(_, _, let branch, _, _, _, _, _, _, _, _, _): add(.created(branch: branch))
         case .branchCheckedOut(let branch): add(.setting("Checked out \(branch)"))
         case .permissionModeChanged(let mode): add(.setting("Permissions set to \(mode.label.lowercased())"))
         case .turnCompleted(let turnId, _), .turnInterrupted(let turnId), .turnFailed(let turnId, _):
@@ -421,7 +421,7 @@ struct SessionModel {
     /// An event as one line of the session's history.
     static func describe(_ body: EventBody) -> String {
         switch body {
-        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _):
+        case .sessionCreated(_, _, let branch, let provider, let accountId, let model, _, _, _, _, _, _):
             return "Created \(branch.map { "on \($0)" } ?? "in the folder") · \(provider) \(model) · \(accountId)"
         case .branchCheckedOut(let branch): return "Checked out \(branch)"
         case .sessionStatusChanged(let status, _): return "Status: \(status)"

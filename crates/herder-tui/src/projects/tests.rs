@@ -152,6 +152,7 @@ fn a_new_session_starts_from_the_project_on_the_clone_used_last() {
                 model: None,
                 permission_mode: Some(PermissionMode::Ask),
                 failover_pin: None,
+                chat: false,
             },
             origin: Origin::NewSession(HostId::new("h1")),
         }]

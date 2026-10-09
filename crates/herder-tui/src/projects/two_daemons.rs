@@ -89,6 +89,7 @@ async fn daemon(dir: &Path, id: &str, name: &str, shutdown: &CancellationToken) 
         turn_ids: ulid_turn_ids(),
         worktrees: Worktrees::new(dir.join("worktrees")),
         attachments: dir.join("attachments"),
+        chats: dir.join("chats"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     let host = Host {
@@ -167,6 +168,7 @@ async fn two_paired_daemons_with_clones_of_one_repo_show_one_project() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         };
         client.send(HostId::new(*id), command).await.unwrap();
     }
