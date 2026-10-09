@@ -129,7 +129,8 @@ struct FleetView: View {
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .home }
         }
-        // A draft belongs to Home or its own project; leaving for elsewhere drops it.
+        // A draft belongs to Home or its own project; leaving for elsewhere closes it, and its
+        // card stays in those lists.
         .onChange(of: item) {
             guard let draft else { return }
             if item != .home && item != .project(draft.projectId ?? "") && !showsEverySession { self.draft = nil }

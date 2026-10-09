@@ -862,7 +862,7 @@ struct DraftSessionView: View {
     /// Moves to the picked project, taking the prompt along; the draft left behind is forgotten.
     private func move(to picked: Draft) {
         guard picked.key != draft.key else { return }
-        PromptDrafts.shared.move(PromptDrafts.Content(text: text, images: images), from: draft.key, to: picked.key)
+        PromptDrafts.shared.move(PromptDrafts.Content(text: text, images: images, draft: picked), from: draft.key, to: picked.key)
         // Emptied, so leaving this draft does not keep the prompt here again.
         text = ""
         images = []
@@ -870,8 +870,11 @@ struct DraftSessionView: View {
     }
 
     private var draftContent: PromptDrafts.Content {
-        PromptDrafts.Content(text: text, images: images, files: files)
+        PromptDrafts.Content(text: text, images: images, files: files, draft: target)
     }
+
+    /// The draft on the machine picked, for its card in the lists.
+    private var target: Draft { Draft(hostId: hostId, projectId: draft.projectId, repo: draft.repo) }
 
     /// Every account on the machine, of each provider; picking another provider's account
     /// switches to that provider's default model.
@@ -925,7 +928,8 @@ struct DraftSessionView: View {
                 files = sentFiles
                 self.error = describe(error)
             }
-            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent, files: sentFiles), for: draft.key)
+            PromptDrafts.shared.save(PromptDrafts.Content(text: prompt, images: sent, files: sentFiles, draft: target),
+                                     for: draft.key)
         }
     }
 }

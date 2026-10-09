@@ -1,3 +1,4 @@
+import Herder
 @testable import HerderKit
 import Testing
 
@@ -17,6 +18,12 @@ struct CheckpointsTests {
         #expect(checkpoints.items.map(\.id) == ["u1", "u2"])
         #expect(checkpoints.items.map(\.prompt) == ["Fix the build please", "Ship it"])
         #expect(checkpoints.items.map(\.reply) == ["**Fixed.** It builds.", nil])
+    }
+
+    @Test func herdersFollowUpsAreNotCheckpoints() {
+        let followUp = FollowUp(reason: .ciPassed, pr: 7, headSha: "abc123")
+        let checkpoints = Checkpoints(blocks + [.user(id: "f1", text: "CI is green on #7.", outgoing: nil, followUp: followUp)])
+        #expect(checkpoints.items.map(\.id) == ["u1", "u2"])
     }
 
     @Test func theBlockAtTheTopMarksTheCheckpointItFallsUnder() {

@@ -3,9 +3,12 @@ import Herder
 @testable import HerderKit
 import Testing
 
+@MainActor
 struct PromptDraftsTests {
-    let drafts = PromptDrafts(directory: FileManager.default.temporaryDirectory
-        .appendingPathComponent("drafts-\(UUID().uuidString)", isDirectory: true))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("drafts-\(UUID().uuidString)", isDirectory: true)
+    let drafts: PromptDrafts
+
+    init() { drafts = PromptDrafts(directory: directory) }
 
     @Test func aDraftIsKeptPerProjectWithItsImages() {
         let image = Herder.Image(mediaType: "image/png", data: Data([1, 2, 3]))
@@ -53,5 +56,29 @@ struct PromptDraftsTests {
         drafts.save(.init(text: "kept", images: []), for: "b")
         drafts.move(.init(text: "", images: []), from: "a", to: "b")
         #expect(drafts.load("b")?.text == "kept")
+    }
+
+    @Test func newSessionDraftsStayListedTheLastWrittenFirstUntilEmptied() {
+        let app = Draft(hostId: "mac", projectId: "app")
+        let web = Draft(hostId: "linux", projectId: "web")
+        drafts.save(.init(text: "fix the login", images: [], draft: app), for: app.key)
+        drafts.save(.init(text: "for a session", images: []), for: PromptDrafts.key(SessionKey(hostId: "mac", sessionId: "s1")))
+        drafts.save(.init(text: "add dark mode", images: [], draft: web), for: web.key)
+        #expect(drafts.unsent.map(\.draft) == [web, app])
+        #expect(PromptDrafts(directory: directory).unsent.map(\.draft) == [web, app])
+        drafts.save(.init(text: "", images: [], draft: web), for: web.key)
+        #expect(drafts.unsent.map(\.draft) == [app])
+    }
+
+    @Test func aDroppedDraftIsNotKeptAgainUntilOpenedAnew() {
+        let app = Draft(hostId: "mac", projectId: "app")
+        drafts.save(.init(text: "fix the login", images: [], draft: app), for: app.key)
+        drafts.drop(app)
+        // Leaving the open draft keeps what it shows; dropped, it stays gone.
+        drafts.save(.init(text: "fix the login", images: [], draft: app), for: app.key)
+        #expect(drafts.unsent.isEmpty)
+        #expect(drafts.load(app.key) == nil)
+        drafts.save(.init(text: "start over", images: [], draft: app), for: app.key)
+        #expect(drafts.load(app.key)?.text == "start over")
     }
 }

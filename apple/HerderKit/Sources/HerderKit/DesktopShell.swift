@@ -55,7 +55,7 @@ struct DesktopShell: View {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
-                    drafting {
+                    drafting(in: id) {
                         ScrollView {
                             if let project {
                                 ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
@@ -114,16 +114,24 @@ struct DesktopShell: View {
         }
     }
 
-    /// A list under the open draft's card, so the session being written shows among the rest.
-    private func drafting<List: View>(@ViewBuilder _ list: () -> List) -> some View {
-        VStack(spacing: 0) {
-            if let draft {
-                DraftCard(draft: draft, fleet: fleet, text: typed)
-                    .frame(maxWidth: 760)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 10)
+    /// A list under the cards of the sessions being written, so they show among the rest until
+    /// started or dropped: the open draft, then those left unsent, in `projectId` or anywhere.
+    private func drafting<List: View>(in projectId: String? = nil, @ViewBuilder _ list: () -> List) -> some View {
+        let unsent = PromptDrafts.shared.unsent.compactMap { kept in kept.draft.map { (draft: $0, text: kept.text) } }
+            .filter { $0.draft.key != draft?.key && (projectId == nil || $0.draft.projectId == projectId) }
+        let cards = (draft.map { [(draft: $0, text: typed)] } ?? []) + unsent
+        return VStack(spacing: 8) {
+            ForEach(cards, id: \.draft.key) { card in
+                DraftCard(draft: card.draft, fleet: fleet, text: card.text, open: card.draft.key == draft?.key) {
+                    draft = card.draft
+                } drop: {
+                    PromptDrafts.shared.drop(card.draft)
+                    if draft?.key == card.draft.key { draft = nil }
+                }
+                .frame(maxWidth: 760)
+                .padding(.horizontal, 16)
             }
-            list()
+            list().padding(.top, cards.isEmpty ? 0 : 2)
         }
     }
 
