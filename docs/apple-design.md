@@ -156,6 +156,10 @@ Vault shows each paired vault's `VaultSection`. A vault that connected machines 
 gets an `UnpairedVaultCard` instead: who backs up to it, and how to pair with it to see its
 statistics.
 
+A session a paired vault replicates is listed once (`Lists.shadowed`): from its own host while
+that host is paired here and connected, else from the vault, read-only. Only the listed copy is
+followed, so pairing a vault does not stream every session twice.
+
 In `MachineSettingsSheet` an owner backs a connected machine up (`BackupField`): it shows
 where the machine backs up (`get_vault_link`), backs it up to a connected vault this device owns
 (`pair_vault_host` on the vault, then `link_vault` on the machine), or stops (`unlink_vault`,

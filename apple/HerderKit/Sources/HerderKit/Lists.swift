@@ -73,9 +73,11 @@ struct Lists: Equatable {
     init(machines: [Machine], sessions: [SessionKey: SessionModel], done: Set<SessionKey> = [],
          archiving: Set<SessionKey> = [], now: Date = .now) {
         var entries: [Entry] = []
+        let shadowed = Self.shadowed(machines)
         for machine in machines {
             for head in machine.sessions {
                 let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
+                if shadowed.contains(key) { continue }
                 var model = sessions[key] ?? SessionModel(key: key)
                 if archiving.contains(key) { model.status = .archived }
                 entries.append(Entry(machine: machine, head: head, model: model, done: done.contains(key)))
@@ -248,6 +250,36 @@ struct Lists: Equatable {
             if let parent = entry.parentKey { children[parent, default: []].append(entry) }
         }
         return children
+    }
+
+    /// The listed copies another copy of the same session stands for, so they are neither
+    /// listed nor followed. A session a vault replicates is listed once: from its own host while
+    /// that host is paired here and connected; else from the vault, read-only.
+    static func shadowed(_ machines: [Machine]) -> Set<SessionKey> {
+        // Each session by its own host: as a connected host lists it, and as a vault does.
+        var live: Set<SessionKey> = []
+        var replicated: Set<SessionKey> = []
+        for machine in machines {
+            for head in machine.sessions {
+                if let origin = head.hostId, origin != machine.hostId {
+                    replicated.insert(SessionKey(hostId: origin, sessionId: head.sessionId))
+                } else if machine.connection == .connected {
+                    live.insert(SessionKey(hostId: machine.hostId, sessionId: head.sessionId))
+                }
+            }
+        }
+        var shadowed: Set<SessionKey> = []
+        for machine in machines {
+            for head in machine.sessions {
+                let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
+                if let origin = head.hostId, origin != machine.hostId {
+                    if live.contains(SessionKey(hostId: origin, sessionId: head.sessionId)) { shadowed.insert(key) }
+                } else if machine.connection != .connected && replicated.contains(key) {
+                    shadowed.insert(key)
+                }
+            }
+        }
+        return shadowed
     }
 
     private static func summary(_ machine: Machine, entries: [Entry], now: Date) -> MachineSummary {
