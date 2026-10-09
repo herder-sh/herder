@@ -61,7 +61,9 @@ struct VaultStats: Hashable, Identifiable {
         guard !machine.hosts.isEmpty || machine.vault != nil else { return nil }
         let entries = machine.sessions.map { head in
             let key = SessionKey(hostId: machine.hostId, sessionId: head.sessionId)
-            var model = sessions[key] ?? SessionModel(key: key)
+            // A copy whose host is connected here is followed on that host instead.
+            var model = sessions[key] ?? head.hostId.flatMap { sessions[SessionKey(hostId: $0, sessionId: head.sessionId)] }
+                ?? SessionModel(key: key)
             // Until its events arrive, the vault's listing says what state it is in.
             if !model.loaded { model.status = head.status }
             return Lists.Entry(machine: machine, head: head, model: model)

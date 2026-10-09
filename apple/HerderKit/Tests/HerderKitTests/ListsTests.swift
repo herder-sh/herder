@@ -326,4 +326,26 @@ struct FleetListsTests {
         #expect(!publishes(fleet) { fleet.setMachinesForTesting(machines) })
         #expect(fleet.lists.home.map(\.key.sessionId) == ["01A"])
     }
+
+    /// `devbox` runs `01A` and `01B`; the vault replicates both, and `01C` of a host not paired here.
+    @Test func aSessionAVaultReplicatesIsListedOnceFromItsLiveHost() {
+        var devbox = machine("devbox", name: "devbox", sessions: ["01A", "01B"])
+        var vault = machine("vault", name: "vault", sessions: ["01A", "01B", "01C"], hosts: [
+            FleetHost(hostId: "devbox", hostName: "devbox", online: true, lastSeen: ""),
+            FleetHost(hostId: "laptop", hostName: "laptop", online: true, lastSeen: ""),
+        ])
+        for (index, host) in ["devbox", "devbox", "laptop"].enumerated() { vault.sessions[index].hostId = host }
+        func listed() -> [String] {
+            Lists(machines: [devbox, vault], sessions: [:]).home.map { "\($0.key.hostId)/\($0.key.sessionId)" }.sorted()
+        }
+
+        // The live copies, and the vault's copy of what only the vault reaches.
+        #expect(Lists.shadowed([devbox, vault]) == [SessionKey(hostId: "vault", sessionId: "01A"),
+                                                     SessionKey(hostId: "vault", sessionId: "01B")])
+        #expect(listed() == ["devbox/01A", "devbox/01B", "vault/01C"])
+
+        // devbox drops: the vault's read-only copies stand in for its sessions.
+        devbox.connection = .disconnected(error: "gone")
+        #expect(listed() == ["vault/01A", "vault/01B", "vault/01C"])
+    }
 }

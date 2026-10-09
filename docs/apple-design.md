@@ -156,6 +156,10 @@ Vault shows each paired vault's `VaultSection`. A vault that connected machines 
 gets an `UnpairedVaultCard` instead: who backs up to it, and how to pair with it to see its
 statistics.
 
+A session a paired vault replicates is listed once (`Lists.shadowed`): from its own host while
+that host is paired here and connected, else from the vault, read-only. Only the listed copy is
+followed, so pairing a vault does not stream every session twice.
+
 In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
 (`EditAccountSheet`). The edit sheet's **Log In Again** runs the provider's login of that
 account again, in its own config directory, for a login that expired; both show the login
