@@ -112,3 +112,21 @@ struct VaultStatsTests {
         #expect(laptop.topProjects.isEmpty)
     }
 }
+
+struct UnpairedVaultTests {
+    @Test func groupsHostsByVaultAndLeavesOutPairedOnes() {
+        let home = LinkedVault(address: "vault.lan:7447", fingerprint: "aa")
+        let work = LinkedVault(address: "backup.example.com:7447", fingerprint: "bb")
+        let vaults = UnpairedVault.from(
+            [(host: "laptop", vault: home), (host: "Builder", vault: home), (host: "devbox", vault: work)],
+            paired: [])
+        #expect(vaults.map(\.address) == ["backup.example.com:7447", "vault.lan:7447"])
+        #expect(vaults.map(\.hosts) == [["devbox"], ["Builder", "laptop"]])
+        #expect(vaults[0].backsUp == "devbox backs up here")
+        #expect(vaults[1].backsUp == "Builder and laptop back up here")
+
+        // Once this device pairs with a vault, its statistics show instead.
+        let rest = UnpairedVault.from([(host: "laptop", vault: home), (host: "devbox", vault: work)], paired: ["aa"])
+        #expect(rest.map(\.fingerprint) == ["bb"])
+    }
+}

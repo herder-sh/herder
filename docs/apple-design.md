@@ -98,8 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) lists Home, Pull Requests, Usage, Skills, Machines, Vault (when
-  a vault is paired), then the projects, then each machine's connection at the bottom. It starts
+- **The sidebar** (`Sidebar`, `SidebarRail`) lists Home, Pull Requests, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
   collapsed to the rail (`sidebarCollapsed`), which leaves the width to the session; ⇧⌘\
   toggles it. The window's traffic lights sit in its top bar (`Sidebar.topBar`, 52 pt on the
   Mac).
@@ -151,6 +150,11 @@ A grid of `MachineCard`s (adaptive, at least 360 pt per column, so one column on
 connection, role, running and total sessions, then each account with its usage windows
 (`UsageBar`). The card's gear opens `MachineSettingsSheet`. Machines fills the width on the Mac
 (no list beside it). A vault shows its hosts (`VaultSection`) here.
+
+Vault shows each paired vault's `VaultSection`. A vault that connected machines back up to
+(`get_vault_link`, asked of the machines this device owns) but this device is not paired with
+gets an `UnpairedVaultCard` instead: who backs up to it, and how to pair with it to see its
+statistics.
 
 In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
 (`EditAccountSheet`). The edit sheet's **Log In Again** runs the provider's login of that
