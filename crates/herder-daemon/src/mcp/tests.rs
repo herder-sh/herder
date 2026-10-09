@@ -153,6 +153,10 @@ async fn a_session_lists_and_calls_the_tools_through_the_shim() {
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(init["result"]["serverInfo"]["name"], "herder");
     assert!(init["result"]["capabilities"]["tools"].is_object());
+    let instructions = init["result"]["instructions"].as_str().unwrap();
+    for tool in ["`spawn`", "`wait_for`", "`send_session`"] {
+        assert!(instructions.contains(tool), "{instructions}");
+    }
     client
         .write(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
         .await;

@@ -27,6 +27,17 @@ const VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-
 /// `outputSchema` and `structuredContent`.
 const DEFAULT_VERSION: &str = "2025-06-18";
 
+/// The `initialize` result's `instructions`, which clients such as Claude Code show the model
+/// up front, so it delegates through `spawn` before trying a built-in subagent that the Claude
+/// adapter's PreToolUse hook would deny.
+const INSTRUCTIONS: &str = "herder runs this session. To delegate work that edits files, \
+builds, or opens pull requests, call `spawn`: one child per independent piece of work, each \
+with a complete prompt, then collect results with `wait_for`. Use `send_session` for \
+follow-ups to an existing child. Never delegate such work to a built-in subagent with its own \
+worktree (Claude Code's Agent tool with `isolation: \"worktree\"`): it is denied, and its \
+work would not show in herder. Built-in subagents for read-only lookups are fine. In a child \
+session, where `spawn` is refused, do the work yourself.";
+
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -201,5 +212,6 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "herder", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": INSTRUCTIONS,
     })
 }

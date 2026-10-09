@@ -44,6 +44,10 @@
 //!
 //! # Steering delegation to `spawn`
 //!
+//! herder's server tells the model up front, in its MCP `initialize` instructions, to delegate
+//! work that edits files, builds or opens pull requests through `spawn` and never through a
+//! worktree subagent. The hook below is the backstop for when it tries anyway.
+//!
 //! With herder's server comes a PreToolUse hook, passed inline as `--settings`, which adds to
 //! the user's own settings and hooks rather than replacing them. It runs the herder binary
 //! (the server's own command) as `herder hook claude-pre-tool-use` on every `Agent` call, and
