@@ -50,7 +50,7 @@ struct Sample {
         let created = try await client.send(
             hostId: host,
             command: .createSession(
-                repo: repo, projectId: nil, branch: nil, accountId: account, provider: nil,
+                repo: repo, projectId: nil, chat: false, branch: nil, accountId: account, provider: nil,
                 model: nil, permissionMode: .ask, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = created else {
             throw Failure(description: "expected a session, got \(created)")
