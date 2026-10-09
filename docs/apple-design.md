@@ -156,6 +156,11 @@ Vault shows each paired vault's `VaultSection`. A vault that connected machines 
 gets an `UnpairedVaultCard` instead: who backs up to it, and how to pair with it to see its
 statistics.
 
+In `MachineSettingsSheet` an owner backs a connected machine up (`BackupField`): it shows
+where the machine backs up (`get_vault_link`), backs it up to a connected vault this device owns
+(`pair_vault_host` on the vault, then `link_vault` on the machine), or stops (`unlink_vault`,
+then `revoke_vault_host` on the vault when it is paired here as its owner).
+
 In `MachineSettingsSheet` an owner adds an account (`AddAccountSheet`) or edits one
 (`EditAccountSheet`). The edit sheet's **Log In Again** runs the provider's login of that
 account again, in its own config directory, for a login that expired; both show the login
