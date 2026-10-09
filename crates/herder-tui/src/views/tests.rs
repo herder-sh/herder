@@ -129,6 +129,7 @@ pub(super) fn herd() -> App {
         label: "claude-main".to_owned(),
         email: None,
         usage: vec![window("five_hour", 38.0), window("seven_day", 12.0)],
+        fallback: false,
     }];
     machines[1].accounts = machines[0].accounts.clone();
     machines[0].resources = Some(fake::host_resources(2));
@@ -864,6 +865,7 @@ fn the_add_account_dialog_picks_a_provider_and_names_the_account() {
         label: "Main".into(),
         email: None,
         usage: Vec::new(),
+        fallback: false,
     }];
     app.update(Msg::Machines(machines));
     press(&mut app, KeyCode::Char('m'));
@@ -1216,7 +1218,8 @@ pub(super) fn add_accounts(app: &mut App) {
         window("five_hour", 8.0, 40 * 60),
         window("weekly", 20.0, 86400),
     ];
-    let work = fake::account("claude-work", "Work");
+    let mut work = fake::account("claude-work", "Work");
+    work.fallback = true;
     machines[0].accounts = vec![main, work, codex];
     machines[0].failover = herder_protocol::FailoverSettings { pin: true };
     let mut laptop = fake::machine("h2", "laptop", &[]);

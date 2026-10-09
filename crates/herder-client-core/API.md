@@ -438,6 +438,11 @@ must be non-empty. Directory changes require all sessions on the daemon archived
 provider and account id cannot be changed. No provider credentials are exposed.
 The wire change is additive (protocol 4); the native record shape changes (client API 6).
 
+`Account.fallback` marks a fallback-only account: the daemon picks it for a new session by
+provider, a failover or a title only once every other account of its provider is at its
+limit or logged out; naming it still uses it. `SetAccountSettings { .., fallback }` changes
+it, and leaves it as it is when absent. The wire change is additive (protocol 5).
+
 ### Turn limit
 
 `Machine::resources` carries the host's `max_turns`, with its `running_turns` and

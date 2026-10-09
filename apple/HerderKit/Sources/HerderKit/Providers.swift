@@ -12,6 +12,9 @@ struct ProviderAccounts: Equatable {
         let owner: Bool
         /// Whether the provider's CLI is missing there and herder can install it.
         let needsInstall: Bool
+        /// Whether the login there is fallback-only: picked only once its provider's other
+        /// accounts there are unavailable. Never for a machine that lacks it.
+        var fallback = false
 
         var id: HostId { hostId }
     }
@@ -25,6 +28,9 @@ struct ProviderAccounts: Equatable {
         let missing: [Place]
 
         var id: String { ProviderAccounts.key(account) }
+
+        /// Where the login is fallback-only; machines may disagree.
+        var fallbackOn: [Place] { on.filter(\.fallback) }
 
         /// The account to log in to on a machine that lacks it, whose accounts' ids are `taken`:
         /// the same id unless taken, label, and config dir when it is in the home dir, which
@@ -60,9 +66,11 @@ struct ProviderAccounts: Equatable {
             let has = { (machine: Machine) in machine.accounts.contains { Self.key($0) == id } }
             let place = { (machine: Machine) in
                 let status = machine.providers.first { $0.provider == account.provider }
+                let here = machine.accounts.filter { Self.key($0) == id }
                 return Place(hostId: machine.hostId, name: machine.name, connected: machine.connection == .connected,
                              owner: machine.role == .owner,
-                             needsInstall: status?.installed == false && status?.canInstall == true)
+                             needsInstall: status?.installed == false && status?.canInstall == true,
+                             fallback: !here.isEmpty && here.allSatisfy(\.fallback))
             }
             return Login(provider: account.provider, email: account.email, account: account,
                          on: daemons.filter(has).map(place), missing: daemons.filter { !has($0) }.map(place))
@@ -124,6 +132,16 @@ struct ProvidersView: View {
                 Text(login.email ?? login.account.label).font(.subheadline.weight(.medium)).foregroundStyle(Theme.text)
                 if login.email == nil {
                     Text(login.account.accountId).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                }
+                let fallbackOn = login.fallbackOn
+                if !fallbackOn.isEmpty {
+                    // Machines may disagree: name the ones it is fallback-only on, unless all.
+                    Text(fallbackOn.count == login.on.count
+                         ? "Fallback" : "Fallback on \(fallbackOn.map(\.name).joined(separator: ", "))")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Theme.raised, in: .capsule)
+                        .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Label(login.on.map(\.name).joined(separator: ", "), systemImage: "checkmark.circle")

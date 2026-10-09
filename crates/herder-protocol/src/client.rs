@@ -396,9 +396,10 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
-    /// Update an existing account's label and config directory; owners only. The id and
-    /// provider stay fixed. Directory changes require all sessions on this daemon archived.
-    /// Omit config_dir to use the provider's default login. Answered with applied and accounts.
+    /// Update an existing account's label, config directory and role in rotation; owners
+    /// only. The id and provider stay fixed. Directory changes require all sessions on this
+    /// daemon archived. Omit config_dir to use the provider's default login. Answered with
+    /// applied and accounts.
     SetAccountSettings {
         /// Account to configure.
         account_id: AccountId,
@@ -407,6 +408,9 @@ pub enum CommandBody {
         /// Config directory on the host; never credentials.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         config_dir: Option<String>,
+        /// Whether the account becomes fallback-only (see `Account.fallback`); absent keeps it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback: Option<bool>,
     },
     /// Change how many turns the host runs at once, live; owners only. Raising it starts
     /// waiting turns at once; lowering it stops no running turn, only new ones from starting.

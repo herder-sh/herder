@@ -8,8 +8,10 @@ struct ReachTests {
                 defaultAccount: nil, setupCommand: nil)
     }
 
-    private func account(_ id: AccountId, _ provider: String, email: String? = nil, configDir: String? = nil) -> Account {
-        Account(accountId: id, provider: provider, label: id.capitalized, configDir: configDir, email: email, usage: [])
+    private func account(_ id: AccountId, _ provider: String, email: String? = nil, configDir: String? = nil,
+                         fallback: Bool = false) -> Account {
+        Account(accountId: id, provider: provider, label: id.capitalized, configDir: configDir, email: email, usage: [],
+                fallback: fallback)
     }
 
     @Test func aProjectWithARemoteIsMissingOnTheOtherMachines() {
@@ -68,5 +70,19 @@ struct ReachTests {
         #expect(missingCursor.map(\.name) == ["server", "mini"])
         #expect(missingCursor[0].needsInstall)
         #expect(groups[2].logins[0].draft(taken: []).configDir == "")
+    }
+
+    @Test func aFallbackLoginIsMarkedOnTheMachinesWhereItIsOne() {
+        let machines = [
+            machine("a", name: "laptop", sessions: [],
+                    accounts: [account("claude", "claude", email: "me@home.test", fallback: true)]),
+            machine("b", name: "server", sessions: [],
+                    accounts: [account("home", "claude", email: "me@home.test")]),
+            machine("c", name: "mini", sessions: []),
+        ]
+        let home = ProviderAccounts(machines: machines).groups[0].logins[0]
+        #expect(home.on.map(\.fallback) == [true, false])
+        #expect(home.fallbackOn.map(\.name) == ["laptop"])
+        #expect(home.missing.allSatisfy { !$0.fallback })
     }
 }

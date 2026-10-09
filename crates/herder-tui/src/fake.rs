@@ -296,6 +296,7 @@ pub fn account(id: &str, label: &str) -> herder_protocol::Account {
         label: label.to_owned(),
         email: None,
         usage: Vec::new(),
+        fallback: false,
     }
 }
 

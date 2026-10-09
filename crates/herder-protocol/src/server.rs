@@ -364,6 +364,11 @@ pub struct Account {
     pub email: Option<String>,
     /// Every limit window the provider last reported; empty until it reports one.
     pub usage: Vec<UsageWindow>,
+    /// Whether the account is fallback-only: sessions started by provider, failover and
+    /// titles pick it only while every other account of its provider is unavailable. Naming
+    /// it, or a project defaulting to it, still runs on it.
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 /// How a daemon's sessions fail over when their account hits a limit: they rotate to the

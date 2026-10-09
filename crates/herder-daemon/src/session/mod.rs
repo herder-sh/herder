@@ -177,7 +177,8 @@
 //! the transcript. A child does not report the failed turn to its primary, only the retry. The
 //! account that hit its limit is passed over by every session until it resets. Failover only
 //! moves to an account of the session's own provider and keeps the session's model: the retry
-//! starts that account's CLI on it. Every account takes part; none opts in. With no available
+//! starts that account's CLI on it. Every account takes part, but a fallback one
+//! ([`AccountConfig::fallback`]) only once no other is available. With no available
 //! account, with the session pinned (its `failover_pin`, else [`FailoverConfig::pin`]), or when
 //! the retry hits a limit too, the session is `needs_you` with the limit error; when the retry
 //! fails otherwise, as when the account rejects the model, it is `needs_you` with that error,
@@ -298,6 +299,9 @@ pub struct AccountConfig {
     pub label: String,
     /// The account's config dir, handed to the adapter; `None` is the CLI's default location.
     pub config_dir: Option<PathBuf>,
+    /// Whether picking an account for the provider passes it over while any of its other
+    /// accounts is available ([`failover`]); naming it still runs on it.
+    pub fallback: bool,
 }
 
 /// Every account sessions may run on, by id.

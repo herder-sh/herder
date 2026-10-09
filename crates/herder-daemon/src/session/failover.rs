@@ -2,11 +2,14 @@
 //!
 //! Only a turn that fails with `limit_reached` triggers it, never usage percentages alone. The
 //! session then rotates to the best available account ([`best`]) and retries the failed turn's
-//! prompt there, once ([`super::actor`]). Every account takes part; none opts in. An account is
+//! prompt there, once ([`super::actor`]). Every account takes part, but a fallback account
+//! ([`super::AccountConfig::fallback`]) comes after every other available one, whatever its
+//! room: it is used only once every rotating account of the provider is limited. An account is
 //! available when it is of the session's own provider, is not the failing one, has an adapter,
 //! and is not limited: no window of its usage ([`crate::usage`]) is at 100% before it resets,
 //! it has not hit a limit since its reset time, and it has not failed to log in since it last
-//! worked ([`Limits`]). Accounts whose usage is known come before those whose usage is not,
+//! worked ([`Limits`]). Among rotating or fallback accounts alike, those whose usage is known
+//! come before those whose usage is not,
 //! which may be used up or logged out without herder knowing. Among them the one refilled
 //! soonest is best, as what it has left is lost at its reset anyway; then the one with the most
 //! quota left, then by id. The session keeps its model, so a failover never changes provider or
@@ -105,7 +108,7 @@ pub(crate) struct Choice<'a> {
 }
 
 /// The available account of `provider` with known usage and the most quota left, other than
-/// `except`, if any is available.
+/// `except`, if any is available; a fallback account only when no rotating one is.
 pub(crate) fn best(
     choice: &Choice<'_>,
     provider: &Provider,
@@ -120,24 +123,32 @@ pub(crate) fn best(
                 && Some(*id) != except
                 && !choice.limits.limited(id, choice.now)
         })
-        .filter_map(|(id, _)| {
+        .filter_map(|(id, account)| {
             let usage = choice.usage.get(id);
-            Some((usage.is_none(), room(usage, choice.now)?, id))
+            Some((
+                account.fallback,
+                usage.is_none(),
+                room(usage, choice.now)?,
+                id,
+            ))
         })
-        // Known usage first, then refilled soonest, then most quota left; ids break ties, as
-        // the map is ordered by id.
-        .min_by(|(a_unknown, a, _), (b_unknown, b, _)| {
-            a_unknown
-                .cmp(b_unknown)
-                .then_with(|| match (a.refilled, b.refilled) {
-                    (Some(a), Some(b)) => a.cmp(&b),
-                    (Some(_), None) => Ordering::Less,
-                    (None, Some(_)) => Ordering::Greater,
-                    (None, None) => Ordering::Equal,
-                })
-                .then(b.left.total_cmp(&a.left))
-        })
-        .map(|(_, _, id)| id.clone())
+        // Rotating accounts first, then known usage, then refilled soonest, then most quota
+        // left; ids break ties, as the map is ordered by id.
+        .min_by(
+            |(a_fallback, a_unknown, a, _), (b_fallback, b_unknown, b, _)| {
+                a_fallback
+                    .cmp(b_fallback)
+                    .then(a_unknown.cmp(b_unknown))
+                    .then_with(|| match (a.refilled, b.refilled) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        (None, None) => Ordering::Equal,
+                    })
+                    .then(b.left.total_cmp(&a.left))
+            },
+        )
+        .map(|(_, _, _, id)| id.clone())
 }
 
 /// What an account has left.
@@ -198,6 +209,7 @@ mod tests {
                     provider: provider.clone(),
                     label: id.to_string(),
                     config_dir: None,
+                    fallback: false,
                 };
                 (AccountId::new(*id), account)
             })
@@ -257,6 +269,38 @@ mod tests {
         fn usage(&mut self, id: &str, windows: Vec<UsageWindow>) {
             self.usage.insert(AccountId::new(id), windows);
         }
+
+        fn fallback(&mut self, id: &str) {
+            if let Some(account) = self.accounts.get_mut(&AccountId::new(id)) {
+                account.fallback = true;
+            }
+        }
+    }
+
+    #[test]
+    fn a_fallback_account_is_used_only_once_every_rotating_one_is_limited() {
+        let mut case = Case::new(&[
+            ("a", Provider::Claude),
+            ("b", Provider::Claude),
+            ("c", Provider::Claude),
+        ]);
+        case.fallback("a");
+        // A rotating account comes first even with less room left, or usage unknown.
+        case.usage("a", vec![window(0.0, "2026-10-02T13:00:00Z")]);
+        case.usage("b", vec![window(90.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("b"));
+        assert_eq!(case.next("c").as_deref(), Some("b"));
+        assert_eq!(case.next("b").as_deref(), Some("c"));
+        // Once every rotating one is at its limit or logged out, the fallback takes over.
+        case.usage("b", vec![window(100.0, "2026-10-02T15:00:00Z")]);
+        assert_eq!(case.next("c").as_deref(), Some("a"));
+        case.limits.logged_out(&AccountId::new("c"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
+        // As soon as a rotating one is available again, it is preferred.
+        case.limits.worked(&AccountId::new("c"));
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("c"));
+        case.limits.hit(&AccountId::new("c"), &[], case.now);
+        assert_eq!(case.any(Provider::Claude).as_deref(), Some("a"));
     }
 
     #[test]

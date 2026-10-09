@@ -46,6 +46,7 @@ async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching
             provider: fake.clone(),
             label: "Work".into(),
             config_dir: Some(dir.join("account")),
+            fallback: false,
         },
     )]);
     if switching {
@@ -57,6 +58,7 @@ async fn daemon_with_switches(dir: &Path, shutdown: CancellationToken, switching
                     provider,
                     label: id.into(),
                     config_dir: Some(dir.join(id)),
+                    fallback: false,
                 },
             );
         }

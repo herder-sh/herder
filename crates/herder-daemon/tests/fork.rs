@@ -209,6 +209,7 @@ impl HostDaemon {
                         provider: fake(),
                         label: "Account".into(),
                         config_dir: Some(dir.join("account")),
+                        fallback: false,
                     },
                 );
                 let changed = Arc::new(Notify::new());

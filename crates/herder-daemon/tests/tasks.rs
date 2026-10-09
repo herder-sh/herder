@@ -259,6 +259,7 @@ impl Daemon {
                 provider: Provider::Other("echo".into()),
                 label: "Account 1".into(),
                 config_dir: None,
+                fallback: false,
             },
         );
         let setup = Setup {

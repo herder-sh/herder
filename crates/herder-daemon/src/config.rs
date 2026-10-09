@@ -22,6 +22,8 @@
 //! provider = "claude"           # claude, codex, cursor, grok or opencode
 //! label = "Main"                # shown to clients; the id when absent
 //! config_dir = "~/.claude-main" # the CLI's own default location when absent
+//! fallback = false              # true: picked only when no other account of its provider is
+//!                               # available; naming it still uses it
 //!
 //! [providers.claude]
 //! binary = "/opt/claude/bin/claude" # the CLI to run; looked up on `PATH` by default
@@ -31,7 +33,8 @@
 //!
 //! A session whose turn hits its account's usage limit rotates to the available account of its
 //! own provider with the most room left, and retries the turn there on the same model. Every
-//! account takes part; a failover never changes the provider or the model:
+//! account takes part, a `fallback` one only once no other is available; a failover never
+//! changes the provider or the model:
 //!
 //! ```toml
 //! [failover]
@@ -465,6 +468,8 @@ struct AccountFile {
     provider: String,
     label: Option<String>,
     config_dir: Option<PathBuf>,
+    #[serde(default)]
+    fallback: bool,
 }
 
 /// One `[providers.<name>]` table as written.
@@ -864,13 +869,15 @@ fn append_account_with_env(
 }
 
 /// Update an account without reading its login files, validating the complete account list
-/// before replacing the daemon config. The caller serializes this with other account writes.
+/// before replacing the daemon config. `fallback` changes whether it is fallback-only; `None`
+/// keeps it. The caller serializes this with other account writes.
 pub(crate) fn set_account_settings(
     path: &Path,
     account_id: &AccountId,
     previous: &AccountConfig,
     label: &str,
     config_dir: Option<&str>,
+    fallback: Option<bool>,
     may_change_directory: bool,
 ) -> Result<AccountConfig> {
     let _write = CONFIG_WRITE
@@ -900,6 +907,15 @@ pub(crate) fn set_account_settings(
         None => {
             table.remove("config_dir");
         }
+    }
+    match fallback {
+        Some(true) => {
+            table.insert("fallback", toml_edit::value(true));
+        }
+        Some(false) => {
+            table.remove("fallback");
+        }
+        None => {}
     }
     let text = doc.to_string();
     let file: ConfigFile = toml::from_str(&text)?;
@@ -1522,6 +1538,7 @@ fn resolve_accounts(
             provider,
             label: entry.label.unwrap_or_else(|| id.clone()),
             config_dir,
+            fallback: entry.fallback,
         };
         accounts.insert(AccountId::new(id), account);
     }
@@ -2147,6 +2164,7 @@ mod tests {
                         provider: Provider::Claude,
                         label: "Main".into(),
                         config_dir: None,
+                        fallback: false,
                     }
                 ),
                 (
@@ -2155,6 +2173,7 @@ mod tests {
                         provider: Provider::Claude,
                         label: "claude-work".into(),
                         config_dir: Some(home.path().join(".claude-work")),
+                        fallback: false,
                     }
                 ),
                 (
@@ -2163,6 +2182,7 @@ mod tests {
                         provider: Provider::Codex,
                         label: "codex".into(),
                         config_dir: Some(PathBuf::from("/srv/codex")),
+                        fallback: false,
                     }
                 ),
             ])
@@ -2294,8 +2314,9 @@ mod tests {
             ),
             (account(&["id = \"a\""]), "missing field `provider`"),
             (claude("a", "token = \"x\""), "unknown field `token`"),
-            // Every account takes part in rotation: there is nothing to opt in to.
+            // Every account takes part in rotation: there is nothing to opt in to, only out.
             (claude("a", "failover = true"), "unknown field `failover`"),
+            (claude("a", "fallback = \"yes\""), "invalid type"),
             (
                 "[providers.nope]\nbinary = \"x\"\n".to_owned(),
                 "herder cannot run nope",
@@ -2584,6 +2605,7 @@ mod tests {
             provider,
             label: "Work \"2\"".into(),
             config_dir: Some(dir.to_owned()),
+            fallback: false,
         }
     }
 
@@ -2668,8 +2690,10 @@ mod tests {
             provider: Provider::Codex,
             label: "Old".into(),
             config_dir: None,
+            fallback: false,
         };
-        let renamed = set_account_settings(&path, &id, &previous, " Work ", None, false).unwrap();
+        let renamed =
+            set_account_settings(&path, &id, &previous, " Work ", None, None, false).unwrap();
         assert_eq!(renamed.label, "Work");
         assert!(
             std::fs::read_to_string(&path)
@@ -2695,18 +2719,53 @@ mod tests {
                     &renamed,
                     label,
                     directory,
+                    Some(true),
                     allowed
                 )
                 .is_err()
             );
             assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
         }
-        let updated = set_account_settings(&path, &id, &renamed, "Work", Some(new), true).unwrap();
+        let updated =
+            set_account_settings(&path, &id, &renamed, "Work", Some(new), None, true).unwrap();
         assert_eq!(updated.config_dir, Some(new_dir));
         let loaded: ConfigFile = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             resolve_accounts(loaded.accounts, &|key| std::env::var_os(key)).unwrap()[&id],
             updated
         );
+    }
+
+    #[test]
+    fn an_account_is_made_fallback_only_and_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.toml");
+        std::fs::write(&path, "[[accounts]]\nid = 'work'\nprovider = 'codex'\n").unwrap();
+        let id = AccountId::new("work");
+        let load = || {
+            let file: ConfigFile =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            resolve_accounts(file.accounts, &|key| std::env::var_os(key)).unwrap()[&id].clone()
+        };
+        let rotating = load();
+        assert!(!rotating.fallback, "an account rotates by default");
+        let fallback =
+            set_account_settings(&path, &id, &rotating, "Work", None, Some(true), false).unwrap();
+        assert!(fallback.fallback);
+        assert_eq!(load(), fallback);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("fallback = true")
+        );
+        // Leaving it out keeps it.
+        let renamed =
+            set_account_settings(&path, &id, &fallback, "Renamed", None, None, false).unwrap();
+        assert!(renamed.fallback);
+        let back = set_account_settings(&path, &id, &renamed, "Renamed", None, Some(false), false)
+            .unwrap();
+        assert!(!back.fallback);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("fallback"));
+        assert_eq!(load(), back);
     }
 }

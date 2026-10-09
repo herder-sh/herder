@@ -1141,6 +1141,7 @@ mod tests {
                     used_percent,
                     resets_at: None,
                 }],
+                fallback: false,
             }]
         };
         let failover = FailoverSettings { pin: true };

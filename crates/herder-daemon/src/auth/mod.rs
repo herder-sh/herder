@@ -908,6 +908,7 @@ mod tests {
             account_id: herder_protocol::AccountId::new("work"),
             label: "Work".into(),
             config_dir: None,
+            fallback: None,
         };
         assert!(authorize(alice.role, &command).is_ok());
         alice.role = Role::Member;

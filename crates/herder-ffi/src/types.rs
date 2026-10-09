@@ -694,6 +694,7 @@ pub enum CommandBody {
         account_id: AccountId,
         label: String,
         config_dir: Option<String>,
+        fallback: Option<bool>,
     },
     SetResourceLimits {
         max_turns: u32,
@@ -1009,6 +1010,9 @@ pub struct Account {
     pub config_dir: Option<String>,
     pub email: Option<String>,
     pub usage: Vec<UsageWindow>,
+    // Defaulted, so Swift and Kotlin code that builds an account, as tests do, need not name it.
+    #[uniffi(default)]
+    pub fallback: bool,
 }
 
 #[uniffi::remote(Record)]

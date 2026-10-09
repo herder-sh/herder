@@ -1177,7 +1177,7 @@
           ]
         },
         {
-          "description": "Update an existing account's label and config directory; owners only. The id and\nprovider stay fixed. Directory changes require all sessions on this daemon archived.\nOmit config_dir to use the provider's default login. Answered with applied and accounts.",
+          "description": "Update an existing account's label, config directory and role in rotation; owners\nonly. The id and provider stay fixed. Directory changes require all sessions on this\ndaemon archived. Omit config_dir to use the provider's default login. Answered with\napplied and accounts.",
           "type": "object",
           "properties": {
             "account_id": {
@@ -1188,6 +1188,13 @@
               "description": "Config directory on the host; never credentials.",
               "type": [
                 "string",
+                "null"
+              ]
+            },
+            "fallback": {
+              "description": "Whether the account becomes fallback-only (see `Account.fallback`); absent keeps it.",
+              "type": [
+                "boolean",
                 "null"
               ]
             },
