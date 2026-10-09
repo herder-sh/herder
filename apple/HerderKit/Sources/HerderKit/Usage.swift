@@ -8,6 +8,7 @@ struct MachineUsage: Equatable {
     let name: String
     let accounts: [Account]
     let totals: [UsageTotal]
+    let failovers: [FailoverTotal]
 }
 
 /// Tokens and API-equivalent dollars, added up.
@@ -22,13 +23,6 @@ struct UsageAmount: Equatable {
     var estimated = false
 
     var tokens: UInt64 { input + output + cacheRead + cacheWrite }
-
-    /// The share of the input read from the prompt cache instead of sent afresh: what the
-    /// cache saved. `nil` with no input.
-    var cacheSavings: Double? {
-        let all = input + cacheRead + cacheWrite
-        return all == 0 ? nil : Double(cacheRead) / Double(all)
-    }
 
     mutating func add(_ total: UsageTotal) {
         turns += total.turns
@@ -49,56 +43,16 @@ struct WindowLeft: Equatable {
     var percentLeft: Double { max(0, 100 - percentUsed) }
 }
 
-/// What the Usage screen shows: the machines' answers added up, overall, per login and per
-/// model, for all machines or one.
+/// The machines' answers to a usage summary added up: overall, per login and per model.
 struct UsageReport: Equatable {
-    /// One provider login: every account signed in to it, on any machine, added up. Accounts
-    /// with the same provider and email share a login and its plan windows; an account whose
-    /// email is unknown is a login of its own.
-    struct AccountRow: Equatable, Identifiable {
-        /// The provider and email, or for an account without an email, its machine and id.
-        let id: String
-        let provider: Provider
-        /// The email the login is signed in as, when its CLI reported one.
-        let email: String?
-        /// The labels of its accounts, and their machines, each once, in the order first met.
-        private(set) var labels: [String] = []
-        private(set) var machines: [String] = []
+    /// One login's period: every account signed in to it, on any machine, added up.
+    struct Login: Equatable {
         var amount = UsageAmount()
-        /// The plan's session window (five hours), when the provider reports one.
-        private(set) var session: WindowLeft?
-        /// The plan's weekly window, when the provider reports one.
-        private(set) var weekly: WindowLeft?
-        /// Every window its accounts reported, as each account's machine last heard it.
-        fileprivate var windows: [UsageWindow] = []
-
-        /// The email, or the label of an account without one.
-        var title: String { email ?? labels.first ?? "" }
-
-        fileprivate init(id: String, provider: Provider, email: String?) {
-            self.id = id
-            self.provider = provider
-            self.email = email
-        }
-
-        fileprivate mutating func add(label: String, machine: String) {
-            if !labels.contains(label) { labels.append(label) }
-            if !machines.contains(machine) { machines.append(machine) }
-        }
-
-        /// The session and weekly windows: of each, the one that resets last, as the others
-        /// are older reports of it; the more used one when they reset together.
-        fileprivate mutating func settle(now: Date) {
-            func latest(_ label: String) -> WindowLeft? {
-                let reset = { (window: UsageWindow) in window.resetsAt.flatMap(Timestamp.date) ?? .distantPast }
-                return windows.filter { Lists.usageLabel($0.window) == label }
-                    .max { (reset($0), $0.usedPercent) < (reset($1), $1.usedPercent) }
-                    .map { WindowLeft(percentUsed: $0.usedPercent,
-                                      resets: Timestamp.until($0.resetsAt.flatMap(Timestamp.date), now: now)) }
-            }
-            session = latest("Session")
-            weekly = latest("Weekly")
-        }
+        /// Turns that failed on the login's accounts at their limit.
+        var limitHits: UInt64 = 0
+        /// Sessions moved off the login's accounts at their limit, and onto them off another.
+        var failoversOut: UInt64 = 0
+        var failoversIn: UInt64 = 0
     }
 
     struct ModelRow: Equatable, Identifiable {
@@ -110,56 +64,34 @@ struct UsageReport: Equatable {
     }
 
     private(set) var total = UsageAmount()
-    /// Every login with usage in the period or a plan window, most expensive first.
-    private(set) var accounts: [AccountRow] = []
+    /// Each login's period, by `ProviderAccounts.key`. An account its machine no longer lists
+    /// counts in `total` only.
+    private(set) var logins: [String: Login] = [:]
     /// Every model with usage in the period, most expensive first.
     private(set) var models: [ModelRow] = []
 
-    /// Adds `machines` up; only `hostId`'s when given.
-    init(_ machines: [MachineUsage], only hostId: HostId? = nil, now: Date = .now) {
+    init(_ machines: [MachineUsage]) {
         var models: [String: ModelRow] = [:]
-        var logins: [String: AccountRow] = [:]
-        func login(_ id: String, provider: Provider, email: String?) -> String {
-            if logins[id] == nil { logins[id] = AccountRow(id: id, provider: provider, email: email) }
-            return id
-        }
-        for machine in machines where hostId == nil || machine.hostId == hostId {
-            // Each of the machine's accounts, by id, to its login.
-            var ids: [AccountId: String] = [:]
-            for account in machine.accounts {
-                let id = login(account.email.map { "\(account.provider)/\($0)" } ?? "\(machine.hostId)/\(account.accountId)",
-                               provider: account.provider, email: account.email)
-                ids[account.accountId] = id
-                logins[id]?.add(label: account.label, machine: machine.name)
-                logins[id]?.windows += account.usage
-            }
+        for machine in machines {
+            let keys = Dictionary(machine.accounts.map { ($0.accountId, ProviderAccounts.key($0)) }) { first, _ in first }
             for total in machine.totals {
                 self.total.add(total)
                 let model = ModelRow(provider: total.provider, model: total.model)
                 models[model.id, default: model].amount.add(total)
-                let id = ids[total.accountId] ?? {
-                    // An account the machine no longer lists keeps its usage.
-                    let id = login("\(machine.hostId)/\(total.accountId)", provider: total.provider, email: nil)
-                    logins[id]?.add(label: total.accountId, machine: machine.name)
-                    return id
-                }()
-                logins[id]?.amount.add(total)
+                if let key = keys[total.accountId] { logins[key, default: Login()].amount.add(total) }
+            }
+            for failover in machine.failovers {
+                guard let key = keys[failover.accountId] else { continue }
+                logins[key, default: Login()].limitHits += failover.limitHits
+                logins[key, default: Login()].failoversOut += failover.failoversOut
+                logins[key, default: Login()].failoversIn += failover.failoversIn
             }
         }
-        accounts = logins.values.map { row in
-            var row = row
-            row.settle(now: now)
-            return row
+        self.models = models.values.sorted { a, b in
+            if a.amount.costUsd != b.amount.costUsd { return a.amount.costUsd > b.amount.costUsd }
+            if a.amount.tokens != b.amount.tokens { return a.amount.tokens > b.amount.tokens }
+            return a.model.localizedStandardCompare(b.model) == .orderedAscending
         }
-        .filter { $0.amount.turns > 0 || $0.session != nil || $0.weekly != nil }
-        .sorted { Self.costlier($0.amount, $1.amount, $0.title, $1.title) }
-        self.models = models.values.sorted { Self.costlier($0.amount, $1.amount, $0.model, $1.model) }
-    }
-
-    private static func costlier(_ a: UsageAmount, _ b: UsageAmount, _ aName: String, _ bName: String) -> Bool {
-        if a.costUsd != b.costUsd { return a.costUsd > b.costUsd }
-        if a.tokens != b.tokens { return a.tokens > b.tokens }
-        return aName.localizedStandardCompare(bName) == .orderedAscending
     }
 
     /// A token count, compactly: "950", "12.3K", "4.5M", "1.2B".
@@ -177,6 +109,45 @@ struct UsageReport: Equatable {
     static func dollars(_ amount: UsageAmount) -> String {
         let value = amount.costUsd > 0 && amount.costUsd < 0.01 ? "<$0.01" : String(format: "$%.2f", amount.costUsd)
         return amount.estimated ? "≈ \(value)" : value
+    }
+}
+
+/// The machines' latest answers to a usage summary, per period: shown at once when the
+/// Providers screen opens, and asked again only once stale. Plan windows need none of it; they
+/// come live with the accounts.
+struct UsageCache {
+    struct Answer: Equatable {
+        let machines: [MachineUsage]
+        let failures: [String]
+        /// The machines asked; another set connected makes the answer stale.
+        let asked: [HostId]
+        let at: Date
+    }
+
+    /// How long an answer stays fresh.
+    static let freshFor: TimeInterval = 60
+
+    private var answers: [UsagePeriod: Answer] = [:]
+    /// The periods being asked now, so a second look does not ask again meanwhile.
+    private var asking: Set<UsagePeriod> = []
+
+    subscript(period: UsagePeriod) -> Answer? { answers[period] }
+
+    /// Whether to ask `machines` for `period` now: never while asking already, else when no
+    /// answer is cached, it asked other machines, or it is older than `freshFor`.
+    func isStale(_ period: UsagePeriod, machines: [HostId], now: Date) -> Bool {
+        guard !asking.contains(period) else { return false }
+        guard let answer = answers[period] else { return true }
+        return answer.asked != machines || now.timeIntervalSince(answer.at) >= Self.freshFor
+    }
+
+    mutating func asks(_ period: UsagePeriod) {
+        asking.insert(period)
+    }
+
+    mutating func answered(_ period: UsagePeriod, with answer: Answer) {
+        answers[period] = answer
+        asking.remove(period)
     }
 }
 
@@ -204,35 +175,50 @@ extension UsagePeriod {
 }
 
 extension Fleet {
-    /// How long a machine gets to add its usage up. A daemon older than the Usage screen
+    /// How long a machine gets to add its usage up. A daemon older than the usage summary
     /// never answers it, so without a limit the screen would wait forever.
     static let usageTimeout: Duration = .seconds(10)
 
+    /// The machines asked for their usage: the connected ones; a vault runs no sessions.
+    private var usageMachines: [Machine] {
+        machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
+    }
+
+    /// Asks the machines for their usage over `period` into `usageCache`, unless it holds a
+    /// fresh answer; always when `force`.
+    func refreshUsage(over period: UsagePeriod, force: Bool = false) async {
+        let asked = usageMachines.map(\.hostId)
+        guard force || usageCache.isStale(period, machines: asked, now: .now) else { return }
+        usageCache.asks(period)
+        let (machines, failures) = await usage(over: period)
+        usageCache.answered(period, with: .init(machines: machines, failures: failures, asked: asked, at: .now))
+    }
+
     /// Asks every connected machine for its usage over `period`, all at once. A machine that
-    /// does not answer in time is left out, with why; a vault runs no sessions, so it is not
-    /// asked.
+    /// does not answer in time is left out, with why.
     func usage(over period: UsagePeriod) async -> (machines: [MachineUsage], failures: [String]) {
-        let asked = machines.filter { $0.connection == .connected && $0.hosts.isEmpty }
+        let asked = usageMachines
         let client = client
-        let answers = await withTaskGroup(of: (Int, Result<[UsageTotal], any Error>).self) { group in
+        typealias Summary = (totals: [UsageTotal], failovers: [FailoverTotal])
+        let answers = await withTaskGroup(of: (Int, Result<Summary, any Error>).self) { group in
             for (index, machine) in asked.enumerated() {
                 let hostId = machine.hostId
                 group.addTask {
                     do {
-                        let totals = try await answered(within: Self.usageTimeout,
-                                                      or: "did not answer; it may run an older herder") {
-                            guard case .usageSummary(_, _, let totals, _) = try await client.send(
+                        let summary = try await answered(within: Self.usageTimeout,
+                                                       or: "did not answer; it may run an older herder") {
+                            guard case .usageSummary(_, _, let totals, let failovers) = try await client.send(
                                 hostId: hostId, command: .getUsageSummary(period: period))
                             else { throw HerderError.Local(detail: "the machine did not add its usage up") }
-                            return totals
+                            return Summary(totals, failovers)
                         }
-                        return (index, .success(totals))
+                        return (index, .success(summary))
                     } catch {
                         return (index, .failure(error))
                     }
                 }
             }
-            var answers: [(Int, Result<[UsageTotal], any Error>)] = []
+            var answers: [(Int, Result<Summary, any Error>)] = []
             for await answer in group { answers.append(answer) }
             return answers.sorted { $0.0 < $1.0 }.map(\.1)
         }
@@ -240,9 +226,9 @@ extension Fleet {
         var failures: [String] = []
         for (machine, answer) in zip(asked, answers) {
             switch answer {
-            case .success(let totals):
-                machines.append(MachineUsage(hostId: machine.hostId, name: machine.name,
-                                             accounts: machine.accounts, totals: totals))
+            case .success(let summary):
+                machines.append(MachineUsage(hostId: machine.hostId, name: machine.name, accounts: machine.accounts,
+                                             totals: summary.totals, failovers: summary.failovers))
             case .failure(let error):
                 failures.append("\(machine.name): \(describe(error))")
             }

@@ -44,6 +44,8 @@ public final class Fleet {
     /// What the lists show now. Replaced only when it differs, so the views that show it
     /// redraw when a list changes, not on every token a session streams.
     private(set) var lists = Lists()
+    /// The machines' latest usage summaries, per period; see `refreshUsage`.
+    var usageCache = UsageCache()
     /// The rebuild of `lists` waiting to run; see `listsChanged`.
     @ObservationIgnored private var listsRefresh: Task<Void, Never>?
     /// The sessions shown on screen now, whose turns ending are seen.
