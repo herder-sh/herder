@@ -230,6 +230,21 @@ struct DraftTests {
         #expect(path.createArguments.repo == "/home/me/other")
         #expect(path.createArguments.projectId == nil)
     }
+
+    @Test func aNewSessionStartsInTheProjectInView() {
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B"])
+        host.sessions[0].projectId = "github.com/acme/app"
+        var app = Script("01A")
+        var loose = Script("01B")
+        let lists = Lists(machines: [host], sessions: [app.key: app.model([created()]), loose.key: loose.model([created()])])
+        #expect(lists.project(for: .project("github.com/acme/app"), session: nil) == "github.com/acme/app")
+        // On the Board, the open session's project.
+        #expect(lists.project(for: .board, session: app.key) == "github.com/acme/app")
+        // A session with no project, or none open, leaves it to the picker.
+        #expect(lists.project(for: .board, session: loose.key) == nil)
+        #expect(lists.project(for: .board, session: nil) == nil)
+        #expect(lists.project(for: .project(""), session: nil) == nil)
+    }
 }
 
 struct FolderTypingTests {

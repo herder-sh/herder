@@ -20,10 +20,12 @@ struct DesktopShell: View {
         HStack(spacing: 0) {
             Group {
                 if sidebarCollapsed {
-                    SidebarRail(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed)
+                    SidebarRail(fleet: fleet, item: $item, session: $session, collapsed: $sidebarCollapsed,
+                                newSession: newSession)
                         .frame(width: 76)
                 } else {
-                    Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed)
+                    Sidebar(fleet: fleet, item: $item, session: $session, sheet: $sheet, collapsed: $sidebarCollapsed,
+                            newSession: newSession)
                         .frame(width: 228)
                 }
             }
@@ -116,6 +118,17 @@ struct DesktopShell: View {
                     .padding(.bottom, 10)
             }
             list()
+        }
+    }
+
+    /// ⌘N: a draft in the project in view, the pane's or the open session's, on the machine
+    /// it would pick; elsewhere, the picker.
+    private func newSession() {
+        if let projectId = fleet.lists.project(for: item, session: session),
+           let draft = Draft.inProject(projectId, fleet: fleet) {
+            self.draft = draft
+        } else {
+            sheet = .newSession
         }
     }
 
@@ -330,6 +343,7 @@ struct Sidebar: View {
     @Binding var session: SessionKey?
     @Binding var sheet: AppSheet?
     @Binding var collapsed: Bool
+    let newSession: () -> Void
 
     private func select(_ next: SidebarItem) {
         if item != next { session = nil }
@@ -345,7 +359,7 @@ struct Sidebar: View {
                     .keyboardShortcut("\\", modifiers: [.command, .shift])
                 IconButton(symbol: "arrow.clockwise", help: "Reconnect") { fleet.wake() }
                     .keyboardShortcut("r")
-                IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
+                IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
                     .keyboardShortcut("n")
             }
             // Room for the window's traffic lights on the Mac.
@@ -422,8 +436,8 @@ private struct SidebarRail: View {
     let fleet: Fleet
     @Binding var item: SidebarItem
     @Binding var session: SessionKey?
-    @Binding var sheet: AppSheet?
     @Binding var collapsed: Bool
+    let newSession: () -> Void
 
     var body: some View {
         let lists = fleet.lists
@@ -431,7 +445,7 @@ private struct SidebarRail: View {
             Spacer().frame(height: Sidebar.topBar - 8)
             IconButton(symbol: "sidebar.left", help: "Expand the sidebar") { collapsed = false }
                 .keyboardShortcut("\\", modifiers: [.command, .shift])
-            IconButton(symbol: "square.and.pencil", help: "New Session") { sheet = .newSession }
+            IconButton(symbol: "square.and.pencil", help: "New Session", action: newSession)
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board, badge: lists.requests.count)
