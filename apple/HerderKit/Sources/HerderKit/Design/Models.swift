@@ -30,6 +30,8 @@ struct SessionSummary: Hashable, Identifiable {
     let key: SessionKey
     let title: String
     let project: String
+    /// The project's id, for its icon; `nil` until the machine has seen its repository.
+    var projectId: String?
     let branch: String
     var worktree = ""
     /// The machine it runs on: the machine's name, or for a vault the host's.

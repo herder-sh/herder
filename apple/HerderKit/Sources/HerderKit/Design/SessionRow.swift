@@ -5,6 +5,8 @@ import SwiftUI
 struct SessionRow: View {
     let session: SessionSummary
     var showsProject = true
+    /// The project's icon image, when known.
+    var projectIcon: ProjectIconImage?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -42,6 +44,7 @@ struct SessionRow: View {
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     if showsProject && !session.project.isEmpty {
+                        ProjectIcon(projectId: session.projectId, name: session.project, image: projectIcon, size: 14)
                         Text(session.project).foregroundStyle(Theme.secondary)
                     }
                     if !session.branch.isEmpty && session.branch != session.title {
