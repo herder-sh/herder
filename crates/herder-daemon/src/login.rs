@@ -251,6 +251,7 @@ impl Logins {
         account_id: &AccountId,
         label: &str,
         config_dir: Option<&str>,
+        fallback: Option<bool>,
     ) -> Result<(), ErrorInfo> {
         let inner = self.inner.as_ref().ok_or_else(|| {
             error(
@@ -268,6 +269,7 @@ impl Logins {
                     previous,
                     label,
                     config_dir,
+                    fallback,
                     may_change_directory,
                 )
                 .map_err(|err| error(ErrorCode::BadRequest, format!("{err:#}")))
@@ -557,6 +559,7 @@ impl Pending {
             provider,
             label,
             config_dir: place.config_dir,
+            fallback: false,
         };
         let _saving = inner.saving.lock().unwrap_or_else(PoisonError::into_inner);
         if let Err(err) = config::append_account(&inner.config_file, &account_id, &account) {
@@ -707,6 +710,7 @@ mod tests {
                 provider: Provider::Codex,
                 label: "Codex".into(),
                 config_dir: None,
+                fallback: false,
             },
         )]);
         let setup = Setup {
@@ -773,6 +777,7 @@ mod tests {
                     provider,
                     label: id.into(),
                     config_dir: dir,
+                    fallback: false,
                 },
             ));
         }
@@ -988,6 +993,7 @@ mod tests {
                 provider: Provider::Codex,
                 label: "Used".into(),
                 config_dir: Some(used),
+                fallback: false,
             },
         );
         let cases = [
@@ -1182,11 +1188,13 @@ mod tests {
                 &AccountId::new("codex"),
                 "Personal",
                 Some("/tmp/herder-personal"),
+                Some(true),
             )
             .await
             .unwrap();
         let account = f.sessions.accounts().remove(0);
         assert_eq!(account.label, "Personal");
+        assert!(account.fallback, "the account became fallback-only");
         let Some(herder_protocol::ServerMessage::Accounts { accounts, .. }) = outbox.pop() else {
             panic!("account metadata was not sent to the connected client");
         };
@@ -1194,7 +1202,7 @@ mod tests {
         assert_eq!(account.config_dir.as_deref(), Some("/tmp/herder-personal"));
         assert_eq!(
             f.logins
-                .set_settings(&AccountId::new("missing"), "Missing", None)
+                .set_settings(&AccountId::new("missing"), "Missing", None, None)
                 .await
                 .unwrap_err()
                 .code,
@@ -1237,13 +1245,13 @@ mod tests {
             .unwrap();
         let account = AccountId::new("codex");
         f.logins
-            .set_settings(&account, "Renamed", None)
+            .set_settings(&account, "Renamed", None, None)
             .await
             .unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(
             f.logins
-                .set_settings(&account, "Renamed", Some("/tmp/new-login"))
+                .set_settings(&account, "Renamed", Some("/tmp/new-login"), None)
                 .await
                 .is_err()
         );
@@ -1261,7 +1269,7 @@ mod tests {
             })
             .unwrap();
         f.logins
-            .set_settings(&account, "Renamed", Some("/tmp/new-login"))
+            .set_settings(&account, "Renamed", Some("/tmp/new-login"), None)
             .await
             .unwrap();
         assert_eq!(

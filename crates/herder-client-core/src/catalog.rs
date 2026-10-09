@@ -324,6 +324,7 @@ mod tests {
                     config_dir: None,
                     email: None,
                     usage: Vec::new(),
+                    fallback: false,
                 })
                 .collect(),
             failover: FailoverSettings::default(),

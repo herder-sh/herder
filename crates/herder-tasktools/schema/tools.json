@@ -674,6 +674,11 @@
                     "null"
                   ]
                 },
+                "fallback": {
+                  "description": "Whether the account is fallback-only: sessions started by provider, failover and\ntitles pick it only while every other account of its provider is unavailable. Naming\nit, or a project defaulting to it, still runs on it.",
+                  "type": "boolean",
+                  "default": false
+                },
                 "label": {
                   "description": "Display label chosen by the owner.",
                   "type": "string"

@@ -453,6 +453,7 @@ async fn a_primary_answers_one_child_and_the_user_answers_the_other() {
             provider: Provider::Claude,
             label: "Work".into(),
             config_dir: None,
+            fallback: false,
         },
     )]);
     let shutdown = CancellationToken::new();

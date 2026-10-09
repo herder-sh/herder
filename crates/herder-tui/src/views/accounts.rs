@@ -5,7 +5,7 @@
 //!  accounts                                              rotates on a limit only
 //!
 //!  ● box                                                          sessions pinned
-//! ▶  claude-main  claude                                                3 sessions
+//! ▶  claude-main  claude · fallback                                     3 sessions
 //!      Session         ███████░░░░░░░░░░░░░  38%   resets in 2h 13m
 //!      Weekly          ██░░░░░░░░░░░░░░░░░░  12%   resets in 5d 3h
 //! ```
@@ -32,8 +32,9 @@ const MIN_BAR: u16 = 8;
 /// How failover works, and where pinning is set.
 const FAILOVER: &str = "A session whose account hits a limit rotates to the account of the same \
                         provider with the most room left, on the same model, unless sessions \
-                        are pinned. Pinning is set in the machine's daemon config \
-                        ([failover] pin).";
+                        are pinned. A fallback account is used only once every other one of \
+                        its provider is at its limit or logged out. Pinning is set in the \
+                        machine's daemon config ([failover] pin).";
 
 pub(super) fn draw(
     frame: &mut Frame,
@@ -223,6 +224,9 @@ fn account_row(
     )];
     if account.label != account.account_id.as_str() && !columns.compact {
         facts.push(Span::styled(account.account_id.to_string(), ui.muted()));
+    }
+    if account.fallback {
+        facts.push(Span::styled("fallback", ui.muted()));
     }
     let mut left = vec![
         Span::raw("  "),

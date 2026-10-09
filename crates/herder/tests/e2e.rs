@@ -330,6 +330,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             provider: Provider::Claude,
             label: "Work".into(),
             config_dir: Some(account_dir.clone()),
+            fallback: false,
         },
     )]);
     let shutdown = CancellationToken::new();
@@ -384,6 +385,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             label: "Work".into(),
             email: None,
             usage: Vec::new(),
+            fallback: false,
         }]
     );
     assert_eq!(failover, FailoverSettings::default());

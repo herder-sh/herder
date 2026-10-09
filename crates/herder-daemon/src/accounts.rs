@@ -146,6 +146,7 @@ pub(crate) fn list(accounts: &Accounts, usage: &Known) -> Vec<Account> {
             label: account.label.clone(),
             email: usage.emails.get(id).cloned(),
             usage: usage.windows.get(id).cloned().unwrap_or_default(),
+            fallback: account.fallback,
         })
         .collect()
 }
@@ -167,6 +168,7 @@ mod tests {
             provider,
             label: "Label".into(),
             config_dir: config_dir.map(Path::to_owned),
+            fallback: false,
         }
     }
 
@@ -313,6 +315,7 @@ mod tests {
                     label: "Label".into(),
                     email: Some("dev@example.com".into()),
                     usage: vec![window],
+                    fallback: false,
                 },
                 Account {
                     config_dir: None,
@@ -321,6 +324,7 @@ mod tests {
                     label: "Label".into(),
                     email: None,
                     usage: Vec::new(),
+                    fallback: false,
                 }
             ]
         );

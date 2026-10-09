@@ -122,6 +122,7 @@ impl Daemon {
                     provider: fake,
                     label: "Account 1".into(),
                     config_dir: Some(dir.join("account")),
+                    fallback: false,
                 },
             );
             let setup = Setup {

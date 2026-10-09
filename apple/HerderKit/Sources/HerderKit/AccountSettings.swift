@@ -147,6 +147,7 @@ struct EditAccountSheet: View {
     let account: Account
     @State private var label = ""
     @State private var configDir = ""
+    @State private var fallback = false
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
 
@@ -166,7 +167,7 @@ struct EditAccountSheet: View {
 
     var body: some View {
         SheetScaffold(title: login == nil ? "Account Settings" : "Log In Again",
-                      subtitle: "\(account.provider) · \(account.accountId)", height: login == nil ? 470 : 680) {
+                      subtitle: "\(account.provider) · \(account.accountId)", height: login == nil ? 560 : 680) {
             if let login {
                 Text("Complete the provider’s login below. It ends once the provider reports the account logged in; sessions can then use it again.")
                     .font(.footnote).foregroundStyle(Theme.secondary)
@@ -193,7 +194,7 @@ struct EditAccountSheet: View {
                 save
             }
         }
-        .onAppear { label = account.label; configDir = account.configDir ?? "" }
+        .onAppear { label = account.label; configDir = account.configDir ?? ""; fallback = account.fallback }
     }
 
     /// Whether another login runs on the machine, which this one would take the place of.
@@ -211,6 +212,9 @@ struct EditAccountSheet: View {
             InputBox(placeholder: "Provider default", text: $configDir, mono: true)
         }
         if let pathProblem { Text(pathProblem).font(.footnote).foregroundStyle(Theme.failure) }
+        Field(label: "Rotation", hint: "A fallback login is picked for new sessions and failover only once every other \(account.provider) account is at its limit or logged out. Choosing it by name still uses it.") {
+            ChoiceChips(options: [(false, "Use in rotation", ""), (true, "Fallback only", "")], selection: $fallback)
+        }
         if !canManage {
             Text("Connect as the machine owner to save changes.").font(.footnote).foregroundStyle(Theme.secondary)
         }
@@ -231,7 +235,7 @@ struct EditAccountSheet: View {
                 let path = configDir.trimmingCharacters(in: .whitespacesAndNewlines)
                 _ = try await fleet.client.send(hostId: hostId, command: .setAccountSettings(
                     accountId: account.accountId, label: label.trimmingCharacters(in: .whitespacesAndNewlines),
-                    configDir: path.isEmpty ? nil : path))
+                    configDir: path.isEmpty ? nil : path, fallback: fallback))
                 dismiss()
             } catch { self.error = describe(error) }
         }.frame(maxWidth: 180).disabled(!canManage || pathProblem != nil || label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

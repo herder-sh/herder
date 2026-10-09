@@ -208,6 +208,7 @@ async fn start(
             provider: fake,
             label: "Account 1".into(),
             config_dir: Some(dir.join("account")),
+            fallback: false,
         },
     );
     let turns = Arc::clone(turns);

@@ -206,6 +206,7 @@ impl Daemon {
                 provider: fake(),
                 label: "Account 1".into(),
                 config_dir: Some(dir.join("account")),
+                fallback: false,
             },
         );
         let setup = Setup {
@@ -1708,6 +1709,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 provider: Provider::Claude,
                 label: "Main".into(),
                 config_dir: None,
+                fallback: false,
             },
         ),
         (
@@ -1716,6 +1718,7 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
                 provider: Provider::Codex,
                 label: "Work".into(),
                 config_dir: Some(codex_home.clone()),
+                fallback: false,
             },
         ),
     ]);
@@ -2239,6 +2242,7 @@ impl Switching {
                     provider: provider.clone(),
                     label: id.to_string(),
                     config_dir: Some(dir.join(id)),
+                    fallback: false,
                 };
                 (AccountId::new(*id), config)
             })
@@ -5314,6 +5318,7 @@ async fn successful_switches_cancel_limit_waits_and_invalid_switches_keep_them()
                         provider: fake(),
                         label: "Another".into(),
                         config_dir: None,
+                        fallback: false,
                     }
                 ));
                 switch_account(&session, "another")

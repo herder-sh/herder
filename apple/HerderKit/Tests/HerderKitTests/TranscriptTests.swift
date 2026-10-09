@@ -225,8 +225,8 @@ struct TranscriptTests {
 
 @MainActor
 struct DefaultAccountTests {
-    private func account(_ id: String, _ provider: String, used: Double) -> Account {
-        Account(accountId: id, provider: provider, label: id, configDir: nil, email: nil, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)])
+    private func account(_ id: String, _ provider: String, used: Double, fallback: Bool = false) -> Account {
+        Account(accountId: id, provider: provider, label: id, configDir: nil, email: nil, usage: [UsageWindow(window: "five_hour", usedPercent: used, resetsAt: nil)], fallback: fallback)
     }
 
     @Test func theProjectsAccountWinsElseTheLeastUsed() throws {
@@ -241,6 +241,23 @@ struct DefaultAccountTests {
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "claude")?.accountId == "busy")
         #expect(fleet.defaultAccount(on: "h", projectId: nil, provider: "claude")?.accountId == "idle")
         #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "codex")?.accountId == "gpt")
+    }
+
+    @Test func aFallbackAccountIsPickedOnlyOnceEveryOtherIsUsedUp() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        var host = machine("h", name: "h", sessions: [],
+                           projects: [Project(projectId: "p", name: "p", paths: [], defaultPermissionMode: nil, defaultAccount: "spare", setupCommand: nil)])
+        host.accounts = [account("main", "claude", used: 90), account("spare", "claude", used: 0, fallback: true)]
+        fleet.setMachinesForTesting([host])
+        #expect(fleet.defaultAccount(on: "h", projectId: nil, provider: "claude")?.accountId == "main")
+        // A project naming it still uses it.
+        #expect(fleet.defaultAccount(on: "h", projectId: "p", provider: "claude")?.accountId == "spare")
+        host.accounts[0] = account("main", "claude", used: 100)
+        fleet.setMachinesForTesting([host])
+        #expect(fleet.defaultAccount(on: "h", projectId: nil, provider: "claude")?.accountId == "spare")
     }
 
     @Test func repliesOfDifferentTurnsKeepApartWhenTheAdapterReusesItemIds() {

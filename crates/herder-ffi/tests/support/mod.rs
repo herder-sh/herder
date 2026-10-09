@@ -129,6 +129,7 @@ impl FakeDaemon {
                     provider,
                     label: label.into(),
                     config_dir: Some(dir.join(account)),
+                    fallback: false,
                 },
             );
         }

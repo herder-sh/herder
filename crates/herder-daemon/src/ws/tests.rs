@@ -59,6 +59,7 @@ impl Backend for TestBackend {
             label: "Main".into(),
             email: None,
             usage: Vec::new(),
+            fallback: false,
         }]
     }
 

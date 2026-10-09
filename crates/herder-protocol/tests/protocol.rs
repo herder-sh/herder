@@ -336,6 +336,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             account_id: AccountId::new("01J9ACCOUNT"),
             label: "Personal".into(),
             config_dir: Some("~/.claude-personal".into()),
+            fallback: Some(true),
         }),
         command(CommandBody::SetResourceLimits { max_turns: 6 }),
         command(CommandBody::GetSettings),
@@ -1114,6 +1115,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
         ]
         .into_iter()
         .map(|provider| Account {
+            fallback: provider == Provider::Codex,
             config_dir: None,
             account_id: account_id(),
             label: format!("{} work", provider.as_str()),
@@ -2984,6 +2986,32 @@ fn follow_up_provenance_is_optional_and_round_trips_with_the_item() {
     assert_eq!((stalled.pr, stalled.head_sha), (None, None));
     let future: FollowUp = serde_json::from_value(json!({ "reason": "deployed" })).unwrap();
     assert_eq!(future.reason, FollowUpReason::Unknown);
+}
+
+#[test]
+fn an_account_without_fallback_rotates() {
+    let account: Account = serde_json::from_value(json!({
+        "account_id": "a",
+        "provider": "claude",
+        "label": "Main",
+        "usage": []
+    }))
+    .unwrap();
+    assert!(!account.fallback);
+    let message: ClientMessage = serde_json::from_value(json!({
+        "type": "command",
+        "id": "c",
+        "body": { "type": "set_account_settings", "account_id": "a", "label": "Main" }
+    }))
+    .unwrap();
+    let ClientMessage::Command(Command {
+        body: CommandBody::SetAccountSettings { fallback, .. },
+        ..
+    }) = message
+    else {
+        panic!("expected set_account_settings");
+    };
+    assert_eq!(fallback, None);
 }
 
 #[test]

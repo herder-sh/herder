@@ -189,7 +189,8 @@ public final class Fleet {
     }
 
     /// The account a new session runs on, so nobody has to pick one: the project's default
-    /// account when it fits the provider, else the provider's account with the most room left.
+    /// account when it fits the provider, else the provider's account with the most room left,
+    /// a fallback-only one only once every other is used up, as the machine itself picks.
     func defaultAccount(on hostId: HostId, projectId: String?, provider: Provider?) -> Account? {
         guard let machine = machines.first(where: { $0.hostId == hostId }) else { return nil }
         let preferred = machine.projects.first { $0.projectId == projectId }?.defaultAccount
@@ -197,9 +198,9 @@ public final class Fleet {
            provider == nil || account.provider == provider {
             return account
         }
-        return machine.accounts
-            .filter { provider == nil || $0.provider == provider }
-            .min { busiest($0) < busiest($1) }
+        let candidates = machine.accounts.filter { provider == nil || $0.provider == provider }
+        let rotating = candidates.filter { !$0.fallback && busiest($0) < 100 }
+        return (rotating.isEmpty ? candidates : rotating).min { busiest($0) < busiest($1) }
     }
 
     private func busiest(_ account: Account) -> Double {

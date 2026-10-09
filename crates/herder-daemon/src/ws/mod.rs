@@ -273,9 +273,10 @@ impl<B: Backend> Shared<B> {
                 account_id,
                 label,
                 config_dir,
+                fallback,
             } => {
                 self.logins
-                    .set_settings(&account_id, &label, config_dir.as_deref())
+                    .set_settings(&account_id, &label, config_dir.as_deref(), fallback)
                     .await?;
                 Ok(CommandResult::Applied)
             }

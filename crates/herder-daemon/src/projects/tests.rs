@@ -477,6 +477,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
                     provider: herder_protocol::Provider::Claude,
                     label: "Main".into(),
                     config_dir: None,
+                    fallback: false,
                 },
             )]),
             sink: Arc::clone(&hub) as Arc<dyn EventSink>,
