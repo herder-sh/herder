@@ -200,7 +200,7 @@ async fn read<B: Backend>(
             }
             Ok(ClientMessage::Sync { token }) => outbox.push(ServerMessage::Synced { token }),
             Ok(ClientMessage::Command(Command { id, body })) => {
-                if let Err(error) = auth::authorize(&identity, &body) {
+                if let Err(error) = auth::authorize(identity.role, &body) {
                     outbox.push(ServerMessage::CommandRejected {
                         command_id: id,
                         error,

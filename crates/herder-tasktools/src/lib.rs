@@ -1,6 +1,7 @@
 //! The task tools: what a session's agent calls to run a task as a primary session with child
-//! sessions. The daemon serves them to every agent over MCP; this crate defines them as data
-//! and holds no logic beyond checking the shape of arguments.
+//! sessions, and to drive the herder daemon it runs in as its apps do. The daemon serves them
+//! to every agent over MCP; this crate defines them as data and holds no logic beyond checking
+//! the shape of arguments.
 //!
 //! - [`tools_list`] is the MCP `tools/list` result: name, description, `inputSchema` and
 //!   `outputSchema` of every tool, generated from the types in this crate.
@@ -10,16 +11,17 @@
 
 mod tools;
 
+use herder_protocol::CommandBody;
 use schemars::generate::SchemaSettings;
-use schemars::{JsonSchema, Schema};
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use tools::{
-    AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, EscalateArgs, EscalateInput,
-    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput, StatusInput,
-    StatusOutput, WaitForInput, WaitForOutput,
+    AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, CommandInput, EscalateArgs, EscalateInput,
+    EscalateOutput, OverviewInput, OverviewOutput, Request, RequestRef, SendInput, SendOutput,
+    SendSessionInput, SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput,
+    StatusInput, StatusOutput, WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -41,11 +43,15 @@ pub enum Tool {
     Escalate,
     /// Show an HTML page inline in the caller's thread.
     ShowHtml,
+    /// What the daemon holds: sessions, projects, accounts.
+    Overview,
+    /// Run a herder command as the session's user.
+    Command,
 }
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 8] = [
+    pub const ALL: [Tool; 10] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -54,6 +60,8 @@ impl Tool {
         Tool::Answer,
         Tool::Escalate,
         Tool::ShowHtml,
+        Tool::Overview,
+        Tool::Command,
     ];
 
     /// Name the agent calls the tool by.
@@ -67,6 +75,8 @@ impl Tool {
             Tool::Answer => "answer",
             Tool::Escalate => "escalate",
             Tool::ShowHtml => "show_html",
+            Tool::Overview => "overview",
+            Tool::Command => "command",
         }
     }
 
@@ -159,6 +169,25 @@ impl Tool {
                  Returns at once; still write a short text reply that summarises what the page \
                  shows, adding what it does not say."
             }
+            Tool::Overview => {
+                "Snapshot of the herder daemon you run in, as its apps see it: `you`, your own \
+                 session's id; every session on this host with its status, title, project and \
+                 queue; every project; and every account with its usage. Use it to find the ids \
+                 the command tool takes. Returns at once."
+            }
+            Tool::Command => {
+                "Run a herder command on the daemon you run in, as the herder apps do: create, \
+                 prompt, rename, archive or interrupt sessions (your own included), switch a \
+                 session's model, permission mode, account or provider, link pull requests, \
+                 manage projects and skills, and read or change the daemon's settings. It runs \
+                 as the user who started your session (for a child, your primary's), with that \
+                 user's role: commands for the daemon's owners only fail with `not_allowed` for \
+                 a member. Commands that open a terminal (terminals, adding or logging in \
+                 accounts, installing providers) or pair a device or host are never run for an \
+                 agent; ask the user to do those in a herder app. Act only on what the user \
+                 asked for: these commands change the user's real sessions and settings. Call \
+                 overview first for the ids. Returns the command's result."
+            }
         }
     }
 
@@ -173,6 +202,8 @@ impl Tool {
             Tool::Answer => tool_schema::<AnswerInput>(),
             Tool::Escalate => tool_schema::<EscalateInput>(),
             Tool::ShowHtml => tool_schema::<ShowHtmlInput>(),
+            Tool::Overview => tool_schema::<OverviewInput>(),
+            Tool::Command => tool_schema::<CommandInput>(),
         }
     }
 
@@ -187,6 +218,18 @@ impl Tool {
             Tool::Answer => tool_schema::<AnswerOutput>(),
             Tool::Escalate => tool_schema::<EscalateOutput>(),
             Tool::ShowHtml => tool_schema::<ShowHtmlOutput>(),
+            Tool::Overview => tool_schema::<OverviewOutput>(),
+            Tool::Command => json_schema!({
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "description": "What the command returned: `applied` when it returns \
+                                        nothing more, else its own result with its fields.",
+                        "type": "string"
+                    }
+                },
+                "required": ["type"]
+            }),
         }
     }
 
@@ -219,6 +262,34 @@ fn tool_schema<T: JsonSchema>() -> Schema {
     schema
 }
 
+/// Every command `command` takes, by its `type`, with the JSON Schema of its arguments. Listing
+/// these schemas in `tools/list` would fill an agent's context, so `command` lists the types
+/// only and a call with a type's arguments wrong answers with that type's schema.
+fn commands() -> Vec<(String, Value)> {
+    let schema = tool_schema::<CommandBody>();
+    let variants = schema.get("oneOf").and_then(Value::as_array);
+    variants
+        .into_iter()
+        .flatten()
+        .filter_map(|variant| {
+            let name = variant.pointer("/properties/type/const")?.as_str()?;
+            Some((name.to_owned(), variant.clone()))
+        })
+        .collect()
+}
+
+/// The schema `tools/list` gives `command`'s argument: its `type` only, see [`commands`].
+fn command_schema(_: &mut SchemaGenerator) -> Schema {
+    let types: Vec<String> = commands().into_iter().map(|(name, _)| name).collect();
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "type": { "type": "string", "enum": types }
+        },
+        "required": ["type"]
+    })
+}
+
 /// A tool as listed by MCP `tools/list`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -248,7 +319,7 @@ pub fn tools_list() -> ToolsList {
 }
 
 /// A `tools/call` request with its arguments checked against the tool's schema.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolCall {
     /// `spawn`.
     Spawn(SpawnInput),
@@ -266,6 +337,10 @@ pub enum ToolCall {
     Escalate(EscalateInput),
     /// `show_html`.
     ShowHtml(ShowHtmlInput),
+    /// `overview`.
+    Overview(OverviewInput),
+    /// `command`.
+    Command(CommandInput),
 }
 
 impl ToolCall {
@@ -273,6 +348,10 @@ impl ToolCall {
     /// Malformed arguments fail with [`ErrorCode::InvalidArguments`].
     pub fn parse(tool: Tool, arguments: Option<Value>) -> Result<ToolCall, ToolError> {
         let arguments = arguments.unwrap_or_else(|| Value::Object(Map::new()));
+        let command = arguments
+            .pointer("/command/type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let call = match tool {
             Tool::Spawn => serde_json::from_value(arguments).map(ToolCall::Spawn),
             Tool::Send => serde_json::from_value(arguments).map(ToolCall::Send),
@@ -282,8 +361,19 @@ impl ToolCall {
             Tool::Answer => serde_json::from_value(arguments).map(ToolCall::Answer),
             Tool::Escalate => serde_json::from_value(arguments).map(ToolCall::Escalate),
             Tool::ShowHtml => serde_json::from_value(arguments).map(ToolCall::ShowHtml),
+            Tool::Overview => serde_json::from_value(arguments).map(ToolCall::Overview),
+            Tool::Command => serde_json::from_value(arguments).map(ToolCall::Command),
         };
-        call.map_err(|error| ToolError::new(ErrorCode::InvalidArguments, error.to_string()))
+        call.map_err(|error| {
+            let mut message = error.to_string();
+            if tool == Tool::Command
+                && let Some((name, schema)) = command
+                    .and_then(|name| commands().into_iter().find(|(known, _)| *known == name))
+            {
+                message.push_str(&format!("; the JSON Schema of `{name}` is {schema}"));
+            }
+            ToolError::new(ErrorCode::InvalidArguments, message)
+        })
     }
 
     /// The tool called.
@@ -297,6 +387,8 @@ impl ToolCall {
             ToolCall::Answer(_) => Tool::Answer,
             ToolCall::Escalate(_) => Tool::Escalate,
             ToolCall::ShowHtml(_) => Tool::ShowHtml,
+            ToolCall::Overview(_) => Tool::Overview,
+            ToolCall::Command(_) => Tool::Command,
         }
     }
 }
@@ -310,7 +402,8 @@ pub enum ErrorCode {
     /// `spawn` was called by a child; children cannot spawn children.
     DepthExceeded,
     /// `spawn` asked for a provider outside the task's providers or a permission mode above the
-    /// caller's own.
+    /// caller's own, or `command` was refused: beyond the user's role, never run for an agent,
+    /// or invalid for the daemon's state.
     NotAllowed,
     /// The session, question or approval request belongs to another session's task.
     NotYourChild,

@@ -289,10 +289,19 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         async move { providers.run(shutdown).await }
     });
-    let server = ws::Server::new(tls, auth, hub, sessions, terminals.clone(), logins, host);
+    let server = ws::Server::new(
+        tls,
+        auth,
+        hub,
+        sessions.clone(),
+        terminals.clone(),
+        logins,
+        host,
+    );
     server.manage_providers(providers)?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
+    sessions.serve_control(server.control())?;
     server.run(listeners, shutdown).await;
     terminals.close_all();
     info!("herder daemon stopped");

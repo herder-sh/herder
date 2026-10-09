@@ -18,10 +18,10 @@ use herder_daemon::session::{
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CiStatus,
-    CommandBody, CommandResult, ErrorClass, ErrorCode, EscalationReason, Event, EventBody, Item,
-    ItemBody, ItemId, Mergeable, PermissionMode, PrState, PromptId, Provider, PullRequest,
-    QuestionId, ReviewStatus, Route, SessionHead, SessionId, SessionStatus, Timestamp, TurnError,
-    TurnId, TurnUsage, UsagePeriod, UsageTotal, UserId,
+    CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
+    EventBody, Item, ItemBody, ItemId, Mergeable, PermissionMode, PrState, PromptId, Provider,
+    PullRequest, QuestionId, ReviewStatus, Route, SessionHead, SessionId, SessionStatus, Timestamp,
+    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UserId,
 };
 use herder_store::{NewEvent, Store};
 use herder_tasktools::CallToolResult;
@@ -1983,4 +1983,96 @@ async fn any_session_shows_an_html_page_within_its_limits() {
     ] {
         assert_eq!(tools.fails("show_html", invalid).await, "invalid_arguments");
     }
+}
+
+/// Records the commands agents run, and refuses those it is told to.
+#[derive(Default)]
+struct Commands {
+    ran: Mutex<Vec<(UserId, CommandBody)>>,
+}
+
+impl mcp::Control for Commands {
+    fn overview(&self) -> mcp::ControlFuture<mcp::Overview> {
+        Box::pin(async {
+            Ok(mcp::Overview {
+                sessions: Vec::new(),
+                projects: Vec::new(),
+                accounts: Vec::new(),
+            })
+        })
+    }
+
+    fn command(&self, user_id: UserId, command: CommandBody) -> mcp::ControlFuture<CommandResult> {
+        let refused = matches!(command, CommandBody::RestartDaemon);
+        self.ran.lock().unwrap().push((user_id, command));
+        Box::pin(async move {
+            if refused {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "owners only".into(),
+                });
+            }
+            Ok(CommandResult::Applied)
+        })
+    }
+}
+
+#[tokio::test]
+async fn agents_drive_the_daemon_as_the_user_who_started_their_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    assert_eq!(
+        tools.fails("overview", json!({})).await,
+        "not_allowed",
+        "without control, agents cannot drive the daemon"
+    );
+
+    let commands = Arc::new(Commands::default());
+    daemon.manager.serve_control(commands.clone()).unwrap();
+    let overview = tools.ok("overview", json!({})).await;
+    assert_eq!(id(&overview["you"]), primary);
+
+    let rename = json!({ "command": {
+        "type": "rename_session",
+        "session_id": primary.as_str(),
+        "title": "Renamed by its agent",
+    }});
+    assert_eq!(
+        tools.ok("command", rename).await,
+        json!({ "type": "applied" })
+    );
+    let restart = json!({ "command": { "type": "restart_daemon" } });
+    assert_eq!(tools.fails("command", restart).await, "not_allowed");
+    assert_eq!(
+        tools
+            .fails(
+                "command",
+                json!({ "command": { "type": "no_such_command" } })
+            )
+            .await,
+        "invalid_arguments"
+    );
+
+    // A child acts for the user who started its primary.
+    let child = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+    let mut child_tools = daemon.connect(&child);
+    let interrupt = json!({ "command": {
+        "type": "interrupt",
+        "session_id": child.as_str(),
+    }});
+    child_tools.ok("command", interrupt).await;
+
+    let ran = commands.ran.lock().unwrap();
+    assert_eq!(ran.len(), 3);
+    assert!(ran.iter().all(|(user_id, _)| user_id == &alice()));
+    assert!(
+        matches!(&ran[0].1, CommandBody::RenameSession { session_id, .. } if session_id == &primary)
+    );
+    assert!(matches!(&ran[2].1, CommandBody::Interrupt { session_id } if session_id == &child));
 }

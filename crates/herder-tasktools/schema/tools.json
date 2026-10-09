@@ -638,6 +638,517 @@
           "shown"
         ]
       }
+    },
+    {
+      "name": "overview",
+      "description": "Snapshot of the herder daemon you run in, as its apps see it: `you`, your own session's id; every session on this host with its status, title, project and queue; every project; and every account with its usage. Use it to find the ids the command tool takes. Returns at once.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "description": "Every account sessions may run on, with its usage.",
+            "type": "array",
+            "items": {
+              "description": "A provider login on this host, used through its own config dir.",
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "description": "The account.",
+                  "type": "string"
+                },
+                "config_dir": {
+                  "description": "Config directory on the host; absent for the provider default.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "email": {
+                  "description": "Email address the provider login is signed in as, as its CLI last reported it; absent\nuntil it reports one, and for a login without one, such as an API key. Accounts with\nthe same provider and email share one login, and so its limits.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "label": {
+                  "description": "Display label chosen by the owner.",
+                  "type": "string"
+                },
+                "provider": {
+                  "description": "Provider the account belongs to.",
+                  "type": "string",
+                  "examples": [
+                    "claude",
+                    "codex",
+                    "cursor",
+                    "grok",
+                    "opencode",
+                    "gemini"
+                  ]
+                },
+                "usage": {
+                  "description": "Every limit window the provider last reported; empty until it reports one.",
+                  "type": "array",
+                  "items": {
+                    "description": "Usage of one provider limit window, such as a five-hour or weekly limit.",
+                    "type": "object",
+                    "properties": {
+                      "resets_at": {
+                        "description": "When the window resets; absent when the provider does not say.",
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time"
+                      },
+                      "used_percent": {
+                        "description": "Share of the window's limit used, from 0 to 100.",
+                        "type": "number",
+                        "format": "double"
+                      },
+                      "window": {
+                        "description": "Window name, in the provider's own naming.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "window",
+                      "used_percent"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "provider",
+                "label",
+                "usage"
+              ]
+            }
+          },
+          "projects": {
+            "description": "Every project with a clone on this host.",
+            "type": "array",
+            "items": {
+              "description": "A project as one daemon sees it: its clones on that daemon's host and its settings there.",
+              "type": "object",
+              "properties": {
+                "default_account": {
+                  "description": "Account new sessions of the project use on this host when none is chosen; absent when\nnone is configured.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default_permission_mode": {
+                  "description": "Permission mode new sessions of the project start in on this host when none is chosen;\nabsent when none is configured.",
+                  "anyOf": [
+                    {
+                      "description": "How much the agent may do without asking.",
+                      "oneOf": [
+                        {
+                          "description": "Reads only; every write or command is refused.",
+                          "type": "string",
+                          "const": "read_only"
+                        },
+                        {
+                          "description": "Asks before every write or command.",
+                          "type": "string",
+                          "const": "ask"
+                        },
+                        {
+                          "description": "Edits files freely; asks before commands.",
+                          "type": "string",
+                          "const": "auto_edit"
+                        },
+                        {
+                          "description": "Does anything without asking.",
+                          "type": "string",
+                          "const": "full_access"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "icon": {
+                  "description": "The project's icon, the image an owner uploaded with `set_project_icon`, else an image\nfile found in its clone on this host, named by the SHA-256 of its bytes as lowercase\nhex; absent when it has none. It changes whenever the image does, so clients cache the\nicon by it and fetch it with `get_project_icon`.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "icon_background": {
+                  "description": "Colour drawn behind the project's icon, as `#rrggbb`; absent when none is configured,\nso a transparent icon shows through to the client's own background.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "icon_uploaded": {
+                  "description": "Whether `icon` is an uploaded image rather than one found in the clone;\n`set_project_icon` without an image clears the upload.",
+                  "type": "boolean",
+                  "default": false
+                },
+                "name": {
+                  "description": "Display name: the configured name, else the last segment of the id.",
+                  "type": "string"
+                },
+                "paths": {
+                  "description": "Absolute paths of the project's clones on this host.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "project_id": {
+                  "description": "The project.",
+                  "type": "string"
+                },
+                "setup_command": {
+                  "description": "Shell command run in each new worktree of the project before its session starts;\nabsent when none is configured.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "project_id",
+                "name",
+                "paths"
+              ]
+            }
+          },
+          "sessions": {
+            "description": "Every session on this host, archived ones included.",
+            "type": "array",
+            "items": {
+              "description": "A session as lists show it, and the seq of its latest event.",
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "description": "Account the session runs on now.",
+                  "type": "string"
+                },
+                "children_need_you": {
+                  "description": "How many of this session's children are `needs_you`; 0 for a child.",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "head_seq": {
+                  "description": "Seq of its latest event.",
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                },
+                "host_id": {
+                  "description": "Host the session runs on, one of the vault's [`ServerMessage::Hosts`]; set by a vault\nonly, as a daemon's sessions all run on its own host.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent": {
+                  "description": "Primary session of the task this session is a child of; absent for a top-level session.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_host": {
+                  "description": "Host the parent runs on when it lives on another machine; absent when the parent, if\nany, is a session of the same host.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "project_id": {
+                  "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent until the daemon's project discovery has seen the repository.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "queue": {
+                  "description": "Prompts waiting for the running turn to end, in the order they will run; a prompt\nleaves it as its turn starts. A vault lists none.",
+                  "type": "array",
+                  "items": {
+                    "description": "A prompt waiting in a session's queue.",
+                    "type": "object",
+                    "properties": {
+                      "agent_message": {
+                        "description": "The session whose agent sent it, as on the `user_message` it becomes; absent for a\nuser's prompt.",
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "hop_count": {
+                            "description": "Trusted relay depth; a human-origin turn starts at zero.",
+                            "type": "integer",
+                            "format": "uint32",
+                            "minimum": 0
+                          },
+                          "message_id": {
+                            "description": "Caller-chosen stable delivery key, scoped to sender and destination.",
+                            "type": "string"
+                          },
+                          "permission_ceiling": {
+                            "description": "Maximum permissions this message may exercise, retained while queued.",
+                            "oneOf": [
+                              {
+                                "description": "Reads only; every write or command is refused.",
+                                "type": "string",
+                                "const": "read_only"
+                              },
+                              {
+                                "description": "Asks before every write or command.",
+                                "type": "string",
+                                "const": "ask"
+                              },
+                              {
+                                "description": "Edits files freely; asks before commands.",
+                                "type": "string",
+                                "const": "auto_edit"
+                              },
+                              {
+                                "description": "Does anything without asking.",
+                                "type": "string",
+                                "const": "full_access"
+                              }
+                            ]
+                          },
+                          "sender_session_id": {
+                            "description": "Session authenticated by the caller's MCP token, never supplied by its prompt.",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "sender_session_id",
+                          "message_id",
+                          "hop_count",
+                          "permission_ceiling"
+                        ]
+                      },
+                      "by": {
+                        "description": "User who sent it; absent when an agent did.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "files": {
+                        "description": "How many files it carries.",
+                        "type": "integer",
+                        "format": "uint32",
+                        "default": 0,
+                        "minimum": 0
+                      },
+                      "images": {
+                        "description": "How many images it carries.",
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      },
+                      "prompt_id": {
+                        "description": "The prompt, for `remove_queued`, `move_queued`, `send_queued_now` and `merge_queued`.",
+                        "type": "string"
+                      },
+                      "text": {
+                        "description": "Prompt text.",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "prompt_id",
+                      "text",
+                      "images"
+                    ]
+                  }
+                },
+                "session_id": {
+                  "description": "The session.",
+                  "type": "string"
+                },
+                "status": {
+                  "description": "Where the session stands.",
+                  "oneOf": [
+                    {
+                      "description": "Waiting for a prompt.",
+                      "type": "string",
+                      "const": "idle"
+                    },
+                    {
+                      "description": "The agent is working, or waiting for its primary session to answer an approval or question.",
+                      "type": "string",
+                      "const": "running"
+                    },
+                    {
+                      "description": "A prompt waits for host capacity or its reported usage reset (retry_at); the turn starts, and the\nstatus becomes `running`, once it does. Survives a daemon restart, and the prompt keeps\nits place in the host's queue.",
+                      "type": "string",
+                      "const": "waiting_for_capacity"
+                    },
+                    {
+                      "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
+                      "type": "string",
+                      "const": "needs_you"
+                    },
+                    {
+                      "description": "Cannot continue without intervention.",
+                      "type": "string",
+                      "const": "error"
+                    },
+                    {
+                      "description": "Put away by a user; read-only.",
+                      "type": "string",
+                      "const": "archived"
+                    },
+                    {
+                      "description": "Handed off to another host; read-only here.",
+                      "type": "string",
+                      "const": "moved"
+                    }
+                  ]
+                },
+                "task": {
+                  "description": "Short label of the session's task, shown in the task tree.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "title": {
+                  "description": "The session's current title, from its latest `title_changed`; absent until it has one.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "session_id",
+                "head_seq",
+                "status",
+                "account_id",
+                "children_need_you"
+              ]
+            }
+          },
+          "you": {
+            "description": "Your own session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "you",
+          "sessions",
+          "projects",
+          "accounts"
+        ]
+      }
+    },
+    {
+      "name": "command",
+      "description": "Run a herder command on the daemon you run in, as the herder apps do: create, prompt, rename, archive or interrupt sessions (your own included), switch a session's model, permission mode, account or provider, link pull requests, manage projects and skills, and read or change the daemon's settings. It runs as the user who started your session (for a child, your primary's), with that user's role: commands for the daemon's owners only fail with `not_allowed` for a member. Commands that open a terminal (terminals, adding or logging in accounts, installing providers) or pair a device or host are never run for an agent; ask the user to do those in a herder app. Act only on what the user asked for: these commands change the user's real sessions and settings. Call overview first for the ids. Returns the command's result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "description": "The herder command, as a herder app sends it: its `type` and that command's arguments\nbeside it, e.g. `{\"type\": \"rename_session\", \"session_id\": \"...\", \"title\": \"...\"}`. A\ncall with arguments missing or wrong fails with the command's JSON Schema, so to learn\na command's arguments, call it with its `type` alone.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "create_session",
+                  "archive_session",
+                  "unarchive_session",
+                  "rename_session",
+                  "retitle_session",
+                  "fork_session",
+                  "upload_history",
+                  "send_prompt",
+                  "get_attachment",
+                  "interrupt",
+                  "remove_queued",
+                  "move_queued",
+                  "send_queued_now",
+                  "merge_queued",
+                  "set_model",
+                  "set_permission_mode",
+                  "answer_approval",
+                  "answer_question",
+                  "switch_account",
+                  "switch_provider",
+                  "link_pr",
+                  "unlink_pr",
+                  "compose_down",
+                  "open_terminal",
+                  "add_account",
+                  "install_provider",
+                  "log_in_account",
+                  "set_account_settings",
+                  "set_resource_limits",
+                  "get_settings",
+                  "set_settings",
+                  "restart_daemon",
+                  "list_directory",
+                  "add_project",
+                  "clone_project",
+                  "set_project_settings",
+                  "remove_project",
+                  "set_project_icon",
+                  "get_project_icon",
+                  "get_usage_summary",
+                  "get_vault_link",
+                  "link_vault",
+                  "unlink_vault",
+                  "pair_device",
+                  "pair_vault_host",
+                  "revoke_vault_host",
+                  "set_skills_repo",
+                  "put_skill",
+                  "delete_skill",
+                  "import_skill",
+                  "pull_skills",
+                  "set_skill_enabled",
+                  "attach_terminal",
+                  "detach_terminal",
+                  "resize_terminal",
+                  "terminal_input"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "command"
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "What the command returned: `applied` when it returns nothing more, else its own result with its fields.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      }
     }
   ]
 }

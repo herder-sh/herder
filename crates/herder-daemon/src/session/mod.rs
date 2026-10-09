@@ -257,7 +257,7 @@ use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
 use crate::config::ProjectSettings;
-use crate::mcp::{self, Mcp};
+use crate::mcp::{self, Control, Mcp};
 use crate::projects::{self, Overrides};
 use crate::prs::{self, PrTracker};
 use crate::resources::{Admission, Docker, Scopes};
@@ -384,6 +384,8 @@ struct Inner {
     stalls: OnceLock<Arc<Stalls>>,
     /// herder's MCP server, once started.
     mcp: OnceLock<Arc<Mcp>>,
+    /// The daemon as agents drive it through `overview` and `command`, once set.
+    control: OnceLock<Arc<dyn Control>>,
     /// Children's reports and requests waiting for their primaries.
     tasks: Tasks,
     /// Where children's requests that go to the user are announced, once set.
@@ -549,6 +551,7 @@ impl SessionManager {
                 prs: OnceLock::new(),
                 stalls: OnceLock::new(),
                 mcp: OnceLock::new(),
+                control: OnceLock::new(),
                 tasks,
                 notifier: OnceLock::new(),
                 scopes: OnceLock::new(),
@@ -986,6 +989,15 @@ impl SessionManager {
             .mcp
             .set(Mcp::start(config, tools, inner.shutdown.clone())?);
         Ok(())
+    }
+
+    /// Lets agents drive the daemon through `control` with the `overview` and `command`
+    /// tools; once per manager. Without it, those tools are unsupported.
+    pub fn serve_control(&self, control: Arc<dyn Control>) -> anyhow::Result<()> {
+        self.inner
+            .control
+            .set(control)
+            .map_err(|_| anyhow::anyhow!("agents drive the daemon already"))
     }
 
     /// Runs every session's CLI in a scope of `scopes` from its next start; once per manager.

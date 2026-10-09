@@ -31,16 +31,18 @@
 //! with any user's answer.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
-use herder_protocol::{ErrorInfo, EventBody, PermissionMode, SessionId, SessionStatus};
+use herder_protocol::{
+    CommandResult, ErrorInfo, EventBody, PermissionMode, SessionId, SessionStatus, UserId,
+};
 use herder_store::Session;
 use herder_tasktools::{
-    AnswerInput, AnswerOutput, CallToolResult, ChildStatus, ErrorCode, EscalateInput,
-    EscalateOutput, Request, RequestRef, SendInput, SendOutput, SendSessionInput,
-    SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput, StatusInput,
-    StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
+    AnswerInput, AnswerOutput, CallToolResult, ChildStatus, CommandInput, ErrorCode, EscalateInput,
+    EscalateOutput, OverviewInput, OverviewOutput, Request, RequestRef, SendInput, SendOutput,
+    SendSessionInput, SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput,
+    StatusInput, StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
 };
 use serde::Serialize;
 use tokio::sync::{oneshot, watch};
@@ -48,7 +50,7 @@ use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
 use super::{CreateRequest, Inner, SessionManager};
-use crate::mcp::{ToolFuture, ToolHandler};
+use crate::mcp::{Control, ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
 
 /// What every primary session waits for: its children's reports, and which children are
@@ -255,6 +257,8 @@ impl ToolHandler for TaskTools {
                 ToolCall::Answer(input) => success(manager.answer(caller, input).await),
                 ToolCall::Escalate(input) => success(manager.escalate(caller, input).await),
                 ToolCall::ShowHtml(input) => success(show_html(&input)),
+                ToolCall::Overview(OverviewInput {}) => success(manager.overview(caller).await),
+                ToolCall::Command(input) => success(manager.command(caller, input).await),
             };
             result.unwrap_or_else(CallToolResult::from)
         })
@@ -297,9 +301,11 @@ fn tool_error(error: ErrorInfo) -> ToolError {
     use herder_protocol::ErrorCode as Command;
     let code = match error.code {
         Command::NotFound => ErrorCode::NotFound,
-        Command::BadRequest | Command::Conflict | Command::Unsupported | Command::Forbidden => {
-            ErrorCode::NotAllowed
-        }
+        Command::BadRequest
+        | Command::Conflict
+        | Command::Unsupported
+        | Command::Forbidden
+        | Command::ReadOnly => ErrorCode::NotAllowed,
         _ => ErrorCode::Internal,
     };
     ToolError::new(code, error.message)
@@ -316,6 +322,72 @@ pub(super) fn rank(mode: PermissionMode) -> u8 {
 }
 
 impl SessionManager {
+    /// `overview`: the daemon as its apps see it.
+    async fn overview(&self, caller: SessionId) -> Result<OverviewOutput, ToolError> {
+        let overview = self.control()?.overview().await.map_err(tool_error)?;
+        Ok(OverviewOutput {
+            you: caller,
+            sessions: overview.sessions,
+            projects: overview.projects,
+            accounts: overview.accounts,
+        })
+    }
+
+    /// `command`: runs a herder command as the user `caller` acts for.
+    async fn command(
+        &self,
+        caller: SessionId,
+        input: CommandInput,
+    ) -> Result<CommandResult, ToolError> {
+        let control = self.control()?;
+        let user_id = self.acts_for(caller).await?;
+        control
+            .command(user_id, input.command)
+            .await
+            .map_err(tool_error)
+    }
+
+    fn control(&self) -> Result<Arc<dyn Control>, ToolError> {
+        self.inner.control.get().cloned().ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::NotAllowed,
+                "this daemon is not driven by its agents",
+            )
+        })
+    }
+
+    /// The user who created `session`, or for a child its primary; an agent acts for them.
+    async fn acts_for(&self, mut session: SessionId) -> Result<UserId, ToolError> {
+        loop {
+            let created = self
+                .inner
+                .journal
+                .read_since(session.clone(), 0, 1)
+                .await
+                .map_err(|err| tool_internal(format!("{err:#}")))?;
+            let Some(created) = created.into_iter().next() else {
+                return Err(tool_internal(format!("session {session} does not exist")));
+            };
+            if let Some(by) = created.by {
+                return Ok(by);
+            }
+            match created.body {
+                EventBody::SessionCreated {
+                    parent: Some(parent),
+                    parent_host: None,
+                    ..
+                } => session = parent,
+                _ => {
+                    return Err(ToolError::new(
+                        ErrorCode::NotAllowed,
+                        "no user of this daemon started your session, so it runs no herder \
+                         commands",
+                    ));
+                }
+            }
+        }
+    }
+
     async fn spawn(&self, caller: SessionId, input: SpawnInput) -> Result<SpawnOutput, ToolError> {
         let primary = self.caller(&caller).await?;
         // Refuse before creating a child if automated relay depth is exhausted.

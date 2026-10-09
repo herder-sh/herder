@@ -4,8 +4,8 @@
 //! that calls the tool.
 
 use herder_protocol::{
-    Answer, ApprovalDecision, ApprovalId, PermissionMode, Provider, QuestionId, SessionId,
-    SessionStatus, TurnId,
+    Account, Answer, ApprovalDecision, ApprovalId, CommandBody, PermissionMode, Project, Provider,
+    QuestionId, SessionHead, SessionId, SessionStatus, TurnId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -425,4 +425,34 @@ pub struct ShowHtmlInput {
 pub struct ShowHtmlOutput {
     /// Always true.
     pub shown: bool,
+}
+
+/// Arguments of `overview`: none.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OverviewInput {}
+
+/// Result of `overview`: what this host's herder daemon holds, as its apps see it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OverviewOutput {
+    /// Your own session.
+    pub you: SessionId,
+    /// Every session on this host, archived ones included.
+    pub sessions: Vec<SessionHead>,
+    /// Every project with a clone on this host.
+    pub projects: Vec<Project>,
+    /// Every account sessions may run on, with its usage.
+    pub accounts: Vec<Account>,
+}
+
+/// Arguments of `command`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CommandInput {
+    /// The herder command, as a herder app sends it: its `type` and that command's arguments
+    /// beside it, e.g. `{"type": "rename_session", "session_id": "...", "title": "..."}`. A
+    /// call with arguments missing or wrong fails with the command's JSON Schema, so to learn
+    /// a command's arguments, call it with its `type` alone.
+    #[schemars(schema_with = "crate::command_schema")]
+    pub command: CommandBody,
 }

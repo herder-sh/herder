@@ -345,6 +345,11 @@ impl Hub {
         }
     }
 
+    /// The latest project list; empty until discovery published one.
+    pub(crate) fn projects(&self) -> Vec<Project> {
+        self.lock().projects.clone().unwrap_or_default()
+    }
+
     /// Queues the latest project list to a client after [`Hub::connect`], unless a change
     /// already reached it or discovery has published none yet.
     pub(crate) fn initial_projects(&self, outbox: &Outbox) {

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use herder_protocol::{Answer, ApprovalDecision, SessionStatus};
+use herder_protocol::{Answer, ApprovalDecision, CommandBody, CommandResult, SessionStatus};
 use herder_protocol::{ApprovalId, PermissionMode, Provider, QuestionId, SessionId, TurnId};
 use herder_tasktools::*;
 use serde_json::{Value, json};
@@ -43,7 +43,9 @@ fn tools_list_is_the_mcp_shape() {
             "wait_for",
             "answer",
             "escalate",
-            "show_html"
+            "show_html",
+            "overview",
+            "command"
         ]
     );
     for tool in tools {
@@ -226,6 +228,22 @@ fn calls_parse_validate_and_round_trip() {
                 html: "<!doctype html><p>p50</p>".into(),
             }),
         ),
+        (json!({}), ToolCall::Overview(OverviewInput {})),
+        (
+            json!({ "command": { "type": "rename_session", "session_id": "01J9CHILD", "title": "Auth" } }),
+            ToolCall::Command(CommandInput {
+                command: CommandBody::RenameSession {
+                    session_id: child(),
+                    title: "Auth".into(),
+                },
+            }),
+        ),
+        (
+            json!({ "command": { "type": "restart_daemon" } }),
+            ToolCall::Command(CommandInput {
+                command: CommandBody::RestartDaemon,
+            }),
+        ),
     ];
     for (arguments, expected) in cases {
         let tool = expected.tool();
@@ -240,6 +258,8 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::Answer(input) => serde_json::to_value(input),
             ToolCall::Escalate(input) => serde_json::to_value(input),
             ToolCall::ShowHtml(input) => serde_json::to_value(input),
+            ToolCall::Overview(input) => serde_json::to_value(input),
+            ToolCall::Command(input) => serde_json::to_value(input),
         };
         assert_eq!(back.unwrap(), arguments);
     }
@@ -313,6 +333,17 @@ fn malformed_calls_are_invalid_arguments() {
         (
             Tool::ShowHtml,
             json!({ "title": "t", "html": "<p></p>", "height": 400 }),
+        ),
+        (Tool::Overview, json!({ "all": true })),
+        (Tool::Command, json!({})),
+        (
+            Tool::Command,
+            json!({ "command": { "type": "format_disk" } }),
+        ),
+        (Tool::Command, json!({ "command": { "type": "interrupt" } })),
+        (
+            Tool::Command,
+            json!({ "type": "interrupt", "session_id": "01J9CHILD" }),
         ),
     ];
     for (tool, arguments) in cases {
@@ -404,6 +435,22 @@ fn outputs_match_their_schemas() {
         (
             Tool::ShowHtml,
             serde_json::to_value(ShowHtmlOutput { shown: true }),
+        ),
+        (
+            Tool::Overview,
+            serde_json::to_value(OverviewOutput {
+                you: child(),
+                sessions: Vec::new(),
+                projects: Vec::new(),
+                accounts: Vec::new(),
+            }),
+        ),
+        (Tool::Command, serde_json::to_value(CommandResult::Applied)),
+        (
+            Tool::Command,
+            serde_json::to_value(CommandResult::SessionCreated {
+                session_id: child(),
+            }),
         ),
     ];
     for (tool, output) in outputs {
@@ -534,4 +581,33 @@ fn send_session_accepts_only_destination_text_and_delivery_key() {
             ErrorCode::InvalidArguments
         );
     }
+}
+
+/// `tools/list` names the commands only; a call with a command's arguments wrong is answered
+/// with that command's schema, so the agent learns them on demand.
+#[test]
+fn a_command_without_its_arguments_answers_with_its_schema() {
+    let error = call(
+        Tool::Command,
+        json!({ "command": { "type": "rename_session" } }),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidArguments);
+    let (_, schema) = error
+        .message
+        .split_once("the JSON Schema of `rename_session` is ")
+        .unwrap();
+    let schema: Value = serde_json::from_str(schema).unwrap();
+    assert_eq!(schema["required"], json!(["type", "session_id", "title"]));
+
+    let unknown = call(
+        Tool::Command,
+        json!({ "command": { "type": "format_disk" } }),
+    )
+    .unwrap_err();
+    assert!(
+        !unknown.message.contains("JSON Schema"),
+        "{}",
+        unknown.message
+    );
 }
