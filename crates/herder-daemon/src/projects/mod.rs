@@ -1,7 +1,7 @@
 //! Project discovery: which repositories this host holds, grouped into projects.
 //!
-//! Repositories come from three places: the repo of every session, a scan of the configured
-//! roots ([`scan`]), and the paths `[[project]]` entries declare. Each repository's project is
+//! Repositories come from three places: the repo of every session, a scan of the projects dir
+//! ([`scan`]), and the paths `[[project]]` entries declare. Each repository's project is
 //! its `origin` remote normalised by [`ProjectId::from_remote`], or a local project of this
 //! host when it has none. `[[project]]` entries then override that ([`resolve`]): they name a
 //! project, merge several remotes into one, and add or declare clones by path.
@@ -46,7 +46,7 @@ use tracing::{debug, warn};
 use crate::hub::Hub;
 use crate::session::{EventSink, SessionManager};
 
-/// How often the roots are scanned again and every remote re-read.
+/// How often the projects dir is scanned again and every remote re-read.
 pub const RESCAN_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// How long a project's setup command may run in a new worktree unless configured otherwise.
@@ -55,8 +55,9 @@ pub const SETUP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The `[projects]` table and the `[[project]]` entries, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectsConfig {
-    /// Directories scanned for repositories.
-    pub roots: Vec<PathBuf>,
+    /// The projects dir: scanned for repositories, and where `clone_project` clones to unless
+    /// told otherwise. Empty only in tests, where nothing is scanned.
+    pub dir: PathBuf,
     /// How long a setup command may run before it is killed and the setup fails.
     pub setup_timeout: Duration,
     /// Repositories left out wherever they are found: the clones of removed projects.
@@ -68,7 +69,7 @@ pub struct ProjectsConfig {
 impl Default for ProjectsConfig {
     fn default() -> Self {
         Self {
-            roots: Vec::new(),
+            dir: PathBuf::new(),
             setup_timeout: SETUP_TIMEOUT,
             exclude: Vec::new(),
             entries: Vec::new(),
@@ -295,7 +296,9 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
         }
     }
 
-    let mut projects: BTreeMap<ProjectId, (Option<usize>, BTreeSet<String>)> = BTreeMap::new();
+    // Each project's entry, and its clones with their remotes.
+    type Clones<'a> = BTreeMap<String, Option<&'a str>>;
+    let mut projects: BTreeMap<ProjectId, (Option<usize>, Clones)> = BTreeMap::new();
     for repo in repos {
         let Some(path) = repo.path.to_str() else {
             debug!("leaving out {}: its path is not UTF-8", repo.path.display());
@@ -309,19 +312,25 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
         let id = entry
             .and_then(|index| entry_ids[index].clone())
             .unwrap_or(own);
-        let project = projects.entry(id).or_insert((entry, BTreeSet::new()));
-        project.1.insert(path.to_owned());
+        let project = projects.entry(id).or_insert((entry, BTreeMap::new()));
+        project.1.insert(path.to_owned(), repo.origin.as_deref());
     }
 
     projects
         .into_iter()
-        .map(|(project_id, (entry, paths))| {
+        .map(|(project_id, (entry, clones))| {
             let entry = entry.map(|index| &entries[index]);
+            let remote = clones
+                .values()
+                .flatten()
+                .find(|origin| ProjectId::from_remote(origin).is_some())
+                .map(|origin| clone::without_password(origin));
             Project {
                 name: entry
                     .and_then(|e| e.name.clone())
                     .unwrap_or_else(|| default_name(&project_id)),
-                paths: paths.into_iter().collect(),
+                paths: clones.into_keys().collect(),
+                remote,
                 default_account: entry.and_then(|e| e.default_account.clone()),
                 default_permission_mode: entry.and_then(|e| e.default_permission_mode),
                 setup_command: entry.and_then(|e| e.setup_command.clone()),
@@ -417,7 +426,7 @@ impl Discovery {
                 () = shutdown.cancelled() => return,
                 _ = rescan.tick() => true,
                 () = self.sessions_changed.notified() => false,
-                // New roots or entries: scan everything again.
+                // A new dir or entries: scan everything again.
                 () = self.config.changed() => true,
             };
             let config = self.config.config();
@@ -429,8 +438,8 @@ impl Discovery {
                 }
             };
             if full {
-                let roots = config.roots.clone();
-                scanned = tokio::task::spawn_blocking(move || scan::repos(&roots))
+                let dir = config.dir.clone();
+                scanned = tokio::task::spawn_blocking(move || scan::repos(&dir))
                     .await
                     .unwrap_or_else(|err| {
                         warn!("the project scan panicked: {err}");

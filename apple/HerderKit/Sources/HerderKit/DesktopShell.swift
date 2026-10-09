@@ -92,6 +92,12 @@ struct DesktopShell: View {
             } actions: {
                 EmptyView()
             }
+        case .providers:
+            Pane(title: "Providers", subtitle: "Accounts on each machine", switcher: switcher) {
+                ProvidersView(fleet: fleet)
+            } actions: {
+                EmptyView()
+            }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
@@ -289,6 +295,7 @@ struct Switcher {
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Usage", systemImage: "chart.bar") { go(.usage) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
+        Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
         Button("Vault", systemImage: "archivebox") { go(.vault) }
         Divider()
@@ -373,6 +380,7 @@ struct Sidebar: View {
                        selected: item == .pullRequests) { select(.pullRequests) }
             SidebarRow(title: "Usage", symbol: "chart.bar", selected: item == .usage) { select(.usage) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
+            SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
                        selected: item == .machines) { select(.machines) }
             SidebarRow(title: "Vault", symbol: "archivebox", selected: item == .vault) { select(.vault) }
@@ -452,6 +460,7 @@ private struct SidebarRail: View {
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("chart.bar", "Usage", .usage, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
+            rail("person.2", "Providers", .providers, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)
             rail("archivebox", "Vault", .vault, badge: 0)
             ForEach(lists.projects) { project in

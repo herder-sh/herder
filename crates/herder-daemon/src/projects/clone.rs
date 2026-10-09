@@ -3,7 +3,7 @@
 //! sees a credential.
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use herder_protocol::{ErrorCode, ErrorInfo};
@@ -75,6 +75,37 @@ pub(crate) async fn clone(url: &str, into: &Path) -> Result<(), ErrorInfo> {
     ))
 }
 
+/// The folder in `dir` a clone of `url` goes into when none is given: one named after the
+/// repository, as `~/Projects/herder` for `git@github.com:herder-sh/herder.git`. `None` when
+/// the URL names no repository, or one whose name would leave `dir` or hide the clone.
+pub(crate) fn folder(dir: &Path, url: &str) -> Option<PathBuf> {
+    let url = git_url(url.trim());
+    let name = url
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .map(|name| name.strip_suffix(".git").unwrap_or(name))
+        .filter(|name| !name.is_empty() && !name.starts_with('.'))?;
+    Some(dir.join(name))
+}
+
+/// `url` without the password a `scheme://user:password@host/...` URL may carry, which is
+/// never listed nor sent to another host.
+pub(crate) fn without_password(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let end = rest.find('/').unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(end);
+    match authority.rsplit_once('@') {
+        Some((user, host)) => {
+            let user = user.split_once(':').map_or(user, |(user, _)| user);
+            format!("{scheme}://{user}@{host}{path}")
+        }
+        None => url.to_owned(),
+    }
+}
+
 /// The git URL `url` names: GitHub's for `owner/repo`, else `url` itself.
 fn git_url(url: &str) -> String {
     let shorthand = url.split_once('/').filter(|(owner, repo)| {
@@ -105,7 +136,47 @@ fn error(code: ErrorCode, message: impl Into<String>) -> ErrorInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::git_url;
+    use std::path::Path;
+
+    use super::{folder, git_url, without_password};
+
+    #[test]
+    fn a_clone_goes_into_the_projects_dir_under_the_repositorys_name() {
+        let dir = Path::new("/home/dev/Projects");
+        for url in [
+            "git@github.com:herder-sh/herder.git",
+            "https://github.com/herder-sh/herder/",
+            "herder-sh/herder",
+            " ssh://git@host:22/team/herder.git ",
+        ] {
+            assert_eq!(folder(dir, url), Some(dir.join("herder")), "{url}");
+        }
+        for url in [
+            "",
+            "https://github.com/org/..",
+            "git@github.com:org/.hidden",
+        ] {
+            assert_eq!(folder(dir, url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn listed_remotes_keep_their_user_but_never_a_password() {
+        for (url, listed) in [
+            (
+                "https://me:ghp_secret@github.com/org/repo.git",
+                "https://me@github.com/org/repo.git",
+            ),
+            (
+                "ssh://git@github.com:22/org/repo",
+                "ssh://git@github.com:22/org/repo",
+            ),
+            ("git@github.com:org/repo.git", "git@github.com:org/repo.git"),
+            ("https://github.com/org/repo", "https://github.com/org/repo"),
+        ] {
+            assert_eq!(without_password(url), listed);
+        }
+    }
 
     #[test]
     fn owner_slash_repo_names_a_github_repository() {

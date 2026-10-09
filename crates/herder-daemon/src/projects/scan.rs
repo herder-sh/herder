@@ -1,4 +1,4 @@
-//! Finding repositories under the configured roots and reading their `origin` remote.
+//! Finding repositories in the projects dir and reading their `origin` remote.
 //!
 //! Both only read the file system: the walk is depth-limited and skips directories that never
 //! hold projects, and the remote comes from the repository's config file, so no `git` process
@@ -7,20 +7,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Directory levels below a root the scan looks into: `~/Projects/org/group/repo` is found
-/// from the root `~/Projects`.
+/// Directory levels below the projects dir the scan looks into: `~/Projects/org/group/repo`
+/// is found in the dir `~/Projects`.
 pub const MAX_DEPTH: usize = 3;
 
 /// Directories the scan never enters, besides hidden ones.
 const SKIPPED: [&str; 2] = ["node_modules", "target"];
 
-/// Every repository at or below `roots`, up to [`MAX_DEPTH`] levels down. The scan does not
+/// Every repository at or below `dir`, up to [`MAX_DEPTH`] levels down. The scan does not
 /// descend into a repository, follow symlinks or enter hidden directories.
-pub fn repos(roots: &[PathBuf]) -> Vec<PathBuf> {
+pub fn repos(dir: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    for root in roots {
-        walk(root, 0, &mut found);
-    }
+    walk(dir, 0, &mut found);
     found
 }
 

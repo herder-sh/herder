@@ -13,17 +13,27 @@ fn repo(path: &str, origin: Option<&str>) -> Repo {
     }
 }
 
+/// A project as resolved from a clone without a remote, or from `remote`'s with [`cloned`].
 fn project(id: &str, name: &str, paths: &[&str]) -> Project {
     Project {
         project_id: ProjectId::new(id),
         name: name.to_owned(),
         paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        remote: None,
         default_permission_mode: None,
         default_account: None,
         setup_command: None,
         icon: None,
         icon_uploaded: false,
         icon_background: None,
+    }
+}
+
+/// `project` with the remote its first clone with one has.
+fn cloned(project: Project, remote: &str) -> Project {
+    Project {
+        remote: Some(remote.to_owned()),
+        ..project
     }
 }
 
@@ -35,10 +45,9 @@ fn two_forms_of_one_remote_are_one_project() {
     ];
     assert_eq!(
         resolve(&host(), &repos, &[]),
-        [project(
-            "github.com/org/repo",
-            "repo",
-            &["/src/a", "/work/b"]
+        [cloned(
+            project("github.com/org/repo", "repo", &["/src/a", "/work/b"]),
+            "git@github.com:org/repo.git"
         )]
     );
 }
@@ -81,13 +90,19 @@ fn an_entry_renames_and_merges_remotes_with_its_settings() {
             Project {
                 default_account: Some(AccountId::new("claude-main")),
                 setup_command: Some("make bootstrap".to_owned()),
-                ..project(
-                    "github.com/herder-sh/herder",
-                    "herder",
-                    &["/src/herder", "/src/mirror"]
+                ..cloned(
+                    project(
+                        "github.com/herder-sh/herder",
+                        "herder",
+                        &["/src/herder", "/src/mirror"]
+                    ),
+                    "git@github.com:herder-sh/herder.git"
                 )
             },
-            project("github.com/org/other", "other", &["/src/other"]),
+            cloned(
+                project("github.com/org/other", "other", &["/src/other"]),
+                "https://github.com/org/other"
+            ),
         ]
     );
 }
@@ -116,10 +131,13 @@ fn a_path_declared_project_takes_its_id_from_the_first_path() {
         resolve(&host(), &repos, &entries),
         [
             project("HOST:/srv/scratch", "Scratch", &["/srv/scratch"]),
-            project(
-                "example.com/me/notes",
-                "Notes",
-                &["/home/dev/notes", "/srv/notes"]
+            cloned(
+                project(
+                    "example.com/me/notes",
+                    "Notes",
+                    &["/home/dev/notes", "/srv/notes"]
+                ),
+                "git@example.com:me/notes"
             ),
         ]
     );
@@ -138,10 +156,9 @@ fn a_listed_path_joins_the_entry_whatever_its_remote() {
     }];
     assert_eq!(
         resolve(&host(), &repos, &entries),
-        [project(
-            "github.com/org/app",
-            "app",
-            &["/src/app", "/src/app-fork"]
+        [cloned(
+            project("github.com/org/app", "app", &["/src/app", "/src/app-fork"]),
+            "https://github.com/org/app"
         )]
     );
 }
@@ -161,7 +178,7 @@ fn git_repo(path: &Path, config: &str) {
 }
 
 #[test]
-fn the_roots_scan_finds_nested_repos_and_skips_excluded_dirs() {
+fn the_scan_finds_nested_repos_and_skips_excluded_dirs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("Projects");
     for found in ["top", "org/repo", "org/group/deep"] {
@@ -180,7 +197,8 @@ fn the_roots_scan_finds_nested_repos_and_skips_excluded_dirs() {
     fs::create_dir_all(root.join("app/src")).unwrap();
     std::os::unix::fs::symlink(&root, root.join("org/loop")).unwrap();
 
-    let mut found = scan::repos(&[root.clone(), tmp.path().join("missing")]);
+    let mut found = scan::repos(&root);
+    assert!(scan::repos(&tmp.path().join("missing")).is_empty());
     found.sort();
     let expected: Vec<PathBuf> = ["org/group/deep", "org/repo", "top"]
         .iter()
@@ -299,7 +317,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
                 tmp.path().join("daemon.toml"),
                 tmp.path().join("project-icons"),
                 ProjectsConfig {
-                    roots: vec![root.clone()],
+                    dir: root.clone(),
                     entries: vec![ProjectEntry {
                         name: Some("Notes".to_owned()),
                         paths: vec![declared.clone()],
@@ -319,7 +337,10 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
     let app = root.join("app").to_string_lossy().into_owned();
     assert_eq!(
         next_projects(&outbox).await,
-        [project("github.com/org/app", "app", &[&app])]
+        [cloned(
+            project("github.com/org/app", "app", &[&app]),
+            "git@github.com:org/app.git"
+        )]
     );
 
     // A look at the sessions also picks up declared paths that appeared since.
@@ -330,7 +351,10 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
         next_projects(&outbox).await,
         [
             project(&format!("HOST:{notes}"), "Notes", &[&notes]),
-            project("github.com/org/app", "app", &[&app]),
+            cloned(
+                project("github.com/org/app", "app", &[&app]),
+                "git@github.com:org/app.git"
+            ),
         ]
     );
 
@@ -432,7 +456,11 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let file = tmp.path().join("daemon.toml");
     fs::write(
         &file,
-        "# mine\n[[accounts]]\nid = \"main\"\nprovider = \"claude\"\n",
+        format!(
+            "# mine\n[[accounts]]\nid = \"main\"\nprovider = \"claude\"\n\n\
+             [projects]\ndir = \"{}\"\n",
+            tmp.path().join("Projects").display()
+        ),
     )
     .unwrap();
     let hub = Arc::new(Hub::default());
@@ -498,7 +526,10 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let path = app.to_string_lossy().into_owned();
     assert_eq!(
         next_projects(&outbox).await,
-        [project("github.com/org/app", "app", &[&path])]
+        [cloned(
+            project("github.com/org/app", "app", &[&path]),
+            "git@github.com:org/app.git"
+        )]
     );
     // Adding it again changes nothing.
     assert_eq!(handle(add).await, Ok(added));
@@ -521,7 +552,10 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         handle(set(" The app ", "main", "#ffffff")).await,
         Ok(herder_protocol::CommandResult::Applied)
     );
-    let mut expected = project("github.com/org/app", "The app", &[&path]);
+    let mut expected = cloned(
+        project("github.com/org/app", "The app", &[&path]),
+        "git@github.com:org/app.git",
+    );
     expected.default_permission_mode = Some(herder_protocol::PermissionMode::AutoEdit);
     expected.default_account = Some(AccountId::new("main"));
     expected.setup_command = Some("make setup".into());
@@ -606,7 +640,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let cloned = tmp.path().join("src/cloned");
     let clone = |url: &Path| herder_protocol::CommandBody::CloneProject {
         url: url.to_string_lossy().into_owned(),
-        path: cloned.to_string_lossy().into_owned(),
+        path: Some(cloned.to_string_lossy().into_owned()),
     };
     let added = handle(clone(&upstream)).await;
     assert!(
@@ -634,6 +668,20 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         error.message
     );
     assert!(!cloned.exists());
+    // Without a path, the clone goes into the projects dir, named after the repository.
+    let into_dir = herder_protocol::CommandBody::CloneProject {
+        url: upstream.to_string_lossy().into_owned(),
+        path: None,
+    };
+    let added = handle(into_dir).await;
+    assert!(
+        matches!(
+            added,
+            Ok(herder_protocol::CommandResult::ProjectAdded { .. })
+        ),
+        "{added:?}"
+    );
+    assert!(tmp.path().join("Projects/upstream/.git").is_dir());
 
     shutdown.cancel();
     task.await.unwrap();
@@ -656,7 +704,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
     fs::write(
         &file,
         format!(
-            "# mine\n[projects]\nroots = [\"{}\"]\n\n[[project]]\nname = \"Lib\"\npaths = [\"{}\"]\n",
+            "# mine\n[projects]\ndir = \"{}\"\n\n[[project]]\nname = \"Lib\"\npaths = [\"{}\"]\n",
             root.display(),
             lib.display()
         ),
@@ -739,8 +787,14 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
         lib.to_string_lossy().into_owned(),
     );
     let both = [
-        project("github.com/org/app", "app", &[&app_path]),
-        project("github.com/org/lib", "Lib", &[&lib_path]),
+        cloned(
+            project("github.com/org/app", "app", &[&app_path]),
+            "git@github.com:org/app.git",
+        ),
+        cloned(
+            project("github.com/org/lib", "Lib", &[&lib_path]),
+            "git@github.com:org/lib.git",
+        ),
     ];
     assert_eq!(next_projects(&outbox).await, both);
     let owner = herder_protocol::UserId::new("owner");
@@ -759,7 +813,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
     let error = handle(remove("github.com/org/other")).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
 
-    // Removed, it stays out though the roots scan and its archived session find it.
+    // Removed, it stays out though the scan and its archived session find it.
     assert_eq!(
         handle(remove("github.com/org/lib")).await,
         Ok(herder_protocol::CommandResult::Applied)
@@ -802,7 +856,10 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
         next_projects(&outbox).await,
         [
             both[0].clone(),
-            project("github.com/org/lib", "lib", &[&both[1].paths[0]])
+            cloned(
+                project("github.com/org/lib", "lib", &[&both[1].paths[0]]),
+                "git@github.com:org/lib.git"
+            )
         ]
     );
     assert!(
@@ -836,7 +893,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
     fs::write(
         &file,
         format!(
-            "[projects]\nroots = [\"{}\"]\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
             root.display(),
         ),
     )
@@ -964,7 +1021,7 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
     fs::write(
         &file,
         format!(
-            "[projects]\nroots = [\"{}\"]\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
             root.display(),
         ),
     )

@@ -634,7 +634,7 @@ pub enum CommandBody {
     },
     CloneProject {
         url: String,
-        path: String,
+        path: Option<String>,
     },
     SetProjectSettings {
         project_id: ProjectId,
@@ -1080,7 +1080,7 @@ pub struct ResourceSettings {
 
 #[uniffi::remote(Record)]
 pub struct ProjectDiscovery {
-    pub roots: Vec<String>,
+    pub dir: String,
     pub exclude: Vec<String>,
     pub setup_timeout_secs: u64,
 }
@@ -1156,6 +1156,9 @@ pub struct Project {
     pub project_id: ProjectId,
     pub name: String,
     pub paths: Vec<String>,
+    // Defaults to nil so Swift and Kotlin code building a `Project` need not name it.
+    #[uniffi(default)]
+    pub remote: Option<String>,
     pub default_permission_mode: Option<PermissionMode>,
     pub default_account: Option<AccountId>,
     pub setup_command: Option<String>,

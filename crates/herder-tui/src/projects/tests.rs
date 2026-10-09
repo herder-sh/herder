@@ -223,6 +223,7 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
         project_id: app_id.clone(),
         name: "Acme app".into(),
         paths: vec!["/work/app".into(), "/srv/app".into()],
+        remote: None,
         default_permission_mode: Some(herder_protocol::PermissionMode::AutoEdit),
         default_account: Some(AccountId::new("claude-work")),
         setup_command: None,

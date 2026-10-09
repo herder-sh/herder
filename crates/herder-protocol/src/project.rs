@@ -101,6 +101,11 @@ pub struct Project {
     pub name: String,
     /// Absolute paths of the project's clones on this host.
     pub paths: Vec<String>,
+    /// The `origin` remote URL of its first clone that has one, without any password in it,
+    /// to clone it onto another host with `clone_project`; absent for a project without a
+    /// remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
     /// Permission mode new sessions of the project start in on this host when none is chosen;
     /// absent when none is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]

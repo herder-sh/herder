@@ -91,13 +91,14 @@
 //!
 //! # Projects
 //!
-//! The daemon finds repositories in its sessions, under the `[projects]` roots and at the
-//! paths `[[project]]` entries declare; a project is identified by its `origin` remote. Each
+//! The daemon finds repositories in its sessions, in the `[projects]` dir and at the paths
+//! `[[project]]` entries declare; a project is identified by its `origin` remote. Each
 //! `[[project]]` entry overrides one project; see [`crate::projects`]:
 //!
 //! ```toml
 //! [projects]
-//! roots = ["~/Projects"]   # scanned 3 levels deep; none by default
+//! dir = "~/Projects"       # scanned 3 levels deep, and where clone_project clones to;
+//!                          # ~/Projects by default
 //! setup_timeout_secs = 600 # how long a setup command may run; 10 minutes by default
 //! exclude = ["~/Projects/old"] # repositories left out wherever they are found
 //!
@@ -209,6 +210,9 @@ pub struct Config {
     /// What a vault keeps, and for how long; read in vault mode only.
     pub retention: Retention,
 }
+
+/// The projects dir unless the `[projects]` table names another.
+pub const DEFAULT_PROJECTS_DIR: &str = "~/Projects";
 
 /// Bytes of images a vault keeps per host unless the host's `[vault]` table says otherwise.
 pub const DEFAULT_ATTACHMENTS_CAP: u64 = 1 << 30;
@@ -432,7 +436,7 @@ impl Default for TitlesFile {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ProjectsFile {
-    roots: Vec<PathBuf>,
+    dir: Option<PathBuf>,
     exclude: Vec<PathBuf>,
     setup_timeout_secs: Option<u64>,
 }
@@ -553,7 +557,7 @@ impl Config {
                 max_load_percent: resources.max_load_percent,
             },
             projects: ProjectDiscovery {
-                roots: self.projects.roots.iter().map(path).collect(),
+                dir: path(&self.projects.dir),
                 exclude: self.projects.exclude.iter().map(path).collect(),
                 setup_timeout_secs: self.projects.setup_timeout.as_secs(),
             },
@@ -699,11 +703,14 @@ fn resolve_projects(
     accounts: &Accounts,
     env: &impl Fn(&str) -> Option<OsString>,
 ) -> Result<ProjectsConfig> {
-    let roots = table
-        .roots
-        .iter()
-        .map(|root| resolve_path(root, env).context("projects.roots"))
-        .collect::<Result<_>>()?;
+    let dir = table
+        .dir
+        .as_deref()
+        .unwrap_or(Path::new(DEFAULT_PROJECTS_DIR));
+    let dir = resolve_path(dir, env)
+        .context("projects.dir")?
+        .components()
+        .collect();
     let exclude = table
         .exclude
         .iter()
@@ -794,7 +801,7 @@ fn resolve_projects(
         None => crate::projects::SETUP_TIMEOUT,
     };
     Ok(ProjectsConfig {
-        roots,
+        dir,
         setup_timeout,
         exclude,
         entries,
@@ -1240,9 +1247,8 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
             edit.set(&["resources"], "max_turns", max_turns)?;
         }
         let (was, is) = (&old.projects, &new.projects);
-        if was.roots != is.roots {
-            let roots = toml_edit::Array::from_iter(&is.roots);
-            edit.set(&["projects"], "roots", Some(roots.into()))?;
+        if was.dir != is.dir {
+            edit.set(&["projects"], "dir", Some(is.dir.as_str().into()))?;
         }
         if was.exclude != is.exclude {
             let exclude = toml_edit::Array::from_iter(&is.exclude);
@@ -1717,6 +1723,13 @@ mod tests {
     }
 
     #[test]
+    fn the_projects_dir_is_projects_in_the_home_dir_by_default() {
+        let config = Config::load_with_env(None, env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(config.projects.dir, Path::new("/h/Projects"));
+        assert_eq!(config.settings().projects.dir, "/h/Projects");
+    }
+
+    #[test]
     fn file_overrides_every_field() {
         let tmp = tempfile::tempdir().unwrap();
         let path = write(
@@ -1745,6 +1758,8 @@ mod tests {
             min_memory_available_mib = 1024
             max_memory_pressure = 30
             max_load_percent = 200
+            [projects]
+            dir = "/srv/src"
             "#,
         );
         let config = Config::load_with_env(Some(&path), env(&[])).unwrap();
@@ -1778,7 +1793,10 @@ mod tests {
                     max_memory_pressure: 30,
                     max_load_percent: 200,
                 },
-                projects: ProjectsConfig::default(),
+                projects: ProjectsConfig {
+                    dir: PathBuf::from("/srv/src"),
+                    ..ProjectsConfig::default()
+                },
                 mode: Mode::Host,
                 vault: None,
                 retention: Retention::default(),
@@ -2318,7 +2336,7 @@ mod tests {
             provider = "claude"
 
             [projects]
-            roots = ["~/Projects", "/srv/src"]
+            dir = "/srv/src/"
             setup_timeout_secs = 90
             exclude = ["~/Projects/old/"]
 
@@ -2340,7 +2358,7 @@ mod tests {
         assert_eq!(
             config.projects,
             ProjectsConfig {
-                roots: vec![home.path().join("Projects"), PathBuf::from("/srv/src")],
+                dir: PathBuf::from("/srv/src"),
                 setup_timeout: std::time::Duration::from_secs(90),
                 exclude: vec![home.path().join("Projects/old")],
                 entries: vec![
@@ -2407,7 +2425,7 @@ mod tests {
                 "[[project]]\npaths = [\"/a\"]\nicon_background = \"#fff\"\n",
                 "is not a #rrggbb colour",
             ),
-            ("[projects]\nroots = [\"rel\"]\n", "projects.roots"),
+            ("[projects]\ndir = \"rel\"\n", "projects.dir"),
             ("[projects]\ndepth = 2\n", "unknown field `depth`"),
             (
                 "[projects]\nsetup_timeout_secs = 0\n",
@@ -2491,7 +2509,8 @@ mod tests {
         );
         let home = home.path().to_str().unwrap();
         let config = Config::load_with_env(Some(&path), env(&[("HOME", home)])).unwrap();
-        assert_eq!(config.projects, projects);
+        // The default projects dir is in the test's own home, read_projects' in the real one.
+        assert_eq!(config.projects.entries, projects.entries);
         assert_eq!(read_projects(&path).unwrap(), projects);
     }
 

@@ -452,10 +452,13 @@ pub enum CommandBody {
     /// with `conflict` when `path` exists, and with `bad_request` when the clone fails; either
     /// way nothing is left behind.
     CloneProject {
-        /// The repository: a git URL, or `owner/repo` for one on GitHub.
+        /// The repository: a git URL, or `owner/repo` for one on GitHub; a project's `remote`
+        /// clones it onto another host.
         url: String,
-        /// Absolute path of the folder to clone into, or one starting with `~/`.
-        path: String,
+        /// Absolute path of the folder to clone into, or one starting with `~/`; absent, the
+        /// folder named after the repository in the host's projects dir.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// Replace a project's settings on this host, kept in its `[[project]]` entry of the
     /// daemon's config; owners only. An absent setting is cleared.

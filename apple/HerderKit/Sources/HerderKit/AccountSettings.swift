@@ -51,6 +51,8 @@ struct AddAccountSheet: View {
     let fleet: Fleet
     let hostId: HostId
     var initialProvider: Provider = "claude"
+    /// The account to start from, as one another machine has.
+    var initialDraft: AccountDraft?
     @State private var draft = AccountDraft()
     @Environment(\.dismiss) private var dismiss
 
@@ -116,8 +118,12 @@ struct AddAccountSheet: View {
         }
         .onAppear {
             if draft.id.isEmpty {
-                draft.provider = initialProvider
-                draft.fillId(taken: taken)
+                if let initialDraft {
+                    draft = initialDraft
+                } else {
+                    draft.provider = initialProvider
+                    draft.fillId(taken: taken)
+                }
             }
         }
         .onChange(of: draft.provider) { old, new in

@@ -105,8 +105,9 @@ pub struct ResourceSettings {
 /// The `[projects]` table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectDiscovery {
-    /// Directories scanned for repositories, absolute or starting with `~/`.
-    pub roots: Vec<String>,
+    /// The projects dir, absolute or starting with `~/`: scanned for repositories, and where
+    /// `clone_project` clones them unless told otherwise.
+    pub dir: String,
     /// Repositories left out wherever they are found.
     pub exclude: Vec<String>,
     /// Seconds a project's setup command may run before it is killed.

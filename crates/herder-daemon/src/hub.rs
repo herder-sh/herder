@@ -1211,6 +1211,7 @@ mod tests {
             project_id: herder_protocol::ProjectId::new("github.com/org/repo"),
             name: "repo".to_owned(),
             paths: vec!["/src/repo".to_owned()],
+            remote: Some("git@github.com:org/repo.git".to_owned()),
             default_permission_mode: None,
             default_account: None,
             setup_command: None,
