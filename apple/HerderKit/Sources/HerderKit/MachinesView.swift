@@ -84,7 +84,7 @@ struct MachinesView: View {
                         Text("Providers").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         let missing = ProviderAccounts(machines: fleet.machines).groups
                             .flatMap(\.logins).filter { !$0.missing.isEmpty }.count
-                        Text(missing == 0 ? "Accounts on each machine"
+                        Text(missing == 0 ? "Accounts, plan limits and usage"
                              : missing == 1 ? "1 login missing on a machine" : "\(missing) logins missing on a machine")
                             .font(.caption).foregroundStyle(Theme.secondary)
                     }

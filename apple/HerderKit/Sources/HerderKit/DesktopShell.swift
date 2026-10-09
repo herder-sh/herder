@@ -80,12 +80,6 @@ struct DesktopShell: View {
                     EmptyView()
                 }
             }
-        case .usage:
-            Pane(title: "Usage", subtitle: "Tokens and API-equivalent cost", switcher: switcher) {
-                UsageView(fleet: fleet)
-            } actions: {
-                EmptyView()
-            }
         case .skills:
             Pane(title: "Skills", subtitle: "The skill library and project skills", switcher: switcher) {
                 SkillsView(fleet: fleet, session: session)
@@ -93,7 +87,7 @@ struct DesktopShell: View {
                 EmptyView()
             }
         case .providers:
-            Pane(title: "Providers", subtitle: "Accounts on each machine", switcher: switcher) {
+            Pane(title: "Providers", subtitle: "Accounts, plan limits and usage", switcher: switcher) {
                 ProvidersView(fleet: fleet)
             } actions: {
                 EmptyView()
@@ -301,7 +295,6 @@ struct Switcher {
     @MainActor @ViewBuilder var items: some View {
         Button("Board", systemImage: "checklist") { go(.board) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
-        Button("Usage", systemImage: "chart.bar") { go(.usage) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Providers", systemImage: "person.2") { go(.providers) }
         Button("Machines", systemImage: "server.rack") { go(.machines) }
@@ -386,7 +379,6 @@ struct Sidebar: View {
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
-            SidebarRow(title: "Usage", symbol: "chart.bar", selected: item == .usage) { select(.usage) }
             SidebarRow(title: "Skills", symbol: "book.closed", selected: item == .skills) { select(.skills) }
             SidebarRow(title: "Providers", symbol: "person.2", selected: item == .providers) { select(.providers) }
             SidebarRow(title: "Machines", symbol: "server.rack", badge: lists.machines.count,
@@ -466,7 +458,6 @@ private struct SidebarRail: View {
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board, badge: lists.requests.count)
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
-            rail("chart.bar", "Usage", .usage, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
             rail("person.2", "Providers", .providers, badge: 0)
             rail("server.rack", "Machines", .machines, badge: 0)

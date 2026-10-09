@@ -19,106 +19,66 @@ private func account(
     Account(accountId: id, provider: provider, label: id.capitalized, configDir: nil, email: email, usage: windows)
 }
 
-struct UsageReportTests {
-    /// Two machines, each with a Claude account named `work`; the laptop's also ran Codex.
-    private let machines = [
-        MachineUsage(hostId: "desk", name: "desk", accounts: [
-            account("work", windows: [
-                UsageWindow(window: "five_hour", usedPercent: 40, resetsAt: now.addingTimeInterval(7200).ISO8601Format()),
-                UsageWindow(window: "seven_day", usedPercent: 75, resetsAt: nil),
-            ]),
-            account("idle"),
-        ], totals: [total("work", "opus", turns: 2, input: 200, cost: 2)]),
-        MachineUsage(hostId: "laptop", name: "laptop", accounts: [account("work"), account("gpt", provider: "codex")],
-                     totals: [
-                         total("work", "opus", cost: 0.5),
-                         total("gpt", "gpt-5", provider: "codex", cost: 3, estimated: true),
-                     ]),
-    ]
+private func failover(_ account: AccountId, hits: UInt64 = 0, out: UInt64 = 0, in into: UInt64 = 0) -> FailoverTotal {
+    FailoverTotal(accountId: account, limitHits: hits, failoversOut: out, failoversIn: into)
+}
 
-    @Test func allMachinesAddUpOverallPerAccountAndPerModel() {
-        let report = UsageReport(machines, now: now)
+struct UsageReportTests {
+    /// One Claude login on both machines under two accounts; an email-less Codex account on
+    /// the laptop.
+    private let accounts = (
+        desk: [account("main", email: "dev@example.com"), account("idle")],
+        laptop: [account("work", email: "dev@example.com"), account("gpt", provider: "codex")]
+    )
+
+    private var answers: [MachineUsage] {
+        [
+            MachineUsage(hostId: "desk", name: "desk", accounts: accounts.desk,
+                         totals: [total("main", "opus", turns: 2, input: 200, cost: 2)],
+                         failovers: [failover("main", hits: 3, out: 2), failover("idle", in: 2)]),
+            MachineUsage(hostId: "laptop", name: "laptop", accounts: accounts.laptop,
+                         totals: [
+                             total("work", "opus", cost: 0.5),
+                             total("gpt", "gpt-5", provider: "codex", cost: 3, estimated: true),
+                         ],
+                         failovers: [failover("work", hits: 1, in: 1)]),
+        ]
+    }
+
+    @Test func usageAndFailoversJoinTheLoginsTheProvidersScreenLists() throws {
+        let report = UsageReport(answers)
         #expect(report.total == UsageAmount(turns: 4, input: 400, output: 30, cacheRead: 900, cacheWrite: 0,
                                             costUsd: 5.5, estimated: true))
-        // Each machine's account is its own row, the costliest first; one with no turns and
-        // no plan window is left out.
-        #expect(report.accounts.map(\.id) == ["laptop/gpt", "desk/work", "laptop/work"])
-        #expect(report.accounts.map(\.amount.turns) == [1, 2, 1])
-        #expect(report.accounts.map(\.machines) == [["laptop"], ["desk"], ["laptop"]])
-        #expect(report.accounts.map(\.title) == ["Gpt", "Work", "Work"])
-        // A model's turns on every machine and account add up into one row.
+        let logins = ProviderAccounts(machines: [
+            machine("desk", name: "desk", sessions: [], accounts: accounts.desk),
+            machine("laptop", name: "laptop", sessions: [], accounts: accounts.laptop),
+        ]).groups.flatMap(\.logins)
+        // Every login the screen lists finds its usage under its own id.
+        #expect(Set(report.logins.keys) == Set(logins.map(\.id)))
+        let claude = try #require(report.logins["claude/dev@example.com"])
+        #expect(claude.amount.turns == 3)
+        #expect(claude.amount.costUsd == 2.5)
+        #expect((claude.limitHits, claude.failoversOut, claude.failoversIn) == (4, 2, 1))
+        let idle = try #require(report.logins["claude/id:idle"])
+        #expect(idle.amount.turns == 0)
+        #expect(idle.failoversIn == 2)
+        #expect(report.logins["codex/id:gpt"]?.amount.estimated == true)
+    }
+
+    @Test func modelsAddUpOverEveryMachineAndAccount() {
+        let report = UsageReport(answers)
         #expect(report.models.map(\.id) == ["codex/gpt-5", "claude/opus"])
         #expect(report.models.map(\.amount.turns) == [1, 3])
         #expect(report.models.map(\.amount.costUsd) == [3, 2.5])
         #expect(report.models.map(\.amount.estimated) == [true, false])
     }
 
-    @Test func oneMachineShowsOnlyItsOwn() {
-        let report = UsageReport(machines, only: "desk", now: now)
-        #expect(report.total.turns == 2)
-        #expect(report.total.costUsd == 2)
-        #expect(!report.total.estimated)
-        #expect(report.accounts.map(\.id) == ["desk/work"])
-        #expect(report.models.map(\.id) == ["claude/opus"])
-    }
-
-    @Test func anAccountShowsWhatIsLeftOfItsPlanWindows() throws {
-        let work = try #require(UsageReport(machines, now: now).accounts.first { $0.id == "desk/work" })
-        #expect(work.session == WindowLeft(percentUsed: 40, resets: "2h 0m"))
-        #expect(work.session?.percentLeft == 60)
-        #expect(work.weekly == WindowLeft(percentUsed: 75, resets: ""))
-        // An account with a plan window but no turns still shows, for its window.
-        let windowed = MachineUsage(hostId: "desk", name: "desk", accounts: [
-            account("spare", windows: [UsageWindow(window: "five_hour", usedPercent: 100, resetsAt: nil)]),
-        ], totals: [])
-        let spare = try #require(UsageReport([windowed], now: now).accounts.first)
-        #expect(spare.amount.turns == 0)
-        #expect(spare.session?.percentLeft == 0)
-    }
-
-    @Test func usageOfAnAccountNoLongerListedKeepsItsRow() {
+    @Test func anAccountNoLongerListedCountsInTheTotalOnly() {
         let gone = MachineUsage(hostId: "desk", name: "desk", accounts: [],
-                                totals: [total("removed", "opus")])
-        let report = UsageReport([gone], now: now)
-        #expect(report.accounts.map(\.labels) == [["removed"]])
+                                totals: [total("removed", "opus")], failovers: [failover("removed", hits: 1)])
+        let report = UsageReport([gone])
         #expect(report.total.turns == 1)
-    }
-
-    @Test func accountsSignedInToOneLoginAddUpIntoOneRow() throws {
-        let reset = { (hours: Double) in now.addingTimeInterval(hours * 3600).ISO8601Format() }
-        // The same Claude login on both machines, under three accounts; desk's report of the
-        // weekly window is older, from before it reset. Codex's login of the same email is
-        // another one.
-        let machines = [
-            MachineUsage(hostId: "desk", name: "desk", accounts: [
-                account("main", email: "dev@example.com", windows: [
-                    UsageWindow(window: "seven_day", usedPercent: 95, resetsAt: reset(-1)),
-                ]),
-                account("spare", email: "dev@example.com"),
-                account("gpt", provider: "codex", email: "dev@example.com"),
-            ], totals: [total("main", "opus", cost: 2), total("spare", "opus", cost: 1)]),
-            MachineUsage(hostId: "laptop", name: "laptop", accounts: [
-                account("work", email: "dev@example.com", windows: [
-                    UsageWindow(window: "five_hour", usedPercent: 20, resetsAt: reset(2)),
-                    UsageWindow(window: "seven_day", usedPercent: 10, resetsAt: reset(160)),
-                ]),
-            ], totals: [total("work", "opus", cost: 0.5)]),
-        ]
-        let report = UsageReport(machines, now: now)
-        #expect(report.accounts.map(\.id) == ["claude/dev@example.com"])
-        let login = try #require(report.accounts.first)
-        #expect(login.title == "dev@example.com")
-        #expect(login.labels == ["Main", "Spare", "Work"])
-        #expect(login.machines == ["desk", "laptop"])
-        #expect(login.amount.turns == 3)
-        #expect(login.amount.costUsd == 3.5)
-        #expect(login.session?.percentUsed == 20)
-        #expect(login.weekly?.percentUsed == 10)
-    }
-
-    @Test func cacheSavingsAreTheShareOfInputReadFromTheCache() {
-        #expect(UsageAmount().cacheSavings == nil)
-        #expect(UsageAmount(input: 100, cacheRead: 300).cacheSavings == 0.75)
+        #expect(report.logins.isEmpty)
     }
 
     @Test func amountsReadCompactly() {
@@ -132,7 +92,85 @@ struct UsageReportTests {
     }
 }
 
-/// The Usage screen against fake daemons, whose hello turn reports usage
+struct ProviderLoginTests {
+    @Test func aLoginShowsWhatIsLeftOfItsPlanWindowsAsLastReported() throws {
+        let reset = { (hours: Double) in now.addingTimeInterval(hours * 3600).ISO8601Format() }
+        // desk's report of the weekly window is older, from before it reset.
+        let machines = [
+            machine("desk", name: "desk", sessions: [], accounts: [
+                account("main", email: "dev@example.com", windows: [
+                    UsageWindow(window: "seven_day", usedPercent: 95, resetsAt: reset(-1)),
+                ]),
+            ]),
+            machine("laptop", name: "laptop", sessions: [], accounts: [
+                account("work", email: "dev@example.com", windows: [
+                    UsageWindow(window: "five_hour", usedPercent: 40, resetsAt: reset(2)),
+                    UsageWindow(window: "seven_day", usedPercent: 10, resetsAt: reset(160)),
+                ]),
+                account("spare"),
+            ]),
+        ]
+        let logins = ProviderAccounts(machines: machines, now: now).groups.flatMap(\.logins)
+        let login = try #require(logins.first { $0.id == "claude/dev@example.com" })
+        #expect(login.session == WindowLeft(percentUsed: 40, resets: "2h 0m"))
+        #expect(login.session?.percentLeft == 60)
+        #expect(login.weekly?.percentUsed == 10)
+        let spare = try #require(logins.first { $0.id == "claude/id:spare" })
+        #expect(spare.session == nil && spare.weekly == nil)
+    }
+
+    @Test func aLoginCountsTheOpenSessionsOfItsAccountsOnEveryMachine() throws {
+        let machines = [
+            machine("desk", name: "desk", sessions: [], accounts: [account("main", email: "dev@example.com"),
+                                                                   account("spare", email: "dev@example.com")]),
+            machine("laptop", name: "laptop", sessions: [], accounts: [account("main"), account("work", email: "dev@example.com")]),
+        ]
+        let login = try #require(ProviderAccounts(machines: machines).groups[0].logins
+            .first { $0.id == "claude/dev@example.com" })
+        let summary = { (hostId: HostId, sessions: [AccountId: Int]) in
+            MachineSummary(hostId: hostId, name: hostId, connection: .connected, role: .owner, cpu: nil, memory: nil,
+                           running: 0, sessions: 0,
+                           accounts: sessions.map { AccountSummary(accountId: $0.key, label: $0.key, provider: "claude",
+                                                                   sessions: $0.value, usage: []) },
+                           hosts: [], pinned: false)
+        }
+        // The laptop's email-less `main` is another login.
+        #expect(login.sessions(in: [summary("desk", ["main": 2, "spare": 1]), summary("laptop", ["main": 5, "work": 1])]) == 4)
+    }
+}
+
+struct UsageCacheTests {
+    private func answer(at: Date, asked: [HostId] = ["desk"]) -> UsageCache.Answer {
+        UsageCache.Answer(machines: [], failures: [], asked: asked, at: at)
+    }
+
+    @Test func aPeriodWithoutAnAnswerIsAskedOnceAtATime() {
+        var cache = UsageCache()
+        #expect(cache.isStale(.week, machines: ["desk"], now: now))
+        cache.asks(.week)
+        #expect(!cache.isStale(.week, machines: ["desk"], now: now))
+        // Another period is its own question.
+        #expect(cache.isStale(.day, machines: ["desk"], now: now))
+    }
+
+    @Test func anAnswerIsShownUntilAMinuteOld() {
+        var cache = UsageCache()
+        cache.asks(.week)
+        cache.answered(.week, with: answer(at: now))
+        #expect(cache[.week] == answer(at: now))
+        #expect(!cache.isStale(.week, machines: ["desk"], now: now.addingTimeInterval(59)))
+        #expect(cache.isStale(.week, machines: ["desk"], now: now.addingTimeInterval(60)))
+    }
+
+    @Test func anotherSetOfMachinesMakesAnAnswerStale() {
+        var cache = UsageCache()
+        cache.answered(.week, with: answer(at: now))
+        #expect(cache.isStale(.week, machines: ["desk", "laptop"], now: now))
+        #expect(cache.isStale(.week, machines: [], now: now))
+    }
+}
+
+/// Usage against fake daemons, whose hello turn reports usage
 /// (`crates/herder-ffi/fixtures/hello.jsonl`).
 @MainActor
 struct UsageFleetTests {
@@ -173,7 +211,7 @@ struct UsageFleetTests {
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func twoMachinesAddUpAndEachCanBeShownAlone() async throws {
+    func twoMachinesAddUpPerLogin() async throws {
         let a = try FakeDaemon(name: "usage-a")
         let b = try FakeDaemon(name: "usage-b")
         let (fleet, following) = try await follow(pairing: [a, b])
@@ -188,14 +226,26 @@ struct UsageFleetTests {
         (both.input, both.output, both.cacheRead, both.cacheWrite) = (2_400, 680, 36_000, 4_096)
         both.costUsd = Self.turn.costUsd * 2
         #expect(report.total == both)
-        // One row per machine's account, and the model's turns from both in one row.
-        #expect(Set(report.accounts.map(\.id)) == ["usage-a/\(a.account)", "usage-b/\(b.account)"])
+        // The model's turns from both in one row; each machine's login has its own turn.
         #expect(report.models.map(\.model) == ["demo-model"])
         #expect(report.models.first?.amount == both)
+        let logins = ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins)
+        #expect(logins.map { report.logins[$0.id]?.amount.turns ?? 0 }.reduce(0, +) == 2)
+    }
 
-        let alone = UsageReport(machines, only: "usage-b")
-        #expect(alone.total == Self.turn)
-        #expect(alone.accounts.map(\.machines) == [["usage-b"]])
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
+    func aFreshAnswerIsKeptInsteadOfAskingAgain() async throws {
+        let daemon = try FakeDaemon(name: "usage-cached")
+        let (fleet, following) = try await follow(pairing: [daemon])
+        defer { following.cancel() }
+        await fleet.refreshUsage(over: .day)
+        let first = try #require(fleet.usageCache[.day])
+        #expect(first.asked == ["usage-cached"])
+        #expect(first.failures.isEmpty)
+        await fleet.refreshUsage(over: .day)
+        #expect(fleet.usageCache[.day]?.at == first.at)
+        await fleet.refreshUsage(over: .day, force: true)
+        #expect(try #require(fleet.usageCache[.day]?.at) > first.at)
     }
 
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
@@ -206,11 +256,14 @@ struct UsageFleetTests {
         try await helloTurn(on: "usage-shared", of: daemon, fleet: owner)
         let ownerSees = UsageReport(await usage(owner, turns: 1))
         #expect(ownerSees.total == Self.turn)
+        #expect(ownerSees.logins.values.map(\.amount) == [Self.turn])
 
         // Members see every session on the machine, so they get the same totals.
         let (member, memberFollowing) = try await follow(pairing: [daemon], member: true)
         defer { memberFollowing.cancel() }
         #expect(await eventually { member.machines.first?.role == .member })
+        // Its usage joins a login once the machine has listed its accounts.
+        #expect(await eventually { member.machines.first?.accounts.isEmpty == false })
         let memberSees = UsageReport(await usage(member, turns: 1))
         #expect(memberSees == ownerSees)
     }
