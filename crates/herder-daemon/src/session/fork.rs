@@ -321,6 +321,7 @@ impl SessionManager {
             parent,
             provider: created_on,
             account_id: created_account,
+            chat,
             ..
         } = &first.body
         else {
@@ -351,6 +352,12 @@ impl SessionManager {
             return Err(error(
                 ErrorCode::Unsupported,
                 format!("{original} is a child of a task; a task's child cannot be forked"),
+            ));
+        }
+        if *chat {
+            return Err(error(
+                ErrorCode::Unsupported,
+                format!("{original} is a chat; a chat cannot be forked"),
             ));
         }
         // Where the original stands at the end of its journal.

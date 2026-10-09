@@ -304,6 +304,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -370,7 +371,31 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
         &app,
         "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
     );
+    // A chat's folder, which its agent made a repository: still no project.
+    let chat = tmp.path().join("data/chats/s2");
+    git_repo(&chat, "");
     let mut store = herder_store::Store::open(tmp.path().join("herder.db")).unwrap();
+    store
+        .append(herder_store::NewEvent {
+            session_id: SessionId::new("s2"),
+            at: jiff::Timestamp::now(),
+            by: None,
+            body: herder_protocol::EventBody::SessionCreated {
+                repo: chat.to_string_lossy().into_owned(),
+                worktree: chat.to_string_lossy().into_owned(),
+                branch: None,
+                provider: herder_protocol::Provider::Claude,
+                account_id: AccountId::new("a"),
+                model: "m".into(),
+                permission_mode: herder_protocol::PermissionMode::Ask,
+                failover_pin: None,
+                parent: None,
+                parent_host: None,
+                task: None,
+                chat: true,
+            },
+        })
+        .unwrap();
     store
         .append(herder_store::NewEvent {
             session_id: SessionId::new("s1"),
@@ -388,6 +413,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
                 parent: None,
                 parent_host: None,
                 task: None,
+                chat: false,
             },
         })
         .unwrap();
@@ -404,6 +430,7 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -426,10 +453,14 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
         .run(shutdown.clone()),
     );
 
+    let mut projects = None;
     let heads = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match outbox.pop() {
                 Some(herder_protocol::ServerMessage::Sessions { sessions }) => return sessions,
+                Some(herder_protocol::ServerMessage::Projects { projects: list }) => {
+                    projects = Some(list);
+                }
                 Some(_) => {}
                 None => outbox.ready().await,
             }
@@ -438,8 +469,29 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
     .await
     .expect("a session list");
     let app_id = Some(ProjectId::new("github.com/org/app"));
-    assert_eq!(heads[0].project_id, app_id);
-    assert_eq!(sessions.sessions().await.unwrap()[0].project_id, app_id);
+    let ids = |heads: &[herder_protocol::SessionHead]| -> Vec<_> {
+        heads
+            .iter()
+            .map(|head| {
+                (
+                    head.session_id.as_str().to_owned(),
+                    head.project_id.clone(),
+                    head.chat,
+                )
+            })
+            .collect()
+    };
+    let want = [
+        ("s1".to_owned(), app_id.clone(), false),
+        ("s2".to_owned(), None, true),
+    ];
+    assert_eq!(ids(&heads), want);
+    assert_eq!(ids(&sessions.sessions().await.unwrap()), want);
+    let projects = projects.expect("a project list");
+    assert_eq!(
+        projects.iter().map(|p| &p.project_id).collect::<Vec<_>>(),
+        [app_id.as_ref().unwrap()]
+    );
 
     shutdown.cancel();
     task.await.unwrap();
@@ -474,6 +526,7 @@ async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
                     parent: None,
                     parent_host: None,
                     task: None,
+                    chat: false,
                 },
             })
             .unwrap();
@@ -491,6 +544,7 @@ async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -565,6 +619,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -812,6 +867,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
                     parent: None,
                     parent_host: None,
                     task: None,
+                    chat: false,
                 },
             })
             .unwrap();
@@ -840,6 +896,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -993,6 +1050,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )
@@ -1121,6 +1179,7 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
             turn_ids: crate::session::ulid_turn_ids(),
             worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
             attachments: tmp.path().join("attachments"),
+            chats: tmp.path().join("chats"),
         },
         shutdown.clone(),
     )

@@ -28,7 +28,7 @@ struct Script {
 func created(task: String? = nil, parent: SessionId? = nil, branch: String = "herder/abc", model: String = "opus") -> EventBody {
     .sessionCreated(
         repo: "/src/demo", worktree: "/wt/demo", branch: branch, provider: "claude", accountId: "main",
-        model: model, permissionMode: .ask, parent: parent, parentHost: nil, task: task, failoverPin: nil)
+        model: model, permissionMode: .ask, parent: parent, parentHost: nil, task: task, failoverPin: nil, chat: false)
 }
 
 struct SessionModelTests {

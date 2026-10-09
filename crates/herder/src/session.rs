@@ -47,13 +47,16 @@ enum Command {
     /// With nothing piped on stdin the session starts idle, without a prompt.
     New {
         /// Absolute path of the repository on the machine.
-        #[arg(long, value_name = "PATH", required_unless_present = "project")]
+        #[arg(long, value_name = "PATH", required_unless_present_any = ["project", "chat"])]
         repo: Option<String>,
         /// Project to work on, by id, in its first clone on the machine.
         #[arg(long, value_name = "PROJECT", conflicts_with = "repo")]
         project: Option<String>,
+        /// Start a chat, about no project, in a folder of its own on the machine.
+        #[arg(long, conflicts_with_all = ["repo", "project", "branch"])]
+        chat: bool,
         /// Account to run on, by id or label [default: the machine's only account, else the
-        /// project's default account].
+        /// project's default account, else the first available one].
         #[arg(long, value_name = "ACCOUNT")]
         account: Option<String>,
         /// Run on the account of this provider with the most room left, instead of a named
@@ -246,6 +249,7 @@ impl Cli {
             Command::New {
                 repo,
                 project,
+                chat,
                 account,
                 provider,
                 model,
@@ -268,6 +272,7 @@ impl Cli {
                         model,
                         permission_mode: mode.map(Into::into),
                         failover_pin: (pin || no_pin).then_some(pin),
+                        chat,
                     })
                     .await?;
                 let CommandResult::SessionCreated { session_id } = created else {

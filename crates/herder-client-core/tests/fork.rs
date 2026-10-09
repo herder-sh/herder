@@ -155,6 +155,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
         },
         worktrees: Worktrees::new(dir.join("worktrees")),
         attachments: dir.join("attachments"),
+        chats: dir.join("chats"),
     };
     let sessions = SessionManager::open(setup, shutdown.clone()).await.unwrap();
     sessions
@@ -243,6 +244,7 @@ async fn create(client: &Client, host: &str, repo: &str) -> SessionId {
         model: None,
         permission_mode: Some(PermissionMode::Ask),
         failover_pin: None,
+        chat: false,
     };
     let created = client.send(HostId::new(host), command).await.unwrap();
     let CommandResult::SessionCreated { session_id } = created else {

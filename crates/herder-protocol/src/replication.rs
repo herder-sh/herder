@@ -115,8 +115,12 @@ pub struct HostHello {
 pub struct SessionSummary {
     /// The session.
     pub session_id: SessionId,
-    /// Project of the session's repository, as resolved under the host's current config.
+    /// Project of the session's repository, as resolved under the host's current config; for
+    /// a chat, the local project id of its folder, which no project has.
     pub project_id: ProjectId,
+    /// Whether the session is a chat, about no project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chat: bool,
     /// Absolute path of the repository on the host.
     pub repo: String,
     /// Branch the session's worktree has checked out, or had when it was removed; absent for

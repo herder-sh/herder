@@ -3,19 +3,20 @@ import SwiftUI
 
 /// The sidebar's entries.
 enum SidebarItem: Hashable {
-    case board, pullRequests, skills, providers, machines, vault
+    case board, chats, pullRequests, skills, providers, machines, vault
     case project(String)
 }
 
 /// The tab bar's tabs on compact width: the sidebar's sections, with the projects as one tab,
 /// Pull Requests inside the Board, and Skills, Providers and a vault inside Machines.
 enum CompactTab: Hashable, CaseIterable {
-    case board, projects, machines
+    case board, chats, projects, machines
 
     /// The tab that shows a sidebar entry.
     init(_ item: SidebarItem) {
         switch item {
         case .project: self = .projects
+        case .chats: self = .chats
         case .board, .pullRequests: self = .board
         case .skills, .providers, .machines, .vault: self = .machines
         }
@@ -24,6 +25,7 @@ enum CompactTab: Hashable, CaseIterable {
     var title: String {
         switch self {
         case .board: "Board"
+        case .chats: "Chats"
         case .projects: "Projects"
         case .machines: "Machines"
         }
@@ -32,6 +34,7 @@ enum CompactTab: Hashable, CaseIterable {
     var symbol: String {
         switch self {
         case .board: "checklist"
+        case .chats: Switcher.chatSymbol
         case .projects: "square.stack.3d.up"
         case .machines: "server.rack"
         }
@@ -48,6 +51,7 @@ struct FleetView: View {
     @State private var tab = CompactTab.board
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
+    @State private var chatsPath: [NavRoute] = []
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -107,6 +111,10 @@ struct FleetView: View {
             // Requests keep their list, so starting a session there stays there.
             if let draft {
                 session = nil
+                if draft.isChat {
+                    item = .chats
+                    return
+                }
                 if showsEverySession { return }
                 // The list beside the chat is the draft's project, or the Board for a path.
                 let shown = draft.projectId.map { id in fleet.lists.projects.contains { $0.id == id } } ?? false
@@ -122,11 +130,12 @@ struct FleetView: View {
         .onChange(of: fleet.lists.projects.map(\.id)) { _, ids in
             if case .project(let id) = item, !ids.contains(id) { item = .board }
         }
-        // A draft belongs to the Board, Pull Requests or its own project; leaving for elsewhere
-        // closes it, and its card stays in those lists.
+        // A draft belongs to the Board, Pull Requests or its own project, a chat to Chats;
+        // leaving for elsewhere closes it, and its card stays in those lists.
         .onChange(of: item) {
             guard let draft else { return }
-            if item != .project(draft.projectId ?? "") && !showsEverySession { self.draft = nil }
+            let home: SidebarItem = draft.isChat ? .chats : .project(draft.projectId ?? "")
+            if item != home && (draft.isChat || !showsEverySession) { self.draft = nil }
         }
     }
 
@@ -138,9 +147,9 @@ struct FleetView: View {
         DesktopShell(fleet: fleet, sheet: $sheet, item: $item, session: $session, draft: $draft, opened: opened)
     }
 
-    /// Shows a session just created from a draft: beside the Board or Pull Requests it was
-    /// started from, in its project's pane, or pushed on the Projects tab it was started from,
-    /// else on the Board.
+    /// Shows a session just created from a draft: beside the Board, Pull Requests or Chats it
+    /// was started from, in its project's pane, or pushed on the Projects or Chats tab it was
+    /// started from, else on the Board.
     private func opened(_ key: SessionKey) {
         draft = nil
         if !showsEverySession, let projectId = fleet.lists.projects.first(where: { $0.sessions.contains { $0.key == key } })?.projectId {
@@ -149,6 +158,8 @@ struct FleetView: View {
         session = key
         if tab == .projects {
             projectsPath.append(.session(key))
+        } else if tab == .chats {
+            chatsPath.append(.session(key))
         } else {
             tab = .board
             boardPath = [.session(key)]
@@ -158,7 +169,7 @@ struct FleetView: View {
     /// Closes a session's pane, and pops it and what was pushed over it on every tab.
     private func close(_ key: SessionKey) {
         if session == key { session = nil }
-        for path in [$projectsPath, $boardPath] {
+        for path in [$projectsPath, $boardPath, $chatsPath] {
             if let index = path.wrappedValue.firstIndex(of: .session(key)) { path.wrappedValue.removeSubrange(index...) }
         }
     }
@@ -184,6 +195,17 @@ struct FleetView: View {
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
             .environment(\.sessionPath, $projectsPath)
+        case .chats:
+            NavigationStack(path: $chatsPath) {
+                ChatsView(fleet: fleet)
+                    .toolbar {
+                        let started = Draft.chat(fleet: fleet)
+                        Button("New Chat", systemImage: "plus") { draft = started }
+                            .disabled(started == nil)
+                    }
+                    .navigationDestination(for: NavRoute.self, destination: destination)
+            }
+            .environment(\.sessionPath, $chatsPath)
         case .board:
             NavigationStack(path: $boardPath) {
                 BoardView(fleet: fleet, sheet: $sheet, showsPullRequests: true)
@@ -435,6 +457,28 @@ struct ProjectView: View {
                     .disabled(started == nil)
             }
         }
+    }
+}
+
+/// The chats on iPhone: their sessions, pushed when tapped.
+struct ChatsView: View {
+    let fleet: Fleet
+
+    var body: some View {
+        let lists = fleet.lists
+        ScrollView {
+            ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, title: "Chats")
+                .padding(16)
+        }
+        .overlay {
+            if lists.chats.isEmpty && lists.archivedChats.isEmpty {
+                ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
+                                       description: Text("Ask anything, about no project."))
+            }
+        }
+        .background(Theme.background)
+        .refreshable { fleet.wake() }
+        .navigationTitle("Chats")
     }
 }
 

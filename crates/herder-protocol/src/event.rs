@@ -66,6 +66,10 @@ pub enum EventBody {
         /// daemon's `[failover] pin`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         failover_pin: Option<bool>,
+        /// Whether the session is a chat, about no project, working in a folder of its own
+        /// under the daemon's data dir.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        chat: bool,
     },
     /// The session's worktree had a branch checked out that the session had not had before.
     /// The session owns it from then on, including after its worktree is removed. The branch

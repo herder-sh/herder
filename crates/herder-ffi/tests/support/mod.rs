@@ -144,6 +144,7 @@ impl FakeDaemon {
             }),
             worktrees: Worktrees::new(dir.join("worktrees")),
             attachments: dir.join("attachments"),
+            chats: dir.join("chats"),
         };
         let shutdown = CancellationToken::new();
         let sessions = SessionManager::open(setup, shutdown.clone()).await?;

@@ -401,6 +401,7 @@ async fn a_paired_client_runs_a_claude_turn_with_an_approval() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         })
         .await
     else {

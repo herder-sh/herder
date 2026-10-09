@@ -20,12 +20,14 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
             parent,
             parent_host,
             task,
+            chat,
             ..
         } => {
             tx.prepare_cached(
                 "INSERT INTO sessions (session_id, repo, worktree, branch, provider, account_id,
-                     model, permission_mode, parent, parent_host, task, status, last_seq, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                     model, permission_mode, parent, parent_host, task, status, last_seq, updated_at,
+                     chat)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             )?
             .execute(params![
                 id,
@@ -42,6 +44,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
                 tag(&SessionStatus::Idle)?,
                 event.seq,
                 event.at,
+                chat,
             ])?;
             if let Some(branch) = branch {
                 add_branch(tx, id, branch, event.seq)?;

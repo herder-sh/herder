@@ -209,15 +209,16 @@ public final class Fleet {
         account.usage.map(\.usedPercent).max() ?? 0
     }
 
-    /// Creates a session, prompts it when a prompt is given, and returns it.
+    /// Creates a session, in `repo` or `projectId`, or a chat; prompts it when a prompt is
+    /// given, and returns it.
     func createSession(
-        on hostId: HostId, repo: String?, projectId: String?, accountId: AccountId, model: String,
+        on hostId: HostId, repo: String?, projectId: String?, chat: Bool = false, accountId: AccountId, model: String,
         mode: PermissionMode, prompt: String, images: [Herder.Image] = [], files: [PromptFile] = []
     ) async throws -> SessionKey {
         let result = try await client.send(
             hostId: hostId,
             command: .createSession(
-                repo: repo, projectId: projectId, branch: nil, accountId: accountId, provider: nil,
+                repo: repo, projectId: projectId, chat: chat, branch: nil, accountId: accountId, provider: nil,
                 model: model.isEmpty ? nil : model, permissionMode: mode, failoverPin: nil))
         guard case .sessionCreated(let sessionId) = result else {
             throw HerderError.Local(detail: "the machine did not create a session")

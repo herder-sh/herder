@@ -49,7 +49,7 @@ struct DesktopShell: View {
                 Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
-                    drafting(in: id) {
+                    drafting({ $0.projectId == id }) {
                         ScrollView {
                             if let project {
                                 ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
@@ -62,6 +62,23 @@ struct DesktopShell: View {
                 } actions: {
                     PaneButton(title: "New Session", symbol: "plus") { draft = Draft.inProject(id, fleet: fleet) }
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
+                }
+            }
+        case .chats:
+            ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
+                Pane(title: "Chats", subtitle: "About no project", switcher: switcher, query: $query) {
+                    drafting(\.isChat) {
+                        ScrollView {
+                            ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
+                                            archived: lists.archivedChats.filter { $0.matches(query) },
+                                            selection: $session, title: "Chats")
+                                .padding(16)
+                        }
+                    }
+                } actions: {
+                    let started = Draft.chat(fleet: fleet)
+                    PaneButton(title: "New Chat", symbol: "plus") { draft = started }
+                        .disabled(started == nil)
                 }
             }
         case .board:
@@ -109,10 +126,13 @@ struct DesktopShell: View {
     }
 
     /// A list under the cards of the sessions being written, so they show among the rest until
-    /// started or dropped: the open draft, then those left unsent, in `projectId` or anywhere.
-    private func drafting<List: View>(in projectId: String? = nil, @ViewBuilder _ list: () -> List) -> some View {
+    /// started or dropped: the open draft, then those left unsent that `shows`, by default
+    /// every one but a chat.
+    private func drafting<List: View>(
+        _ shows: (Draft) -> Bool = { !$0.isChat }, @ViewBuilder _ list: () -> List
+    ) -> some View {
         let unsent = PromptDrafts.shared.unsent.compactMap { kept in kept.draft.map { (draft: $0, text: kept.text) } }
-            .filter { $0.draft.key != draft?.key && (projectId == nil || $0.draft.projectId == projectId) }
+            .filter { $0.draft.key != draft?.key && shows($0.draft) }
         let cards = (draft.map { [(draft: $0, text: typed)] } ?? []) + unsent
         return VStack(spacing: 8) {
             ForEach(cards, id: \.draft.key) { card in
@@ -129,10 +149,12 @@ struct DesktopShell: View {
         }
     }
 
-    /// ⌘N: a draft in the project in view, the pane's or the open session's, on the machine
-    /// it would pick; elsewhere, the picker.
+    /// ⌘N: a chat in Chats; a draft in the project in view, the pane's or the open session's,
+    /// on the machine it would pick; elsewhere, the picker.
     private func newSession() {
-        if let projectId = fleet.lists.project(for: item, session: session),
+        if item == .chats, let draft = Draft.chat(fleet: fleet) {
+            self.draft = draft
+        } else if let projectId = fleet.lists.project(for: item, session: session),
            let draft = Draft.inProject(projectId, fleet: fleet) {
             self.draft = draft
         } else {
@@ -288,12 +310,15 @@ struct Pane<Content: View, Actions: View>: View {
 
 /// The sections and projects, for a pane title's menu, so the sidebar can stay collapsed.
 struct Switcher {
+    /// The symbol of Chats, wherever it is listed.
+    static let chatSymbol = "bubble.left.and.bubble.right"
     let fleet: Fleet
     let item: Binding<SidebarItem>
     let session: Binding<SessionKey?>
 
     @MainActor @ViewBuilder var items: some View {
         Button("Board", systemImage: "checklist") { go(.board) }
+        Button("Chats", systemImage: Self.chatSymbol) { go(.chats) }
         Button("Pull Requests", systemImage: "arrow.triangle.pull") { go(.pullRequests) }
         Button("Skills", systemImage: "book.closed") { go(.skills) }
         Button("Providers", systemImage: "person.2") { go(.providers) }
@@ -376,6 +401,8 @@ struct Sidebar: View {
 
             SidebarRow(title: "Board", symbol: "checklist", badge: lists.requests.count, attention: true,
                        selected: item == .board) { select(.board) }
+            SidebarRow(title: "Chats", symbol: Switcher.chatSymbol, state: SessionState.rollup(lists.chats.map(\.state)),
+                       selected: item == .chats) { select(.chats) }
             SidebarRow(title: "Pull Requests", symbol: "arrow.triangle.pull",
                        badge: lists.pullRequests(openOnly: true).flatMap(\.sessions).map(\.prs.count).reduce(0, +),
                        selected: item == .pullRequests) { select(.pullRequests) }
@@ -457,6 +484,7 @@ private struct SidebarRail: View {
                 .keyboardShortcut("n")
             Rectangle().fill(Theme.stroke).frame(width: 28, height: 1)
             rail("checklist", "Board", .board, badge: lists.requests.count)
+            rail(Switcher.chatSymbol, "Chats", .chats, badge: 0, state: SessionState.rollup(lists.chats.map(\.state)))
             rail("arrow.triangle.pull", "Pull Requests", .pullRequests, badge: 0)
             rail("book.closed", "Skills", .skills, badge: 0)
             rail("person.2", "Providers", .providers, badge: 0)
@@ -596,11 +624,12 @@ struct ProjectSessions: View {
     let archived: [SessionSummary]
     /// Where a tapped session opens beside the list; `nil` pushes it.
     var selection: Binding<SessionKey?>?
+    var title = "Sessions"
     @State private var showsArchived = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 26) {
-            SessionGroup(title: "Sessions", sessions: live, fleet: fleet, selection: selection, showsProject: false)
+            SessionGroup(title: title, sessions: live, fleet: fleet, selection: selection, showsProject: false)
             if !archived.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Button { showsArchived.toggle() } label: {

@@ -90,6 +90,7 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
             model: None,
             permission_mode: Some(PermissionMode::Ask),
             failover_pin: None,
+            chat: false,
         },
     ))
     .unwrap();

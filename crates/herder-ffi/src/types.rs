@@ -211,6 +211,7 @@ pub enum EventBody {
         parent_host: Option<HostId>,
         task: Option<String>,
         failover_pin: Option<bool>,
+        chat: bool,
     },
     BranchCheckedOut {
         branch: String,
@@ -523,6 +524,7 @@ pub enum CommandBody {
     CreateSession {
         repo: Option<String>,
         project_id: Option<ProjectId>,
+        chat: bool,
         branch: Option<String>,
         account_id: Option<AccountId>,
         provider: Option<Provider>,
@@ -985,6 +987,7 @@ pub struct SessionHead {
     pub task: Option<String>,
     pub title: Option<String>,
     pub project_id: Option<ProjectId>,
+    pub chat: bool,
     pub account_id: AccountId,
     pub children_need_you: u32,
     pub queue: Vec<QueuedPrompt>,
