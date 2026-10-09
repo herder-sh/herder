@@ -25,8 +25,8 @@ final class ScreenshotTests: XCTestCase {
         if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
         #endif
 
-        // Home: the approval waiting on you, then the work in progress.
-        guard wait(row("Upgrade date-fns to v4"), "home") else { return finish() }
+        // The Board: the approval waiting on you, then where each session's work stands.
+        guard wait(row("Upgrade date-fns to v4"), "board") else { return finish() }
         settle()
         #if os(macOS)
         shoot("mac-home")
@@ -67,15 +67,6 @@ final class ScreenshotTests: XCTestCase {
         if open("Roll out 30-day log retention") { shoot("mac-tasks") }
         #endif
 
-        // Where each session's work stands.
-        if section("Board") {
-            #if os(macOS)
-            shoot("mac-board")
-            #else
-            shoot("ios-board")
-            #endif
-        }
-
         // The fleet.
         if section("Machines") {
             settle()
@@ -108,9 +99,9 @@ final class ScreenshotTests: XCTestCase {
         press(done)
     }
 
-    /// Opens the session titled `title` from Home, scrolling its row into view.
+    /// Opens the session titled `title` from the Board, scrolling its row into view.
     private func open(_ title: String) -> Bool {
-        _ = section("Home")
+        _ = section("Board")
         let row = row(title)
         guard wait(row, title) else { return false }
         reveal(row)

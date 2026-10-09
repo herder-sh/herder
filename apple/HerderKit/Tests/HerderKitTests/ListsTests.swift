@@ -38,27 +38,6 @@ struct ListsTests {
         #expect(lists.requests.map(\.requestId) == ["b", "a"])
     }
 
-    @Test func homeKeepsSessionsInTheOrderTheyWereCreatedWhateverTheirState() {
-        var older = Script("01A")
-        var middle = Script("01B")
-        var newer = Script("01C")
-        var archived = Script("01D")
-        let running = EventBody.sessionStatusChanged(status: .running, retryAt: nil)
-        // The older session works on after the others: its activity is the latest.
-        let olderModel = older.model([created(), running, .turnStarted(turnId: "t"), .turnStarted(turnId: "u")])
-        let newerModel = newer.model([created()])
-        #expect(olderModel.updatedAt! > newerModel.updatedAt!)
-        let sessions = [
-            older.key: olderModel,
-            middle.key: middle.model([created(), .sessionStatusChanged(status: .error, retryAt: nil)]),
-            newer.key: newerModel,
-            archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
-        ]
-        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])],
-                          sessions: sessions)
-        #expect(lists.home.map(\.key.sessionId) == ["01C", "01B", "01A"])
-    }
-
     @Test func childrenFollowTheirParentOldestFirst() {
         var parent = Script("01A")
         var older = Script("01B")
@@ -145,9 +124,6 @@ struct ListsTests {
         #expect(lists.projects[0].live.map(\.key) == [parent.key, child.key])
         #expect(lists.projects[0].live.map(\.depth) == [0, 1])
         #expect(lists.projects[0].archived.isEmpty)
-        // Home keeps the archived parent while its child works, to lead it.
-        #expect(lists.home.map(\.key) == [parent.key, child.key])
-        #expect(lists.home.map(\.depth) == [0, 1])
     }
 
     @Test func archivingAChildKeepsItUnderItsLiveParent() {
@@ -162,7 +138,6 @@ struct ListsTests {
         #expect(lists.projects[0].live.map(\.depth) == [0, 1])
         #expect(lists.projects[0].live[0].children == 1)
         #expect(lists.projects[0].archived.isEmpty)
-        #expect(lists.home.map(\.key) == [parent.key])
     }
 
     @Test func aChildIsNestedByTheListsParentBeforeItsEventsLoad() {
@@ -182,7 +157,6 @@ struct ListsTests {
         let lists = Lists(machines: [host], sessions: [
             archiving.key: archiving.model([created()]), live.key: live.model([created()]),
         ], archiving: [archiving.key])
-        #expect(lists.home.map(\.key) == [live.key])
         #expect(lists.projects[0].live.map(\.key) == [live.key])
         #expect(lists.projects[0].archived.map(\.key) == [archiving.key])
     }
@@ -198,7 +172,6 @@ struct ListsTests {
         // The live session waits for a project; the archived one keeps none in the list.
         #expect(lists.projects.map(\.projectId) == [nil])
         #expect(lists.projects[0].sessions.map(\.key) == [live.key])
-        #expect(lists.home.map(\.key) == [live.key])
 
         let withoutLive = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [
             archived.key: archived.model([created(), .sessionStatusChanged(status: .archived, retryAt: nil)]),
@@ -294,7 +267,7 @@ struct ListsTests {
         let start = ContinuousClock.now
         let lists = Lists(machines: machines, sessions: sessions)
         #expect(ContinuousClock.now - start < .seconds(1))
-        #expect(lists.home.first?.children == 2999)
+        #expect(lists.projects[0].live.first?.children == 2999)
         #expect(lists.projects.flatMap(\.sessions).count == 3000)
     }
 
@@ -326,7 +299,7 @@ struct FleetListsTests {
         let machines = [machine("host-a", name: "a", sessions: ["01A"])]
         #expect(publishes(fleet) { fleet.setMachinesForTesting(machines) })
         #expect(!publishes(fleet) { fleet.setMachinesForTesting(machines) })
-        #expect(fleet.lists.home.map(\.key.sessionId) == ["01A"])
+        #expect(fleet.lists.projects.flatMap(\.sessions).map(\.key.sessionId) == ["01A"])
     }
 
     /// `devbox` runs `01A` and `01B`; the vault replicates both, and `01C` of a host not paired here.
@@ -338,7 +311,7 @@ struct FleetListsTests {
         ])
         for (index, host) in ["devbox", "devbox", "laptop"].enumerated() { vault.sessions[index].hostId = host }
         func listed() -> [String] {
-            Lists(machines: [devbox, vault], sessions: [:]).home.map { "\($0.key.hostId)/\($0.key.sessionId)" }.sorted()
+            Lists(machines: [devbox, vault], sessions: [:]).projects.flatMap(\.sessions).map { "\($0.key.hostId)/\($0.key.sessionId)" }.sorted()
         }
 
         // The live copies, and the vault's copy of what only the vault reaches.

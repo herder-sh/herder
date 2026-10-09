@@ -348,8 +348,7 @@ struct ProjectIconLookupTests {
 
 struct CompactTabTests {
     @Test func compactWidthReachesEverySidebarSection() {
-        #expect(CompactTab.allCases.map(\.title) == ["Home", "Projects", "Board", "Usage", "Machines"])
-        #expect(CompactTab(.home) == .home)
+        #expect(CompactTab.allCases.map(\.title) == ["Board", "Projects", "Usage", "Machines"])
         #expect(CompactTab(.project("p")) == .projects)
         #expect(CompactTab(.board) == .board)
         // Pull Requests has no tab of its own: it opens from the Board.

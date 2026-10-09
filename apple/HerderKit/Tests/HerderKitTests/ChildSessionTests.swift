@@ -68,23 +68,4 @@ struct ChildSessionTests {
         let started = Date(timeIntervalSince1970: 1_767_225_600 + 6)
         #expect(model.runTime(at: started.addingTimeInterval(10)) == 11)
     }
-
-    @Test func homeListsActiveChildrenUnderTheirParentAndLeavesIdleOnesOut() {
-        var parent = Script("01A")
-        var running = Script("01B")
-        var done = Script("01C")
-        var solo = Script("01D")
-        let sessions = [
-            parent.key: parent.model([created(task: "Lead")]),
-            running.key: running.model([created(task: "Build", parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
-            done.key: done.model([created(task: "Docs", parent: "01A")]),
-            solo.key: solo.model([created(task: "Solo")]),
-        ]
-        let lists = Lists(
-            machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])], sessions: sessions)
-        // The idle parent leads its running child; the idle child shows only in its project.
-        #expect(lists.home.map(\.title) == ["Solo", "Lead", "Build"])
-        #expect(lists.home.map(\.depth) == [0, 0, 1])
-        #expect(lists.home[1].children == 2)
-    }
 }

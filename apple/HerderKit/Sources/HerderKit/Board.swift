@@ -148,10 +148,11 @@ extension Lists {
     }
 }
 
-/// Every task tree by where its work stands, so "did CI pass?" needs no asking; a session opens
-/// beside it, or is pushed.
+/// The app's home: what is waiting on you, then every task tree by where its work stands, so
+/// "did CI pass?" needs no asking; a session opens beside it, or is pushed.
 struct BoardView: View {
     let fleet: Fleet
+    @Binding var sheet: AppSheet?
     /// Where a tapped session opens on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>?
     var query = ""
@@ -159,14 +160,27 @@ struct BoardView: View {
     var showsPullRequests = false
 
     var body: some View {
-        let columns = fleet.lists.board.compactMap { column -> BoardColumn? in
+        let lists = fleet.lists
+        let columns = lists.board.compactMap { column -> BoardColumn? in
             let trees = column.trees.filter { $0.matches(query) }
             return trees.isEmpty ? nil : BoardColumn(state: column.state, trees: trees)
         }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
+                #if os(iOS)
+                ConnectionLine(machines: lists.machines)
+                #endif
+                if lists.machines.isEmpty {
+                    EmptyFleet { sheet = .pair }
+                }
+                if !lists.requests.isEmpty && query.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionHeading(title: "Requests", count: lists.requests.count, tint: Theme.accent)
+                        ForEach(lists.requests) { RequestCard(request: $0, fleet: fleet, selection: selection) }
+                    }
+                }
                 if showsPullRequests { pullRequestsLink }
-                if columns.isEmpty {
+                if columns.isEmpty && !lists.machines.isEmpty {
                     Text(query.isEmpty ? "No sessions yet." : "No sessions match.")
                         .foregroundStyle(Theme.tertiary)
                         .padding(.top, 30)

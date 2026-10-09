@@ -19,7 +19,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 
 ## 1. Decisions at a glance
 
-1. **One information architecture everywhere.** Home, Projects, Pull Requests, Usage, Skills,
+1. **One information architecture everywhere.** Board, Projects, Pull Requests, Usage, Skills,
    Machines (with a vault inside), a session, and settings sheets. The Mac, the iPad and the iPhone show the
    same sections with the same names; only the navigation chrome changes (§3).
 2. **Three layouts, chosen by width, not by device.** `FleetView` picks the layout from the
@@ -51,7 +51,7 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
 
 | app section | what it holds | TUI equivalent | component |
 |---|---|---|---|
-| **Home** | needs-you cards, then Active and Recent sessions across all machines | inbox + attention list | `HomeView` |
+| **Board** | request cards, then every task tree by where its work stands, across all machines | board | `BoardView` |
 | **Projects** | every project with its sessions, children under parents | sidebar *projects* tree | `ProjectsView` (iPhone), `ProjectSessions` (Mac/iPad) |
 | **Pull Requests** | PRs linked to sessions, by project | prs view | `PullRequestsView` |
 | **Usage** | tokens and API-equivalent dollars over a period, per account and model | — | `UsageView` |
@@ -72,7 +72,7 @@ the project header's gear).
 
 - Sections are written in title case in the chrome ("Pull Requests", "New Session") and as
   `SectionHeading` capitals inside panes ("NEEDS YOU 2", "ACTIVE", "RECENT", "ARCHIVED").
-- The product is always lowercase `herder`, including the iPhone Home title.
+- The product is always lowercase `herder`.
 - A session is named by its title; its branch shows in monospace (`Theme.monoSmall`) as a
   secondary line, never instead of the title.
 - A child session is "Agent of ‹parent›" (`ChildBanner`), as the TUI's task child.
@@ -84,7 +84,7 @@ the project header's gear).
 | | Mac window / iPad regular | narrow regular (< 820 pt content) | iPhone / compact |
 |---|---|---|---|
 | frame | `DesktopShell` | `DesktopShell` | `FleetView.tabs` |
-| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Home · Projects · PRs · Usage · Machines |
+| navigation | sidebar: rail (76 pt) or full (228 pt) | same | tab bar: Board · Projects · Usage · Machines |
 | section switch | sidebar rows; the pane title's menu (`Switcher`) | same | tabs |
 | list | 380 pt pane beside the session (`ListAndSession`) | full width until a session opens | full screen, `NavigationStack` |
 | session | fills the rest | replaces the list, with **Back** | pushed; tab bar hidden |
@@ -98,7 +98,7 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) lists Home, Pull Requests, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
+- **The sidebar** (`Sidebar`, `SidebarRail`) lists Board, Pull Requests, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
   collapsed to the rail (`sidebarCollapsed`), which leaves the width to the session; ⇧⌘\
   toggles it. The window's traffic lights sit in its top bar (`Sidebar.topBar`, 52 pt on the
   Mac).
@@ -107,9 +107,10 @@ Rules:
 - **The pane header** (`Pane`) is the title (a menu of sections and projects, `Switcher`), a
   one-line subtitle, the pane's actions on the right (`PaneButton`, `IconButton`), then a
   search field where the pane lists sessions.
-- **The tab bar** on compact width has the same sections as the sidebar: Home (badged with the
-  needs-you count), Projects, PRs, Usage, Machines. Skills and a vault show inside Machines. Each tab is its own
-  `NavigationStack` (`homePath`, `projectsPath`, `prsPath`), so switching tabs keeps each tab's place.
+- **The tab bar** on compact width has the same sections as the sidebar: Board (badged with the
+  request count), Projects, Usage, Machines. Pull Requests opens from the Board; Skills and a
+  vault show inside Machines. Each tab is its own `NavigationStack` (`boardPath`,
+  `projectsPath`), so switching tabs keeps each tab's place.
 - **Back always returns to where the user came from**: the stack's back button on iPhone,
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
   parent.
@@ -121,17 +122,9 @@ Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-narrow.png`
 
 ## 4. Lists and sections
 
-### 4.1 Home (`HomeView`)
+### 4.1 Board
 
-1. **Needs you**: one `RequestCard` per pending approval or question, newest first, answerable
-   in place. The card's session line opens that session.
-2. **Active**: running, waiting and needing-you sessions without a card, as task trees in
-   creation order so the list holds still while they work (`Lists.home`).
-3. **Recent**: idle and failed sessions, newest activity first, at most 20.
-
-Home never lists an archived session, except an archived parent that still has a working
-child: it stays to lead its child. On iPhone, a connection line ("1 machine connected",
-`ConnectionLine`) heads the list; on the Mac and iPad that line is the pane subtitle.
+The app opens on the Board (§4.8): it is the home screen.
 
 ### 4.2 Projects (`ProjectsView`, `ProjectSessions`)
 
@@ -210,7 +203,7 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
   activity first within each, except Active, which holds creation order (above).
 - **Children under parents:** a child is indented under its parent with a tree line
   (`SessionRow.depth`, `TreeLine`, 14 pt per level); a parent row shows its child count and how
-  many need you. Idle children stay under their parent and never crowd Home.
+  many need you.
 - **Task trees stay whole:** each tree is built from all of a project's sessions before the list
   splits them, so archiving a parent or a child never takes a tree apart. A tree with any
   session that is not archived is listed with the live ones: an archived parent stays, dimmed,
@@ -228,7 +221,11 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 
 ### 4.8 Board (`BoardView`, `Lists.board`)
 
-One column per `WorkState`, what needs the user first: needs you, CI failed, changes
+On iPhone, a connection line ("1 machine connected", `ConnectionLine`) heads the Board; on the
+Mac and iPad that line is the pane subtitle. With no machine paired it offers Add Machine.
+Then **Requests**: one `RequestCard` per pending approval or question, newest first,
+answerable in place; the card's session line opens that session. Then one column per
+`WorkState`, what needs the user first: needs you, CI failed, changes
 requested, conflicting, ready to merge, idle, working, waiting on CI, merged. A column lists
 task trees, not sessions, newest first, and its count counts trees.
 
@@ -428,8 +425,8 @@ blindness. No view uses a literal colour; new colours are added to `Theme` first
   Fixed point sizes only for glyphs and the draft's 30 pt question.
 - Corners: `Theme.corner` (10 pt) for cards and fields, 8–9 pt for buttons, 18 pt bubbles,
   22 pt composer, capsules for chips and badges.
-- Spacing: 16 pt screen margins on iOS, 20 pt pane margins on the Mac; 22 pt between Home
-  groups; content columns 760 pt (transcript, Home) and 784 pt (composer).
+- Spacing: 16 pt screen margins on iOS, 20 pt pane margins on the Mac; 22 pt between Board
+  groups; content columns 760 pt (transcript, Board) and 784 pt (composer).
 
 ### 8.3 Components
 
@@ -458,7 +455,7 @@ iPhone layout fixes land in P7.21.
 
 | screen | Mac | iPhone |
 |---|---|---|
-| Home | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
+| Board | `mac-home.png`, `mac-sidebar-expanded.png` | `ios-home.png` |
 | Project / Projects | `mac-project.png` | `ios-projects.png` |
 | Pull Requests | `mac-pull-requests.png` | [`p7-22/ios-pull-requests.png`](screenshots/p7-22/ios-pull-requests.png), [`p7-22/ios-pull-requests-session.png`](screenshots/p7-22/ios-pull-requests-session.png) |
 | Machines, machine settings | `mac-machines.png`, `mac-machine-settings.png` | `ios-machines.png`, `ios-machine-settings.png` |

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Opens a session from its request card on Home, against the fake daemons of `PairingUITests`:
+/// Opens a session from its request card on the Board, against the fake daemons of `PairingUITests`:
 /// `fake-host-1` has a session waiting on an approval.
 final class RequestCardUITests: XCTestCase {
     @MainActor
