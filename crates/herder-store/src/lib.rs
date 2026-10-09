@@ -25,9 +25,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use herder_protocol::{
-    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, HostId, JournalRecord,
-    PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId, SessionStatus,
-    Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal, UserId,
+    AccountId, Attachment, CommandId, CommandResult, Event, EventBody, FailoverTotal, HostId,
+    JournalRecord, PermissionMode, PromptId, Provider, PullRequest, RawEventBody, Seq, SessionId,
+    SessionStatus, Timestamp, TitleSource, TurnId, TurnUsage, UsageTotal, UserId,
 };
 use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
@@ -613,6 +613,61 @@ impl Store {
                 cache_write: row.get(7)?,
                 cost_usd: row.get(8)?,
                 cost_estimated: row.get(9)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Each account's limit hits and failovers journaled at or after `since`, ordered by
+    /// account; accounts with neither are left out.
+    ///
+    /// A limit hit is a `turn_failed` with `limit_reached`, counted against the account the
+    /// session was on; a failover is an `account_switched` no user made, counted out of the
+    /// account before it and into the one it names. A fork's journal starts with a copy of the
+    /// original's, which counts once, in the original, so only events after a session's last
+    /// `session_forked` count.
+    pub fn failover_totals(&self, since: Timestamp) -> Result<Vec<FailoverTotal>> {
+        // `at` is RFC 3339 text whose fraction jiff leaves out when zero, so text order is
+        // time order only to the second: the index narrows to a second early, and
+        // `unixepoch` keeps the exact period.
+        let early =
+            Timestamp::from_second(since.as_second().saturating_sub(1)).unwrap_or(Timestamp::MIN);
+        let mut stmt = self.conn.prepare_cached(
+            "WITH forked AS (
+                SELECT session_id, MAX(seq) AS seq FROM events
+                WHERE event_type = 'session_forked' GROUP BY session_id
+             ),
+             counted AS (
+                SELECT e.event_type,
+                    json_extract(e.body, '$.account_id') AS onto,
+                    (SELECT json_extract(p.body, '$.account_id') FROM events p
+                     WHERE p.session_id = e.session_id AND p.seq < e.seq
+                        AND p.event_type IN
+                            ('session_created', 'account_switched', 'provider_switched')
+                     ORDER BY p.seq DESC LIMIT 1) AS off
+                FROM events e LEFT JOIN forked f ON f.session_id = e.session_id
+                WHERE e.event_type IN ('turn_failed', 'account_switched')
+                    AND e.at >= ?1 AND unixepoch(e.at, 'subsec') * 1000 >= ?2
+                    AND e.seq > COALESCE(f.seq, 0)
+                    AND (e.event_type = 'account_switched' AND e.by IS NULL
+                        OR json_extract(e.body, '$.error.class') = 'limit_reached')
+             )
+             SELECT account_id, SUM(hits), SUM(outs), SUM(ins) FROM (
+                SELECT off AS account_id, event_type = 'turn_failed' AS hits,
+                    event_type = 'account_switched' AS outs, 0 AS ins
+                FROM counted
+                UNION ALL
+                SELECT onto, 0, 0, 1 FROM counted WHERE event_type = 'account_switched'
+             )
+             WHERE account_id IS NOT NULL
+             GROUP BY account_id ORDER BY account_id",
+        )?;
+        let rows = stmt.query_map(params![early, since.as_millisecond()], |row| {
+            Ok(FailoverTotal {
+                account_id: AccountId::new(row.get::<_, String>(0)?),
+                limit_hits: row.get(1)?,
+                failovers_out: row.get(2)?,
+                failovers_in: row.get(3)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

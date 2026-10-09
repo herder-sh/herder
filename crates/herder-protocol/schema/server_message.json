@@ -923,9 +923,17 @@
           ]
         },
         {
-          "description": "The tokens and cost of the turns completed on this daemon's host over a period,\nanswering `get_usage_summary`.",
+          "description": "The tokens and cost of the turns completed on this daemon's host over a period, and\neach account's limit hits and failovers, answering `get_usage_summary`.",
           "type": "object",
           "properties": {
+            "failovers": {
+              "description": "One total per account with a limit hit or failover in the period, ordered by\naccount; empty from a daemon that does not count them.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/FailoverTotal"
+              }
+            },
             "period": {
               "description": "The period asked for.",
               "$ref": "#/$defs/UsagePeriod"
@@ -2142,6 +2150,40 @@
       },
       "required": [
         "pin"
+      ]
+    },
+    "FailoverTotal": {
+      "description": "How often one account hit its limit, and how often the daemon failed sessions over off it\nand onto it, over a period, on one daemon.",
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "description": "The account.",
+          "$ref": "#/$defs/AccountId"
+        },
+        "failovers_in": {
+          "description": "Sessions the daemon moved onto the account off another that hit its limit.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "failovers_out": {
+          "description": "Sessions the daemon moved off the account after it hit its limit.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "limit_hits": {
+          "description": "Turns that failed on the account with `limit_reached`, retries included.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "account_id",
+        "limit_hits",
+        "failovers_out",
+        "failovers_in"
       ]
     },
     "FleetHost": {

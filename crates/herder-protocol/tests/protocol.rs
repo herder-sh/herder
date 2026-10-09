@@ -651,6 +651,12 @@ fn server_fixtures() -> Vec<ServerMessage> {
                         cost_estimated: true,
                     },
                 ],
+                failovers: vec![FailoverTotal {
+                    account_id: AccountId::new("01J9ACCOUNT"),
+                    limit_hits: 2,
+                    failovers_out: 2,
+                    failovers_in: 1,
+                }],
             },
         },
         ServerMessage::CommandAccepted {
@@ -659,6 +665,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 period: UsagePeriod::Day,
                 since: "2026-10-03T12:00:00Z".parse().unwrap(),
                 totals: Vec::new(),
+                failovers: Vec::new(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -667,6 +674,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 period: UsagePeriod::Week,
                 since: "2026-09-27T12:00:00Z".parse().unwrap(),
                 totals: Vec::new(),
+                failovers: Vec::new(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -675,6 +683,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 period: UsagePeriod::ThirtyDays,
                 since: "2026-09-04T12:00:00Z".parse().unwrap(),
                 totals: Vec::new(),
+                failovers: Vec::new(),
             },
         },
         ServerMessage::CommandAccepted {
@@ -2366,6 +2375,12 @@ fn usage_summary_has_its_wire_form() {
             cost_usd: 1.25,
             cost_estimated: false,
         }],
+        failovers: vec![FailoverTotal {
+            account_id: AccountId::new("work"),
+            limit_hits: 3,
+            failovers_out: 1,
+            failovers_in: 2,
+        }],
     };
     let wire = json!({
         "type": "usage_summary",
@@ -2383,12 +2398,27 @@ fn usage_summary_has_its_wire_form() {
             "cost_usd": 1.25,
             "cost_estimated": false,
         }],
+        "failovers": [{
+            "account_id": "work",
+            "limit_hits": 3,
+            "failovers_out": 1,
+            "failovers_in": 2,
+        }],
     });
     assert_eq!(serde_json::to_value(&summary).unwrap(), wire);
     assert_eq!(
-        serde_json::from_value::<CommandResult>(wire).unwrap(),
+        serde_json::from_value::<CommandResult>(wire.clone()).unwrap(),
         summary
     );
+    // A daemon from before failover counts sends none.
+    let mut older = wire;
+    older.as_object_mut().unwrap().remove("failovers");
+    let CommandResult::UsageSummary { failovers, .. } =
+        serde_json::from_value::<CommandResult>(older).unwrap()
+    else {
+        panic!("expected a usage summary");
+    };
+    assert_eq!(failovers, []);
 }
 
 #[test]
