@@ -336,7 +336,7 @@ struct Lists: Equatable {
                 // The list's title stands in until the session's own events have loaded.
                 key: key, title: model.titled ?? head.title ?? model.title ?? head.task ?? "Session …\(key.sessionId.suffix(6))",
                 project: projectId.map { String($0.split(whereSeparator: { $0 == "/" || $0 == ":" }).last ?? "") } ?? "",
-                branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
+                projectId: projectId, branch: model.branch ?? "", worktree: model.worktree ?? "", machine: machineName,
                 machineOffline: host.map { !$0.online } ?? false,
                 state: state, activity: model.activity,
                 age: Timestamp.age(model.updatedAt, now: now), prs: model.prs,

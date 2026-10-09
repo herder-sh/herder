@@ -376,7 +376,7 @@ struct SessionLink: View {
     }
 
     private var row: some View {
-        SessionRow(session: session, showsProject: showsProject)
+        SessionRow(session: session, showsProject: showsProject, projectIcon: fleet.projectIcon(session.projectId))
             .padding(.horizontal, 8)
     }
 }

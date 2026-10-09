@@ -98,6 +98,8 @@ struct ListsTests {
         ])
         #expect(lists.projects.map(\.name) == ["Demo"])
         #expect(lists.projects[0].machines == ["alpha", "beta"])
+        // Rows carry the project's id, so they can show its icon.
+        #expect(lists.projects[0].sessions.map(\.projectId) == ["github.com/acme/demo", "github.com/acme/demo"])
     }
 
     @Test func taskTreesStayWholeAndGoToArchivedOnlyWhenAllOfThemIs() {
