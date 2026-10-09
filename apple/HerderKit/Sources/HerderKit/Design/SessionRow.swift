@@ -78,13 +78,17 @@ struct SessionRow: View {
     }
 }
 
-/// The session being written and not sent yet, laid out as a session row but dashed and
-/// quiet, so it reads as a draft.
+/// A session being written and not sent yet, laid out as a session row but dashed and quiet,
+/// so it reads as a draft: a click opens it, the cross drops it.
 struct DraftCard: View {
     let draft: Draft
     let fleet: Fleet
     /// The prompt as typed so far.
     let text: String
+    /// Whether it is the draft open beside the list.
+    let open: Bool
+    let select: () -> Void
+    let drop: () -> Void
 
     var body: some View {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,6 +108,15 @@ struct DraftCard: View {
                     Text("Draft")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Theme.tertiary)
+                    Button(action: drop) {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Theme.tertiary)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Drop Draft")
+                    .accessibilityLabel("Drop draft")
                 }
                 Text("Not sent yet")
                     .font(.subheadline)
@@ -120,13 +133,18 @@ struct DraftCard: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface.opacity(0.5), in: .rect(cornerRadius: Theme.corner))
+        .background(Theme.surface.opacity(open ? 1 : 0.5), in: .rect(cornerRadius: Theme.corner))
         .overlay {
             RoundedRectangle(cornerRadius: Theme.corner)
-                .strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                .strokeBorder(open ? Theme.secondary : Theme.stroke, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
         }
+        .contentShape(.rect)
+        .onTapGesture(perform: select)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(prompt.isEmpty ? "New session draft" : "Draft: \(prompt)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { select() }
+        .accessibilityAction(named: "Drop Draft") { drop() }
     }
 
     /// The draft's project, or the folder of its path.
