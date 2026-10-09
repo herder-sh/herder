@@ -969,6 +969,9 @@ struct MachineSettingsSheet: View {
                     .padding(12)
                     .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
                 }
+                if machine.role == .owner && machine.connection == .connected && machine.hosts.isEmpty {
+                    BackupField(fleet: fleet, machine: machine)
+                }
                 Field(label: "Accounts",
                       hint: "A session at its limit rotates to another of the provider's accounts.") {
                     VStack(alignment: .leading, spacing: 8) {
