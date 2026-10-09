@@ -371,6 +371,16 @@ impl Auth {
             .map(|user| user.user_id.clone())
     }
 
+    /// The role of `user_id`; `None` once no such user is paired.
+    pub fn role(&self, user_id: &UserId) -> Option<Role> {
+        self.lock()
+            .users
+            .users
+            .iter()
+            .find(|user| &user.user_id == user_id)
+            .map(|user| user.role)
+    }
+
     /// Every paired device with its user, oldest first.
     pub fn devices(&self) -> Vec<(Device, User)> {
         let state = self.lock();
@@ -451,11 +461,11 @@ impl Auth {
     }
 }
 
-/// Refuses commands the identity's role does not allow: terminals, and so adding accounts or
+/// Refuses commands `role` does not allow: terminals, and so adding accounts or
 /// logging them in again, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
 /// sessions onto the host, and changing the skill library or which of its skills are enabled are for owners only.
-pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), ErrorInfo> {
+pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
     let terminal = matches!(
         command,
         CommandBody::OpenTerminal { .. }
@@ -467,15 +477,15 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::ResizeTerminal { .. }
             | CommandBody::TerminalInput { .. }
     );
-    if terminal && identity.role != Role::Owner {
+    if terminal && role != Role::Owner {
         return Err(forbidden("terminals are for the daemon's owners only"));
     }
-    if matches!(command, CommandBody::ComposeDown { .. }) && identity.role != Role::Owner {
+    if matches!(command, CommandBody::ComposeDown { .. }) && role != Role::Owner {
         return Err(forbidden(
             "bringing down containers is for the daemon's owners only",
         ));
     }
-    if matches!(command, CommandBody::SetAccountSettings { .. }) && identity.role != Role::Owner {
+    if matches!(command, CommandBody::SetAccountSettings { .. }) && role != Role::Owner {
         return Err(forbidden(
             "changing accounts is for the daemon's owners only",
         ));
@@ -487,7 +497,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::SetResourceLimits { .. }
             | CommandBody::RestartDaemon
     );
-    if settings && identity.role != Role::Owner {
+    if settings && role != Role::Owner {
         return Err(forbidden("the daemon's settings are for its owners only"));
     }
     let host = matches!(
@@ -499,7 +509,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::RemoveProject { .. }
             | CommandBody::SetProjectIcon { .. }
     );
-    if host && identity.role != Role::Owner {
+    if host && role != Role::Owner {
         return Err(forbidden(
             "browsing folders and changing projects are for the daemon's owners only",
         ));
@@ -512,7 +522,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::PairVaultHost { .. }
             | CommandBody::RevokeVaultHost { .. }
     );
-    if backup && identity.role != Role::Owner {
+    if backup && role != Role::Owner {
         return Err(forbidden(
             "backing up to a vault is for the daemon's owners only",
         ));
@@ -520,7 +530,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
     if matches!(
         command,
         CommandBody::ForkSession { .. } | CommandBody::UploadHistory { .. }
-    ) && identity.role != Role::Owner
+    ) && role != Role::Owner
     {
         return Err(forbidden(
             "forking sessions onto this host is for the daemon's owners only",
@@ -535,7 +545,7 @@ pub fn authorize(identity: &Identity, command: &CommandBody) -> Result<(), Error
             | CommandBody::PullSkills
             | CommandBody::SetSkillEnabled { .. }
     );
-    if skills && identity.role != Role::Owner {
+    if skills && role != Role::Owner {
         return Err(forbidden(
             "changing the skill library is for the daemon's owners only",
         ));
@@ -899,10 +909,10 @@ mod tests {
             label: "Work".into(),
             config_dir: None,
         };
-        assert!(authorize(&alice, &command).is_ok());
+        assert!(authorize(alice.role, &command).is_ok());
         alice.role = Role::Member;
         assert_eq!(
-            authorize(&alice, &command).unwrap_err().code,
+            authorize(alice.role, &command).unwrap_err().code,
             ErrorCode::Forbidden
         );
     }
@@ -917,10 +927,10 @@ mod tests {
             cols: 80,
             rows: 24,
         };
-        assert!(authorize(&alice, &command).is_ok());
+        assert!(authorize(alice.role, &command).is_ok());
         alice.role = Role::Member;
         assert_eq!(
-            authorize(&alice, &command).unwrap_err().code,
+            authorize(alice.role, &command).unwrap_err().code,
             ErrorCode::Forbidden
         );
     }
@@ -935,10 +945,10 @@ mod tests {
             cols: 80,
             rows: 24,
         };
-        assert!(authorize(&alice, &command).is_ok());
+        assert!(authorize(alice.role, &command).is_ok());
         alice.role = Role::Member;
         assert_eq!(
-            authorize(&alice, &command).unwrap_err().code,
+            authorize(alice.role, &command).unwrap_err().code,
             ErrorCode::Forbidden
         );
     }
@@ -960,12 +970,12 @@ mod tests {
             CommandBody::RestartDaemon,
         ];
         for command in &commands {
-            assert!(authorize(&alice, command).is_ok());
+            assert!(authorize(alice.role, command).is_ok());
         }
         alice.role = Role::Member;
         for command in &commands {
             assert_eq!(
-                authorize(&alice, command).unwrap_err().code,
+                authorize(alice.role, command).unwrap_err().code,
                 ErrorCode::Forbidden
             );
         }

@@ -20,7 +20,7 @@ use std::time::Duration;
 use herder_protocol::{
     Account, AttachmentId, Batch, CommandBody, CommandId, CommandResult, ErrorCode, ErrorInfo,
     Event, EventBody, FleetHost, HostId, HostUsage, IMAGE_NOT_BACKED_UP, Seq, SessionHead,
-    SessionId, Timestamp, VaultVolume,
+    SessionId, Timestamp, UserId, VaultVolume,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -31,7 +31,7 @@ use super::blocking;
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::session::EventSink;
-use crate::ws::{Backend, Identity};
+use crate::ws::Backend;
 
 /// The vault's sessions as the client server sees them.
 #[derive(Clone)]
@@ -330,7 +330,7 @@ impl Backend for Fleet {
 
     async fn command(
         &self,
-        _: &Identity,
+        _: &UserId,
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {

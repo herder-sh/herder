@@ -13,7 +13,7 @@ mod tls;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use herder_protocol::{
@@ -32,11 +32,12 @@ pub(crate) type Ws =
     tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>;
 
 use crate::auth::control::addresses;
-use crate::auth::{Auth, PAIRING_TTL};
+use crate::auth::{self, Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
 use crate::login::{Login, Logins, NewAccount};
+use crate::mcp::{Control, ControlFuture, Overview};
 use crate::providers::Providers;
 use crate::session::SessionManager;
 use crate::settings::Settings;
@@ -77,12 +78,12 @@ pub trait Backend: Send + Sync + 'static {
         limit: usize,
     ) -> impl Future<Output = anyhow::Result<Vec<Event>>> + Send;
 
-    /// Applies `identity`'s command `command_id`; an error rejects it with nothing changed.
+    /// Applies `user_id`'s command `command_id`; an error rejects it with nothing changed.
     /// Each command id reaches here once per daemon, unless it was rejected; an id accepted
     /// before a restart must be answered with its first result, not applied again.
     fn command(
         &self,
-        identity: &Identity,
+        user_id: &UserId,
         command_id: &CommandId,
         command: CommandBody,
     ) -> impl Future<Output = Result<CommandResult, ErrorInfo>> + Send;
@@ -122,11 +123,11 @@ impl Backend for SessionManager {
 
     async fn command(
         &self,
-        identity: &Identity,
+        user_id: &UserId,
         command_id: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
-        self.handle_once(identity.user_id.clone(), command_id.clone(), command)
+        self.handle_once(user_id.clone(), command_id.clone(), command)
             .await
     }
 
@@ -169,8 +170,9 @@ struct Shared<B> {
 }
 
 impl<B: Backend> Shared<B> {
-    /// Applies command `command_id` from the connection with `outbox`: terminal commands here,
-    /// as they act on the connection and die with the daemon, the rest in the backend.
+    /// Applies command `command_id` from the connection with `outbox`: terminal commands and
+    /// pairing a device here, as they act on the connection or its device, the rest in
+    /// [`Shared::run`].
     async fn apply(
         &self,
         identity: &Identity,
@@ -238,15 +240,6 @@ impl<B: Backend> Shared<B> {
                 });
                 return open_install(terminals, provider, command, cols, rows, outbox, on_exit);
             }
-            CommandBody::SetAccountSettings {
-                account_id,
-                label,
-                config_dir,
-            } => {
-                self.logins
-                    .set_settings(&account_id, &label, config_dir.as_deref())
-                    .await?;
-            }
             CommandBody::AttachTerminal { terminal_id } => {
                 terminals.attach(&terminal_id, outbox)?
             }
@@ -261,29 +254,50 @@ impl<B: Backend> Shared<B> {
             CommandBody::TerminalInput { terminal_id, data } => {
                 terminals.input(&terminal_id, outbox, data.0).await?;
             }
+            CommandBody::PairDevice => return self.pair_device(identity),
+            command => return self.run(&identity.user_id, command_id, command).await,
+        }
+        Ok(CommandResult::Applied)
+    }
+
+    /// Applies `user_id`'s command `command_id` that needs no connection: every command but
+    /// the terminal ones and pairing a device.
+    async fn run(
+        &self,
+        user_id: &UserId,
+        command_id: &CommandId,
+        command: CommandBody,
+    ) -> Result<CommandResult, ErrorInfo> {
+        match command {
+            CommandBody::SetAccountSettings {
+                account_id,
+                label,
+                config_dir,
+            } => {
+                self.logins
+                    .set_settings(&account_id, &label, config_dir.as_deref())
+                    .await?;
+                Ok(CommandResult::Applied)
+            }
             command @ (CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
             | CommandBody::UnlinkVault)
                 if let Some(link) = self.link.get() =>
             {
-                return link.command(command).await;
+                link.command(command).await
             }
-            CommandBody::PairDevice => return self.pair_device(identity),
             command @ (CommandBody::GetSettings
             | CommandBody::SetSettings { .. }
             | CommandBody::SetResourceLimits { .. }
-            | CommandBody::RestartDaemon) => {
-                return match self.settings.get() {
-                    Some(settings) => settings.command(command).await,
-                    None => Err(ErrorInfo {
-                        code: ErrorCode::Unsupported,
-                        message: "this daemon's settings are not changed from a client".to_owned(),
-                    }),
-                };
-            }
-            command => return self.backend.command(identity, command_id, command).await,
+            | CommandBody::RestartDaemon) => match self.settings.get() {
+                Some(settings) => settings.command(command).await,
+                None => Err(ErrorInfo {
+                    code: ErrorCode::Unsupported,
+                    message: "this daemon's settings are not changed from a client".to_owned(),
+                }),
+            },
+            command => self.backend.command(user_id, command_id, command).await,
         }
-        Ok(CommandResult::Applied)
     }
 
     /// A one-time code that pairs another device as `identity`'s user, with this daemon's
@@ -355,6 +369,78 @@ fn open_install(
     Ok(CommandResult::TerminalOpened { terminal_id })
 }
 
+/// The server's [`Control`], for agents; weak, as the session manager that holds it is the
+/// server's backend.
+struct AgentControl<B>(Weak<Shared<B>>);
+
+impl<B: Backend> AgentControl<B> {
+    fn shared(&self) -> Result<Arc<Shared<B>>, ErrorInfo> {
+        self.0.upgrade().ok_or_else(|| ErrorInfo {
+            code: ErrorCode::Internal,
+            message: "the daemon is shutting down".to_owned(),
+        })
+    }
+}
+
+impl<B: Backend> Control for AgentControl<B> {
+    fn overview(&self) -> ControlFuture<Overview> {
+        let shared = self.shared();
+        Box::pin(async move {
+            let shared = shared?;
+            let sessions = shared.backend.sessions().await.map_err(|err| ErrorInfo {
+                code: ErrorCode::Internal,
+                message: format!("{err:#}"),
+            })?;
+            Ok(Overview {
+                sessions,
+                projects: shared.hub.projects(),
+                accounts: shared.backend.accounts(),
+            })
+        })
+    }
+
+    fn command(&self, user_id: UserId, command: CommandBody) -> ControlFuture<CommandResult> {
+        let shared = self.shared();
+        Box::pin(async move {
+            let shared = shared?;
+            let connection = matches!(
+                command,
+                CommandBody::OpenTerminal { .. }
+                    | CommandBody::AttachTerminal { .. }
+                    | CommandBody::DetachTerminal { .. }
+                    | CommandBody::ResizeTerminal { .. }
+                    | CommandBody::TerminalInput { .. }
+                    | CommandBody::AddAccount { .. }
+                    | CommandBody::LogInAccount { .. }
+                    | CommandBody::InstallProvider { .. }
+            );
+            let pairing = matches!(
+                command,
+                CommandBody::PairDevice | CommandBody::PairVaultHost { .. }
+            );
+            if connection || pairing {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "terminals, logins, installs and pairing codes are never run for \
+                              an agent; ask the user to do this in a herder app"
+                        .to_owned(),
+                });
+            }
+            let Some(role) = shared.auth.role(&user_id) else {
+                return Err(ErrorInfo {
+                    code: ErrorCode::Forbidden,
+                    message: "the user who started this session is no longer paired with this \
+                              daemon"
+                        .to_owned(),
+                });
+            };
+            auth::authorize(role, &command)?;
+            let command_id = CommandId::new(ulid::Ulid::new().to_string());
+            shared.run(&user_id, &command_id, command).await
+        })
+    }
+}
+
 impl<B: Backend> Server<B> {
     /// A server for `backend` and `terminals`, adding accounts through `logins`, whose events
     /// reach clients through `hub`; `auth` decides who may connect.
@@ -383,6 +469,11 @@ impl<B: Backend> Server<B> {
                 providers: OnceLock::new(),
             }),
         }
+    }
+
+    /// The commands this server runs for clients, for agents to run through MCP.
+    pub fn control(&self) -> Arc<dyn Control> {
+        Arc::new(AgentControl(Arc::downgrade(&self.shared)))
     }
 
     /// Answers install and the providers list with `providers`; once per server.

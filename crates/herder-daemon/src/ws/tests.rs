@@ -13,7 +13,7 @@ use herder_protocol::{
     Account, AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
     Cursor, DaemonSettings, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
     PROTOCOL_VERSION, PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
-    SessionId, Terminal, TerminalPurpose, TurnId,
+    SessionId, Terminal, TerminalPurpose, TurnId, UserId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -26,10 +26,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
-use super::{Backend, Host, Identity, Server, Tls};
+use super::{Backend, Host, Server, Tls};
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::login::Logins;
+use crate::mcp::Control;
 use crate::session::EventSink;
 use crate::settings::{self, Settings};
 use crate::terminal::Terminals;
@@ -99,7 +100,7 @@ impl Backend for TestBackend {
 
     async fn command(
         &self,
-        _: &Identity,
+        _: &UserId,
         _: &CommandId,
         command: CommandBody,
     ) -> Result<CommandResult, ErrorInfo> {
@@ -159,6 +160,8 @@ struct Daemon {
     shutdown: CancellationToken,
     /// The daemon's config file, which the settings commands change.
     config: PathBuf,
+    /// The commands the server runs for agents.
+    control: Arc<dyn Control>,
     _tmp: tempfile::TempDir,
 }
 
@@ -215,6 +218,7 @@ impl Daemon {
             shutdown.clone(),
         );
         server.manage_settings(Arc::new(settings)).unwrap();
+        let control = server.control();
         tokio::spawn(server.run(vec![listener, other_listener], shutdown.clone()));
         Arc::new(Self {
             addr,
@@ -227,6 +231,7 @@ impl Daemon {
             commands,
             shutdown,
             config,
+            control,
             _tmp: tmp,
         })
     }
@@ -1505,4 +1510,77 @@ async fn a_restart_is_answered_before_the_daemon_stops() {
         .await
         .unwrap();
     assert!(settings::restart_requested());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_run_commands_as_their_user_within_its_role() {
+    let daemon = Daemon::start().await;
+    let owner = daemon.client().await.hello(Vec::new()).await.user_id;
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let member = daemon
+        .client_on(&device, Some(&code))
+        .await
+        .hello(Vec::new())
+        .await
+        .user_id;
+    let control = &daemon.control;
+    let browse = || CommandBody::ListDirectory { path: "/".into() };
+
+    assert!(matches!(
+        control.command(owner.clone(), browse()).await,
+        Ok(CommandResult::Directory { .. })
+    ));
+    assert!(matches!(
+        control
+            .command(owner.clone(), CommandBody::GetSettings)
+            .await,
+        Ok(CommandResult::Settings { .. })
+    ));
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+
+    // A member's agent gets a member's rights only.
+    for command in [browse(), CommandBody::GetSettings] {
+        let error = control.command(member.clone(), command).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+
+    // No agent opens a terminal or mints a pairing code, whoever it acts for; nor does one
+    // whose user is gone.
+    let refused = [
+        CommandBody::OpenTerminal {
+            session_id: SessionId::new("s1"),
+            cols: 80,
+            rows: 24,
+        },
+        CommandBody::LogInAccount {
+            account_id: AccountId::new("claude-main"),
+            cols: 80,
+            rows: 24,
+        },
+        CommandBody::PairDevice,
+        CommandBody::PairVaultHost {
+            host_name: "devbox".into(),
+        },
+    ];
+    for command in refused {
+        let error = control.command(owner.clone(), command).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+    let gone = control
+        .command(UserId::new("gone"), browse())
+        .await
+        .unwrap_err();
+    assert_eq!(gone.code, ErrorCode::Forbidden);
+    assert_eq!(daemon.commands.load(Ordering::SeqCst), 1);
+
+    let overview = control.overview().await.unwrap();
+    assert_eq!(
+        overview
+            .accounts
+            .iter()
+            .map(|account| account.account_id.as_str())
+            .collect::<Vec<_>>(),
+        ["claude-main"]
+    );
 }

@@ -24,6 +24,13 @@
 //! Newline-delimited JSON-RPC 2.0, as MCP's stdio transport: `initialize`, `ping`, `tools/list`
 //! and `tools/call`; notifications are ignored. Calls run concurrently, since `wait_for` blocks,
 //! and go to a [`ToolHandler`].
+//!
+//! # Driving herder
+//!
+//! `overview` and `command` let an agent drive the daemon it runs in as the herder apps do,
+//! through [`Control`]. A command runs as the user who created the agent's session (for a
+//! child, its primary's), with that user's current role, under the same checks as their
+//! clients' commands.
 
 mod rpc;
 mod shim;
@@ -38,7 +45,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use herder_adapters::McpServer;
-use herder_protocol::SessionId;
+use herder_protocol::{
+    Account, CommandBody, CommandResult, ErrorInfo, Project, SessionHead, SessionId, UserId,
+};
 use herder_tasktools::{CallToolResult, ToolCall};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
@@ -77,6 +86,31 @@ pub trait ToolHandler: Send + Sync + 'static {
 
 /// What [`ToolHandler::call`] returns.
 pub type ToolFuture = Pin<Box<dyn Future<Output = CallToolResult> + Send>>;
+
+/// The daemon as its apps drive it, for the `overview` and `command` tools: the WebSocket
+/// server runs the same commands for clients.
+pub trait Control: Send + Sync + 'static {
+    /// Every session, project and account on this host.
+    fn overview(&self) -> ControlFuture<Overview>;
+
+    /// Runs `command` as `user_id`, with that user's role, as a client of theirs would. Refuses
+    /// commands that need a connection (terminals, and so adding or logging in accounts and
+    /// installing providers) or mint a pairing code, which an agent must never get.
+    fn command(&self, user_id: UserId, command: CommandBody) -> ControlFuture<CommandResult>;
+}
+
+/// What [`Control`] returns.
+pub type ControlFuture<T> = Pin<Box<dyn Future<Output = Result<T, ErrorInfo>> + Send>>;
+
+/// What [`Control::overview`] returns.
+pub struct Overview {
+    /// Every session.
+    pub sessions: Vec<SessionHead>,
+    /// Every project with a clone on this host.
+    pub projects: Vec<Project>,
+    /// Every account.
+    pub accounts: Vec<Account>,
+}
 
 /// The running MCP server: grants sessions their tokens and serves their shims.
 pub struct Mcp {
