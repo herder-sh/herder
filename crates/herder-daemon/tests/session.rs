@@ -27,10 +27,10 @@ use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_protocol::{
     Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
     Attachment, AttachmentId, Bytes, CommandBody, CommandId, CommandResult, Constraint, ErrorClass,
-    ErrorCode, ErrorInfo, Event, EventBody, FILE_MEDIA_TYPE, HostId, Image, Item, ItemBody, ItemId,
-    MAX_FILE_BYTES, MAX_TITLE_CHARS, PermissionMode, Project, ProjectId, PromptFile, PromptId,
-    Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TitleSource, TurnError,
-    TurnId, TurnUsage, UsageWindow, UserId,
+    ErrorCode, ErrorInfo, Event, EventBody, FILE_MEDIA_TYPE, FailoverTotal, HostId, Image, Item,
+    ItemBody, ItemId, MAX_FILE_BYTES, MAX_TITLE_CHARS, PermissionMode, Project, ProjectId,
+    PromptFile, PromptId, Provider, QuestionId, SessionHead, SessionId, SessionStatus, Timestamp,
+    TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageWindow, UserId,
 };
 use herder_store::{NativeSession, Store};
 use jiff::SignedDuration;
@@ -3875,6 +3875,52 @@ async fn a_retry_that_hits_a_limit_too_is_not_retried_again() {
         ]
     );
     assert_eq!(claude.starts().len(), 2);
+    daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn the_usage_summary_counts_each_accounts_limit_hits_and_failovers_but_not_a_users_switch() {
+    let dir = tempfile::tempdir().unwrap();
+    let claude = Scripted::new(&["failover_limit.jsonl", "failover_retry_limit.jsonl"]);
+    let mut daemon = Switching::open(
+        dir.path(),
+        &[(Provider::Claude, claude.clone())],
+        &[
+            ("claude-a", Provider::Claude),
+            ("claude-b", Provider::Claude),
+            ("claude-c", Provider::Claude),
+        ],
+        Vec::new(),
+    )
+    .await;
+    let session = daemon.create("claude-a").await;
+    daemon.send(&session, "Refactor the parser.").await;
+    daemon.settled(&session, SessionStatus::NeedsYou).await;
+    // alice moves the session on herself: no failover.
+    assert_eq!(
+        daemon.handle(switch_account(&session, "claude-c")).await,
+        Ok(CommandResult::Applied)
+    );
+
+    let summary = daemon
+        .handle(CommandBody::GetUsageSummary {
+            period: UsagePeriod::Day,
+        })
+        .await
+        .unwrap();
+    let CommandResult::UsageSummary { failovers, .. } = summary else {
+        panic!("expected a usage summary, got {summary:?}");
+    };
+    let total = |account: &str, limit_hits, failovers_out, failovers_in| FailoverTotal {
+        account_id: AccountId::new(account),
+        limit_hits,
+        failovers_out,
+        failovers_in,
+    };
+    assert_eq!(
+        failovers,
+        [total("claude-a", 1, 1, 0), total("claude-b", 1, 0, 1)]
+    );
     daemon.shutdown.cancel();
 }
 

@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use anyhow::{Context, Result, anyhow};
 use herder_protocol::{
-    CommandId, CommandResult, Event, EventBody, HostId, JournalRecord, Project, ProjectId,
-    PromptId, PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary, Timestamp,
-    UsageTotal, UserId,
+    CommandId, CommandResult, Event, EventBody, FailoverTotal, HostId, JournalRecord, Project,
+    ProjectId, PromptId, PullRequest, Seq, SessionHead, SessionId, SessionStatus, SessionSummary,
+    Timestamp, UsageTotal, UserId,
 };
 use herder_store::{NativeSession, NewEvent, QueuedPrompt, Session, Store};
 
@@ -243,6 +243,12 @@ impl Journal {
     /// The usage of the turns completed since `since`, per account and model.
     pub(super) async fn usage_totals(&self, since: Timestamp) -> Result<Vec<UsageTotal>> {
         self.with_store(move |store| store.usage_totals(since))
+            .await
+    }
+
+    /// Each account's limit hits and failovers since `since`.
+    pub(super) async fn failover_totals(&self, since: Timestamp) -> Result<Vec<FailoverTotal>> {
+        self.with_store(move |store| store.failover_totals(since))
             .await
     }
 

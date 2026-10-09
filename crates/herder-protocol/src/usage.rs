@@ -93,3 +93,17 @@ pub struct UsageTotal {
     /// `cost_usd`.
     pub cost_estimated: bool,
 }
+
+/// How often one account hit its limit, and how often the daemon failed sessions over off it
+/// and onto it, over a period, on one daemon.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FailoverTotal {
+    /// The account.
+    pub account_id: AccountId,
+    /// Turns that failed on the account with `limit_reached`, retries included.
+    pub limit_hits: u64,
+    /// Sessions the daemon moved off the account after it hit its limit.
+    pub failovers_out: u64,
+    /// Sessions the daemon moved onto the account off another that hit its limit.
+    pub failovers_in: u64,
+}

@@ -1086,6 +1086,7 @@ async fn usage_summary(daemon: &Daemon, by: UserId, period: UsagePeriod) -> Vec<
         period: answered,
         since,
         totals,
+        ..
     } = result
     else {
         panic!("expected a usage summary, got {result:?}");

@@ -839,10 +839,17 @@ impl SessionManager {
                     .usage_totals(since)
                     .await
                     .map_err(internal)?;
+                let failovers = self
+                    .inner
+                    .journal
+                    .failover_totals(since)
+                    .await
+                    .map_err(internal)?;
                 return Ok(CommandResult::UsageSummary {
                     period,
                     since,
                     totals,
+                    failovers,
                 });
             }
         };

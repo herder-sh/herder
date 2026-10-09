@@ -13,15 +13,15 @@ use herder_protocol::{
     ApprovalId, ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus,
     CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings,
     DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody,
-    FailoverSettings, FleetHost, FollowUp, FollowUpReason, FollowUpSettings, HistoryPart, HostId,
-    HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill,
-    LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState, Pressure, Project,
-    ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
-    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
-    Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile,
-    SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp,
-    TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow,
-    UserId, VaultStatus, VaultVolume,
+    FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings,
+    HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId,
+    LibrarySkill, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState,
+    Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
+    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings,
+    ReviewStatus, Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage,
+    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
+    UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -800,6 +800,7 @@ pub enum CommandResult {
         period: UsagePeriod,
         since: Timestamp,
         totals: Vec<UsageTotal>,
+        failovers: Vec<FailoverTotal>,
     },
     VaultLink {
         is_vault: bool,
@@ -1136,6 +1137,14 @@ pub struct UsageTotal {
     pub cache_write: u64,
     pub cost_usd: f64,
     pub cost_estimated: bool,
+}
+
+#[uniffi::remote(Record)]
+pub struct FailoverTotal {
+    pub account_id: AccountId,
+    pub limit_hits: u64,
+    pub failovers_out: u64,
+    pub failovers_in: u64,
 }
 
 #[uniffi::remote(Record)]

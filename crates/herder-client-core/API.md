@@ -1,6 +1,6 @@
 # herder-client-core public API
 
-`CLIENT_API_VERSION = 11`
+`CLIENT_API_VERSION = 12`
 
 This is the reviewed reference for the API the TUI, the `herder` CLI and the native apps
 (SwiftUI, GTK4, Compose) build on. The rustdoc of each item is the detailed contract; this file
@@ -284,6 +284,12 @@ not the ones the sharer reached it on. The new device gets its own key on every 
 revocable on its own; the sharer's keys never leave it. The share is one-time: machines
 paired later are not passed on.
 
+## Changes in version 12
+
+| Before | Now | Why |
+| ------ | --- | --- |
+| `CommandResult::UsageSummary { period, since, totals }` | `CommandResult::UsageSummary { period, since, totals, failovers }` (`FailoverTotal`) | Apps show each account's limit hits and failovers next to its tokens and cost. The wire change is additive (protocol 5); a new field breaks native code that matches the variant. |
+
 ## Changes in version 11
 
 | Before | Now | Why |
@@ -473,3 +479,11 @@ one `UsageTotal` per account and model with a turn on that daemon's host in the 
 Owners and members may ask; each daemon answers for its own host, and a client adds its
 machines' answers up. The wire change is additive (protocol 4); the native shape of
 `TurnCompleted` and `CommandResult` changes (client API 10).
+
+`UsageSummary.failovers` (client API 12) has one `FailoverTotal` per account with a limit hit
+or failover on that daemon in the period: `limit_hits`, the turns that failed with
+`limit_reached` on it, retries included; `failovers_out`, the sessions the daemon moved off
+it after a limit hit; and `failovers_in`, those it moved onto it. A switch a user makes is no
+failover. Each daemon counts its own journal, a fork's copy of another session's history
+left out, so a client adds its machines' answers up as it does `totals`. A daemon from before
+it answers none.

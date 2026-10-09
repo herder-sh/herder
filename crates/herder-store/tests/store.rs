@@ -7,10 +7,10 @@ use std::thread;
 use std::time::Duration;
 
 use herder_protocol::{
-    AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, Event, EventBody,
-    HostId, Item, ItemBody, ItemId, JournalRecord, Mergeable, PermissionMode, PrState, PromptId,
-    Provider, PullRequest, ReviewStatus, SessionId, SessionStatus, Timestamp, TitleSource, TurnId,
-    TurnUsage, UsageTotal, UserId,
+    AccountId, Attachment, AttachmentId, CiStatus, CommandId, CommandResult, ErrorClass, Event,
+    EventBody, FailoverTotal, HostId, Item, ItemBody, ItemId, JournalRecord, Mergeable,
+    PermissionMode, PrState, PromptId, Provider, PullRequest, ReviewStatus, SessionId,
+    SessionStatus, Timestamp, TitleSource, TurnError, TurnId, TurnUsage, UsageTotal, UserId,
 };
 use herder_store::{
     COMMAND_RESULTS_KEPT, Error, NativeSession, NewEvent, QueuedPrompt, Session, Store,
@@ -662,7 +662,7 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     };
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
 
     // Back to the v13 schema, where every session had a branch; reopening rebuilds the
     // sessions table and keeps them.
@@ -680,12 +680,12 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              DROP TABLE sessions;
              ALTER TABLE sessions_v13 RENAME TO sessions;
              CREATE INDEX sessions_parent ON sessions (parent);
-             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 13;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 13;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     assert_eq!(
         store.session(&s).unwrap().unwrap().branch.as_deref(),
         Some("feature")
@@ -707,11 +707,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN parent_host; DROP TABLE turn_usage;
-             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 11;",
+             ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 11;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     assert_eq!(store.session(&s).unwrap().unwrap().parent_host, None);
     drop(store);
 
@@ -722,11 +722,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
         .execute_batch(
             "ALTER TABLE sessions DROP COLUMN parent_host;
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
-             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 7;",
+             ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 7;",
         )
         .unwrap();
     let store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.title, session.title_source), (None, None));
     drop(store);
@@ -740,11 +740,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch; DROP TABLE native_sessions;
              ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
-             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 4;",
+             ALTER TABLE queued_prompts DROP COLUMN attachments; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 4;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     let mut untracked = pr(7, PrState::Open);
     untracked.head_branch = None;
     assert_eq!(store.session_prs(&s).unwrap(), [untracked]);
@@ -772,11 +772,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN title; ALTER TABLE sessions DROP COLUMN title_source;
              ALTER TABLE session_prs DROP COLUMN head_branch;
              DROP TABLE session_branches; DROP TABLE command_results; DROP TABLE queued_prompts;
-             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 2;",
+             DROP TABLE native_sessions; DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 2;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     store
         .append(new_event(&s, 1, checked_out("spike")))
@@ -799,11 +799,11 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
              ALTER TABLE sessions DROP COLUMN task;
              ALTER TABLE sessions DROP COLUMN title;
              ALTER TABLE sessions DROP COLUMN title_source;
-             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 1;",
+             DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 1;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(version(&path), 15);
+    assert_eq!(version(&path), 16);
     assert_eq!(store.session_branches(&s).unwrap(), ["feature"]);
     let session = store.session(&s).unwrap().unwrap();
     assert_eq!((session.parent, session.task), (None, None));
@@ -824,13 +824,13 @@ fn migrations_create_reopen_and_refuse_newer_schemas() {
 
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 16)
+        .pragma_update(None, "user_version", 17)
         .unwrap();
     assert!(matches!(
         Store::open(&path),
         Err(Error::TooNew {
-            found: 16,
-            supported: 15
+            found: 17,
+            supported: 16
         })
     ));
 }
@@ -862,7 +862,7 @@ fn v15_keeps_pull_requests_tracked_before_without_a_head_commit() {
         .unwrap()
         .execute_batch(
             "ALTER TABLE session_prs DROP COLUMN head_sha;
-             ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 14;",
+             ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 14;",
         )
         .unwrap();
     let mut store = Store::open(&path).unwrap();
@@ -880,6 +880,32 @@ fn v15_keeps_pull_requests_tracked_before_without_a_head_commit() {
 }
 
 #[test]
+fn v16_indexes_events_by_type_and_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let s = SessionId::new("s1");
+    {
+        let mut store = Store::open(&path).unwrap();
+        store.append(new_event(&s, 0, created())).unwrap();
+    }
+    // Back to the v15 schema, as a build before failover totals left it.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP INDEX events_type_at; PRAGMA user_version = 15;")
+        .unwrap();
+    drop(Store::open(&path).unwrap());
+    let indexed: u32 = Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'events_type_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1);
+}
+
+#[test]
 fn v13_adds_an_empty_turn_usage_table() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("herder.db");
@@ -891,7 +917,7 @@ fn v13_adds_an_empty_turn_usage_table() {
     // Back to the v12 schema, as a build before turn usage left it.
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 12;")
+        .execute_batch("DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 12;")
         .unwrap();
     let store = Store::open(&path).unwrap();
     assert_eq!(store.latest_seq(&s).unwrap(), 1);
@@ -1245,6 +1271,99 @@ fn turn_usage_adds_up_per_account_and_model_since_a_time_and_survives_a_reopen()
 }
 
 #[test]
+fn failover_totals_count_limit_hits_and_automatic_switches_in_the_period() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("herder.db");
+    let mut store = Store::open(&path).unwrap();
+    let (s1, fork) = (SessionId::new("s1"), SessionId::new("fork"));
+    let ms = |ms: i64| Timestamp::from_millisecond(at(0).as_millisecond() + ms).unwrap();
+    let failed = |class| EventBody::TurnFailed {
+        turn_id: TurnId::new("t"),
+        error: TurnError {
+            class,
+            message: "no".into(),
+        },
+    };
+    let switched = |account: &str| EventBody::AccountSwitched {
+        account_id: AccountId::new(account),
+    };
+    let append = |store: &mut Store, session: &SessionId, at, by: Option<&str>, body| {
+        store
+            .append(NewEvent {
+                session_id: session.clone(),
+                at,
+                by: by.map(UserId::new),
+                body,
+            })
+            .unwrap()
+    };
+    let limit = || failed(ErrorClass::LimitReached);
+
+    // s1 starts on acct-1, which hits its limit long before the period and just before it.
+    let mut journal = vec![
+        append(&mut store, &s1, at(0), Some("user-1"), created()),
+        append(&mut store, &s1, at(10), None, limit()),
+        append(&mut store, &s1, ms(99_500), None, limit()),
+    ];
+    // In the period: a hit half a second in, which text order alone would put before it, and
+    // a failure of another class.
+    journal.push(append(&mut store, &s1, ms(100_500), None, limit()));
+    append(
+        &mut store,
+        &s1,
+        at(100),
+        None,
+        failed(ErrorClass::Transient),
+    );
+    // The daemon fails over to acct-2, which hits its limit too; a user then picks acct-3,
+    // which is no failover, and it hits its limit.
+    journal.push(append(&mut store, &s1, at(101), None, switched("acct-2")));
+    journal.push(append(&mut store, &s1, at(102), None, limit()));
+    append(&mut store, &s1, at(103), Some("user-1"), switched("acct-3"));
+    append(&mut store, &s1, at(104), None, limit());
+
+    // A fork of s1 copies its journal up to the failover, which counts once, in s1; the
+    // fork's own hit counts against acct-2, the account it was copied on.
+    for event in journal {
+        append(
+            &mut store,
+            &fork,
+            event.at,
+            event.by.as_ref().map(UserId::as_str),
+            event.body,
+        );
+    }
+    let body = EventBody::SessionForked {
+        from_session: s1.clone(),
+        from_host: HostId::new("host-1"),
+    };
+    append(&mut store, &fork, at(105), Some("user-1"), body);
+    append(&mut store, &fork, at(106), None, limit());
+
+    let total = |account: &str, limit_hits, failovers_out, failovers_in| FailoverTotal {
+        account_id: AccountId::new(account),
+        limit_hits,
+        failovers_out,
+        failovers_in,
+    };
+    let period = [
+        total("acct-1", 1, 1, 0),
+        total("acct-2", 2, 0, 1),
+        total("acct-3", 1, 0, 0),
+    ];
+    assert_eq!(store.failover_totals(at(100)).unwrap(), period);
+    assert_eq!(
+        store.failover_totals(at(0)).unwrap()[0],
+        total("acct-1", 3, 1, 0)
+    );
+    assert_eq!(store.failover_totals(at(107)).unwrap(), []);
+    drop(store);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.failover_totals(at(100)).unwrap(), period);
+}
+
+#[test]
 fn queued_prompts_survive_a_reopen_in_order() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("herder.db");
@@ -1342,7 +1461,7 @@ fn v8_queue_migration_preserves_prompts_with_no_deadline() {
          ALTER TABLE queued_prompts DROP COLUMN prompt_id; ALTER TABLE queued_prompts DROP COLUMN agent_message; ALTER TABLE queued_prompts DROP COLUMN retry_at;
          INSERT INTO queued_prompts (session_id, position, by, text, attachments, retry)
          VALUES ('s1', 0, 'alice', 'continue', '[]', 1);
-         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; PRAGMA user_version = 8;",
+         DROP TABLE IF EXISTS agent_message_receipts; DROP TABLE turn_usage; ALTER TABLE session_prs DROP COLUMN head_sha; ALTER TABLE session_prs DROP COLUMN unresolved_threads; DROP INDEX events_type_at; PRAGMA user_version = 8;",
         )
         .unwrap();
     drop(connection);
