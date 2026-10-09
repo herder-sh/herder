@@ -292,9 +292,12 @@ pub struct SessionHead {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Project of the session's repository, as resolved under the daemon's current config;
-    /// absent until the daemon's project discovery has seen the repository.
+    /// absent until the daemon's project discovery has seen the repository, and for a chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<ProjectId>,
+    /// Whether the session is a chat, about no project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chat: bool,
     /// Account the session runs on now.
     pub account_id: AccountId,
     /// How many of this session's children are `needs_you`; 0 for a child.

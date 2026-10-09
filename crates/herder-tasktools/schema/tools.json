@@ -849,6 +849,10 @@
                   "description": "Account the session runs on now.",
                   "type": "string"
                 },
+                "chat": {
+                  "description": "Whether the session is a chat, about no project.",
+                  "type": "boolean"
+                },
                 "children_need_you": {
                   "description": "How many of this session's children are `needs_you`; 0 for a child.",
                   "type": "integer",
@@ -883,7 +887,7 @@
                   ]
                 },
                 "project_id": {
-                  "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent until the daemon's project discovery has seen the repository.",
+                  "description": "Project of the session's repository, as resolved under the daemon's current config;\nabsent until the daemon's project discovery has seen the repository, and for a chat.",
                   "type": [
                     "string",
                     "null"

@@ -99,6 +99,7 @@ async fn share(daemons: &[support::FakeDaemon]) -> Result<String> {
                 model: None,
                 permission_mode: None,
                 failover_pin: None,
+                chat: false,
             },
         )
         .await?;

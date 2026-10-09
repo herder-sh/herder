@@ -112,6 +112,8 @@ pub struct Session {
     pub title: Option<String>,
     /// Who chose the current title; `None` while there is none.
     pub title_source: Option<TitleSource>,
+    /// Whether the session is a chat, about no project.
+    pub chat: bool,
     /// Current status; `Idle` until the first status change.
     pub status: SessionStatus,
     /// Seq of the latest event, equal to [`Store::latest_seq`].
@@ -710,7 +712,7 @@ fn queued_prompt(row: &Row<'_>) -> rusqlite::Result<QueuedPrompt> {
 
 const SESSION_SELECT: &str = "SELECT session_id, repo, worktree, branch, provider, account_id,
     model, permission_mode, parent, task, status, last_seq, updated_at, title, title_source,
-    parent_host FROM sessions";
+    parent_host, chat FROM sessions";
 
 fn latest_seq(conn: &Connection, session: &SessionId) -> Result<Seq> {
     let max: Option<Seq> = conn
@@ -748,6 +750,7 @@ fn read_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         title: row.get(13)?,
         title_source: get_tag(row, 14)?,
         parent_host: row.get::<_, Option<String>>(15)?.map(HostId::new),
+        chat: row.get(16)?,
     })
 }
 

@@ -198,6 +198,7 @@ impl Journal {
                     .get(&session.repo)
                     .cloned()
                     .unwrap_or_else(|| ProjectId::local(host, &session.repo)),
+                chat: session.chat,
                 session_id: session.session_id,
                 repo: session.repo,
                 branch: session.branch,
@@ -416,7 +417,10 @@ fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<Session
         .into_iter()
         .map(|session| SessionHead {
             host_id: None,
-            project_id: projects.by_path.get(&session.repo).cloned(),
+            project_id: (!session.chat)
+                .then(|| projects.by_path.get(&session.repo).cloned())
+                .flatten(),
+            chat: session.chat,
             children_need_you: need_you.get(&session.session_id).copied().unwrap_or(0),
             queue: queues
                 .remove(&session.session_id)

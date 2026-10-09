@@ -187,6 +187,7 @@ mod tests {
             title: None,
             head_seq: 1,
             updated_at: at,
+            chat: false,
         };
         store.put_summary(&host, &summary).unwrap();
     }

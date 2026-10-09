@@ -25,6 +25,7 @@ pub fn head(id: &str, project: Option<&str>) -> SessionHead {
         account_id: AccountId::new("claude-main"),
         children_need_you: 0,
         queue: Vec::new(),
+        chat: false,
     }
 }
 
@@ -77,6 +78,7 @@ pub fn created_in(repo: &str, branch: &str, parent: Option<&str>, task: Option<&
         parent_host: None,
         task: task.map(str::to_owned),
         failover_pin: None,
+        chat: false,
     }
 }
 

@@ -467,6 +467,10 @@
             "null"
           ]
         },
+        "chat": {
+          "description": "Whether the session is a chat, about no project.",
+          "type": "boolean"
+        },
         "head_seq": {
           "description": "Seq of the session's latest event on the host; the vault is caught up once it holds it.",
           "type": "integer",
@@ -496,7 +500,7 @@
           ]
         },
         "project_id": {
-          "description": "Project of the session's repository, as resolved under the host's current config.",
+          "description": "Project of the session's repository, as resolved under the host's current config; for\na chat, the local project id of its folder, which no project has.",
           "$ref": "#/$defs/ProjectId"
         },
         "prs": {
