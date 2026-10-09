@@ -517,8 +517,8 @@ async fn with_icons(
     projects
 }
 
-/// Every repository to resolve: those `scanned`, the session repos still there and the paths
-/// `config` declares that are directories, but none `config` excludes or `data_dir` holds.
+/// Every repository to resolve: those `scanned`, the session repos still git repositories and
+/// the paths `config` declares that are directories, but none `config` excludes or `data_dir` holds.
 fn wanted(
     config: &ProjectsConfig,
     data_dir: &Path,
@@ -527,7 +527,7 @@ fn wanted(
 ) -> BTreeSet<PathBuf> {
     let declared = config.entries.iter().flat_map(|entry| &entry.paths);
     let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
-    wanted.extend(session_repos.into_iter().filter(|path| path.is_dir()));
+    wanted.extend(session_repos.into_iter().filter(|path| scan::is_repo(path)));
     wanted.extend(declared.filter(|path| path.is_dir()).cloned());
     wanted.retain(|path| !config.exclude.contains(path) && !path.starts_with(data_dir));
     wanted

@@ -446,6 +446,87 @@ async fn sessions_get_the_project_of_their_repo_once_it_is_discovered() {
 }
 
 #[tokio::test]
+async fn sessions_in_folders_that_are_not_git_repositories_make_no_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = tmp.path().join("app");
+    git_repo(
+        &app,
+        "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
+    );
+    let folder = tmp.path().join("herdr");
+    fs::create_dir(&folder).unwrap();
+    let mut store = herder_store::Store::open(tmp.path().join("herder.db")).unwrap();
+    for (id, repo) in [("s1", &app), ("s2", &folder)] {
+        store
+            .append(herder_store::NewEvent {
+                session_id: SessionId::new(id),
+                at: jiff::Timestamp::now(),
+                by: None,
+                body: herder_protocol::EventBody::SessionCreated {
+                    repo: repo.to_string_lossy().into_owned(),
+                    worktree: repo.to_string_lossy().into_owned(),
+                    branch: None,
+                    provider: herder_protocol::Provider::Claude,
+                    account_id: AccountId::new("a"),
+                    model: "m".into(),
+                    permission_mode: herder_protocol::PermissionMode::Ask,
+                    failover_pin: None,
+                    parent: None,
+                    parent_host: None,
+                    task: None,
+                },
+            })
+            .unwrap();
+    }
+    let hub = Arc::new(Hub::default());
+    let outbox = Arc::new(crate::hub::Outbox::default());
+    hub.connect(&outbox, herder_protocol::Role::Member);
+    let shutdown = CancellationToken::new();
+    let sessions = SessionManager::open(
+        crate::session::Setup {
+            store,
+            adapters: crate::session::Adapters::new(),
+            accounts: crate::session::Accounts::new(),
+            sink: Arc::clone(&hub) as Arc<dyn EventSink>,
+            turn_ids: crate::session::ulid_turn_ids(),
+            worktrees: crate::worktree::Worktrees::new(tmp.path().join("worktrees")),
+            attachments: tmp.path().join("attachments"),
+        },
+        shutdown.clone(),
+    )
+    .await
+    .unwrap();
+    let task = tokio::spawn(
+        Discovery {
+            host: host(),
+            config: Arc::new(Overrides::new(
+                tmp.path().join("daemon.toml"),
+                tmp.path().join("project-icons"),
+                ProjectsConfig::default(),
+            )),
+            hub: Arc::clone(&hub),
+            sessions,
+            sessions_changed: Arc::new(Notify::new()),
+            data_dir: tmp.path().join("data"),
+        }
+        .run(shutdown.clone()),
+    );
+
+    // Only the git repository is a project; the plain folder is not, though a session ran in it.
+    let app = app.to_string_lossy().into_owned();
+    assert_eq!(
+        next_projects(&outbox).await,
+        [cloned(
+            project("github.com/org/app", "app", &[&app]),
+            "git@github.com:org/app.git"
+        )]
+    );
+
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
 async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
     let tmp = tempfile::tempdir().unwrap();
     let app = tmp.path().join("src/app");
