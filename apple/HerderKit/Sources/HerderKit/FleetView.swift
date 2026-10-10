@@ -52,6 +52,7 @@ struct FleetView: View {
     @State private var projectsPath: [NavRoute] = []
     @State private var boardPath: [NavRoute] = []
     @State private var chatsPath: [NavRoute] = []
+    @State private var boardQuery = ""
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -208,7 +209,8 @@ struct FleetView: View {
             .environment(\.sessionPath, $chatsPath)
         case .board:
             NavigationStack(path: $boardPath) {
-                BoardView(fleet: fleet, sheet: $sheet, showsPullRequests: true)
+                BoardView(fleet: fleet, sheet: $sheet, query: boardQuery, showsPullRequests: true)
+                    .searchable(text: $boardQuery, prompt: "Sessions")
                     .toolbar { Button("New Session", systemImage: "plus") { sheet = .newSession } }
                     .navigationDestination(for: NavRoute.self, destination: destination)
             }
@@ -437,15 +439,18 @@ struct ProjectView: View {
     let id: String
     @Binding var sheet: AppSheet?
     @Binding var draft: Draft?
+    @State private var query = ""
 
     var body: some View {
         let project = fleet.lists.projects.first { $0.id == id }
         ScrollView {
             if let project {
-                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived)
+                ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
+                                archived: project.archived.filter { $0.matches(query) })
                     .padding(16)
             }
         }
+        .searchable(text: $query, prompt: "Sessions")
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle(project?.name ?? "Project")
@@ -463,11 +468,13 @@ struct ProjectView: View {
 /// The chats on iPhone: their sessions, pushed when tapped.
 struct ChatsView: View {
     let fleet: Fleet
+    @State private var query = ""
 
     var body: some View {
         let lists = fleet.lists
         ScrollView {
-            ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, title: "Chats")
+            ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
+                            archived: lists.archivedChats.filter { $0.matches(query) }, title: "Chats")
                 .padding(16)
         }
         .overlay {
@@ -476,6 +483,7 @@ struct ChatsView: View {
                                        description: Text("Ask anything, about no project."))
             }
         }
+        .searchable(text: $query, prompt: "Chats")
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Chats")
