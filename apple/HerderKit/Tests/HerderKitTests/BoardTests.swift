@@ -161,4 +161,23 @@ struct BoardTests {
         #expect(tree.matches("lead"))
         #expect(!tree.matches("nothing"))
     }
+
+    @Test func aSearchKeepsTheTreesItFindsAndDropsTheColumnsItEmpties() {
+        var deal = Script("01A")
+        var child = Script("01B")
+        var running = Script("01C")
+        let sessions = [
+            deal.key: deal.model([created(task: "Fix the deal pages"), .prLinked(pr: pr(1))]),
+            child.key: child.model([created(task: "Style the checkout", parent: "01A", branch: "herder/checkout")]),
+            running.key: running.model([created(task: "Run the tests"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+        ]
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C"])], sessions: sessions)
+        #expect(lists.board(matching: "").map(\.state) == [.readyToMerge, .working])
+        // A child's branch finds its whole tree; the column it leaves empty goes.
+        let found = lists.board(matching: "CHECKOUT")
+        #expect(found.map(\.state) == [.readyToMerge])
+        #expect(found.map { $0.trees.map(\.lead.title) } == [["Fix the deal pages"]])
+        #expect(lists.board(matching: "tests").map { $0.trees.map(\.lead.title) } == [["Run the tests"]])
+        #expect(lists.board(matching: "nothing").isEmpty)
+    }
 }
