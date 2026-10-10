@@ -2,7 +2,7 @@ import XCTest
 
 /// Searches the Board on iPhone, against the fake daemons of `PairingUITests`: `fake-host-1` has a
 /// session waiting on an approval.
-final class BoardSearchUITests: XCTestCase {
+final class SessionSearchUITests: XCTestCase {
     @MainActor
     func testSearchingTheBoardFiltersItsSessions() throws {
         let app = XCUIApplication()
