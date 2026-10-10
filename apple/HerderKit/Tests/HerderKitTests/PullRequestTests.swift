@@ -237,13 +237,11 @@ struct DraftTests {
         var app = Script("01A")
         var loose = Script("01B")
         let lists = Lists(machines: [host], sessions: [app.key: app.model([created()]), loose.key: loose.model([created()])])
-        #expect(lists.project(for: .project("github.com/acme/app"), session: nil) == "github.com/acme/app")
-        // On the Board, the open session's project.
-        #expect(lists.project(for: .board, session: app.key) == "github.com/acme/app")
-        // A session with no project, or none open, leaves it to the picker.
-        #expect(lists.project(for: .board, session: loose.key) == nil)
-        #expect(lists.project(for: .board, session: nil) == nil)
-        #expect(lists.project(for: .project(""), session: nil) == nil)
+        #expect(lists.project(for: .project("github.com/acme/app")) == "github.com/acme/app")
+        // Anywhere but a project pane leaves it to the picker.
+        #expect(lists.project(for: .board) == nil)
+        #expect(lists.project(for: .pullRequests) == nil)
+        #expect(lists.project(for: .project("")) == nil)
     }
 }
 

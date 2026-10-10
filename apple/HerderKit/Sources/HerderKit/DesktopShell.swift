@@ -149,12 +149,12 @@ struct DesktopShell: View {
         }
     }
 
-    /// ⌘N: a chat in Chats; a draft in the project in view, the pane's or the open session's,
-    /// on the machine it would pick; elsewhere, the picker.
+    /// ⌘N: a chat in Chats; a draft in the project pane's project, on the machine it would
+    /// pick; elsewhere, even beside an open session in a project, the picker.
     private func newSession() {
         if item == .chats, let draft = Draft.chat(fleet: fleet) {
             self.draft = draft
-        } else if let projectId = fleet.lists.project(for: item, session: session),
+        } else if let projectId = fleet.lists.project(for: item),
            let draft = Draft.inProject(projectId, fleet: fleet) {
             self.draft = draft
         } else {
