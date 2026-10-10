@@ -87,7 +87,7 @@ extension TranscriptBlock {
         case .user(_, let text, _, _, _, _), .assistant(_, let text, _), .reasoning(_, let text, _): text
         case .tools(_, let calls): calls.map { "\($0.name) \($0.summary) \($0.output)" }.joined(separator: "\n")
         case .children(_, let children): children.map(\.task).joined(separator: "\n")
-        case .report(let report): report.summary
+        case .report(let report, _): report.summary
         case .visual(let visual): visual.title
         case .agents(_, let agents): agents.map { [$0.title, $0.prompt, $0.result ?? ""].joined(separator: "\n") }.joined(separator: "\n")
         case .notice(let notice): [notice.text, notice.detail ?? ""].joined(separator: "\n")
