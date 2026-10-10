@@ -129,7 +129,9 @@ struct SessionView: View {
             }
             }
             if let model {
-                controls(model, summary)
+                // Short of room, as with the keyboard up, the transcript gives way first: the
+                // pinned card would otherwise shrink to its header, its Allow and Deny gone.
+                controls(model, summary).layoutPriority(1)
             }
             }
         }

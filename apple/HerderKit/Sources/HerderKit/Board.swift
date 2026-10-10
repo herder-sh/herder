@@ -174,7 +174,8 @@ struct BoardView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 #if os(iOS)
-                ConnectionLine(machines: lists.machines)
+                // On the phone; iPad's shell says it under the Board's title.
+                if selection == nil { ConnectionLine(machines: lists.machines) }
                 #endif
                 if lists.machines.isEmpty {
                     EmptyFleet { sheet = .pair }

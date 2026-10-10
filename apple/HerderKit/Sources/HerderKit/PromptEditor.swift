@@ -505,6 +505,9 @@ struct PromptEditor: UIViewRepresentable {
                     || keyboard.button(forKeyCode: .rightShift)?.isPressed == true
                 if !shift {
                     parent.submit()
+                    // Emptied now, not at the next update: a key typed before it would bring the
+                    // sent text back.
+                    if textView.text != parent.text { show(parent.text, in: textView) }
                     return false
                 }
             }

@@ -22,6 +22,8 @@ final class SessionKeyboardUITests: XCTestCase {
 
         app.descendants(matching: .any)["composer"].firstMatch.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "tapping the prompt shows no keyboard")
+        // The transcript gives way to the keyboard, not the pinned approval.
+        XCTAssertTrue(app.buttons["Allow"].isHittable, "the keyboard squeezed the approval to its header")
         // Down through the keyboard, as a thumb would: it follows the drag and goes. The drag
         // starts on a message, as a fixed point of the transcript can fall under the header.
         app.message("Run the tests.").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
