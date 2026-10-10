@@ -58,3 +58,55 @@ struct ProjectIconUploadTests {
         }
     }
 }
+
+struct ProjectIconPictureTests {
+    /// Green squares of each of `sides`, as one file of `type`.
+    private func image(sides: [Int], type: UTType) -> Data {
+        let out = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(out, type.identifier as CFString, sides.count, nil)!
+        for side in sides {
+            let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(),
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.setFillColor(red: 0, green: 1, blue: 0, alpha: 1)
+            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+            CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        }
+        #expect(CGImageDestinationFinalize(destination))
+        return out as Data
+    }
+
+    /// The red, green and blue of the pixel `y` rows from the top of `picture`.
+    private func pixel(_ picture: CGImage, x: Int, y: Int) -> [UInt8] {
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let context = CGContext(data: &rgba, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(picture, in: CGRect(x: -x, y: y - picture.height + 1, width: picture.width, height: picture.height))
+        return Array(rgba.prefix(3))
+    }
+
+    /// Machines find favicon.svg first; iOS showed none, as UIImage reads no SVG.
+    @Test func anSvgIconIsDrawnUprightAtTheIconSide() throws {
+        let svg = Data("""
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+              <rect width="16" height="4" fill="#ff0000"/><rect y="4" width="16" height="4" fill="#0000ff"/>
+            </svg>
+            """.utf8)
+        let picture = try #require(ProjectIconImage.picture(svg))
+        #expect(picture.width == 256 && picture.height == 128)
+        #expect(pixel(picture, x: 128, y: 10) == [255, 0, 0])
+        #expect(pixel(picture, x: 128, y: 118) == [0, 0, 255])
+    }
+
+    @Test func aRasterIconIsReadAndAnIcoGivesItsLargestImage() throws {
+        let png = try #require(ProjectIconImage.picture(image(sides: [40], type: .png)))
+        #expect(png.width == 40 && png.height == 40)
+        let ico = try #require(ProjectIconImage.picture(image(sides: [16, 48, 32], type: .ico)))
+        #expect(ico.width == 48 && ico.height == 48)
+    }
+
+    @Test func aFileThatIsNoPictureHasNone() {
+        #expect(ProjectIconImage.picture(Data("not a picture".utf8)) == nil)
+    }
+}

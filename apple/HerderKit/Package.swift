@@ -14,6 +14,7 @@ let package = Package(
     dependencies: [
         .package(name: "Herder", path: "../../crates/herder-ffi/swift"),
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.20.0"),
+        .package(url: "https://github.com/swhitty/SwiftDraw", from: "0.29.0"),
     ],
     targets: [
         .target(
@@ -21,6 +22,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Herder", package: "Herder"),
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
+                // Draws SVG project icons, which UIImage cannot read.
+                .product(name: "SwiftDraw", package: "SwiftDraw"),
             ],
             // Mermaid 11.17.2 (MIT, LICENSE alongside) renders diagrams offline.
             resources: [.copy("Resources/Mermaid")]),

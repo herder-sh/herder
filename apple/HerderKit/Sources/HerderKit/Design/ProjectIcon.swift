@@ -1,17 +1,41 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+import SwiftDraw
 import SwiftUI
 
-#if os(iOS)
-import UIKit
-#else
-import AppKit
-#endif
-
-/// A project's icon file, when this app has one, and the colour its machine fills the tile
+/// A project's icon picture, when this app has one, and the colour its machine fills the tile
 /// with, as `#rrggbb`.
 struct ProjectIconImage: Equatable {
-    var data: Data?
+    var picture: CGImage?
     var background: String?
+
+    /// The longest side, in pixels, an SVG icon is drawn at.
+    static let side: CGFloat = 256
+
+    /// The picture in an icon file of any of the machines' icon media types, read the same way
+    /// on iOS and macOS: PNG, JPEG and ICO, its largest image, by ImageIO, and SVG by SwiftDraw,
+    /// as neither ImageIO nor UIImage reads SVG. `nil` when it is none of them.
+    static func picture(_ data: Data) -> CGImage? {
+        if let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 {
+            return (0..<CGImageSourceGetCount(source))
+                .compactMap { CGImageSourceCreateImageAtIndex(source, $0, nil) }
+                .max { $0.width * $0.height < $1.width * $1.height }
+        }
+        guard let svg = SVG(data: data), svg.size.width > 0, svg.size.height > 0 else { return nil }
+        let scale = side / max(svg.size.width, svg.size.height)
+        let width = Int((svg.size.width * scale).rounded()), height = Int((svg.size.height * scale).rounded())
+        guard width > 0, height > 0,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        // SwiftDraw draws top-down; a bitmap context's origin is at the bottom.
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.draw(svg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
 }
 
 /// A project's small rounded tile: its own icon when there is one, else its initial; on the
@@ -29,8 +53,8 @@ struct ProjectIcon: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
         Group {
-            if let image, let picture = image.data.flatMap(Self.platformImage) {
-                picture.resizable().interpolation(.high).scaledToFill()
+            if let image, let picture = image.picture {
+                SwiftUI.Image(decorative: picture, scale: 1).resizable().interpolation(.high).scaledToFill()
                     .background(image.background.flatMap(Self.colour) ?? .clear)
             } else if let projectId, let rgb = image?.background.flatMap(Self.rgb) {
                 Text(Self.initial(name ?? projectId))
@@ -46,7 +70,7 @@ struct ProjectIcon: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(tint.opacity(0.2))
             } else {
-                Image(systemName: "questionmark")
+                SwiftUI.Image(systemName: "questionmark")
                     .font(.system(size: size * 0.5, weight: .bold))
                     .foregroundStyle(Theme.tertiary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,13 +130,5 @@ struct ProjectIcon: View {
     static func isLight(_ rgb: UInt32) -> Bool {
         let red = Double(rgb >> 16 & 0xFF), green = Double(rgb >> 8 & 0xFF), blue = Double(rgb & 0xFF)
         return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255 > 0.5
-    }
-
-    private static func platformImage(_ data: Data) -> Image? {
-        #if os(iOS)
-        UIImage(data: data).map { Image(uiImage: $0) }
-        #else
-        NSImage(data: data).map { Image(nsImage: $0) }
-        #endif
     }
 }
