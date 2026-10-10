@@ -1,16 +1,18 @@
 import SwiftUI
 #if os(iOS)
 import UIKit
+#else
+import AppKit
 #endif
 
 extension EnvironmentValues {
-    /// The whole message a transcript text is part of, which its menu on a phone copies.
+    /// The whole message a transcript text is part of, which its menu copies.
     @Entry var messageText: String?
 }
 
-/// Transcript text to select any part of and copy. A phone's SwiftUI text only copies all of
-/// itself, from a menu, so there it is a text view, with the selection handles and the edit
-/// menu of any other; that menu also copies the whole message.
+/// Transcript text to select any part of and copy, in a text view on both platforms: SwiftUI's
+/// text has no hanging indent for list items nor space between paragraphs, and on a phone only
+/// copies all of itself. Its menu also copies the whole message.
 struct TranscriptText: View {
     let string: AttributedString
     var style: Font.TextStyle = .body
@@ -19,70 +21,97 @@ struct TranscriptText: View {
     var color: Color = Theme.text
 
     var body: some View {
-        #if os(macOS)
-        LinkText(string)
-            .font(.system(style, design: monospaced ? .monospaced : .default))
-            .foregroundStyle(color)
-            .lineSpacing(lineSpacing)
-            .textSelection(.enabled)
-        #else
         SelectableTextView(text: Self.attributed(string, style: style, monospaced: monospaced,
-                                                 lineSpacing: lineSpacing, color: UIColor(color)))
-        #endif
+                                                 lineSpacing: lineSpacing, color: PlatformColor(color)))
     }
 }
 
 #if os(iOS)
+typealias PlatformFont = UIFont
+typealias PlatformColor = UIColor
+#else
+typealias PlatformFont = NSFont
+typealias PlatformColor = NSColor
+#endif
+
 extension TranscriptText {
-    /// `string` in UIKit's attributes: its SwiftUI colours, the fonts `MarkdownText` gives
-    /// headings, quotes and gaps, and Markdown's bold, italic, code and strikethrough.
+    /// Inline code against the text around it.
+    static let codeScale: CGFloat = 0.88
+
+    /// `string` in the text views' attributes: its SwiftUI colours, the fonts and paragraphs
+    /// `MarkdownText` gives its prose, and Markdown's bold, italic, code and strikethrough.
+    /// Links keep the text's colour, underlined in a quieter one.
     static func attributed(_ string: AttributedString, style: Font.TextStyle, monospaced: Bool,
-                           lineSpacing: CGFloat, color: UIColor) -> NSAttributedString {
-        let base = UIFont.preferredFont(forTextStyle: style.uiKit)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = lineSpacing
+                           lineSpacing: CGFloat, color: PlatformColor) -> NSAttributedString {
+        let base = PlatformFont.preferredFont(forTextStyle: style.platform)
+        let text = monospaced ? PlatformFont.monospacedSystemFont(ofSize: base.pointSize, weight: .regular) : base
+        // One indent column fits a list marker up to "99.".
+        let column = (base.pointSize * 1.6).rounded()
+        var paragraphs: [MarkdownText.Paragraph: NSParagraphStyle] = [:]
         let result = NSMutableAttributedString()
         for run in string.runs {
-            var font = run.swiftUI.font.flatMap(uiFont) ?? (monospaced ? mono(base) : base)
+            var font = switch run[MarkdownText.Role.self] {
+            case .heading: PlatformFont.preferredFont(forTextStyle: .headline)
+            case .label: PlatformFont.systemFont(ofSize: PlatformFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .semibold)
+            case .marker: PlatformFont.monospacedDigitSystemFont(ofSize: base.pointSize, weight: .regular)
+            case .quote: text.adding(italic: true)
+            case nil: text
+            }
             let intent = run.inlinePresentationIntent ?? []
-            if intent.contains(.code) { font = mono(font) }
-            var traits = font.fontDescriptor.symbolicTraits
-            if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
-            if intent.contains(.emphasized) { traits.insert(.traitItalic) }
-            if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: 0) }
+            if intent.contains(.code) {
+                font = .monospacedSystemFont(ofSize: (font.pointSize * codeScale).rounded(), weight: .regular)
+            }
+            font = font.adding(bold: intent.contains(.stronglyEmphasized), italic: intent.contains(.emphasized))
+            let layout = run[MarkdownText.Paragraph.self] ?? MarkdownText.Paragraph()
+            let paragraph = paragraphs[layout] ?? {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineSpacing = lineSpacing
+                paragraph.paragraphSpacingBefore = layout.spaceBefore
+                paragraph.headIndent = CGFloat(layout.indent) * column
+                paragraph.firstLineHeadIndent = paragraph.headIndent - (layout.marker ? column : 0)
+                paragraph.tabStops = [NSTextTab(textAlignment: .left, location: paragraph.headIndent)]
+                paragraph.defaultTabInterval = column
+                paragraphs[layout] = paragraph
+                return paragraph
+            }()
             var attributes: [NSAttributedString.Key: Any] = [
                 .font: font,
-                .foregroundColor: run.swiftUI.foregroundColor.map(UIColor.init) ?? color,
+                .foregroundColor: run.swiftUI.foregroundColor.map(PlatformColor.init) ?? color,
                 .paragraphStyle: paragraph,
             ]
-            if let background = run.swiftUI.backgroundColor { attributes[.backgroundColor] = UIColor(background) }
-            if let link = run.link { attributes[.link] = link }
+            if run[MarkdownText.Role.self] == .label { attributes[.kern] = 0.6 }
+            if let background = run.swiftUI.backgroundColor { attributes[.backgroundColor] = PlatformColor(background) }
+            if let link = run.link {
+                attributes[.link] = link
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attributes[.underlineColor] = PlatformColor(Theme.tertiary)
+            }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: String(string[run.range].characters), attributes: attributes))
         }
         return result
     }
-
-    private static func uiFont(_ font: Font) -> UIFont? {
-        switch font {
-        case MarkdownText.headingFont: .preferredFont(forTextStyle: .headline)
-        case MarkdownText.quoteFont: UIFont.preferredFont(forTextStyle: .body).withItalic
-        case MarkdownText.gapFont: .systemFont(ofSize: MarkdownText.gapSize)
-        default: nil
-        }
-    }
-
-    private static func mono(_ font: UIFont) -> UIFont { .monospacedSystemFont(ofSize: font.pointSize, weight: .regular) }
 }
 
-private extension UIFont {
-    var withItalic: UIFont {
-        fontDescriptor.withSymbolicTraits(.traitItalic).map { UIFont(descriptor: $0, size: 0) } ?? self
+private extension PlatformFont {
+    func adding(bold: Bool = false, italic: Bool = false) -> PlatformFont {
+        guard bold || italic else { return self }
+        #if os(iOS)
+        var traits = fontDescriptor.symbolicTraits
+        if bold { traits.insert(.traitBold) }
+        if italic { traits.insert(.traitItalic) }
+        return fontDescriptor.withSymbolicTraits(traits).map { UIFont(descriptor: $0, size: 0) } ?? self
+        #else
+        var traits = fontDescriptor.symbolicTraits
+        if bold { traits.insert(.bold) }
+        if italic { traits.insert(.italic) }
+        return NSFont(descriptor: fontDescriptor.withSymbolicTraits(traits), size: 0) ?? self
+        #endif
     }
 }
 
 private extension Font.TextStyle {
-    var uiKit: UIFont.TextStyle {
+    var platform: PlatformFont.TextStyle {
         switch self {
         case .largeTitle: .largeTitle
         case .title: .title1
@@ -99,6 +128,15 @@ private extension Font.TextStyle {
     }
 }
 
+/// The size of `text` laid out in `proposal`'s width.
+@MainActor private func fit(_ text: NSAttributedString, in proposal: ProposedViewSize) -> CGSize {
+    let width = proposal.width.map { $0.isFinite ? $0 : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
+    let fit = text.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+    return CGSize(width: min(width, ceil(fit.width)), height: ceil(fit.height))
+}
+
+#if os(iOS)
 /// A text view that only selects: sized to its text, laid out by SwiftUI, links opened by the
 /// environment's `openURL`.
 private struct SelectableTextView: UIViewRepresentable {
@@ -113,7 +151,8 @@ private struct SelectableTextView: UIViewRepresentable {
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
-        view.linkTextAttributes = [.foregroundColor: UIColor(Theme.link), .underlineStyle: NSUnderlineStyle.single.rawValue]
+        // The text's own attributes style its links.
+        view.linkTextAttributes = [:]
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.delegate = context.coordinator
         return view
@@ -130,10 +169,7 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
-        let width = proposal.width.map { $0.isFinite ? $0 : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
-        let fit = text.boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                                    options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-        return CGSize(width: min(width, ceil(fit.width)), height: ceil(fit.height))
+        fit(text, in: proposal)
     }
 
     @MainActor final class Coordinator: NSObject, UITextViewDelegate {
@@ -158,6 +194,72 @@ private struct SelectableTextView: UIViewRepresentable {
                       defaultAction: UIAction) -> UIAction? {
             guard case .link(let url) = textItem.content, let openURL else { return defaultAction }
             return UIAction { _ in openURL(url) }
+        }
+    }
+}
+#else
+/// A text view that only selects: sized to its text, laid out by SwiftUI, links opened by the
+/// environment's `openURL`, with the pointing hand over them.
+private struct SelectableTextView: NSViewRepresentable {
+    let text: NSAttributedString
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let view = NSTextView(usingTextLayoutManager: true)
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.isVerticallyResizable = false
+        view.isHorizontallyResizable = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        // The text's own attributes style its links.
+        view.linkTextAttributes = [.cursor: NSCursor.pointingHand]
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.delegate = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ view: NSTextView, context: Context) {
+        context.coordinator.openURL = context.environment.openURL
+        context.coordinator.message = context.environment.messageText
+        // Setting the same text again would drop a selection, as a streaming message redraws.
+        if context.coordinator.text != text {
+            context.coordinator.text = text
+            view.textStorage?.setAttributedString(text)
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
+        fit(text, in: proposal)
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: NSAttributedString?
+        var message: String?
+        var openURL: OpenURLAction?
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)), let openURL else { return false }
+            openURL(url)
+            return true
+        }
+
+        func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            guard let message else { return menu }
+            let copy = NSMenuItem(title: "Copy Message", action: #selector(copyMessage), keyEquivalent: "")
+            copy.target = self
+            copy.representedObject = message
+            // Next to Copy, ahead of Look Up and the rest.
+            let after = menu.items.firstIndex { $0.action == #selector(NSText.copy(_:)) }
+            menu.insertItem(copy, at: after.map { $0 + 1 } ?? 0)
+            return menu
+        }
+
+        @objc private func copyMessage(_ item: NSMenuItem) {
+            if let message = item.representedObject as? String { Clipboard.string = message }
         }
     }
 }
