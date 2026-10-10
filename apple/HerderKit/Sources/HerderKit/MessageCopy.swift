@@ -1,22 +1,13 @@
 import SwiftUI
 
 extension View {
-    /// Copies `text`, the whole message, which selecting can't: each of its lines is a text of
-    /// its own, so a drag stops at a line's end and a long press copies one line. A Mac shows
-    /// Copy and Select Text under the message on hover; both offer them in its context menu.
-    /// Select Text shows the message in a text view that selects across its lines.
+    /// Copies `text`, the whole message. On a Mac selecting can't: each of its lines is a text of
+    /// its own, so a drag stops at a line's end. There it shows Copy and Select Text under the
+    /// message on hover and in its context menu; Select Text shows the message in a text view
+    /// that selects across its lines. On a phone a long press selects a word of the message, to
+    /// select any part of it, and the edit menu over it copies the whole message too.
     func messageCopy(_ text: String, alignment: HorizontalAlignment = .leading) -> some View {
         modifier(MessageCopy(text: text, alignment: alignment))
-    }
-
-    /// Selectable text on a Mac. On a phone a long press opens the message's menu instead,
-    /// which a selectable text would take for its own one-line Copy.
-    @ViewBuilder func messageSelection() -> some View {
-        #if os(macOS)
-        textSelection(.enabled)
-        #else
-        textSelection(.disabled)
-        #endif
     }
 }
 
@@ -27,9 +18,9 @@ private struct MessageCopy: ViewModifier {
     @State private var selecting = false
 
     func body(content: Content) -> some View {
+        #if os(macOS)
         VStack(alignment: alignment, spacing: 0) {
             content
-            #if os(macOS)
             HStack(spacing: 0) {
                 CopyButton(text: text)
                 Button { selecting = true } label: {
@@ -42,7 +33,6 @@ private struct MessageCopy: ViewModifier {
                 .help("Select Text")
             }
             .opacity(hovering ? 1 : 0)
-            #endif
         }
         .onHover { hovering = $0 }
         .contextMenu {
@@ -50,9 +40,15 @@ private struct MessageCopy: ViewModifier {
             Button("Select Text", systemImage: "text.cursor") { selecting = true }
         }
         .sheet(isPresented: $selecting) { SelectTextSheet(text: text) }
+        #else
+        // A context menu here would take the long press from the selection, and lift the
+        // whole message, shrunk to fit the screen.
+        content.environment(\.messageText, text)
+        #endif
     }
 }
 
+#if os(macOS)
 /// A message in a text view, to select any part of it.
 private struct SelectTextSheet: View {
     let text: String
@@ -72,33 +68,10 @@ private struct SelectTextSheet: View {
             SelectableText(text: text)
         }
         .background(Theme.surface)
-        #if os(macOS)
         .frame(minWidth: 520, idealWidth: 720, minHeight: 360, idealHeight: 560)
-        #endif
     }
 }
 
-#if os(iOS)
-private struct SelectableText: UIViewRepresentable {
-    let text: String
-
-    func makeUIView(context: Context) -> UITextView {
-        let view = UITextView()
-        view.isEditable = false
-        view.font = .preferredFont(forTextStyle: .body)
-        view.adjustsFontForContentSizeCategory = true
-        view.textColor = UIColor(Theme.text)
-        view.backgroundColor = .clear
-        view.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 16, right: 12)
-        view.accessibilityIdentifier = "selectable-text"
-        return view
-    }
-
-    func updateUIView(_ view: UITextView, context: Context) {
-        if view.text != text { view.text = text }
-    }
-}
-#else
 private struct SelectableText: NSViewRepresentable {
     let text: String
 
