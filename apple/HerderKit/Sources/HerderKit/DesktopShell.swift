@@ -105,9 +105,9 @@ struct DesktopShell: View {
             }
         case .providers:
             Pane(title: "Providers", subtitle: "Accounts, plan limits and usage", switcher: switcher) {
-                ProvidersView(fleet: fleet)
+                ProvidersView(fleet: fleet, sheet: $sheet)
             } actions: {
-                EmptyView()
+                PaneButton(title: "Add Account", symbol: "plus") { sheet = .addAccount }
             }
         case .machines:
             Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {

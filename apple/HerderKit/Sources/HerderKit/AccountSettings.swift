@@ -141,6 +141,86 @@ struct AddAccountSheet: View {
     }
 }
 
+/// A machine to add an account on, and why this device cannot add one there, if it cannot.
+struct AccountTarget: Equatable, Identifiable {
+    let hostId: HostId
+    let name: String
+    /// Why an account cannot be added there from this device; `nil` when it can.
+    let problem: String?
+
+    var id: HostId { hostId }
+
+    /// The machines that run sessions: a vault runs none, and a machine never connected has
+    /// not said whether this device owns it. Adding an account is the owner's, on a connected
+    /// machine.
+    static func all(_ machines: [Machine]) -> [AccountTarget] {
+        machines.filter { $0.hosts.isEmpty && $0.role != nil }.map { machine in
+            AccountTarget(hostId: machine.hostId, name: machine.name,
+                          problem: machine.role != .owner ? "Owners only"
+                              : machine.connection != .connected ? "Not connected" : nil)
+        }
+    }
+
+    /// The machine to add on without asking: the only one where this device can.
+    static func only(_ targets: [AccountTarget]) -> HostId? {
+        let usable = targets.filter { $0.problem == nil }
+        return usable.count == 1 ? usable[0].hostId : nil
+    }
+}
+
+/// Adds a provider account from anywhere: picks the machine, then runs the add-account sheet's
+/// login there.
+struct NewAccountSheet: View {
+    let fleet: Fleet
+    @State private var picked: HostId?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let targets = AccountTarget.all(fleet.machines)
+        if let hostId = picked ?? AccountTarget.only(targets) {
+            AddAccountSheet(fleet: fleet, hostId: hostId)
+        } else {
+            SheetScaffold(title: "Add Account", subtitle: "Pick the machine to log in on", height: 460) {
+                if targets.isEmpty {
+                    Text("Pair a machine first; accounts live on the machines that run sessions.")
+                        .foregroundStyle(Theme.secondary)
+                }
+                VStack(spacing: 0) {
+                    ForEach(Array(targets.enumerated()), id: \.element.id) { index, target in
+                        if index > 0 { RowDivider() }
+                        Button { picked = target.hostId } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary)
+                                Text(target.name).foregroundStyle(Theme.text)
+                                Spacer(minLength: 8)
+                                if let problem = target.problem {
+                                    Text(problem).font(.caption).foregroundStyle(Theme.tertiary)
+                                } else {
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                                        .foregroundStyle(Theme.tertiary)
+                                }
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(target.problem != nil)
+                    }
+                }
+                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
+                Text("The provider’s own login runs on that machine, under the new account’s config directory.")
+                    .font(.footnote).foregroundStyle(Theme.tertiary)
+            } footer: {
+                Spacer()
+                ActionButton(title: "Cancel", style: .secondary) { dismiss() }.frame(maxWidth: 180)
+            }
+        }
+    }
+}
+
 struct EditAccountSheet: View {
     let fleet: Fleet
     let hostId: HostId

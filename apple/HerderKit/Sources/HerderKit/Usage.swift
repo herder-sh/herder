@@ -41,6 +41,17 @@ struct WindowLeft: Equatable {
     let resets: String
 
     var percentLeft: Double { max(0, 100 - percentUsed) }
+    var headroom: Headroom { Headroom(percentLeft: percentLeft) }
+}
+
+/// How much room a plan's limit window leaves: what colours its meter, and whether its
+/// account stands out.
+enum Headroom: Comparable {
+    case nearlyOut, low, plenty
+
+    init(percentLeft: Double) {
+        self = percentLeft <= 10 ? .nearlyOut : percentLeft <= 30 ? .low : .plenty
+    }
 }
 
 /// The machines' answers to a usage summary added up: overall, per login and per model.
