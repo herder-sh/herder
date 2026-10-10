@@ -48,11 +48,18 @@ struct SessionSummary: Hashable, Identifiable {
     var agents: [NativeAgent] = []
 }
 
-/// An approval or a question waiting on the user.
+/// An approval or a question waiting on the user: the one its session pins, with how many
+/// wait behind it.
 struct PendingRequest: Hashable, Identifiable {
     enum Kind: Hashable {
         case approval(summary: String)
         case question(text: String, choices: [String])
+    }
+
+    /// Which of the questions asked together this is, and of how many.
+    struct Step: Hashable {
+        let number: Int
+        let of: Int
     }
 
     var id: String { "\(session.key.hostId)/\(session.key.sessionId)/\(requestId)" }
@@ -64,6 +71,9 @@ struct PendingRequest: Hashable, Identifiable {
     let age: String
     var reason: String?
     var note: String?
+    /// The session's other requests, answered after this one.
+    var more = 0
+    var step: Step?
 }
 
 struct UsageWindowSummary: Hashable, Identifiable {

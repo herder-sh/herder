@@ -9,9 +9,6 @@ struct RequestCard: View {
     var showsSession = true
     /// Where the session row opens the session on iPad and the Mac; `nil` pushes it.
     var selection: Binding<SessionKey?>? = nil
-    var more = 0
-    /// Which of the questions asked together this is, and of how many, when more than one.
-    var step: (number: Int, of: Int)? = nil
     /// The session's composer below the card takes the user's own answer, so the card has no
     /// field of its own.
     var answersInComposer = false
@@ -49,10 +46,10 @@ struct RequestCard: View {
                 .font(.subheadline.weight(.bold))
             Text(request.isQuestion ? "Question" : "Approval needed")
                 .font(.subheadline.weight(.semibold))
-            if let step {
+            if let step = request.step {
                 StepDots(number: step.number, of: step.of)
-            } else if more > 0 {
-                Text("+\(more) more").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+            } else if request.more > 0 {
+                Text("+\(request.more) more").font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
             }
             Spacer()
             Text(request.age).font(.caption).foregroundStyle(Theme.tertiary)

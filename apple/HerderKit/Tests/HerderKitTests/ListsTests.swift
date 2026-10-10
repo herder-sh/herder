@@ -40,6 +40,21 @@ struct ListsTests {
         #expect(lists.requests.map(\.requestId) == ["b", "a"])
     }
 
+    @Test func questionsAskedTogetherAreOneRequest() {
+        var script = Script("01A")
+        func ask(_ id: String) -> EventBody {
+            .questionAsked(questionId: id, turnId: "t1", text: "Which?", choices: ["Red", "Blue"], routedTo: .user, reason: nil)
+        }
+        let model = script.model([
+            created(), .turnStarted(turnId: "t1"), ask("q1"), ask("q2"), ask("q3"),
+            .questionAnswered(questionId: "q1", answer: .choice(index: 0), answeredBy: .user),
+        ])
+        let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A"])], sessions: [script.key: model])
+        #expect(lists.requests.map(\.requestId) == ["q2"])
+        #expect(lists.requests.first?.step == .init(number: 2, of: 3))
+        #expect(lists.requests.first?.more == 1)
+    }
+
     @Test func childrenFollowTheirParentOldestFirst() {
         var parent = Script("01A")
         var older = Script("01B")
