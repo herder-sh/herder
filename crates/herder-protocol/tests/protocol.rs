@@ -219,6 +219,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             default_account: Some(AccountId::new("01J9ACCOUNT")),
             setup_command: Some("cargo fetch".into()),
             icon_background: Some("#ffffff".into()),
+            private_artifacts: true,
         }),
         command(CommandBody::SetProjectSettings {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
@@ -227,6 +228,7 @@ fn client_fixtures() -> Vec<ClientMessage> {
             default_account: None,
             setup_command: None,
             icon_background: None,
+            private_artifacts: false,
         }),
         command(CommandBody::RemoveProject {
             project_id: ProjectId::new("github.com/herder-sh/herder"),
@@ -978,6 +980,36 @@ fn server_fixtures() -> Vec<ServerMessage> {
                 from_host: HostId::new("01J9HOST2"),
             },
         ),
+        event(
+            22,
+            None,
+            EventBody::ArtifactPublished {
+                title: "Settings screen".into(),
+                attachment: Attachment {
+                    attachment_id: AttachmentId::new("01J9ARTIFACT"),
+                    media_type: FILE_MEDIA_TYPE.into(),
+                    size: 48213,
+                    name: Some("settings.png".into()),
+                },
+                url: Some("https://krowk.com/a/art_1".into()),
+                expires_at: Some("2026-10-11T17:57:01Z".parse().unwrap()),
+            },
+        ),
+        event(
+            23,
+            None,
+            EventBody::ArtifactPublished {
+                title: "Customer report".into(),
+                attachment: Attachment {
+                    attachment_id: AttachmentId::new("01J9ARTIFACT2"),
+                    media_type: FILE_MEDIA_TYPE.into(),
+                    size: 512,
+                    name: Some("customer-report.html".into()),
+                },
+                url: None,
+                expires_at: None,
+            },
+        ),
         ServerMessage::Terminals {
             terminals: vec![
                 Terminal {
@@ -1369,6 +1401,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     ),
                     icon_uploaded: true,
                     icon_background: Some("#ffffff".into()),
+                    private_artifacts: true,
                 },
                 Project {
                     project_id: ProjectId::local(&HostId::new("01J9HOST"), "/home/dev/scratch"),
@@ -1381,6 +1414,7 @@ fn project_fixtures() -> Vec<ServerMessage> {
                     icon: None,
                     icon_uploaded: false,
                     icon_background: None,
+                    private_artifacts: false,
                 },
             ],
         },
@@ -2257,6 +2291,7 @@ fn project_optional_fields_may_be_absent() {
             default_account: None,
             setup_command: None,
             icon_background: None,
+            private_artifacts: false,
         }
     );
 
@@ -3241,4 +3276,33 @@ fn settings() -> DaemonSettings {
             max_stall_nudges: 3,
         },
     }
+}
+
+#[test]
+fn prompts_and_published_artifacts_name_their_attachments() {
+    let attachment = |id: &str| Attachment {
+        attachment_id: AttachmentId::new(id),
+        media_type: FILE_MEDIA_TYPE.into(),
+        size: 1,
+        name: Some("f.txt".into()),
+    };
+    let prompt = EventBody::ItemAdded {
+        item: item(ItemBody::UserMessage {
+            text: "hi".into(),
+            attachments: vec![attachment("a1"), attachment("a2")],
+        }),
+    };
+    assert_eq!(prompt.attachments(), [attachment("a1"), attachment("a2")]);
+    let artifact = EventBody::ArtifactPublished {
+        title: "Log".into(),
+        attachment: attachment("a3"),
+        url: None,
+        expires_at: None,
+    };
+    assert_eq!(artifact.attachments(), [attachment("a3")]);
+    let title = EventBody::TitleChanged {
+        title: "t".into(),
+        source: TitleSource::User,
+    };
+    assert!(title.attachments().is_empty());
 }

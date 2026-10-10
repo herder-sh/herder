@@ -216,6 +216,7 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         async move { admission.run(&hub, shutdown).await }
     });
+    sessions.publish_with(Arc::new(session::publish::Krowk::new()))?;
     let herder = herder_binary()?;
     sessions.serve_mcp(mcp::Config {
         data_dir: data_dir.root().to_owned(),

@@ -1331,6 +1331,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "ureq",
  "uuid",
 ]
 

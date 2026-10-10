@@ -97,6 +97,8 @@ pub struct ProjectEntry {
     pub icon: Option<PathBuf>,
     /// Colour drawn behind the project's icon, as `#rrggbb`.
     pub icon_background: Option<String>,
+    /// Whether the artifacts the project's sessions publish stay private, never uploaded.
+    pub private_artifacts: bool,
 }
 
 /// The `[projects]` table and `[[project]]` entries as they are now: what the daemon started
@@ -337,6 +339,7 @@ pub fn resolve(host: &HostId, repos: &[Repo], entries: &[ProjectEntry]) -> Vec<P
                 icon: None,
                 icon_uploaded: false,
                 icon_background: entry.and_then(|e| e.icon_background.clone()),
+                private_artifacts: entry.is_some_and(|e| e.private_artifacts),
                 project_id,
             }
         })

@@ -18,9 +18,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    Account, Attachment, AttachmentData, Batch, Cursor, Event, EventBody, HostHello, HostMessage,
-    Item, ItemBody, ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason,
-    Seq, SessionHead, SessionId, SessionStatus, SessionSummary, VaultMessage,
+    Account, Attachment, AttachmentData, Batch, Cursor, Event, HostHello, HostMessage, Item,
+    ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason, Seq, SessionHead,
+    SessionId, SessionStatus, SessionSummary, VaultMessage,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -385,22 +385,18 @@ impl Link {
     }
 }
 
-/// Every image the prompts among `records` carried, in order.
+/// Every image and file `records` name, in order: the prompts' and the published artifacts.
 fn attachments(records: &[JournalRecord]) -> Vec<Attachment> {
     records
         .iter()
-        // Only a `user_message` item names images; skip decoding everything else.
-        .filter(|record| record.body.event_type() == "item_added")
-        .flat_map(|record| match record.body.decode() {
-            EventBody::ItemAdded {
-                item:
-                    Item {
-                        body: ItemBody::UserMessage { attachments, .. },
-                        ..
-                    },
-            } => attachments,
-            _ => Vec::new(),
+        // Only these events name attachments; skip decoding everything else.
+        .filter(|record| {
+            matches!(
+                record.body.event_type(),
+                "item_added" | "artifact_published"
+            )
         })
+        .flat_map(|record| record.body.decode().attachments().to_vec())
         .collect()
 }
 
