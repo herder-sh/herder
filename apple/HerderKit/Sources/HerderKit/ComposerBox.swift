@@ -45,6 +45,7 @@ struct ComposerBox<Footer: View>: View {
     #if os(iOS)
     /// Photos picked to attach, until they load.
     @State private var picked: [PhotosPickerItem] = []
+    @State private var pickingPhotos = false
     @State private var importing = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -128,6 +129,23 @@ struct ComposerBox<Footer: View>: View {
                             in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14))
                 .padding(.horizontal, compact ? 12 : 18)
         }
+        #if os(iOS)
+        // On the box, not the toolbar: `ViewThatFits` holds two of those.
+        .photosPicker(isPresented: $pickingPhotos, selection: $picked, matching: .images,
+                      preferredItemEncoding: .compatible)
+        .onChange(of: picked) {
+            guard !picked.isEmpty else { return }
+            let items = picked
+            picked = []
+            Task { await attach(items) }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): attach(urls)
+            case .failure(let error): imageError = error.localizedDescription
+            }
+        }
+        #endif
         .onAppear { if focusesOnAppear { focus() } }
         .onChange(of: text) {
             // A chip deleted from the text takes its image or paste with it.
@@ -164,10 +182,9 @@ struct ComposerBox<Footer: View>: View {
                 .help("Attach files and images (or paste or drop them)")
             #else
             Menu {
-                PhotosPicker(selection: $picked, matching: .images, preferredItemEncoding: .compatible) {
-                    Label("Photo Library", systemImage: "photo.on.rectangle")
-                }
-                .accessibilityIdentifier("attach-images")
+                // A `PhotosPicker` in a menu goes with the menu as it closes, before it presents.
+                Button { pickingPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+                    .accessibilityIdentifier("attach-images")
                 Button { importing = true } label: { Label("Choose Files", systemImage: "folder") }
                     .accessibilityIdentifier("attach-files")
             } label: {
@@ -176,18 +193,6 @@ struct ComposerBox<Footer: View>: View {
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
             .accessibilityLabel("Attach")
             .accessibilityIdentifier("attach")
-            .onChange(of: picked) {
-                guard !picked.isEmpty else { return }
-                let items = picked
-                picked = []
-                Task { await attach(items) }
-            }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                switch result {
-                case .success(let urls): attach(urls)
-                case .failure(let error): imageError = error.localizedDescription
-                }
-            }
             #endif
             if running && nothingToSend {
                 CircleButton(symbol: "stop.fill", help: "Interrupt", action: stop)
@@ -318,7 +323,7 @@ struct ComposerBox<Footer: View>: View {
         for item in items {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else { continue }
-                added.append(try ImageAttachment.make(data, type: item.supportedContentTypes.first { $0.conforms(to: .image) }))
+                added.append(try ImageAttachment.make(data))
             } catch {
                 imageError = error.localizedDescription
             }
