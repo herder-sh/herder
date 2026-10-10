@@ -47,14 +47,21 @@ struct TranscriptBlockView: View {
                 Group {
                     if inline {
                         MessageText(text: text, pictures: pictures) { await fleet.fetchAttachment($0, of: key) }
+                            .font(.body)
+                            .foregroundStyle(Theme.onBubble)
+                            #if os(iOS)
+                            // Its words and chips are views of their own, which select none of
+                            // the others; a short bubble's menu copies them all.
+                            .contextMenu { Button("Copy", systemImage: "doc.on.doc") { Clipboard.string = text } }
+                            #else
+                            .textSelection(.enabled)
+                            #endif
                     } else {
-                        Text(MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find))
+                        TranscriptText(string: MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find),
+                                       color: Theme.onBubble)
                     }
                 }
-                    .font(.body)
-                    .foregroundStyle(Theme.onBubble)
                     .tint(Theme.link)
-                    .messageSelection()
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(Theme.bubble.opacity(outgoing == nil ? 1 : 0.6), in: .rect(cornerRadius: 18))
@@ -174,11 +181,9 @@ struct FollowUpCard: View {
             Label("herder", systemImage: "arrow.triangle.pull")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.tertiary)
-            Text(MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find))
-                .font(.callout)
-                .foregroundStyle(Theme.secondary)
+            TranscriptText(string: MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find),
+                           style: .callout, color: Theme.secondary)
                 .tint(Theme.link)
-                .messageSelection()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -309,13 +314,12 @@ struct MarkdownText: View {
                 case .table(let table):
                     MarkdownTableView(table: table)
                 case .line, .gap, nil:
-                    LinkText(prose(block, last: index == blocks.count - 1))
-                        .font(.body).foregroundStyle(Theme.text).lineSpacing(3)
+                    TranscriptText(string: prose(block, last: index == blocks.count - 1), lineSpacing: 3)
                 }
             }
         }
-        // Every line, heading and bullet can be selected and copied, not only code.
-        .messageSelection()
+        // A table's cells and a diagram's source can be copied too.
+        .textSelection(.enabled)
         // The app's tint is the text colour, which would hide links in prose.
         .tint(Theme.link)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -323,13 +327,13 @@ struct MarkdownText: View {
 
     static func codeText(_ code: String, language: String) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            Text(CodeHighlight.attributed(code, language: language)).font(Theme.mono).foregroundStyle(Theme.text).messageSelection()
+            TranscriptText(string: CodeHighlight.attributed(code, language: language), style: .footnote, monospaced: true)
                 .padding(12)
         }
     }
 
     /// Each run of prose lines as one block, everything else as a block of its own. A selection
-    /// can't leave the `Text` it starts in, so a run drawn as one `Text` copies across lines.
+    /// can't leave the text it starts in, so a run drawn as one text copies across lines.
     static func blocks(_ parts: [Part]) -> [[Part]] {
         var blocks: [[Part]] = []
         for part in parts {
@@ -358,7 +362,7 @@ struct MarkdownText: View {
                 string += AttributedString("\n")
                 if gap {
                     var spacer = AttributedString("\n")
-                    spacer.font = .system(size: 5)
+                    spacer.font = Self.gapFont
                     string += spacer
                 }
             }
@@ -368,10 +372,15 @@ struct MarkdownText: View {
         return string
     }
 
+    static let headingFont = Font.headline
+    static let quoteFont = Font.body.italic()
+    static let gapSize: CGFloat = 5
+    static let gapFont = Font.system(size: gapSize)
+
     private func styled(_ line: String) -> AttributedString {
         if line.hasPrefix("#") {
             var heading = inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces))
-            heading.font = .headline
+            heading.font = Self.headingFont
             return heading
         }
         if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
@@ -381,7 +390,7 @@ struct MarkdownText: View {
         }
         if line.hasPrefix(">") {
             var quote = inline(line.dropFirst().trimmingCharacters(in: .whitespaces))
-            quote.font = .body.italic()
+            quote.font = Self.quoteFont
             quote.foregroundColor = Theme.secondary
             return quote
         }
