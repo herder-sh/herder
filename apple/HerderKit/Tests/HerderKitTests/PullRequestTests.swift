@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Herder
 @testable import HerderKit
@@ -284,6 +285,12 @@ struct RemoveProjectTests {
 }
 
 struct ProjectIconLookupTests {
+    /// An icon picture `width` units wide and one high, drawn `ProjectIconImage.side` wide, so
+    /// `side / width` high.
+    private func picture(width: Int) -> CGImage {
+        ProjectIconImage.picture(Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="\#(width)" height="1"/>"#.utf8))!
+    }
+
     @Test func aProjectShowsTheIconAnyMachineListedAndThisAppFetched() {
         let bare = Project(projectId: "github.com/acme/app", name: "app", paths: [], defaultPermissionMode: nil,
                            defaultAccount: nil, setupCommand: nil, icon: nil)
@@ -296,13 +303,14 @@ struct ProjectIconLookupTests {
                         machine("b", name: "beta", sessions: [], projects: [iconed])]
         // Without a fetched icon, the initial shows on a machine's background.
         #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: [:])
-                == ProjectIconImage(data: nil, background: "#000000"))
+                == ProjectIconImage(picture: nil, background: "#000000"))
         #expect(Fleet.icon(of: "github.com/acme/app", on: [machine("a", name: "alpha", sessions: [], projects: [bare])],
                            fetched: [:]) == nil)
         // The background comes from the machine whose icon is shown.
-        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": Data([1])])
-                == ProjectIconImage(data: Data([1]), background: "#ffffff"))
-        #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": Data([1])]) == nil)
+        let picture = picture(width: 1)
+        #expect(Fleet.icon(of: "github.com/acme/app", on: machines, fetched: ["abc": picture])
+                == ProjectIconImage(picture: picture, background: "#ffffff"))
+        #expect(Fleet.icon(of: nil, on: machines, fetched: ["abc": picture]) == nil)
     }
 
     @Test func theInitialIsDarkOnALightBackgroundAndWhiteOnADarkOne() {
@@ -320,16 +328,17 @@ struct ProjectIconLookupTests {
         uploaded.iconUploaded = true
         var other = found
         other.icon = "other"
-        let fetched = ["found": Data([1]), "up": Data([2]), "other": Data([3])]
+        // Told apart by their heights.
+        let fetched = ["found": picture(width: 1), "up": picture(width: 2), "other": picture(width: 3)]
         let a = machine("a", name: "alpha", sessions: [], projects: [found])
         let b = machine("b", name: "beta", sessions: [], projects: [uploaded])
         let c = machine("c", name: "gamma", sessions: [], projects: [other])
         // An uploaded icon wins over those found in clones, in either order.
-        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, b], fetched: fetched)?.data == Data([2]))
-        #expect(Fleet.icon(of: "github.com/acme/app", on: [b, a], fetched: fetched)?.data == Data([2]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, b], fetched: fetched)?.picture?.height == 128)
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [b, a], fetched: fetched)?.picture?.height == 128)
         // Between found icons, the machine with the lowest id wins.
-        #expect(Fleet.icon(of: "github.com/acme/app", on: [c, a], fetched: fetched)?.data == Data([1]))
-        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, c], fetched: fetched)?.data == Data([1]))
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [c, a], fetched: fetched)?.picture?.height == 256)
+        #expect(Fleet.icon(of: "github.com/acme/app", on: [a, c], fetched: fetched)?.picture?.height == 256)
     }
 
     @Test func everyDeviceShowsTheSameNameWhateverOrderItPairedTheMachinesIn() {

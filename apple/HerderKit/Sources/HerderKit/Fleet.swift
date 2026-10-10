@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Herder
 import Network
@@ -31,8 +32,10 @@ public final class Fleet {
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.
     private(set) var attachments: [String: Data] = [:]
-    /// Project icons the machines found in their clones, by the icon's hash.
-    private(set) var projectIcons: [String: Data] = [:]
+    /// Project icons the machines list, read into pictures, by the icon's hash.
+    private(set) var projectIcons: [String: CGImage] = [:]
+    /// Icons fetched that are no picture this app reads, by hash, so they are not fetched again.
+    @ObservationIgnored private var unreadableIcons: Set<String> = []
     @ObservationIgnored private var fetching: Set<String> = []
     @ObservationIgnored fileprivate var previousAverage: [HostId: UInt32?] = [:]
     /// Each machine's connection changes since the app opened, oldest first.
@@ -318,14 +321,14 @@ public final class Fleet {
     /// fetched icon, the background of the lowest-id machine that sets one. Choosing by id keeps
     /// the choice from hanging on the order this device paired its machines in.
     nonisolated static func icon(
-        of projectId: ProjectId?, on machines: [Machine], fetched: [String: Data]
+        of projectId: ProjectId?, on machines: [Machine], fetched: [String: CGImage]
     ) -> ProjectIconImage? {
         guard let projectId else { return nil }
         let listed = machines.sorted { $0.hostId < $1.hostId }
             .compactMap { machine in machine.projects.first { $0.projectId == projectId } }
         let iconed = listed.compactMap { project -> (uploaded: Bool, image: ProjectIconImage)? in
             project.icon.flatMap { fetched[$0] }
-                .map { (project.iconUploaded, ProjectIconImage(data: $0, background: project.iconBackground)) }
+                .map { (project.iconUploaded, ProjectIconImage(picture: $0, background: project.iconBackground)) }
         }
         return (iconed.first(where: \.uploaded) ?? iconed.first)?.image
             ?? listed.compactMap(\.iconBackground).first.map { ProjectIconImage(background: $0) }
@@ -335,13 +338,18 @@ public final class Fleet {
     private func fetchProjectIcons(_ machines: [Machine]) {
         for machine in machines where machine.connection == .connected {
             for project in machine.projects {
-                guard let icon = project.icon, projectIcons[icon] == nil, !fetching.contains(icon) else { continue }
+                guard let icon = project.icon, projectIcons[icon] == nil, !unreadableIcons.contains(icon),
+                      !fetching.contains(icon) else { continue }
                 fetching.insert(icon)
                 Task {
                     defer { fetching.remove(icon) }
                     if case .projectIcon(let hash, _, let data)? = try? await client.send(
                         hostId: machine.hostId, command: .getProjectIcon(projectId: project.projectId)) {
-                        projectIcons[hash] = data
+                        if let picture = ProjectIconImage.picture(data) {
+                            projectIcons[hash] = picture
+                        } else {
+                            unreadableIcons.insert(hash)
+                        }
                     }
                 }
             }

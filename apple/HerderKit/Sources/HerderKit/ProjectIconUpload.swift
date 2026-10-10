@@ -62,7 +62,7 @@ struct ProjectIconRow: View {
             HStack(spacing: 10) {
                 if busy { ProgressView().controlSize(.small) }
                 ProjectIcon(projectId: project.projectId, name: project.name,
-                            image: ProjectIconImage(data: fleet.projectIcon(project.projectId)?.data,
+                            image: ProjectIconImage(picture: fleet.projectIcon(project.projectId)?.picture,
                                                     background: background),
                             size: 32)
                 if project.iconUploaded {
