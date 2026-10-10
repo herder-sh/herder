@@ -68,14 +68,11 @@ struct Lists: Equatable {
 
     init() {}
 
-    /// The project a new session starts in from where the user is: the project pane's, else the
-    /// open session's; `nil` when neither is a known project.
-    func project(for item: SidebarItem, session: SessionKey?) -> String? {
-        if case .project(let id) = item, let group = projects.first(where: { $0.id == id }) {
-            return group.projectId
-        }
-        guard let session else { return nil }
-        return projects.first { $0.sessions.contains { $0.key == session } }?.projectId
+    /// The project a new session starts in from where the user is: the project pane's only;
+    /// `nil` anywhere else, which leaves the choice to the picker.
+    func project(for item: SidebarItem) -> String? {
+        guard case .project(let id) = item else { return nil }
+        return projects.first { $0.id == id }?.projectId
     }
 
     /// `done` holds the sessions that finished a turn since this device last opened them;
