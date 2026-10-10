@@ -27,10 +27,14 @@ final class PhotoAttachUITests: XCTestCase {
         // By its point: on CI the out-of-process picker's images can report no hit point while
         // shown, and an element tap then refuses.
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        // Done stays disabled until the picker takes the tap; tapped before, it does nothing.
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: photo)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 10), .completed, "the photo was not selected")
         app.buttons["Done"].tap()
 
+        // The strip shows once the photo has loaded from the library, slow on a fresh simulator.
         let strip = app.descendants(matching: .any)["attachment-strip"].firstMatch
-        XCTAssertTrue(strip.waitForExistence(timeout: 15), "the picked photo was not attached")
+        XCTAssertTrue(strip.waitForExistence(timeout: 60), "the picked photo was not attached")
         app.buttons["Send"].tap()
         XCTAssertTrue(strip.waitForNonExistence(timeout: 10), "the photo did not go with the prompt")
         // The prompt, its photo's marker, queues behind the approval on the machine.
