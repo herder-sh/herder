@@ -992,6 +992,52 @@ async fn a_child_is_archived_once_all_its_pull_requests_are_merged() {
 }
 
 #[tokio::test]
+async fn archiving_a_primary_archives_its_children_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    let idle = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Do it." }))
+        .await["child"]);
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["status"], "idle", "{report}");
+    let busy = id(&tools
+        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
+        .await["child"]);
+    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(request["kind"], "request");
+
+    // A child mid-turn refuses, and the primary stays live.
+    let archive = CommandBody::ArchiveSession {
+        session_id: primary.clone(),
+    };
+    let err = daemon
+        .manager
+        .handle(alice(), archive.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::Conflict, "{}", err.message);
+    assert!(err.message.starts_with("child session "), "{}", err.message);
+    assert_eq!(daemon.status(&busy).await, SessionStatus::Running);
+    assert_ne!(daemon.status(&primary).await, SessionStatus::Archived);
+
+    // Once every child can go, they all go with the primary, an archived one left as it is.
+    let archive_idle = CommandBody::ArchiveSession {
+        session_id: idle.clone(),
+    };
+    daemon.manager.handle(alice(), archive_idle).await.unwrap();
+    let answer = json!({ "child": busy.as_str(), "question_id": "question-1", "choice": 0 });
+    tools.ok("answer", answer).await;
+    let report = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
+    assert_eq!(report["status"], "idle", "{report}");
+    daemon.manager.handle(alice(), archive).await.unwrap();
+    for session in [&idle, &busy, &primary] {
+        assert_eq!(daemon.status(session).await, SessionStatus::Archived);
+    }
+}
+
+#[tokio::test]
 async fn wait_for_filters_by_child_and_leaves_other_reports_waiting() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
