@@ -17,14 +17,14 @@ final class SessionKeyboardUITests: XCTestCase {
         let transcript = app.descendants(matching: .any)["transcript"].firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["Allow"].exists)
-        XCTAssertTrue(app.staticTexts["Run the tests."].isHittable)
+        XCTAssertTrue(app.message("Run the tests.").isHittable)
         XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 2), "the keyboard opened with the session")
 
         app.descendants(matching: .any)["composer"].firstMatch.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "tapping the prompt shows no keyboard")
         // Down through the keyboard, as a thumb would: it follows the drag and goes. The drag
         // starts on a message, as a fixed point of the transcript can fall under the header.
-        app.staticTexts["Run the tests."].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        app.message("Run the tests.").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "dragging the transcript keeps the keyboard")
     }
