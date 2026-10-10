@@ -38,6 +38,10 @@ struct SheetScaffold<Content: View, Footer: View>: View {
         .background(Theme.surface)
         #if os(macOS)
         .frame(width: 560, height: height)
+        #else
+        // The sheet's own glass would show the screen behind it under the footer, by the home
+        // indicator.
+        .presentationBackground(Theme.surface)
         #endif
         .preferredColorScheme(.dark)
     }

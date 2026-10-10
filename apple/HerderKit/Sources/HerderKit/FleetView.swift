@@ -472,13 +472,20 @@ struct ChatsView: View {
 
     var body: some View {
         let lists = fleet.lists
+        let empty = lists.chats.isEmpty && lists.archivedChats.isEmpty
         ScrollView {
-            ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
-                            archived: lists.archivedChats.filter { $0.matches(query) }, title: "Chats")
-                .padding(16)
+            // With no chats the overlay says so, rather than the list's "No sessions match."
+            if !empty {
+                ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
+                                archived: lists.archivedChats.filter { $0.matches(query) }, title: "Chats")
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        // Empty, the scroll view is as narrow as its content; the overlay takes the screen's width.
+        .frame(maxWidth: .infinity)
         .overlay {
-            if lists.chats.isEmpty && lists.archivedChats.isEmpty {
+            if empty {
                 ContentUnavailableView("No chats", systemImage: Switcher.chatSymbol,
                                        description: Text("Ask anything, about no project."))
             }
