@@ -400,9 +400,9 @@ struct SessionView: View {
             if let request = pinned(model, summary) {
                 // The composer takes the user's own answer, as it would with the card gone; each
                 // answer brings in the next question.
-                RequestCard(request: request.request, fleet: fleet, showsSession: false, more: request.more,
-                            step: request.step, answersInComposer: readOnly(model, summary) == nil)
-                    .id(request.request.requestId)
+                RequestCard(request: request, fleet: fleet, showsSession: false,
+                            answersInComposer: readOnly(model, summary) == nil)
+                    .id(request.requestId)
                     .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
                                             removal: .opacity))
             }
@@ -423,7 +423,7 @@ struct SessionView: View {
                 .id(key)
             }
         }
-        .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.request.requestId)
+        .animation(.smooth(duration: 0.25), value: pinned(model, summary)?.requestId)
         .frame(maxWidth: 784)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
@@ -433,21 +433,8 @@ struct SessionView: View {
     }
 
     /// The oldest approval, else the oldest question, on any route, as the TUI pins them.
-    private func pinned(_ model: SessionModel, _ summary: SessionSummary?)
-        -> (request: PendingRequest, more: Int, step: (number: Int, of: Int)?)? {
-        guard let summary, let pending = model.approvals.first ?? model.questions.first else { return nil }
-        let kind: PendingRequest.Kind = switch pending.kind {
-        case .approval(let summary): .approval(summary: summary)
-        case .question(let text, let choices): .question(text: text, choices: choices)
-        }
-        let reason = pending.routedTo == .primary
-            ? "Asked the primary session first; you can still answer"
-            : pending.reason?.text
-        return (PendingRequest(requestId: pending.id, session: summary, kind: kind, since: pending.since,
-                               age: Timestamp.age(pending.since, now: .now), reason: reason, note: pending.note),
-                model.approvals.count + model.questions.count - 1,
-                model.approvals.isEmpty && model.questionRun > 1
-                    ? (model.questionRun - model.questions.count + 1, model.questionRun) : nil)
+    private func pinned(_ model: SessionModel, _ summary: SessionSummary?) -> PendingRequest? {
+        summary.flatMap { model.pinned($0, userOnly: false) }
     }
 
     /// Why the session cannot be driven from here, if it cannot.

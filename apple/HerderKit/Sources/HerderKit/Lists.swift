@@ -98,17 +98,9 @@ struct Lists: Equatable {
         (chats, archivedChats) = Self.split(entries.filter(\.head.chat), now: now)
         let flat = entries.map { $0.summary(now: now, children: children) }
 
-        requests = zip(entries, flat).flatMap { entry, summary in
-            entry.model.forUser.map { pending in
-                let kind: PendingRequest.Kind = switch pending.kind {
-                case .approval(let summary): .approval(summary: summary)
-                case .question(let text, let choices): .question(text: text, choices: choices)
-                }
-                return PendingRequest(
-                    requestId: pending.id, session: summary, kind: kind, since: pending.since,
-                    age: Timestamp.age(pending.since, now: now), reason: pending.reason?.text,
-                    note: pending.note)
-            }
+        // One per session, as its view pins it: the questions asked together page in one card.
+        requests = zip(entries, flat).compactMap { entry, summary in
+            entry.model.pinned(summary, userOnly: true, now: now)
         }
         // Newest first; ties by machine, session, approvals before questions, then id.
         requests.sort { a, b in

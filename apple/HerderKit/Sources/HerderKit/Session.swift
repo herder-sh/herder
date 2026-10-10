@@ -488,6 +488,27 @@ struct SessionModel {
         (approvals + questions).filter { $0.routedTo == .user }
     }
 
+    /// The request to answer first, as the TUI pins them: the oldest approval, else the oldest
+    /// question, on any route or, `userOnly`, only those routed to the user.
+    func pinned(_ session: SessionSummary, userOnly: Bool, now: Date = .now) -> PendingRequest? {
+        let approvals = approvals.filter { !userOnly || $0.routedTo == .user }
+        let questions = questions.filter { !userOnly || $0.routedTo == .user }
+        guard let pending = approvals.first ?? questions.first else { return nil }
+        let kind: PendingRequest.Kind = switch pending.kind {
+        case .approval(let summary): .approval(summary: summary)
+        case .question(let text, let choices): .question(text: text, choices: choices)
+        }
+        let reason = pending.routedTo == .primary
+            ? "Asked the primary session first; you can still answer"
+            : pending.reason?.text
+        return PendingRequest(
+            requestId: pending.id, session: session, kind: kind, since: pending.since,
+            age: Timestamp.age(pending.since, now: now), reason: reason, note: pending.note,
+            more: approvals.count + questions.count - 1,
+            step: approvals.isEmpty && questionRun > 1
+                ? .init(number: questionRun - self.questions.count + 1, of: questionRun) : nil)
+    }
+
     var needsUser: Bool {
         status == .needsYou || !forUser.isEmpty
     }
