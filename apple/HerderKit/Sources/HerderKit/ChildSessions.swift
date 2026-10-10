@@ -195,50 +195,119 @@ private struct RunTime: View {
     }
 }
 
-/// What a child reported when it ended a turn: who, how the turn ended, and its message as
-/// Markdown, folded to a few lines; the child is a click away.
+/// What a child reported when it ended a turn: who, where the child stands now, and its message
+/// as Markdown, folded to a few lines; the header opens the child. A report the same child has
+/// since followed with another shows as one quiet line, which opens it in place.
 struct ChildReportCard: View {
     let report: ChildReport
+    let superseded: Bool
+    /// The block's id, which keeps a superseded report open.
+    let id: String
     let fleet: Fleet
     let hostId: HostId
     let open: ((SessionKey) -> Void)?
-    @State private var expanded = false
-    @State private var height: CGFloat = 0
-    private let folded: CGFloat = 132
+    @Environment(\.transcriptExpanded) private var opened
+
+    var body: some View {
+        if superseded {
+            let shown = opened.wrappedValue.contains(id)
+            VStack(alignment: .leading, spacing: 8) {
+                EarlierReportLine(report: report, child: fleet.sessions[key], shown: shown) {
+                    if shown { opened.wrappedValue.remove(id) } else { opened.wrappedValue.insert(id) }
+                }
+                if shown { card }
+            }
+        } else {
+            card
+        }
+    }
 
     private var key: SessionKey { SessionKey(hostId: hostId, sessionId: report.sessionId) }
 
+    private var card: some View {
+        ReportCard(report: report, key: key, child: fleet.sessions[key], open: open)
+    }
+}
+
+/// An earlier report as one line: "Earlier report", the child's title and the report's first
+/// line, with a chevron.
+private struct EarlierReportLine: View {
+    let report: ChildReport
+    let child: SessionModel?
+    let shown: Bool
+    let toggle: () -> Void
+
     var body: some View {
-        let child = fleet.sessions[key]
-        let overflows = height > folded + 24
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                ChildAvatar(session: child, size: 24, showsState: false)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(child?.title ?? "Session …\(report.sessionId.suffix(6))")
-                            .fontWeight(.semibold).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                        ReportBadge(end: child?.turnEnds[report.turnId])
-                    }
-                    Text(child.map { "Report · \(ModelCatalog.name($0.model ?? "", provider: $0.provider))" } ?? "Report")
-                        .font(.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                SessionButton(key: key, open: open) {
-                    HStack(spacing: 4) {
-                        Text("Open")
-                        Image(systemName: "arrow.up.right")
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.text)
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(Theme.raised, in: .rect(cornerRadius: 7))
-                    .contentShape(.rect)
-                }
-                .help("Open the child session")
+        let title = child?.title ?? "Session …\(report.sessionId.suffix(6))"
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                ChildAvatar(session: child, size: 18, showsState: false)
+                Text("Earlier report").foregroundStyle(Theme.secondary).fixedSize()
+                Text("·").foregroundStyle(Theme.tertiary)
+                Text(title).foregroundStyle(Theme.secondary).lineLimit(1).layoutPriority(1)
+                Text("·").foregroundStyle(Theme.tertiary)
+                Text(report.preview).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Theme.tertiary)
+                    .rotationEffect(.degrees(shown ? 90 : 0))
             }
             .font(.footnote)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help("Earlier report from \(title)")
+        .accessibilityLabel("Earlier report from \(title): \(report.preview)")
+        .accessibilityValue(shown ? "Expanded" : "Collapsed")
+    }
+}
+
+/// A report in full: a header that opens the child, then its message, folded with Show more.
+private struct ReportCard: View {
+    let report: ChildReport
+    let key: SessionKey
+    let child: SessionModel?
+    let open: ((SessionKey) -> Void)?
+    @State private var expanded = false
+    @State private var height: CGFloat = 0
+    @State private var hovering = false
+    private let folded: CGFloat = 132
+
+    var body: some View {
+        let overflows = height > folded + 24
+        let title = child?.title ?? "Session …\(report.sessionId.suffix(6))"
+        let status = ReportStatus(progress: child?.progress, prs: child?.prs ?? [], end: child?.turnEnds[report.turnId])
+        VStack(alignment: .leading, spacing: 10) {
+            SessionButton(key: key, open: open) {
+                HStack(spacing: 8) {
+                    ChildAvatar(session: child, size: 24)
+                    // The status follows the title, or goes under it where a phone has no room.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            titleText(title).fixedSize()
+                            ReportStatusLine(status: status)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            titleText(title)
+                            ReportStatusLine(status: status)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(hovering ? Theme.secondary : Theme.tertiary)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(hovering ? Theme.raised : .clear, in: .rect(cornerRadius: 7))
+                .padding(.horizontal, -6)
+                .padding(.vertical, -4)
+                .contentShape(.rect)
+                .onHover { hovering = $0 }
+            }
+            .help("Open the child session")
+            .accessibilityLabel(status.text.isEmpty ? "Open child session: \(title)"
+                                : "Open child session: \(title), \(status.text)")
             MarkdownText(text: report.summary)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
@@ -265,26 +334,122 @@ struct ChildReportCard: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         .messageCopy(report.summary)
     }
+
+    private func titleText(_ title: String) -> some View {
+        Text(title).fontWeight(.semibold).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+    }
 }
 
-/// How the reported turn ended, as a small badge.
-private struct ReportBadge: View {
-    let end: TurnEnd?
+/// A report's status after the child's title: a badge when the turn failed or was interrupted,
+/// the child's state, then its PR.
+private struct ReportStatusLine: View {
+    let status: ReportStatus
 
     var body: some View {
-        let (text, color): (String, Color) = switch end {
-        case .completed: ("Done", Theme.success)
-        case .failed: ("Failed", Theme.failure)
-        case .interrupted: ("Interrupted", Theme.secondary)
-        case nil: ("Reported", Theme.secondary)
+        HStack(spacing: 5) {
+            if let ending = status.ending {
+                let color = ending == .failed ? Theme.failure : Theme.secondary
+                Text(ending == .failed ? "Failed" : "Interrupted")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(color.opacity(0.14), in: .capsule)
+            }
+            if let word = status.stateWord, let progress = status.progress {
+                Text(word).foregroundStyle(progress == .idle || progress == .done ? Theme.secondary : progress.color)
+            }
+            if let text = status.prText, let pr = status.pr {
+                if status.stateWord != nil { Text("·").foregroundStyle(Theme.tertiary) }
+                Text(text).foregroundStyle(status.prAlarm ? Theme.failure : pr.state.color)
+            }
         }
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.14), in: .capsule)
-            .fixedSize()
+        .font(.caption)
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// Where a reporting child stands now, rather than how its turn ended: its state and its most
+/// pressing PR, as "Idle · #1922 draft", "Working" or "Idle · #1921 CI running". How the
+/// reported turn ended shows only when it failed or was interrupted.
+struct ReportStatus: Equatable {
+    /// How the reported turn ended, when it did not complete.
+    let ending: TurnEnd?
+    /// The child's state; `nil` for a child this device does not know.
+    let progress: ChildProgress?
+    /// The child's most pressing PR: open, then draft, merged and closed, newest first.
+    let pr: PullRequest?
+    /// How many more PRs the child has.
+    let more: Int
+
+    init(progress: ChildProgress?, prs: [PullRequest], end: TurnEnd?) {
+        ending = end == .failed || end == .interrupted ? end : nil
+        self.progress = progress
+        let prs = prs.sorted(by: PRRollup.order)
+        pr = prs.first
+        more = max(prs.count - 1, 0)
+    }
+
+    /// The child's state in a word; a failed child's is left out next to its failed turn.
+    var stateWord: String? {
+        switch progress {
+        case nil: nil
+        case .running: "Working"
+        case .waiting: "Waiting"
+        case .needsYou: "Needs you"
+        case .idle, .done: "Idle"
+        case .failed: ending == .failed ? nil : "Failed"
+        case .archived: "Archived"
+        case .moved: "Moved"
+        }
+    }
+
+    /// The PR's number and what holds it up, or where it ended: "#1921 CI failing", "#1922 draft".
+    var prText: String? {
+        guard let pr else { return nil }
+        let state: String = switch pr.state {
+        case .draft: "draft"
+        case .merged: "merged"
+        case .closed: "closed"
+        case .open:
+            if pr.ci == .failing { "CI failing" }
+            else if pr.mergeable == .conflicting { "conflicts" }
+            else if pr.review == .changesRequested { "changes requested" }
+            else if pr.ci == .pending { "CI running" }
+            else if pr.review == .approved { "approved" }
+            else { "open" }
+        }
+        return "#\(pr.number) \(state)" + (more > 0 ? " +\(more)" : "")
+    }
+
+    /// Whether the PR is held up by something that needs fixing.
+    var prAlarm: Bool {
+        guard let pr, pr.state == .open else { return false }
+        return pr.ci == .failing || pr.mergeable == .conflicting || pr.review == .changesRequested
+    }
+
+    /// All of it on one line, as accessibility reads it.
+    var text: String {
+        [ending.map { $0 == .failed ? "Failed" : "Interrupted" }, stateWord, prText].compactMap { $0 }
+            .joined(separator: " · ")
+    }
+}
+
+extension ChildReport {
+    /// What stands for an earlier report: its first line past any headings, which name a
+    /// section rather than say anything; a heading's own text when there is nothing else.
+    var preview: String {
+        let lines = summary.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        return lines.first { Self.heading($0) == nil } ?? lines.first.map { Self.heading($0) ?? $0 } ?? ""
+    }
+
+    /// A Markdown heading's text: one to six `#`s, then a space; `#1922` is not one.
+    private static func heading(_ line: String) -> String? {
+        let marks = line.prefix { $0 == "#" }.count
+        guard (1...6).contains(marks), line.dropFirst(marks).first == " " else { return nil }
+        return line.dropFirst(marks).trimmingCharacters(in: .whitespaces)
     }
 }
 

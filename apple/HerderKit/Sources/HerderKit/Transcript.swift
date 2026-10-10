@@ -33,7 +33,8 @@ enum TranscriptBlock: Hashable, Identifiable {
     /// A page the agent showed with `show_html`, in its own card.
     case visual(HtmlVisual)
     case children(id: String, [ChildRef])
-    case report(ChildReport)
+    /// A child's report; `superseded` once the same child has reported again since.
+    case report(ChildReport, superseded: Bool)
     case agents(id: String, [NativeAgent])
     case notice(Notice)
     case question(AskedQuestion)
@@ -51,7 +52,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .notice(let notice): "notice-\(notice.id)"
         case .question(let question): "question-\(question.seq)"
         case .handoff(let handoff): "handoff-\(handoff.id)"
-        case .report(let report): "report-\(report.id)"
+        case .report(let report, _): "report-\(report.id)"
         case .work(let work): work.id
         }
     }
@@ -224,6 +225,8 @@ enum Transcript {
             }
         }
 
+        var latestReports: [SessionId: UInt64] = [:]
+        for case .report(let report) in model.log { latestReports[report.sessionId] = report.id }
         for entry in model.log {
             switch entry {
             case .item(let item): add(item, streaming: false)
@@ -242,7 +245,7 @@ enum Transcript {
             case .report(let report):
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
-                append(.report(report))
+                append(.report(report, superseded: latestReports[report.sessionId] != report.id))
             case .child(let sessionId, let task):
                 guard parent == nil else { continue }
                 flushCalls(); flushAgents()
