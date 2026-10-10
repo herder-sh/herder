@@ -98,8 +98,8 @@ struct TranscriptBlockView: View {
             NativeAgentGroup(agents: agents, fleet: fleet, key: key)
         case .children(_, let children):
             ChildrenCard(children: children, fleet: fleet, hostId: hostId, open: open)
-        case .report(let report):
-            ChildReportCard(report: report, fleet: fleet, hostId: hostId, open: open)
+        case .report(let report, let superseded):
+            ChildReportCard(report: report, superseded: superseded, id: block.id, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
             NoticeLine(notice: notice)
         case .question(let question):
