@@ -1,4 +1,5 @@
 import Herder
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 #if os(macOS)
@@ -8,64 +9,78 @@ import UIKit
 #endif
 
 /// Images for a prompt: in a type and size the daemon takes (`imageMediaTypes()`,
-/// `maxImageBytes()`), converted to JPEG and scaled down when they are not.
+/// `maxImageBytes()`), and no larger than `longEdge` pixels on their long edge. Others are
+/// scaled down first, as JPEG, or as PNG if they were one and still fit, so a screenshot's text
+/// stays sharp. No provider looks at more pixels, so the upload is smaller and nothing is lost.
 enum ImageAttachment {
     struct Refused: LocalizedError {
         let errorDescription: String?
     }
 
-    /// An image from its bytes, as the clipboard, a drop or a file gives them.
-    static func make(_ data: Data, type: UTType?) throws -> Herder.Image {
+    /// The longest edge, in pixels, an image is sent at; the TUI's too.
+    static let longEdge = 2048
+
+    /// An image from its bytes, as the photo library, the clipboard, a drop or a file gives them.
+    /// Its type is the one its bytes are in, whatever their source says.
+    static func make(_ data: Data) throws -> Herder.Image {
         let limit = Int(maxImageBytes())
-        if let mediaType = type?.preferredMIMEType, imageMediaTypes().contains(mediaType), data.count <= limit {
+        let refused = Refused(errorDescription: "That image cannot be sent: it is not a picture, or it is too large.")
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else {
+            throw refused
+        }
+        let type = CGImageSourceGetType(source).flatMap { UTType($0 as String) }
+        let mediaType = type?.preferredMIMEType
+        let taken = mediaType.map { imageMediaTypes().contains($0) } ?? false
+        let edge = longestEdge(source)
+        // A GIF goes as it is, which keeps its animation.
+        if let mediaType, taken, data.count <= limit, edge <= longEdge || type?.conforms(to: .gif) == true {
             return Herder.Image(mediaType: mediaType, data: data)
         }
-        guard let jpeg = jpeg(data, limit: limit) else {
-            throw Refused(errorDescription: "That image cannot be sent: it is not a picture, or it is too large.")
+        guard let scaled = scaled(source, from: edge, limit: limit, png: taken && type?.conforms(to: .png) == true) else {
+            throw refused
         }
-        return Herder.Image(mediaType: "image/jpeg", data: jpeg)
+        return scaled
     }
 
-    /// The image as JPEG within `limit` bytes, scaling it down until it fits.
-    private static func jpeg(_ data: Data, limit: Int) -> Data? {
-        #if os(macOS)
-        guard let image = NSImage(data: data), let tiff = image.tiffRepresentation,
-              var rep = NSBitmapImageRep(data: tiff) else { return nil }
-        for _ in 0..<4 {
-            if let out = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85]), out.count <= limit {
-                return out
+    /// The image's long edge in pixels; 0 when its properties do not say.
+    private static func longestEdge(_ source: CGImageSource) -> Int {
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let width = properties?[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let height = properties?[kCGImagePropertyPixelHeight] as? Int ?? 0
+        return max(width, height)
+    }
+
+    /// The image within `longEdge` and `limit` bytes, upright, halving it until it fits.
+    private static func scaled(_ source: CGImageSource, from edge: Int, limit: Int, png: Bool) -> Herder.Image? {
+        var size = edge > 0 ? min(edge, longEdge) : longEdge
+        repeat {
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: size,
+            ]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+            if png, let out = encode(image, as: .png), out.count <= limit {
+                return Herder.Image(mediaType: "image/png", data: out)
             }
-            let size = NSSize(width: rep.pixelsWide / 2, height: rep.pixelsHigh / 2)
-            guard size.width > 64, let smaller = resized(rep, to: size) else { return nil }
-            rep = smaller
-        }
+            if let out = encode(image, as: .jpeg), out.count <= limit {
+                return Herder.Image(mediaType: "image/jpeg", data: out)
+            }
+            size /= 2
+        } while size >= 64
         return nil
-        #else
-        guard var image = UIImage(data: data) else { return nil }
-        for _ in 0..<4 {
-            if let out = image.jpegData(compressionQuality: 0.85), out.count <= limit { return out }
-            let size = CGSize(width: image.size.width / 2, height: image.size.height / 2)
-            guard size.width > 64 else { return nil }
-            image = UIGraphicsImageRenderer(size: size).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+    }
+
+    private static func encode(_ image: CGImage, as type: UTType) -> Data? {
+        let out = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil) else {
+            return nil
         }
-        return nil
-        #endif
+        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? out as Data : nil
     }
 
     #if os(macOS)
-    private static func resized(_ rep: NSBitmapImageRep, to size: NSSize) -> NSBitmapImageRep? {
-        guard let smaller = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height), bitsPerSample: 8,
-            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
-            bitsPerPixel: 0)
-        else { return nil }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: smaller)
-        rep.draw(in: NSRect(origin: .zero, size: size))
-        NSGraphicsContext.restoreGraphicsState()
-        return smaller
-    }
-
     /// Whether a pasteboard holds an image, by its types alone, without reading it.
     static func available(_ board: NSPasteboard = .general) -> Bool {
         board.availableType(from: [.png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier),
@@ -79,12 +94,12 @@ enum ImageAttachment {
         if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL],
            !urls.isEmpty {
             return urls.compactMap { url in
-                (try? Data(contentsOf: url)).flatMap { try? make($0, type: UTType(filenameExtension: url.pathExtension)) }
+                (try? Data(contentsOf: url)).flatMap { try? make($0) }
             }
         }
         for type in [UTType.png, .jpeg, .tiff, .gif, .webP] {
             if let data = board.data(forType: NSPasteboard.PasteboardType(type.identifier)) {
-                return (try? make(data, type: type)).map { [$0] } ?? []
+                return (try? make(data)).map { [$0] } ?? []
             }
         }
         return []
@@ -96,7 +111,7 @@ enum ImageAttachment {
         let images = images(in: board.items)
         if !images.isEmpty { return images }
         return (board.images ?? []).compactMap { picture in
-            picture.pngData().flatMap { try? make($0, type: .png) }
+            picture.pngData().flatMap { try? make($0) }
         }
     }
     #endif
@@ -116,7 +131,7 @@ enum ImageAttachment {
                 taken(a.type) != taken(b.type) ? taken(a.type) : a.type.identifier < b.type.identifier
             }
             for candidate in candidates {
-                if let image = try? make(candidate.data, type: candidate.type) { return image }
+                if let image = try? make(candidate.data) { return image }
             }
             return nil
         }
@@ -127,7 +142,7 @@ enum ImageAttachment {
         var images: [Herder.Image] = []
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
             let type = provider.registeredTypeIdentifiers.compactMap(UTType.init).first { $0.conforms(to: .image) }
-            if let data = try? await provider.loadData(type: type ?? .image), let image = try? make(data, type: type) {
+            if let data = try? await provider.loadData(type: type ?? .image), let image = try? make(data) {
                 images.append(image)
             }
         }
@@ -167,7 +182,7 @@ enum FileAttachment {
         for url in urls {
             let type = UTType(filenameExtension: url.pathExtension)
             if type?.conforms(to: .image) == true, let data = try? Data(contentsOf: url),
-               let image = try? ImageAttachment.make(data, type: type) {
+               let image = try? ImageAttachment.make(data) {
                 images.append(image)
                 continue
             }
@@ -364,6 +379,7 @@ struct AttachmentStrip: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
         }
+        .accessibilityIdentifier("attachment-strip")
     }
 }
 
