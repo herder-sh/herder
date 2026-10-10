@@ -30,8 +30,8 @@ enum TranscriptBlock: Hashable, Identifiable {
     case assistant(id: String, text: String, streaming: Bool)
     case reasoning(id: String, text: String, streaming: Bool)
     case tools(id: String, calls: [ToolCall])
-    /// A page the agent showed with `show_html`, in its own card.
-    case visual(HtmlVisual)
+    /// What the agent published with `publish`, in its own card.
+    case artifact(Artifact)
     case children(id: String, [ChildRef])
     case report(ChildReport)
     case agents(id: String, [NativeAgent])
@@ -46,7 +46,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         case .user(let id, _, _, _, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
         case .agents(let id, _): id
-        case .visual(let visual): "visual-\(visual.id)"
+        case .artifact(let artifact): "artifact-\(artifact.id)"
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
         case .question(let question): "question-\(question.seq)"
@@ -172,9 +172,6 @@ enum Transcript {
             // Adapters number items per turn, so an item id alone repeats across turns.
             let id = "\(item.turnId)/\(item.id)"
             switch item.body {
-            case .toolCall(let name, let input) where HtmlVisual.isShowHtml(name):
-                flushCalls(); flushChildren(); flushAgents()
-                append(.visual(HtmlVisual(id: id, input: input, streaming: streaming)), turn: item.turnId)
             case .toolCall(let name, let input):
                 flushChildren()
                 if NativeAgent.isAgent(name) || items.contains(where: {
@@ -243,6 +240,10 @@ enum Transcript {
                 guard parent == nil else { continue }
                 flushCalls(); flushChildren(); flushAgents()
                 append(.report(report))
+            case .artifact(let artifact):
+                guard parent == nil else { continue }
+                flushCalls(); flushChildren(); flushAgents()
+                append(.artifact(artifact))
             case .child(let sessionId, let task):
                 guard parent == nil else { continue }
                 flushCalls(); flushAgents()

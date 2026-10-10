@@ -51,6 +51,9 @@ says what exists, why, and how it maps to foreign languages.
   `Attachment.name`, `QueuedPrompt.files` and `HistoryPart::File`, with `FILE_MEDIA_TYPE`,
   `MAX_FILE_BYTES` and `MAX_FILE_NAME_BYTES`; `MAX_PROMPT_IMAGE_BYTES` became
   `MAX_PROMPT_ATTACHMENT_BYTES`, covering a prompt's images and files together.
+  Publishing artifacts added, compatibly, `EventBody::ArtifactPublished`, whose attachment
+  `get_attachment` fetches like a prompt's file, `EventBody::attachments`, and
+  `Project.private_artifacts` with the `private_artifacts` of `SetProjectSettings`.
 
 ## Shape, and how it maps to UniFFI
 

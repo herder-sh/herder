@@ -231,6 +231,7 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
         icon: None,
         icon_uploaded: false,
         icon_background: None,
+        private_artifacts: false,
     }];
     app.update(Msg::Machines(machines));
     assert_eq!(app.project_name(&app_id), "Acme app");

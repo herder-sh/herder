@@ -10,18 +10,21 @@ use herder_adapters::{
     Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartFuture, StartRequest,
 };
 use herder_daemon::mcp;
+use herder_daemon::projects::{Overrides, ProjectEntry, ProjectsConfig};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
+use herder_daemon::session::publish::{Link, Publisher, UploadFuture};
 use herder_daemon::session::{
     AccountConfig, Accounts, Adapters, Escalation, EventSink, Notifier, SessionManager, Setup,
     ulid_turn_ids,
 };
 use herder_daemon::worktree::Worktrees;
 use herder_protocol::{
-    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, CiStatus,
-    CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event,
-    EventBody, Item, ItemBody, ItemId, Mergeable, PermissionMode, PrState, PromptId, Provider,
-    PullRequest, QuestionId, ReviewStatus, Route, SessionHead, SessionId, SessionStatus, Timestamp,
-    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UserId,
+    Account, AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome,
+    Attachment, Bytes, CiStatus, CommandBody, CommandResult, ErrorClass, ErrorCode, ErrorInfo,
+    EscalationReason, Event, EventBody, FILE_MEDIA_TYPE, HostId, Item, ItemBody, ItemId, Mergeable,
+    PermissionMode, PrState, PromptId, Provider, PullRequest, QuestionId, ReviewStatus, Route,
+    SessionHead, SessionId, SessionStatus, Timestamp, TurnError, TurnId, TurnUsage, UsagePeriod,
+    UsageTotal, UserId,
 };
 use herder_store::{NewEvent, Store};
 use herder_tasktools::CallToolResult;
@@ -1995,44 +1998,171 @@ async fn agent_delivery_receipts_survive_archive_and_scope_keys_by_sender() {
     assert!(agent_messages(&daemon.journal(&b).await).is_empty());
 }
 
+/// Uploads every artifact for a link of its own, `https://links.test/<n>/<name>`, and records
+/// what it got; refuses a file named `refused.*`.
+#[derive(Default)]
+struct Links(Mutex<Vec<(String, &'static str, Vec<u8>)>>);
+
+impl Links {
+    fn uploads(&self) -> Vec<(String, &'static str, Vec<u8>)> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl Publisher for Links {
+    fn upload(&self, name: String, media_type: &'static str, data: Bytes) -> UploadFuture {
+        let mut uploads = self.0.lock().unwrap();
+        uploads.push((name.clone(), media_type, data.0));
+        let n = uploads.len();
+        Box::pin(async move {
+            if name.starts_with("refused.") {
+                return Err("the link service is down".to_owned());
+            }
+            Ok(Link {
+                url: format!("https://links.test/{n}/{name}"),
+                expires_at: Some("2026-10-11T12:00:00Z".parse().unwrap()),
+            })
+        })
+    }
+}
+
+/// The artifacts `events` record: title, attachment, url.
+fn artifacts(events: &[Event]) -> Vec<(String, Attachment, Option<String>)> {
+    events
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::ArtifactPublished {
+                title,
+                attachment,
+                url,
+                ..
+            } => Some((title.clone(), attachment.clone(), url.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn fetched(daemon: &Daemon, session_id: &SessionId, attachment: &Attachment) -> Vec<u8> {
+    let fetch = CommandBody::GetAttachment {
+        session_id: session_id.clone(),
+        attachment_id: attachment.attachment_id.clone(),
+    };
+    match daemon.manager.handle(alice(), fetch).await.unwrap() {
+        CommandResult::Attachment { data, .. } => data.0,
+        other => panic!("expected an attachment, got {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn any_session_shows_an_html_page_within_its_limits() {
+async fn a_published_artifact_is_kept_in_the_thread_with_its_public_link() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = Daemon::open(dir.path()).await;
+    let links = Arc::new(Links::default());
+    daemon.manager.publish_with(links.clone()).unwrap();
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let worktree = daemon.worktree(&primary).await;
+    std::fs::create_dir(worktree.join("shots")).unwrap();
+    let png = b"\x89PNG\r\n\x1a\nscreen".to_vec();
+    std::fs::write(worktree.join("shots/settings.png"), &png).unwrap();
+    let mut tools = daemon.connect(&primary);
+
+    // A file, by a path relative to the worktree.
+    let shot = json!({ "title": "Settings screen", "path": "shots/settings.png" });
+    assert_eq!(
+        tools.ok("publish", shot).await,
+        json!({
+            "url": "https://links.test/1/settings.png",
+            "expires_at": "2026-10-11T12:00:00Z",
+        })
+    );
+    // A page, by its HTML, named after its title.
+    let page = json!({ "title": "p50 latency", "html": "<!doctype html><p>12 ms</p>" });
+    assert_eq!(
+        tools.ok("publish", page).await["url"],
+        "https://links.test/2/p50-latency.html"
+    );
+    assert_eq!(
+        links.uploads(),
+        [
+            ("settings.png".to_owned(), "image/png", png.clone()),
+            (
+                "p50-latency.html".to_owned(),
+                "text/html",
+                b"<!doctype html><p>12 ms</p>".to_vec()
+            ),
+        ]
+    );
+    let journal = daemon.journal(&primary).await;
+    let published = artifacts(&journal);
+    assert_eq!(published.len(), 2);
+    let (title, attachment, url) = &published[0];
+    assert_eq!(title, "Settings screen");
+    assert_eq!(attachment.name.as_deref(), Some("settings.png"));
+    assert_eq!(attachment.media_type, FILE_MEDIA_TYPE);
+    assert_eq!(attachment.size, png.len() as u64);
+    assert_eq!(url.as_deref(), Some("https://links.test/1/settings.png"));
+    // Clients fetch what they render, as they do a prompt's file.
+    assert_eq!(fetched(&daemon, &primary, attachment).await, png);
+    assert_eq!(
+        fetched(&daemon, &primary, &published[1].1).await,
+        b"<!doctype html><p>12 ms</p>"
+    );
+
+    // A failed upload fails the call and keeps nothing.
+    std::fs::write(worktree.join("refused.txt"), "log").unwrap();
+    std::fs::write(worktree.join("big.mov"), vec![0; (10 << 20) + 1]).unwrap();
+    let refused = json!({ "title": "Log", "path": "refused.txt" });
+    assert_eq!(tools.fails("publish", refused).await, "upload_failed");
+    for invalid in [
+        json!({ "title": " ", "html": "<p>x</p>" }),
+        json!({ "title": "Empty", "html": "  " }),
+        json!({ "title": "Neither" }),
+        json!({ "title": "Both", "html": "<p>x</p>", "path": "refused.txt" }),
+        json!({ "title": "Missing", "path": "nowhere.png" }),
+        json!({ "title": "Folder", "path": "shots" }),
+        json!({ "title": "Too big", "path": "big.mov" }),
+    ] {
+        assert_eq!(tools.fails("publish", invalid).await, "invalid_arguments");
+    }
+    assert_eq!(artifacts(&daemon.journal(&primary).await).len(), 2);
+    assert_eq!(links.uploads().len(), 3);
+}
+
+#[tokio::test]
+async fn a_project_that_keeps_artifacts_private_shows_them_without_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let links = Arc::new(Links::default());
+    daemon.manager.publish_with(links.clone()).unwrap();
+    let projects = ProjectsConfig {
+        entries: vec![ProjectEntry {
+            paths: vec![daemon.repo.clone()],
+            private_artifacts: true,
+            ..ProjectEntry::default()
+        }],
+        ..ProjectsConfig::default()
+    };
+    let overrides = Overrides::new(
+        dir.path().join("daemon.toml"),
+        dir.path().join("icons"),
+        projects,
+    );
+    daemon
+        .manager
+        .manage_projects(HostId::new("host-1"), Arc::new(overrides))
+        .unwrap();
     let primary = daemon.primary(PermissionMode::Ask).await;
     let mut tools = daemon.connect(&primary);
-    let page = json!({ "title": "Latency", "html": "<!doctype html><p>p50: 12 ms</p>" });
+    let page = json!({ "title": "Customers", "html": "<p>internal</p>" });
+    assert_eq!(tools.ok("publish", page).await, json!({}));
+    assert!(links.uploads().is_empty());
+    let published = artifacts(&daemon.journal(&primary).await);
+    assert_eq!(published.len(), 1);
+    assert_eq!(published[0].2, None);
     assert_eq!(
-        tools.ok("show_html", page.clone()).await,
-        json!({ "shown": true })
+        fetched(&daemon, &primary, &published[0].1).await,
+        b"<p>internal</p>"
     );
-
-    // A child shows pages too.
-    let child = id(&tools
-        .ok("spawn", json!({ "task": "T", "prompt": "Ask." }))
-        .await["child"]);
-    let request = tools.ok("wait_for", json!({ "timeout_secs": 10 })).await;
-    assert_eq!(request["kind"], "request");
-    let mut child_tools = daemon.connect(&child);
-    assert_eq!(
-        child_tools.ok("show_html", page).await,
-        json!({ "shown": true })
-    );
-
-    let largest = "a".repeat(1 << 20);
-    assert_eq!(
-        tools
-            .ok("show_html", json!({ "title": "Big", "html": largest }))
-            .await,
-        json!({ "shown": true })
-    );
-    for invalid in [
-        json!({ "title": " \n", "html": "<p>x</p>" }),
-        json!({ "title": "Empty", "html": "  " }),
-        json!({ "title": "Too big", "html": "a".repeat((1 << 20) + 1) }),
-    ] {
-        assert_eq!(tools.fails("show_html", invalid).await, "invalid_arguments");
-    }
 }
 
 /// Records the commands agents run, and refuses those it is told to.

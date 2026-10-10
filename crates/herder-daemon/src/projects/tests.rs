@@ -26,6 +26,7 @@ fn project(id: &str, name: &str, paths: &[&str]) -> Project {
         icon: None,
         icon_uploaded: false,
         icon_background: None,
+        private_artifacts: false,
     }
 }
 
@@ -679,6 +680,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
             default_account: Some(AccountId::new(default_account)),
             setup_command: Some("make setup".into()),
             icon_background: Some(icon_background.into()),
+            private_artifacts: false,
         }
     };
     let error = handle(set("app", "nobody", "#ffffff")).await.unwrap_err();
@@ -719,6 +721,7 @@ async fn owners_add_projects_and_set_their_settings_into_the_config_file() {
         default_account: None,
         setup_command: None,
         icon_background: None,
+        private_artifacts: false,
     };
     let error = handle(unknown).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
@@ -1135,6 +1138,7 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
         default_account: None,
         setup_command: Some("true".into()),
         icon_background: None,
+        private_artifacts: false,
     };
     assert_eq!(
         sessions.handle(member.clone(), set).await,

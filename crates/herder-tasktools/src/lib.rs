@@ -19,9 +19,9 @@ use serde_json::{Map, Value};
 
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, CommandInput, EscalateArgs, EscalateInput,
-    EscalateOutput, OverviewInput, OverviewOutput, Request, RequestRef, SendInput, SendOutput,
-    SendSessionInput, SendSessionOutput, ShowHtmlInput, ShowHtmlOutput, SpawnInput, SpawnOutput,
-    StatusInput, StatusOutput, WaitForInput, WaitForOutput,
+    EscalateOutput, OverviewInput, OverviewOutput, PublishInput, PublishOutput, Request,
+    RequestRef, SendInput, SendOutput, SendSessionInput, SendSessionOutput, SpawnInput,
+    SpawnOutput, StatusInput, StatusOutput, WaitForInput, WaitForOutput,
 };
 
 /// One of the task tools.
@@ -41,8 +41,8 @@ pub enum Tool {
     Answer,
     /// Hand a child's question or approval request to the user.
     Escalate,
-    /// Show an HTML page inline in the caller's thread.
-    ShowHtml,
+    /// Show an artifact in the caller's thread, with a public link to it.
+    Publish,
     /// What the daemon holds: sessions, projects, accounts.
     Overview,
     /// Run a herder command as the session's user.
@@ -59,7 +59,7 @@ impl Tool {
         Tool::WaitFor,
         Tool::Answer,
         Tool::Escalate,
-        Tool::ShowHtml,
+        Tool::Publish,
         Tool::Overview,
         Tool::Command,
     ];
@@ -74,7 +74,7 @@ impl Tool {
             Tool::WaitFor => "wait_for",
             Tool::Answer => "answer",
             Tool::Escalate => "escalate",
-            Tool::ShowHtml => "show_html",
+            Tool::Publish => "publish",
             Tool::Overview => "overview",
             Tool::Command => "command",
         }
@@ -154,20 +154,25 @@ impl Tool {
                  `approval_id`, and a `note` with \
                  what the user should know to decide."
             }
-            Tool::ShowHtml => {
-                "Show a self-contained HTML page inline in this thread, where the call happens, \
-                 so the user sees it rendered live. Use it when something reads better as a \
-                 visual than as prose: data as a chart or table, a diagram or code map, \
-                 side-by-side mocks of several UI options, or an interactive exploration. Do not \
-                 use it for ordinary answers. Write one complete HTML document with all CSS, \
-                 JavaScript, SVG and data inline. The page has no network: remote scripts, \
-                 stylesheets, fonts and images do not load and fetches fail, so use no CDN \
-                 libraries and embed the data in the page. Support light and dark with \
-                 `prefers-color-scheme` (dark is the common case). Make it responsive: readable \
-                 in a column about 700px wide and on a phone, with no fixed widths that \
-                 overflow. Keep it under 1 MiB. `title` is a short label shown above the page. \
-                 Returns at once; still write a short text reply that summarises what the page \
-                 shows, adding what it does not say."
+            Tool::Publish => {
+                "Show an artifact inline in this thread, where the call happens, and get a \
+                 public link to it that opens on any device and can be sent to anyone. Use it \
+                 to prove your work without being asked: whenever a task has an observable \
+                 result, publish it before your final reply, e.g. a screenshot or screen \
+                 recording of a UI change, the captured output of a CLI or API change, or the \
+                 test run of a refactor. Also use it when something reads better as a visual \
+                 than as prose: data as a chart or table, a diagram, side-by-side mocks. Pass \
+                 exactly one of `path`, a file on this machine (absolute, or relative to your \
+                 working directory) of any type, or `html`, one complete self-contained HTML \
+                 document. An HTML page has no network: remote scripts, stylesheets, fonts and \
+                 images do not load, so inline all CSS, JavaScript, SVG and data. Support light \
+                 and dark with `prefers-color-scheme` and keep it readable in a column about \
+                 700px wide and on a phone. At most 10 MiB; shorten or downscale a recording \
+                 that is larger. Never publish secrets, credentials or customer data: anyone \
+                 with the link can open it. Returns `url`, the public link, and `expires_at`; \
+                 `url` is absent when the project keeps artifacts private. Put `url` in your \
+                 reply as a Markdown link, never a local file path. Fails with `upload_failed` \
+                 when the upload fails; retry later."
             }
             Tool::Overview => {
                 "Snapshot of the herder daemon you run in, as its apps see it: `you`, your own \
@@ -201,7 +206,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForInput>(),
             Tool::Answer => tool_schema::<AnswerInput>(),
             Tool::Escalate => tool_schema::<EscalateInput>(),
-            Tool::ShowHtml => tool_schema::<ShowHtmlInput>(),
+            Tool::Publish => tool_schema::<PublishInput>(),
             Tool::Overview => tool_schema::<OverviewInput>(),
             Tool::Command => tool_schema::<CommandInput>(),
         }
@@ -217,7 +222,7 @@ impl Tool {
             Tool::WaitFor => tool_schema::<WaitForOutput>(),
             Tool::Answer => tool_schema::<AnswerOutput>(),
             Tool::Escalate => tool_schema::<EscalateOutput>(),
-            Tool::ShowHtml => tool_schema::<ShowHtmlOutput>(),
+            Tool::Publish => tool_schema::<PublishOutput>(),
             Tool::Overview => tool_schema::<OverviewOutput>(),
             Tool::Command => json_schema!({
                 "type": "object",
@@ -335,8 +340,8 @@ pub enum ToolCall {
     Answer(AnswerInput),
     /// `escalate`.
     Escalate(EscalateInput),
-    /// `show_html`.
-    ShowHtml(ShowHtmlInput),
+    /// `publish`.
+    Publish(PublishInput),
     /// `overview`.
     Overview(OverviewInput),
     /// `command`.
@@ -360,7 +365,7 @@ impl ToolCall {
             Tool::WaitFor => serde_json::from_value(arguments).map(ToolCall::WaitFor),
             Tool::Answer => serde_json::from_value(arguments).map(ToolCall::Answer),
             Tool::Escalate => serde_json::from_value(arguments).map(ToolCall::Escalate),
-            Tool::ShowHtml => serde_json::from_value(arguments).map(ToolCall::ShowHtml),
+            Tool::Publish => serde_json::from_value(arguments).map(ToolCall::Publish),
             Tool::Overview => serde_json::from_value(arguments).map(ToolCall::Overview),
             Tool::Command => serde_json::from_value(arguments).map(ToolCall::Command),
         };
@@ -386,7 +391,7 @@ impl ToolCall {
             ToolCall::WaitFor(_) => Tool::WaitFor,
             ToolCall::Answer(_) => Tool::Answer,
             ToolCall::Escalate(_) => Tool::Escalate,
-            ToolCall::ShowHtml(_) => Tool::ShowHtml,
+            ToolCall::Publish(_) => Tool::Publish,
             ToolCall::Overview(_) => Tool::Overview,
             ToolCall::Command(_) => Tool::Command,
         }
@@ -414,6 +419,8 @@ pub enum ErrorCode {
     /// `spawn` found this host without capacity for another session's agent; retry after
     /// [`ToolError::retry_after_secs`].
     HostBusy,
+    /// `publish` could not upload the artifact for its public link.
+    UploadFailed,
     /// The daemon failed.
     Internal,
 }

@@ -606,37 +606,54 @@
       }
     },
     {
-      "name": "show_html",
-      "description": "Show a self-contained HTML page inline in this thread, where the call happens, so the user sees it rendered live. Use it when something reads better as a visual than as prose: data as a chart or table, a diagram or code map, side-by-side mocks of several UI options, or an interactive exploration. Do not use it for ordinary answers. Write one complete HTML document with all CSS, JavaScript, SVG and data inline. The page has no network: remote scripts, stylesheets, fonts and images do not load and fetches fail, so use no CDN libraries and embed the data in the page. Support light and dark with `prefers-color-scheme` (dark is the common case). Make it responsive: readable in a column about 700px wide and on a phone, with no fixed widths that overflow. Keep it under 1 MiB. `title` is a short label shown above the page. Returns at once; still write a short text reply that summarises what the page shows, adding what it does not say.",
+      "name": "publish",
+      "description": "Show an artifact inline in this thread, where the call happens, and get a public link to it that opens on any device and can be sent to anyone. Use it to prove your work without being asked: whenever a task has an observable result, publish it before your final reply, e.g. a screenshot or screen recording of a UI change, the captured output of a CLI or API change, or the test run of a refactor. Also use it when something reads better as a visual than as prose: data as a chart or table, a diagram, side-by-side mocks. Pass exactly one of `path`, a file on this machine (absolute, or relative to your working directory) of any type, or `html`, one complete self-contained HTML document. An HTML page has no network: remote scripts, stylesheets, fonts and images do not load, so inline all CSS, JavaScript, SVG and data. Support light and dark with `prefers-color-scheme` and keep it readable in a column about 700px wide and on a phone. At most 10 MiB; shorten or downscale a recording that is larger. Never publish secrets, credentials or customer data: anyone with the link can open it. Returns `url`, the public link, and `expires_at`; `url` is absent when the project keeps artifacts private. Put `url` in your reply as a Markdown link, never a local file path. Fails with `upload_failed` when the upload fails; retry later.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "html": {
-            "description": "One complete, self-contained HTML document, at most 1 MiB, with all CSS, JavaScript, SVG and data inline.",
-            "type": "string"
+            "description": "One complete, self-contained HTML document to publish, with all CSS, JavaScript, SVG\nand data inline.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "A file to publish, of any type: absolute, or relative to your working directory.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "title": {
-            "description": "Short label shown above the page, e.g. \"Request latency by endpoint\".",
+            "description": "Short label shown with the artifact, e.g. \"Settings screen after the fix\".",
             "type": "string"
           }
         },
         "additionalProperties": false,
         "required": [
-          "title",
-          "html"
+          "title"
         ]
       },
       "outputSchema": {
         "type": "object",
         "properties": {
-          "shown": {
-            "description": "Always true.",
-            "type": "boolean"
+          "expires_at": {
+            "description": "When `url` stops working; absent when it never expires or there is no `url`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "url": {
+            "description": "Public link to the artifact, for your reply; absent when the project keeps artifacts\nprivate.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
-        },
-        "required": [
-          "shown"
-        ]
+        }
       }
     },
     {
@@ -811,6 +828,10 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "private_artifacts": {
+                  "description": "Whether the project keeps the artifacts its sessions publish private: shown in the\nthread, never uploaded for a public link.",
+                  "type": "boolean"
                 },
                 "project_id": {
                   "description": "The project.",

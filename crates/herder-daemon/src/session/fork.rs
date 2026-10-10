@@ -282,13 +282,7 @@ impl SessionManager {
             .map_err(internal)?;
         let mut kept = Vec::new();
         for event in &events {
-            let EventBody::ItemAdded { item } = &event.body else {
-                continue;
-            };
-            let ItemBody::UserMessage { attachments, .. } = &item.body else {
-                continue;
-            };
-            for attachment in attachments {
+            for attachment in event.body.attachments() {
                 let id = &attachment.attachment_id;
                 let (_, data) = attachments::fetch(&self.inner.attachments, session_id, id).await?;
                 kept.push((attachment.clone(), data));

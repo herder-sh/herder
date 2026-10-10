@@ -53,8 +53,6 @@ enum Kind {
     Web,
     Todo,
     Task,
-    /// `show_html`: a page clients that render HTML show in the thread.
-    Visual,
     Other,
 }
 
@@ -68,7 +66,6 @@ fn kind(name: &str) -> Kind {
         "WebFetch" | "WebSearch" | "web_search" => Kind::Web,
         "TodoWrite" | "TodoRead" | "update_plan" => Kind::Todo,
         "Task" | "Agent" => Kind::Task,
-        name if name.ends_with("show_html") => Kind::Visual,
         name if name.starts_with("mcp__herder__") => Kind::Task,
         _ => Kind::Other,
     }
@@ -211,18 +208,20 @@ fn summary(name: &str, input: &Value, output: Option<&str>, worktree: &str) -> (
         }
         Kind::Task => {
             let label = name.strip_prefix("mcp__herder__").unwrap_or(name);
-            let what = ["description", "task", "prompt", "message", "summary"]
-                .iter()
-                .find_map(|key| arg(input, key))
-                .map(|text| first_line(text).to_owned())
-                .unwrap_or_default();
+            let what = [
+                "description",
+                "task",
+                "prompt",
+                "message",
+                "summary",
+                "title",
+            ]
+            .iter()
+            .find_map(|key| arg(input, key))
+            .map(|text| first_line(text).to_owned())
+            .unwrap_or_default();
             (label.into(), what)
         }
-        // Its title only: the page is no use as text.
-        Kind::Visual => (
-            "visual:".into(),
-            first_line(arg(input, "title").unwrap_or_default()).to_owned(),
-        ),
         Kind::Other => {
             let label = match name.strip_prefix("mcp__") {
                 Some(rest) => rest.replacen("__", " ", 1),
@@ -494,7 +493,7 @@ pub(super) fn tool(
         && match kind {
             Kind::Edit => !diff_lines.is_empty(),
             Kind::Write => arg(input, "content").is_some_and(|c| !c.is_empty()),
-            Kind::Todo | Kind::Visual => false,
+            Kind::Todo => false,
             _ => has_output,
         };
     if !block {
@@ -998,12 +997,10 @@ mod tests {
             ("spawn".into(), "write tests".into())
         );
         let page = json!({"title": "Latency\nby endpoint", "html": "<!doctype html><svg/>"});
-        for name in ["mcp__herder__show_html", "show_html"] {
-            assert_eq!(
-                s(name, page.clone(), Some(r#"{"shown":true}"#)),
-                ("visual:".into(), "Latency".into())
-            );
-        }
+        assert_eq!(
+            s("mcp__herder__publish", page, None),
+            ("publish".into(), "Latency".into())
+        );
         assert_eq!(
             s(
                 "mcp__github__search",

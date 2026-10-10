@@ -679,6 +679,7 @@ struct ProjectSettingsForm: View {
     @State private var account: AccountId?
     @State private var setup = ""
     @State private var iconBackground: String?
+    @State private var privateArtifacts = false
     @State private var loaded = false
     @State private var error: String?
     @State private var confirmingRemove = false
@@ -762,6 +763,17 @@ struct ProjectSettingsForm: View {
             .font(.subheadline)
             .foregroundStyle(Theme.secondary)
             .disabled(!owner)
+            SettingsGroup(title: "Artifacts") {
+                SettingRow(label: "Keep private", detail: "Shown in the thread, never uploaded for a public link") {
+                    Toggle("Keep private", isOn: $privateArtifacts)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("private-artifacts")
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(Theme.secondary)
+            .disabled(!owner)
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(Theme.failure)
             }
@@ -807,11 +819,13 @@ struct ProjectSettingsForm: View {
             account = project.defaultAccount
             setup = project.setupCommand ?? ""
             iconBackground = project.iconBackground
+            privateArtifacts = project.privateArtifacts
             loaded = true
         }
         .onChange(of: mode) { if loaded { Task { await save() } } }
         .onChange(of: iconBackground) { if loaded { Task { await saveAppearance() } } }
         .onChange(of: account) { if loaded { Task { await save() } } }
+        .onChange(of: privateArtifacts) { if loaded { Task { await save() } } }
         .onChange(of: editingSetup) { if !editingSetup { Task { await save() } } }
         .onChange(of: editingName) { if !editingName { Task { await saveAppearance() } } }
     }
@@ -850,12 +864,13 @@ struct ProjectSettingsForm: View {
     private func save() async {
         let command = setup.trimmingCharacters(in: .whitespaces)
         guard mode != project.defaultPermissionMode || account != project.defaultAccount
-                || (command.isEmpty ? nil : command) != project.setupCommand else { return }
+                || (command.isEmpty ? nil : command) != project.setupCommand
+                || privateArtifacts != project.privateArtifacts else { return }
         do {
             try await fleet.setProjectSettings(project.projectId, on: machine.hostId, name: appearanceName, mode: mode,
                                                account: account,
                                                setupCommand: command.isEmpty ? nil : command,
-                                               iconBackground: iconBackground)
+                                               iconBackground: iconBackground, privateArtifacts: privateArtifacts)
             error = nil
         } catch {
             self.error = describe(error)

@@ -233,6 +233,7 @@ pub mod failover;
 pub mod fork;
 pub(crate) mod journal;
 mod merge;
+pub mod publish;
 mod routing;
 mod setup;
 mod tasks;
@@ -433,6 +434,8 @@ struct Inner {
     /// Held while a title is checked and journaled, so renames and generated titles apply one
     /// at a time.
     titling: Mutex<()>,
+    /// Where artifacts are uploaded for their public links, once set; without one, none is.
+    publisher: OnceLock<Arc<dyn publish::Publisher>>,
     /// Where forks find sessions, updated when the vault link changes ([`SessionManager::fork_from`]).
     forks: std::sync::RwLock<Option<Arc<fork::Forks>>>,
     /// Histories clients relay for forks, until the fork takes them.
@@ -585,6 +588,7 @@ impl SessionManager {
                 skills: OnceLock::new(),
                 titler: OnceLock::new(),
                 titling: Mutex::new(()),
+                publisher: OnceLock::new(),
                 forks: std::sync::RwLock::new(None),
                 uploads: fork::Uploads::default(),
                 shutdown,
@@ -705,6 +709,7 @@ impl SessionManager {
                 default_account,
                 setup_command,
                 icon_background,
+                private_artifacts,
             } => {
                 let settings = ProjectSettings {
                     name,
@@ -712,6 +717,7 @@ impl SessionManager {
                     default_account,
                     setup_command,
                     icon_background,
+                    private_artifacts,
                 };
                 return self.set_project_settings(&project_id, settings).await;
             }
@@ -1404,6 +1410,15 @@ impl SessionManager {
     /// The providers this manager runs sessions of.
     pub fn providers(&self) -> Vec<Provider> {
         self.inner.adapters.0.keys().cloned().collect()
+    }
+
+    /// Uploads what sessions `publish` with `publisher` from now on, for their public links;
+    /// once per manager. Without one, artifacts are only shown in their threads.
+    pub fn publish_with(&self, publisher: Arc<dyn publish::Publisher>) -> anyhow::Result<()> {
+        self.inner
+            .publisher
+            .set(publisher)
+            .map_err(|_| anyhow::anyhow!("artifacts have a publisher already"))
     }
 
     /// Announces every child request that goes to the user instead of its primary session to
