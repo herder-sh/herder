@@ -76,7 +76,7 @@ struct MachinesView: View {
     }
 
     private var providersLink: some View {
-        NavigationLink { ProvidersView(fleet: fleet) } label: {
+        NavigationLink { ProvidersView(fleet: fleet, sheet: $sheet) } label: {
             Card(padding: 12) {
                 HStack(spacing: 10) {
                     Image(systemName: "person.2").foregroundStyle(Theme.secondary)

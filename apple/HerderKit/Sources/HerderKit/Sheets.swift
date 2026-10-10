@@ -17,6 +17,8 @@ enum AppSheet: Identifiable, Hashable {
     case newProject
     case projectSettings(projectId: String)
     case machineSettings(hostId: HostId)
+    /// A new provider account: pick its machine first.
+    case addAccount
 
     var id: Self { self }
 }
@@ -31,6 +33,7 @@ extension AppSheet {
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .projectSettings(let projectId): ProjectSettingsSheet(fleet: fleet, projectId: projectId)
         case .machineSettings(let hostId): MachineSettingsSheet(fleet: fleet, hostId: hostId)
+        case .addAccount: NewAccountSheet(fleet: fleet)
         }
     }
 }
