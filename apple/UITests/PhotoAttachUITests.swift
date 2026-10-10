@@ -24,7 +24,9 @@ final class PhotoAttachUITests: XCTestCase {
         // simulator's first use of its library they take a minute to load.
         let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 120), "the photo library did not open")
-        photo.tap()
+        // By its point: on CI the out-of-process picker's images can report no hit point while
+        // shown, and an element tap then refuses.
+        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         app.buttons["Done"].tap()
 
         let strip = app.descendants(matching: .any)["attachment-strip"].firstMatch
