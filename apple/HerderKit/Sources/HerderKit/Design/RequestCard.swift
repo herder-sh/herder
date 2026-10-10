@@ -26,6 +26,14 @@ struct RequestCard: View {
                 content
                 ScrollView { content }.frame(maxHeight: 360)
             }
+            // Outside the scroll, so short of room (the keyboard up under a pinned card) the
+            // approval's text gives way and Allow and Deny stay.
+            if case .approval = request.kind {
+                HStack(spacing: 10) {
+                    ActionButton(title: "Deny", style: .secondary) { await fleet.answer(request, allow: false) }
+                    ActionButton(title: "Allow", style: .primary) { await fleet.answer(request, allow: true) }
+                }
+            }
             if let refusal = fleet.refusals[request.session.key] {
                 Text(refusal).font(.footnote).foregroundStyle(Theme.failure)
             }
@@ -64,10 +72,6 @@ struct RequestCard: View {
                     .background(Theme.raised, in: .rect(cornerRadius: 8))
                     .textSelection(.enabled)
                 reasonLines
-                HStack(spacing: 10) {
-                    ActionButton(title: "Deny", style: .secondary) { await fleet.answer(request, allow: false) }
-                    ActionButton(title: "Allow", style: .primary) { await fleet.answer(request, allow: true) }
-                }
             case .question(let text, let labels):
                 let question = QuestionText(text, choices: labels)
                 MarkdownText(text: question.body)
