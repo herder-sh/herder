@@ -133,11 +133,18 @@ impl Daemon {
             .unwrap_or(SessionStatus::Idle)
     }
 
-    /// Waits until turn `turn` started and the session is `status`, then lets the watcher see
-    /// it, as its next check would.
+    /// Waits until turn `turn` started, its `turn_started` is journaled and the session is
+    /// `status`, then lets the watcher see it, as its next check would. The session journals
+    /// `Running` before the CLI's `turn_started`, which would otherwise land after this check.
     async fn settled(&self, session_id: &SessionId, turn: u64, status: SessionStatus) {
+        let turn_id = TurnId::new(format!("turn-{turn}"));
         for _ in 0..500 {
-            if self.turns.load(Ordering::SeqCst) >= turn && self.status(session_id).await == status
+            let started = self.events(session_id).await.iter().any(
+                |event| matches!(&event.body, EventBody::TurnStarted { turn_id: id } if *id == turn_id),
+            );
+            if self.turns.load(Ordering::SeqCst) >= turn
+                && started
+                && self.status(session_id).await == status
             {
                 self.stalls.check().await.unwrap();
                 return;
