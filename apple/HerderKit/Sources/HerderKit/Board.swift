@@ -146,6 +146,15 @@ extension Lists {
             return BoardColumn(state: state, trees: newest)
         }
     }
+
+    /// The Board's columns with just the task trees a search finds, and without the columns it
+    /// leaves empty.
+    func board(matching query: String) -> [BoardColumn] {
+        board.compactMap { column in
+            let trees = column.trees.filter { $0.matches(query) }
+            return trees.isEmpty ? nil : BoardColumn(state: column.state, trees: trees)
+        }
+    }
 }
 
 /// The app's home: what is waiting on you, then every task tree by where its work stands, so
@@ -161,10 +170,7 @@ struct BoardView: View {
 
     var body: some View {
         let lists = fleet.lists
-        let columns = lists.board.compactMap { column -> BoardColumn? in
-            let trees = column.trees.filter { $0.matches(query) }
-            return trees.isEmpty ? nil : BoardColumn(state: column.state, trees: trees)
-        }
+        let columns = lists.board(matching: query)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 22) {
                 #if os(iOS)
