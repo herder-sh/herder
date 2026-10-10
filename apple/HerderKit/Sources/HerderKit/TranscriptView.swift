@@ -20,8 +20,8 @@ struct TranscriptBlockView: View {
 
     var body: some View {
         switch block {
-        case .user(_, let text, _, _, _, .some):
-            FollowUpCard(text: text)
+        case .user(let id, let text, _, _, _, .some(let followUp)):
+            FollowUpEvent(id: id, followUp: followUp, text: text)
         case .user(_, let text, let attachments, let outgoing, let agentMessage, _):
             VStack(alignment: .trailing, spacing: 6) {
                 let pictures = MessagePicture.of(attachments: attachments, outgoing: outgoing, in: fleet)
@@ -166,34 +166,6 @@ private struct Disclosure: View {
         }
         .buttonStyle(.plain)
         .accessibilityValue(open ? "Expanded" : "Collapsed")
-    }
-}
-
-/// A prompt herder sent the agent on its own, such as a pull request's checks passing: a quiet
-/// card on the agent's side, so it never reads as the user's message.
-struct FollowUpCard: View {
-    let text: String
-    @Environment(\.prLinks) private var prLinks
-    @Environment(\.findHighlight) private var find
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("herder", systemImage: "arrow.triangle.pull")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.tertiary)
-            TranscriptText(string: MarkdownText.decorated(AttributedString(text), prs: prLinks, find: find),
-                           style: .callout, color: Theme.secondary)
-                .tint(Theme.link)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay {
-            RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.stroke, lineWidth: 1)
-        }
-        .messageCopy(text)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("herder: \(text)")
     }
 }
 
