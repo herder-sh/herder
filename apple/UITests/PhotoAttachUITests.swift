@@ -26,7 +26,10 @@ final class PhotoAttachUITests: XCTestCase {
         XCTAssertTrue(photo.waitForExistence(timeout: 120), "the photo library did not open")
         // By its point: on CI the out-of-process picker's images can report no hit point while
         // shown, and an element tap then refuses.
+        print("BEFORE-TAP-DUMP\n" + app.debugDescription + "\nEND-DUMP")
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        sleep(2)
+        print("AFTER-TAP-DUMP\n" + app.debugDescription + "\nEND-DUMP")
         app.buttons["Done"].tap()
 
         let strip = app.descendants(matching: .any)["attachment-strip"].firstMatch
