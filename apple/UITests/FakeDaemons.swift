@@ -1,6 +1,11 @@
 import XCTest
 
 extension XCUIApplication {
+    /// A transcript message's text, a text view to select in, found by what it says.
+    func message(_ text: String) -> XCUIElement {
+        textViews.matching(NSPredicate(format: "value == %@", text)).firstMatch
+    }
+
     /// The link of the fake daemons the tests run against (`fake_daemon --share` prints it; pass
     /// it to `xcodebuild test` as `TEST_RUNNER_HERDER_PAIR_LINK`).
     static func pairLink() throws -> String {
