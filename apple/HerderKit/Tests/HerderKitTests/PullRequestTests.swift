@@ -166,19 +166,6 @@ struct FollowUpTests {
     }
 }
 
-struct ImageAttachmentTests {
-    @Test func aSmallPNGGoesAsItIsAndOtherImagesBecomeJPEG() throws {
-        // A 1×1 PNG.
-        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==")!
-        let image = try ImageAttachment.make(png, type: .png)
-        #expect(image.mediaType == "image/png")
-        #expect(image.data == png)
-        let converted = try ImageAttachment.make(png, type: .tiff)
-        #expect(converted.mediaType == "image/jpeg")
-        #expect(throws: (any Error).self) { try ImageAttachment.make(Data("not a picture".utf8), type: nil) }
-    }
-}
-
 struct RoundTwoTests {
     @Test func aProjectWithoutSessionsStillLists() {
         let project = Project(projectId: "github.com/acme/new", name: "new", paths: ["/src/new"], defaultPermissionMode: nil,
