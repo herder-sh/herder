@@ -25,8 +25,9 @@ final class SessionKeyboardUITests: XCTestCase {
         // The keyboard leaves the pinned approval its Allow and Deny.
         XCTAssertTrue(app.buttons["Allow"].isHittable, "the keyboard squeezed the approval to its header")
         // Down through the keyboard, as a thumb would: it follows the drag and goes. The drag
-        // starts on a message, as a fixed point of the transcript can fall under the header.
-        app.message("Run the tests.").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        // starts at the transcript's foot, just above the pinned card: with the keyboard up the
+        // rest of what is left of it can fall under the header.
+        transcript.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92))
             .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "dragging the transcript keeps the keyboard")
     }
