@@ -47,7 +47,9 @@
 //! the worktree is removed, so the session keeps owning it once the worktree, and the reflog it
 //! was read from, are gone. `archive_session` ([`SessionManager::archive`]) stops the session
 //! and journals the `archived` status, leaving the worktree as it is: archiving runs no git, so
-//! nothing in the worktree can stop it. [`SessionManager::remove_archived_worktrees`], run
+//! nothing in the worktree can stop it. Archiving a primary archives its children first, deepest
+//! first, and refuses with the first child that refuses.
+//! [`SessionManager::remove_archived_worktrees`], run
 //! every [`SWEEP_INTERVAL`], removes the worktree of each session archived for
 //! [`KEEP_ARCHIVED_WORKTREE`], whatever it holds, keeping its branches. An archived session
 //! takes no further commands but `unarchive_session`, which goes on in the worktree when it is
@@ -1455,11 +1457,38 @@ impl SessionManager {
 
     /// Archives `session_id` for `by`: stops it and makes it read-only, leaving its worktree
     /// for [`Self::remove_archived_worktrees`]. Refuses while a turn or the setup command runs.
+    /// Its children, and theirs, are archived first, deepest first; one that refuses stops the
+    /// archive there, leaving `session_id` live.
     pub async fn archive(
         &self,
         by: UserId,
         session_id: SessionId,
     ) -> Result<CommandResult, ErrorInfo> {
+        let mut descendants = Vec::new();
+        let mut parents = vec![session_id.clone()];
+        while let Some(parent) = parents.pop() {
+            for child in self
+                .inner
+                .journal
+                .children(parent)
+                .await
+                .map_err(internal)?
+            {
+                parents.push(child.session_id.clone());
+                descendants.push(child);
+            }
+        }
+        for child in descendants.into_iter().rev() {
+            if child.status == SessionStatus::Archived {
+                continue;
+            }
+            self.send(child.session_id.clone(), Some(by.clone()), Request::Archive)
+                .await
+                .map_err(|err| {
+                    let name = child.title.as_deref().unwrap_or(child.session_id.as_str());
+                    error(err.code, format!("child session {name}: {}", err.message))
+                })?;
+        }
         self.send(session_id, Some(by), Request::Archive).await
     }
 
