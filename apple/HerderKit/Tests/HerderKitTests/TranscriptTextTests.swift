@@ -28,6 +28,15 @@ struct TranscriptTextTests {
         #expect(try Self.litPixels(host) > 1_000, "the end of the text is drawn")
     }
 
+    /// SwiftUI's text has no paragraph styles, so a gap above a paragraph is a short blank line
+    /// and a nested item is indented by tabs, which line up with the tab after a marker.
+    @Test func paragraphsKeepTheirSpaceAndIndentsInSwiftUIText() {
+        let prose = MarkdownText(text: "")
+        let lines = MarkdownText.proseLines(MarkdownText.parse("Intro\n\n- one\n  - nested"))
+        let spaced = TranscriptText.spaced(prose.prose(lines, last: true), style: .body, lineSpacing: 3)
+        #expect(String(spaced.characters) == "Intro\n\n•\tone\n\t•\tnested")
+    }
+
     /// The pixels of white text on the black background, in the layers as they are on screen:
     /// drawing the view afresh would lay out whatever it is asked to draw.
     private static func litPixels(_ view: NSView) throws -> Int {
