@@ -67,7 +67,7 @@ struct MarkdownTableView: View {
     @Environment(\.findHighlight) private var find
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        SidewaysScroll {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(table.header.enumerated()), id: \.offset) { column, text in

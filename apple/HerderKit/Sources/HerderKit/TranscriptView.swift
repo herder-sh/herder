@@ -354,7 +354,7 @@ struct MarkdownText: View {
     static let readingWidth: CGFloat = 680
 
     static func codeText(_ code: String, language: String) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        SidewaysScroll {
             TranscriptText(string: CodeHighlight.attributed(code, language: language), style: .footnote, monospaced: true)
                 .padding(12)
         }

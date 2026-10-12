@@ -37,6 +37,28 @@ struct TranscriptTextTests {
         #expect(String(spaced.characters) == "Intro\n\n•\tone\n\t•\tnested")
     }
 
+    /// A table wider than the transcript scrolls in its own box: the message, its prose and the
+    /// table keep to the width they are given, the table starting at its first column.
+    @Test func aWideTableKeepsTheMessageToItsWidth() throws {
+        let columns = (1...8).map { "Column \($0) with a long heading" }
+        let text = "We buy the room and resell it as our own product, fully responsible for delivering it.\n\n"
+            + "| " + columns.joined(separator: " | ") + " |\n|" + String(repeating: "---|", count: columns.count) + "\n"
+            + "| " + columns.map { _ in "The hotel carries the risk" }.joined(separator: " | ") + " |"
+        let host = NSHostingView(rootView: MarkdownText(text: text))
+        host.frame = CGRect(x: 0, y: 0, width: 500, height: 400)
+        host.layoutSubtreeIfNeeded()
+
+        let table = try #require(Self.first(NSScrollView.self, in: host))
+        let frame = table.convert(table.bounds, to: host)
+        #expect(frame.minX >= 0, "the table starts at its first column, \(frame)")
+        #expect(frame.maxX <= 500, "\(frame)")
+    }
+
+    private static func first<View: NSView>(_ type: View.Type, in view: NSView) -> View? {
+        if let view = view as? View { return view }
+        return view.subviews.lazy.compactMap { first(type, in: $0) }.first
+    }
+
     /// The pixels of white text on the black background, in the layers as they are on screen:
     /// drawing the view afresh would lay out whatever it is asked to draw.
     private static func litPixels(_ view: NSView) throws -> Int {
