@@ -14,7 +14,7 @@ settings:
     PRODUCT_NAME: herder
     # Not `herder`: on a case-insensitive disk it clashes with the bindings module `Herder`.
     PRODUCT_MODULE_NAME: HerderApp
-    PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder
+    PRODUCT_BUNDLE_IDENTIFIER: sh.herder.HerderGZ69
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_CFBundleDisplayName: herder
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
