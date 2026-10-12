@@ -13,69 +13,64 @@ final class ScreenshotTests: XCTestCase {
     private var missed: [String] = []
 
     func testScreenshots() throws {
-        let link = try XCTUnwrap(
-            ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        let link = ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"] ?? ""
+        let mode = ProcessInfo.processInfo.environment["HERDER_SHOT_MODE"] ?? "light"
+        #if os(macOS)
+        if mode == "dark" { app.launchArguments += ["-AppleInterfaceStyle", "Dark"] }
+        #endif
         app.launch()
         #if os(macOS)
-        resize(to: CGSize(width: 1440, height: 900))
+        resize(to: CGSize(width: 1100, height: 800))
         #endif
-        try pair(link)
-        #if os(macOS)
-        let expand = app.buttons["Expand the sidebar"].firstMatch
-        if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
-        #endif
-
-        // The Board: the approval waiting on you, then where each session's work stands.
-        guard wait(row("Upgrade date-fns to v4"), "board") else { return finish() }
-        settle()
-        #if os(macOS)
-        shoot("mac-home")
-        #else
-        shoot("ios-home")
-        #endif
-
-        // A session whose Claude subagents work in parallel, then one of them.
-        if open("Audit webhook retries") {
-            #if os(iOS)
-            shoot("ios-session")
-            #endif
-            let agent = app.buttons.matching(
-                NSPredicate(format: "label BEGINSWITH 'Open sub-agent: Review retry backoff'")).firstMatch
-            if wait(agent, "subagent row") {
-                press(agent)
-                settle()
-                #if os(macOS)
-                shoot("mac-subagents")
-                #endif
-                dismiss()
-            }
+        if app.buttons["Add Machine"].firstMatch.waitForExistence(timeout: 8) { try pair(link) }
+        guard open("Rate-limit the public API per key") else { return finish() }
+        // A later turn, so the long one sits mid-transcript.
+        if !app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Thanks, ship it.'")).firstMatch.exists
+            && !app.textViews.matching(NSPredicate(format: "value CONTAINS 'Thanks, ship it.'")).firstMatch.exists {
+            let field = app.textViews["composer"].exists ? app.textViews["composer"].firstMatch
+                : app.descendants(matching: .any)["composer"].firstMatch
+            press(field)
+            field.typeText("Thanks, ship it.")
+            press(app.buttons["Send"].firstMatch)
+            settle(); settle()
         }
-
-        // The approval, pinned above the composer.
-        if open("Upgrade date-fns to v4") {
-            #if os(macOS)
-            shoot("mac-approval")
-            #else
-            shoot("ios-approval")
-            #endif
-        }
-
-        #if os(macOS)
-        // Failover after a limit, a handoff to another machine, a task with its children.
-        if open("Move invoices onto the ledger") { shoot("mac-failover") }
-        if open("Fix the flaky checkout e2e test") { shoot("mac-handoff") }
-        if open("Roll out 30-day log retention") { shoot("mac-tasks") }
-        #endif
-
-        // The fleet.
-        if section("Machines") {
+        #if os(iOS)
+        if app.keyboards.firstMatch.exists {
+            let t = app.descendants(matching: .any)["transcript"].firstMatch
+            t.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).press(forDuration: 0.05, thenDragTo: t.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1.0)))
             settle()
-            #if os(macOS)
-            shoot("mac-machines")
-            #else
-            shoot("ios-machines")
-            #endif
         }
+        #endif
+        let work = app.descendants(matching: .any)["turn-work"].firstMatch
+        guard wait(work, "turn-work") else { return finish() }
+        if work.value as? String == "Expanded" { press(work); settle() }
+        shoot("\(mode)-1-folded")
+        press(work)
+        settle()
+        shoot("\(mode)-2-opened")
+        let hide = app.descendants(matching: .any)["turn-work-hide"].firstMatch
+        for _ in 0..<30 where !(hide.exists && hide.isHittable) {
+            #if os(iOS)
+            app.swipeUp(velocity: .slow)
+            #else
+            app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -300)
+            #endif
+            Thread.sleep(forTimeInterval: 0.3)
+            if !hide.exists && app.staticTexts["Done. The change is on this session's branch, with the tests passing."].firstMatch.isHittable { break }
+        }
+        settle()
+        shoot("\(mode)-3-bottom")
+        guard hide.exists else { missed.append("hide (before build?)"); return finish() }
+        let info = XCTAttachment(string: "hide label=\(hide.label) id=\(hide.identifier)")
+        info.name = "\(mode)-hide-info"; info.lifetime = .keepAlways; add(info)
+        press(hide)
+        settle()
+        shoot("\(mode)-4-hidden-from-bottom")
+        XCTAssertTrue(work.isHittable, "the folded line is out of view")
+        // From the top, as before.
+        press(work); settle()
+        press(work); settle()
+        shoot("\(mode)-5-top-toggle")
         finish()
     }
 
