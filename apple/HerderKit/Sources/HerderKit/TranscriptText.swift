@@ -206,7 +206,10 @@ private struct SelectableTextView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSTextView {
-        let view = NSTextView(usingTextLayoutManager: true)
+        // TextKit 1, which lays out all of the text. TextKit 2 lays out only the part of it in
+        // view, which it misses in a transcript that opens at its end: a reply taller than the
+        // transcript was blank.
+        let view = NSTextView(usingTextLayoutManager: false)
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
