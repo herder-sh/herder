@@ -229,6 +229,65 @@ struct ChildReportCard: View {
     }
 }
 
+/// A run of earlier reports as one line: how many, and from which children, "12 earlier reports ·
+/// OAuth sign-in, Signed-in tools"; a click lists them, each as its own line that opens it.
+struct EarlierReports: View {
+    /// The block's id, which keeps the run open.
+    let id: String
+    let reports: [ChildReport]
+    let fleet: Fleet
+    let hostId: HostId
+    let open: ((SessionKey) -> Void)?
+    @Environment(\.transcriptExpanded) private var opened
+
+    var body: some View {
+        let shown = opened.wrappedValue.contains(id)
+        let children = reports.reduce(into: [SessionId]()) { if !$0.contains($1.sessionId) { $0.append($1.sessionId) } }
+        let titles = children.map { fleet.sessions[key($0)]?.title ?? "Session …\($0.suffix(6))" }.joined(separator: ", ")
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                if shown { opened.wrappedValue.remove(id) } else { opened.wrappedValue.insert(id) }
+            } label: {
+                HStack(spacing: 6) {
+                    HStack(spacing: -6) {
+                        ForEach(children.prefix(3), id: \.self) { child in
+                            ChildAvatar(session: fleet.sessions[key(child)], size: 18, showsState: false)
+                        }
+                    }
+                    Text("\(reports.count) earlier reports").foregroundStyle(Theme.secondary).fixedSize()
+                    Text("·").foregroundStyle(Theme.tertiary)
+                    Text(titles).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.tertiary)
+                        .rotationEffect(.degrees(shown ? 90 : 0))
+                }
+                .font(.footnote)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help(shown ? "Hide the earlier reports" : "Show the earlier reports")
+            .accessibilityLabel("\(reports.count) earlier reports from \(titles)")
+            .accessibilityValue(shown ? "Expanded" : "Collapsed")
+            if shown {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(reports, id: \.id) { report in
+                        ChildReportCard(report: report, superseded: true,
+                                        id: TranscriptBlock.report(report, superseded: true).id,
+                                        fleet: fleet, hostId: hostId, open: open)
+                    }
+                }
+                .padding(.leading, 12)
+                .overlay(alignment: .leading) { Rectangle().fill(Theme.stroke).frame(width: 2) }
+                .padding(.leading, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func key(_ child: SessionId) -> SessionKey { SessionKey(hostId: hostId, sessionId: child) }
+}
+
 /// An earlier report as one line: "Earlier report", the child's title and the report's first
 /// line, with a chevron.
 private struct EarlierReportLine: View {
