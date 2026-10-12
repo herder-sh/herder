@@ -75,6 +75,18 @@ struct TranscriptFind: Equatable {
         self.current = matches[(index + step + matches.count) % matches.count]
     }
 
+    /// The folds a match in `block` opens to show: a turn's work, an earlier report, or a run of
+    /// them with each report in it that matches.
+    func opens(_ block: TranscriptBlock) -> [String] {
+        switch block {
+        case .work, .report(_, superseded: true): [block.id]
+        case .earlierReports(let id, let reports):
+            [id] + reports.filter { $0.summary.localizedStandardContains(query) }
+                .map { TranscriptBlock.report($0, superseded: true).id }
+        default: []
+        }
+    }
+
     func highlight(_ id: String) -> FindHighlight? {
         shown && !query.isEmpty ? FindHighlight(query: query, current: id == current) : nil
     }
@@ -88,6 +100,7 @@ extension TranscriptBlock {
         case .tools(_, let calls): calls.map { "\($0.name) \($0.summary) \($0.output)" }.joined(separator: "\n")
         case .children(_, let children): children.map(\.task).joined(separator: "\n")
         case .report(let report, _): report.summary
+        case .earlierReports(_, let reports): reports.map(\.summary).joined(separator: "\n")
         case .artifact(let artifact): [artifact.title, artifact.url?.absoluteString ?? ""].joined(separator: "\n")
         case .agents(_, let agents): agents.map { [$0.title, $0.prompt, $0.result ?? ""].joined(separator: "\n") }.joined(separator: "\n")
         case .notice(let notice): [notice.text, notice.detail ?? ""].joined(separator: "\n")

@@ -109,11 +109,8 @@ struct SessionView: View {
             }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
-                // A match in a turn's folded work, or in an earlier report, opens it.
-                switch blocks.first(where: { $0.id == id }) {
-                case .work?, .report(_, superseded: true)?: expanded.insert(id)
-                default: break
-                }
+                // A match in a turn's folded work, or in earlier reports, opens it.
+                if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
                 withAnimation { proxy.scrollTo(id, anchor: .center) }
             }
             .overlay(alignment: .topTrailing) {

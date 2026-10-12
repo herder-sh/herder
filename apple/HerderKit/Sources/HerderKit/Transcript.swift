@@ -35,6 +35,8 @@ enum TranscriptBlock: Hashable, Identifiable {
     case children(id: String, [ChildRef])
     /// A child's report; `superseded` once the same child has reported again since.
     case report(ChildReport, superseded: Bool)
+    /// Superseded reports next to each other, in order, behind one line.
+    case earlierReports(id: String, [ChildReport])
     case agents(id: String, [NativeAgent])
     case notice(Notice)
     case question(AskedQuestion)
@@ -46,7 +48,7 @@ enum TranscriptBlock: Hashable, Identifiable {
         switch self {
         case .user(let id, _, _, _, _, _), .assistant(let id, _, _), .reasoning(let id, _, _), .tools(let id, _),
              .children(let id, _): id
-        case .agents(let id, _): id
+        case .agents(let id, _), .earlierReports(let id, _): id
         case .artifact(let artifact): "artifact-\(artifact.id)"
         case .working: "working"
         case .notice(let notice): "notice-\(notice.id)"
@@ -127,6 +129,30 @@ enum Transcript {
             if let work = folds[index] { result.append(.work(work)) }
             if !folded.contains(index) { result.append(block) }
         }
+        return groupingEarlierReports(result)
+    }
+
+    /// Each run of two or more superseded reports as one `.earlierReports` block, where the run
+    /// was. A child's latest report and a lone earlier one stay as they are.
+    static func groupingEarlierReports(_ blocks: [TranscriptBlock]) -> [TranscriptBlock] {
+        var result: [TranscriptBlock] = []
+        var run: [ChildReport] = []
+        func flush() {
+            if let first = run.first {
+                result.append(run.count == 1 ? .report(first, superseded: true)
+                              : .earlierReports(id: "earlier-reports-\(first.id)", run))
+            }
+            run = []
+        }
+        for block in blocks {
+            if case .report(let report, superseded: true) = block {
+                run.append(report)
+            } else {
+                flush()
+                result.append(block)
+            }
+        }
+        flush()
         return result
     }
 

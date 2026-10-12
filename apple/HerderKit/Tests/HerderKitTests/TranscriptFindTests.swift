@@ -37,4 +37,16 @@ struct TranscriptFindTests {
         #expect(string.runs.filter { $0.backgroundColor != nil }.map { String(string[$0.range].characters) }
             == ["Trails", "trails"])
     }
+
+    @Test func aMatchInEarlierReportsOpensTheRunAndTheReportsThatMatch() {
+        let reports = [ChildReport(id: 1, sessionId: "01C", turnId: "c1", summary: "CI is running."),
+                       ChildReport(id: 2, sessionId: "01C", turnId: "c2", summary: "The base moved."),
+                       ChildReport(id: 3, sessionId: "01D", turnId: "d1", summary: "CI passed.")]
+        let block = TranscriptBlock.earlierReports(id: "earlier-reports-1", reports)
+        let find = TranscriptFind(shown: true, query: "ci")
+        #expect(find.matches([block]) == ["earlier-reports-1"])
+        #expect(find.opens(block) == ["earlier-reports-1", "report-1", "report-3"])
+        #expect(find.opens(.report(reports[0], superseded: true)) == ["report-1"])
+        #expect(find.opens(.report(reports[0], superseded: false)) == [])
+    }
 }

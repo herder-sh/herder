@@ -38,8 +38,14 @@ final class PhotoAttachUITests: XCTestCase {
         XCTAssertTrue(queued.waitForExistence(timeout: 10), "the machine did not queue the prompt")
 
         // Off the queue again, leaving the session as the next tests expect it.
-        queued.swipeLeft()
-        app.buttons["Remove"].tap()
+        // A swipe while the tray still animates in can leave the row closed, so swipe until its
+        // action shows.
+        let remove = app.buttons["Remove"]
+        for _ in 0..<3 where !remove.exists {
+            queued.swipeLeft()
+            _ = remove.waitForExistence(timeout: 3)
+        }
+        remove.tap()
         XCTAssertTrue(queued.waitForNonExistence(timeout: 10))
     }
 }

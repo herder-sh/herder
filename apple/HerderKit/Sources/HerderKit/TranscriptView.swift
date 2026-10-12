@@ -100,6 +100,8 @@ struct TranscriptBlockView: View {
             ChildrenCard(children: children, fleet: fleet, hostId: hostId, open: open)
         case .report(let report, let superseded):
             ChildReportCard(report: report, superseded: superseded, id: block.id, fleet: fleet, hostId: hostId, open: open)
+        case .earlierReports(let id, let reports):
+            EarlierReports(id: id, reports: reports, fleet: fleet, hostId: hostId, open: open)
         case .notice(let notice):
             NoticeLine(notice: notice)
         case .question(let question):

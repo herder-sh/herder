@@ -114,4 +114,58 @@ struct ChildSessionTests {
         let started = Date(timeIntervalSince1970: 1_767_225_600 + 6)
         #expect(model.runTime(at: started.addingTimeInterval(10)) == 11)
     }
+
+    private func report(_ id: UInt64, _ child: SessionId) -> ChildReport {
+        ChildReport(id: id, sessionId: child, turnId: "t\(id)", summary: "Report \(id).")
+    }
+
+    @Test func aRunOfEarlierReportsGroupsIntoOneBlockWhereItWas() {
+        let reply = TranscriptBlock.assistant(id: "a", text: "Waiting.", streaming: false)
+        let earlier = [report(1, "01C"), report(2, "01D"), report(3, "01C")]
+        let latest = [report(4, "01C"), report(5, "01D")]
+        let blocks = Transcript.groupingEarlierReports(
+            [reply] + earlier.map { .report($0, superseded: true) } + latest.map { .report($0, superseded: false) })
+        #expect(blocks == [reply, .earlierReports(id: "earlier-reports-1", earlier),
+                           .report(latest[0], superseded: false), .report(latest[1], superseded: false)])
+    }
+
+    @Test func aLoneEarlierReportAndBlocksBetweenReportsStayAsTheyAre() {
+        let reply = TranscriptBlock.assistant(id: "a", text: "Waiting.", streaming: false)
+        let blocks: [TranscriptBlock] = [
+            .report(report(1, "01C"), superseded: true), reply,
+            .report(report(2, "01C"), superseded: true), .report(report(3, "01D"), superseded: true),
+            .report(report(4, "01C"), superseded: false), .report(report(5, "01D"), superseded: true),
+        ]
+        #expect(Transcript.groupingEarlierReports(blocks) == [
+            blocks[0], reply, .earlierReports(id: "earlier-reports-2", [report(2, "01C"), report(3, "01D")]),
+            blocks[4], blocks[5],
+        ])
+    }
+
+    @Test func aParentsTranscriptGroupsTheReportsItsFoldedWorkLeavesSideBySide() {
+        var script = Script("01P")
+        func item(_ id: String, _ body: ItemBody) -> EventBody {
+            .itemAdded(item: Item(agentMessage: nil, parentCallId: nil, id: id, turnId: "t1", body: body))
+        }
+        let model = script.model([
+            created(task: "Lead"), .turnStarted(turnId: "t1"),
+            item("w1", .toolCall(name: "mcp__herder__wait_for", input: "{}")),
+            .childReported(childSessionId: "01C", turnId: "c1", summary: "First pass."),
+            item("r1", .toolResult(callId: "w1", output: "{}", isError: false)),
+            item("w2", .toolCall(name: "mcp__herder__wait_for", input: "{}")),
+            .childReported(childSessionId: "01C", turnId: "c2", summary: "Second pass."),
+            item("r2", .toolResult(callId: "w2", output: "{}", isError: false)),
+            item("a", .assistantMessage(text: "Both are on it.")),
+            .turnCompleted(turnId: "t1", usage: nil),
+            .childReported(childSessionId: "01C", turnId: "c3", summary: "Third pass."),
+        ])
+        let blocks = Transcript.collapsed(model)
+        guard blocks.count == 4, case .earlierReports(_, let earlier) = blocks[0],
+              case .work = blocks[1], case .assistant = blocks[2], case .report(let latest, superseded: false) = blocks[3] else {
+            Issue.record("unexpected blocks: \(blocks)")
+            return
+        }
+        #expect(earlier.map(\.summary) == ["First pass.", "Second pass."])
+        #expect(latest.summary == "Third pass.")
+    }
 }
