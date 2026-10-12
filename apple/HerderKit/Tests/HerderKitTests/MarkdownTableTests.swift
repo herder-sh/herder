@@ -63,14 +63,16 @@ import SwiftUI
         return table
     }()
 
-    /// The table's laid-out size at `width`, then at each of `widths` in turn, as when the sidebar
-    /// opens or closes without the window changing size.
+    /// The table's laid-out size in a column of each of `widths` in turn, in a window that keeps
+    /// its size, as when the sidebar opens or closes.
     private func sizes(_ table: MarkdownTable, at widths: [CGFloat]) throws -> [CGSize] {
-        let host = NSHostingView(rootView: MarkdownTableView(table: table).frame(maxWidth: .infinity, alignment: .leading))
-        let window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+        let column = Column()
+        let host = NSHostingView(rootView: ColumnView(column: column, table: table))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1400, height: 600), styleMask: .borderless,
+                              backing: .buffered, defer: false)
         window.contentView = host
         return try widths.map { width in
-            host.frame = CGRect(x: 0, y: 0, width: width, height: 600)
+            column.width = width
             for _ in 0..<3 {
                 host.layoutSubtreeIfNeeded()
                 RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -103,6 +105,19 @@ import SwiftUI
         let long = try size(String(repeating: "wrapping words ", count: 30))
         #expect(long.width <= 501, "the column wraps at the width it is given, \(long)")
         #expect(long.height > short.height + 60, "the row grows to fit its wrapped lines, \(long) vs \(short)")
+    }
+
+    @MainActor @Observable private final class Column {
+        var width: CGFloat = 0
+    }
+
+    private struct ColumnView: View {
+        let column: Column
+        let table: MarkdownTable
+
+        var body: some View {
+            MarkdownTableView(table: table).frame(width: column.width).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private static func first<View: NSView>(_ type: View.Type, in view: NSView) -> View? {
