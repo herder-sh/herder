@@ -116,6 +116,10 @@ jobs:
           echo "device=$device" >> "$GITHUB_ENV"
           # Booted while the app builds, so the first test does not wait out a cold boot.
           xcrun simctl boot "$device"
+          # The photo library loads on its first use, which can take longer than the photo test
+          # waits: the picker then shows only "Loading...". Opening Photos loads it during the build.
+          nohup sh -c "xcrun simctl bootstatus '$device' && xcrun simctl launch '$device' com.apple.mobileslideshow" \
+            > "$RUNNER_TEMP/photos-warmup.log" 2>&1 &
       - name: Build the iOS app and its UI tests
         run: >-
           xcodebuild build-for-testing -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj

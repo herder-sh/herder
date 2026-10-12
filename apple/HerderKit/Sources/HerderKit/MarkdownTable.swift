@@ -59,47 +59,46 @@ struct MarkdownTable: Equatable {
     }
 }
 
-/// A Markdown table: a raised header, hairlines between rows, and sideways scrolling when it's
-/// wider than the transcript. Long cells wrap rather than stretch a column.
+/// A Markdown table: a raised header and hairlines between rows. Its columns share the width
+/// of the message, their long cells wrapping; a table too wide for that even with its columns
+/// narrowed scrolls sideways in its own box.
 struct MarkdownTableView: View {
     let table: MarkdownTable
     @Environment(\.prLinks) private var prLinks
     @Environment(\.findHighlight) private var find
+    /// The width the message gives the table, measured again whenever it changes: the sideways
+    /// scroll view proposes its content no width, so the table can't learn it from its proposal.
+    @State private var width: CGFloat?
 
     var body: some View {
         SidewaysScroll {
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                GridRow {
-                    ForEach(Array(table.header.enumerated()), id: \.offset) { column, text in
-                        cell(text, column).font(.callout.weight(.semibold)).foregroundStyle(Theme.text)
-                            .gridColumnAlignment(horizontal(table.alignments[column]))
-                    }
+            TableLayout(columns: table.header.count, width: width) {
+                ForEach(Array(table.header.enumerated()), id: \.offset) { column, text in
+                    cell(text, column).font(.callout.weight(.semibold)).background(Theme.raised)
                 }
-                .background(Theme.raised)
                 ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
-                    Rectangle().fill(Theme.stroke).frame(height: 1).gridCellUnsizedAxes(.horizontal)
-                    GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { column, text in
-                            cell(text, column).font(.callout).foregroundStyle(Theme.text)
-                        }
+                    ForEach(Array(row.enumerated()), id: \.offset) { column, text in
+                        cell(text, column).font(.callout)
+                            .overlay(alignment: .top) { Rectangle().fill(Theme.stroke).frame(height: 1) }
                     }
                 }
             }
+            .foregroundStyle(Theme.text)
             .clipShape(.rect(cornerRadius: Theme.corner))
             .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
             .textSelection(.enabled)
             .tint(Theme.link)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 
     private func cell(_ text: String, _ column: Int) -> some View {
-        WrappingWidth(limit: 320) {
-            LinkText(MarkdownText.inline(text, prs: prLinks, find: find))
-                .multilineTextAlignment(textAlignment(table.alignments[column]))
-        }
-        .frame(maxWidth: .infinity, alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        LinkText(MarkdownText.inline(text, prs: prLinks, find: find))
+            .multilineTextAlignment(textAlignment(table.alignments[column]))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                   alignment: Alignment(horizontal: horizontal(table.alignments[column]), vertical: .center))
     }
 
     private func horizontal(_ alignment: MarkdownTable.Alignment) -> HorizontalAlignment {
@@ -119,22 +118,65 @@ struct MarkdownTableView: View {
     }
 }
 
-/// Lays its content out at its natural width up to `limit`, wrapping past it. The sideways
-/// scroll view proposes no width, so text would otherwise measure itself on one line and spill
-/// out of a row sized for that one line.
-private struct WrappingWidth: Layout {
-    let limit: CGFloat
+/// Lays out a table's cells, given row by row, in columns that fit `width` where they can. Each
+/// row is as tall as its tallest cell, so a wrapped cell grows its row.
+struct TableLayout: Layout {
+    /// How narrow a column gets before the table scrolls instead, padding included.
+    static let narrowest: CGFloat = 120
+
+    let columns: Int
+    let width: CGFloat?
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        return content.sizeThatFits(ProposedViewSize(width: width(of: content), height: nil))
+        let widths = columnWidths(subviews)
+        return CGSize(width: widths.reduce(0, +), height: rowHeights(subviews, widths).reduce(0, +))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+        let widths = columnWidths(subviews)
+        var y = bounds.minY
+        for (row, height) in rowHeights(subviews, widths).enumerated() {
+            var x = bounds.minX
+            for (column, width) in widths.enumerated() {
+                subviews[row * columns + column].place(at: CGPoint(x: x, y: y),
+                                                       proposal: ProposedViewSize(width: width, height: height))
+                x += width
+            }
+            y += height
+        }
     }
 
-    private func width(of content: LayoutSubview) -> CGFloat {
-        min(content.sizeThatFits(.unspecified).width, limit)
+    private func columnWidths(_ subviews: Subviews) -> [CGFloat] {
+        let natural = (0..<columns).map { column in
+            stride(from: column, to: rows(subviews) * columns, by: columns)
+                .map { subviews[$0].sizeThatFits(.unspecified).width }.max() ?? 0
+        }
+        return Self.share(natural, within: width)
+    }
+
+    private func rowHeights(_ subviews: Subviews, _ widths: [CGFloat]) -> [CGFloat] {
+        (0..<rows(subviews)).map { row in
+            widths.enumerated().map { column, width in
+                subviews[row * columns + column].sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+            }.max() ?? 0
+        }
+    }
+
+    private func rows(_ subviews: Subviews) -> Int {
+        columns == 0 ? 0 : subviews.count / columns
+    }
+
+    /// Columns at their natural widths while they fit. Past that each keeps up to `narrowest`, and
+    /// the width left over goes to the columns by how much more they would take, so a column of
+    /// short words stays whole while long prose wraps. Too narrow for that, the table scrolls.
+    static func share(_ natural: [CGFloat], within width: CGFloat?) -> [CGFloat] {
+        guard let width, natural.reduce(0, +) > width else { return natural }
+        let least = natural.map { min($0, narrowest) }
+        let spare = width - least.reduce(0, +)
+        guard spare > 0 else { return least }
+        let wanted = zip(natural, least).map { $0 - $1 }
+        // More than `spare`, as the natural widths overflow `width`.
+        let total = wanted.reduce(0, +)
+        return zip(least, wanted).map { $0 + spare * $1 / total }
     }
 }
