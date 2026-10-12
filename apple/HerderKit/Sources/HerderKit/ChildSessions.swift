@@ -238,7 +238,6 @@ struct ChildReportCard: View {
                 }
                 .help("Open the child session")
             }
-            .font(.footnote)
             MarkdownText(text: report.summary)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }

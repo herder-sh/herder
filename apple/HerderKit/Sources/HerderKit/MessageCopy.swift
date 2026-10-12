@@ -1,10 +1,10 @@
 import SwiftUI
 
 extension View {
-    /// Copies `text`, the whole message. On a Mac selecting can't: each of its lines is a text of
-    /// its own, so a drag stops at a line's end. There it shows Copy and Select Text under the
-    /// message on hover and in its context menu; Select Text shows the message in a text view
-    /// that selects across its lines. On a phone a long press selects a word of the message, to
+    /// Copies `text`, the whole message. On a Mac a selection stops at the end of its prose, at a
+    /// code block or a table. There it shows Copy and Select Text under the message on hover, and
+    /// Select Text shows the message in a text view that selects all of it; the menu of its text
+    /// copies the whole message too. On a phone a long press selects a word of the message, to
     /// select any part of it, and the edit menu over it copies the whole message too.
     func messageCopy(_ text: String, alignment: HorizontalAlignment = .leading) -> some View {
         modifier(MessageCopy(text: text, alignment: alignment))
@@ -40,6 +40,7 @@ private struct MessageCopy: ViewModifier {
             Button("Select Text", systemImage: "text.cursor") { selecting = true }
         }
         .sheet(isPresented: $selecting) { SelectTextSheet(text: text) }
+        .environment(\.messageText, text)
         #else
         // A context menu here would take the long press from the selection, and lift the
         // whole message, shrunk to fit the screen.

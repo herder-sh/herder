@@ -14,7 +14,28 @@ struct AutolinkTests {
         let string = MarkdownText.inline("Open as PR **#194**: https://github.com/herder-sh/herder/pull/194.")
         let run = string.runs.first { $0.link != nil }
         #expect(run?.link == URL(string: "https://github.com/herder-sh/herder/pull/194"))
-        #expect(run.map { String(string[$0.range].characters) } == "https://github.com/herder-sh/herder/pull/194")
+        #expect(run.map { String(string[$0.range].characters) } == "github.com/herder-sh/herder/pull/194")
+        #expect(String(string.characters) == "Open as PR #194: github.com/herder-sh/herder/pull/194.")
+    }
+
+    @Test func aBareURLShowsItsHostAndTheStartOfItsPath() throws {
+        func shown(_ url: String) throws -> String { MarkdownText.display(try #require(URL(string: url))) }
+        #expect(try shown("https://auth.planetscale.com/oauth/device?user_code=SZJ3Q1WD") == "auth.planetscale.com/oauth/device…")
+        #expect(try shown("https://www.example.com/") == "example.com")
+        #expect(try shown("http://localhost:8080/a/b#top") == "localhost:8080/a/b…")
+        #expect(try shown("https://example.com/one/two/three/four/five/six/seven") == "example.com/one/two/three/four/five/six…")
+        #expect(try shown("https://example.com/caf%C3%A9") == "example.com/café")
+    }
+
+    @Test func aMarkdownLinkKeepsItsText() {
+        let string = MarkdownText.inline("See [the device page](https://auth.planetscale.com/oauth/device?user_code=X)")
+        #expect(String(string.characters) == "See the device page")
+    }
+
+    @Test func severalBareURLsAreEachShortened() {
+        let string = MarkdownText.inline("https://a.com/x?y=1 and https://b.com/z?w=2")
+        #expect(String(string.characters) == "a.com/x… and b.com/z…")
+        #expect(links("https://a.com/x?y=1 and https://b.com/z?w=2") == ["https://a.com/x?y=1", "https://b.com/z?w=2"])
     }
 
     @Test func codeSpansExplicitLinksAndSchemelessNamesStayAsTheyAre() {

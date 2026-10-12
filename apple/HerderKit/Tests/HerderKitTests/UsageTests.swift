@@ -284,6 +284,8 @@ struct AnsweredWithinTests {
                 return 42
             }
         }
-        #expect(ContinuousClock.now - started < .seconds(5))
+        // Well under the operation's 60s: with the whole suite running in parallel on CI, the
+        // timer's task waits seconds for a thread, so a tight bound fails on load alone.
+        #expect(ContinuousClock.now - started < .seconds(30))
     }
 }

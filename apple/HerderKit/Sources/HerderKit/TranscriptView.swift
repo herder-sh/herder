@@ -299,8 +299,8 @@ struct HandoffSide: View {
 struct MarkdownText: View {
     let text: String
     var streaming = false
-    @Environment(\.prLinks) private var prLinks
-    @Environment(\.findHighlight) private var find
+    @Environment(\.prLinks) var prLinks
+    @Environment(\.findHighlight) var find
 
     var body: some View {
         let blocks = Self.blocks(parts)
@@ -314,7 +314,12 @@ struct MarkdownText: View {
                 case .table(let table):
                     MarkdownTableView(table: table)
                 case .line, .gap, nil:
-                    TranscriptText(string: prose(block, last: index == blocks.count - 1), lineSpacing: 3)
+                    let lines = Self.proseLines(block)
+                    TranscriptText(string: prose(lines, last: index == blocks.count - 1), lineSpacing: 3)
+                        .frame(maxWidth: Self.readingWidth, alignment: .leading)
+                        // A section after a code block or a table keeps its space above.
+                        .padding(.top, index > 0 && lines.first?.section == true
+                                 ? Self.sectionSpace - 8 : 0)
                 }
             }
         }
@@ -324,6 +329,10 @@ struct MarkdownText: View {
         .tint(Theme.link)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// The widest prose runs, for lines short enough to read. Code, tables and diagrams take the
+    /// full width, as their lines don't wrap.
+    static let readingWidth: CGFloat = 680
 
     static func codeText(_ code: String, language: String) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -349,59 +358,13 @@ struct MarkdownText: View {
         return blocks
     }
 
-    /// A run of prose lines as one text, a blank line between two as a short gap.
-    private func prose(_ block: [Part], last: Bool) -> AttributedString {
-        var string = AttributedString()
-        var gap = false
-        for (index, part) in block.enumerated() {
-            guard case .line(let line) = part else {
-                gap = true
-                continue
-            }
-            if !string.characters.isEmpty {
-                string += AttributedString("\n")
-                if gap {
-                    var spacer = AttributedString("\n")
-                    spacer.font = Self.gapFont
-                    string += spacer
-                }
-            }
-            gap = false
-            string += styled(line + (streaming && last && index == block.count - 1 ? " ▍" : ""))
-        }
-        return string
-    }
-
-    static let headingFont = Font.headline
-    static let quoteFont = Font.body.italic()
-    static let gapSize: CGFloat = 5
-    static let gapFont = Font.system(size: gapSize)
-
-    private func styled(_ line: String) -> AttributedString {
-        if line.hasPrefix("#") {
-            var heading = inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces))
-            heading.font = Self.headingFont
-            return heading
-        }
-        if let item = ["- ", "* ", "+ "].first(where: line.hasPrefix) {
-            var bullet = AttributedString("•\u{2002}")
-            bullet.foregroundColor = Theme.secondary
-            return bullet + inline(String(line.dropFirst(item.count)))
-        }
-        if line.hasPrefix(">") {
-            var quote = inline(line.dropFirst().trimmingCharacters(in: .whitespaces))
-            quote.font = Self.quoteFont
-            quote.foregroundColor = Theme.secondary
-            return quote
-        }
-        return inline(line)
-    }
-
-    private func inline(_ text: String) -> AttributedString { Self.inline(text, prs: prLinks, find: find) }
-
     static func inline(_ text: String, prs: PRLinks = PRLinks(), find: FindHighlight? = nil) -> AttributedString {
-        decorated((try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text), prs: prs, find: find)
+        decorated(markdown(text), prs: prs, find: find)
+    }
+
+    static func markdown(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
     }
 
     /// Links bare URLs and `#123` pull request references, underlines every link, and marks
@@ -426,26 +389,58 @@ struct MarkdownText: View {
         }
     }
 
-    /// Links `range` of `plain`, the characters of `string`, unless it is code or a link already.
-    private static func link(_ string: inout AttributedString, plain: String, range: Range<String.Index>, to url: URL) {
+    /// Links `range` of `plain`, the characters of `string`, unless it is code or a link elsewhere
+    /// already; `shown` in its place, if given.
+    private static func link(_ string: inout AttributedString, plain: String, range: Range<String.Index>, to url: URL,
+                             shown: String? = nil) {
         let start = string.characters.index(string.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
         let end = string.characters.index(start, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
         let linked = string[start..<end].runs.contains {
-            $0.link != nil || $0.inlinePresentationIntent?.contains(.code) == true
+            ($0.link != nil && $0.link != url) || $0.inlinePresentationIntent?.contains(.code) == true
         }
-        if !linked { string[start..<end].link = url }
+        guard !linked else { return }
+        if let shown, let attributes = string[start..<end].runs.first?.attributes {
+            var replacement = AttributedString(shown, attributes: attributes)
+            replacement.link = url
+            string.replaceSubrange(start..<end, with: replacement)
+        } else {
+            string[start..<end].link = url
+        }
     }
 
-    /// Links bare `http(s)://` URLs, which Markdown leaves as text, outside code spans and links.
-    /// Scheme-less matches stay text: file names like `main.rs` would read as domains.
+    /// Links bare `http(s)://` URLs outside code spans and links, each shown as `display(_:)` puts
+    /// it; Markdown links some of them already. Scheme-less matches stay text: file names like
+    /// `main.rs` would read as domains.
     static func autolink(_ string: inout AttributedString) {
         let plain = String(string.characters)
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
-        for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+        // From the end, so a shortened URL leaves the ranges before it where they were.
+        for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)).reversed() {
             guard let url = match.url, let range = Range(match.range, in: plain),
                   ["http://", "https://"].contains(where: plain[range].lowercased().hasPrefix) else { continue }
-            link(&string, plain: plain, range: range, to: url)
+            link(&string, plain: plain, range: range, to: url, shown: display(url))
         }
+    }
+
+    /// The longest path a bare URL shows.
+    static let displayPath = 32
+
+    /// A bare URL as it reads: its host and the start of its path, an ellipsis for the rest and
+    /// any query, `auth.planetscale.com/oauth/device…`.
+    static func display(_ url: URL) -> String {
+        guard let host = url.host(percentEncoded: false) else { return url.absoluteString }
+        var shown = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        if let port = url.port { shown += ":\(port)" }
+        var cut = url.query() != nil || url.fragment() != nil
+        var path = ""
+        for component in url.path(percentEncoded: false).split(separator: "/") {
+            guard path.count + component.count + 1 <= displayPath else {
+                cut = true
+                break
+            }
+            path += "/" + component
+        }
+        return shown + path + (cut ? "…" : "")
     }
 
     enum Part: Equatable {
