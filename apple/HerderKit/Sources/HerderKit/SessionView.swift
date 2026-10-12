@@ -107,6 +107,7 @@ struct SessionView: View {
                     proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
                 }
             }
+            .environment(\.transcriptScroll) { id, anchor in proxy.scrollTo(id, anchor: anchor) }
             .onChange(of: find.current) {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.

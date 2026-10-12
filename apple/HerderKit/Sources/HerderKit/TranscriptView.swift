@@ -5,6 +5,8 @@ extension EnvironmentValues {
     /// The ids of the folded blocks a transcript shows open: a turn's work, a run of tool calls.
     /// Kept by the transcript's view, so a row scrolled out and back stays as it was.
     @Entry var transcriptExpanded: Binding<Set<String>> = .constant([])
+    /// Scrolls the transcript to put a block's anchor point at the same point of the view.
+    @Entry var transcriptScroll: @MainActor (String, UnitPoint) -> Void = { _, _ in }
 }
 
 /// One block of a transcript: prose in focus, tool calls as quiet one-line rows.
@@ -116,13 +118,17 @@ struct TranscriptBlockView: View {
 }
 
 /// A finished turn's work as one quiet line, "Worked for 48s ›"; a click lays out its tool
-/// calls, reasoning and passing prose in order.
+/// calls, reasoning and passing prose in order, ending in a line that folds it again from below.
 private struct TurnWorkView: View {
     let work: TurnWork
     let fleet: Fleet
     let key: SessionKey
     let open: ((SessionKey) -> Void)?
     @Environment(\.transcriptExpanded) private var expanded
+    @Environment(\.transcriptScroll) private var scroll
+    /// Where the bottom line sits in the transcript's view, read only when it is clicked; a
+    /// plain box, so scrolling does not redraw the turn.
+    @State private var bottom = FoldSpot()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -139,9 +145,48 @@ private struct TurnWorkView: View {
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                     }
                 }
+                hide
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "Hide work ˄", right above the turn's reply. The folded line takes its place on screen,
+    /// so the reply stays where it was read rather than the view landing pages above.
+    private var hide: some View {
+        Button {
+            expanded.wrappedValue.remove(work.id)
+            scroll(work.id, bottom.anchor)
+        } label: {
+            HStack(spacing: 4) {
+                Text("Hide work")
+                Image(systemName: "chevron.up").font(.caption2.weight(.semibold))
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.secondary)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onGeometryChange(for: UnitPoint.self) { proxy in
+            // Both in the line's own space: the view's bounds, converted to it, move as it scrolls.
+            FoldSpot.anchor(of: proxy.frame(in: .local), in: proxy.bounds(of: .scrollView) ?? .zero)
+        } action: { bottom.anchor = $0 }
+        .accessibilityLabel("Hide work for this turn")
+        .accessibilityIdentifier("turn-work-hide")
+    }
+}
+
+/// Where a fold's closing line sits in the transcript's view, as the anchor that puts the
+/// folded line in its place.
+final class FoldSpot {
+    var anchor = UnitPoint.bottom
+
+    /// The point of `viewport` at the middle of `frame`, kept inside the view: a line scrolled
+    /// out of sight lands at the view's edge.
+    static func anchor(of frame: CGRect, in viewport: CGRect) -> UnitPoint {
+        guard viewport.height > 0 else { return .bottom }
+        let y = (frame.midY - viewport.minY) / viewport.height
+        return UnitPoint(x: 0, y: min(max(y, 0), 1))
     }
 }
 
