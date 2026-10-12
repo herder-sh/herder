@@ -107,11 +107,11 @@ import SwiftUI
         #expect(long.height > short.height + 60, "the row grows to fit its wrapped lines, \(long) vs \(short)")
     }
 
-    @MainActor @Observable private final class Column {
+    @MainActor @Observable final class Column {
         var width: CGFloat = 0
     }
 
-    private struct ColumnView: View {
+    struct ColumnView: View {
         let column: Column
         let table: MarkdownTable
 
