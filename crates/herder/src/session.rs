@@ -805,6 +805,7 @@ impl View {
             EventBody::ChildSpawned { .. } | EventBody::ChildReported { .. } => {}
             EventBody::TitleChanged { .. }
             | EventBody::SessionForked { .. }
+            | EventBody::ArtifactPublished { .. }
             | EventBody::Unknown => {}
         }
     }

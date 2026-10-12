@@ -492,6 +492,10 @@ pub enum CommandBody {
         /// Colour drawn behind the project's icon, as `#rrggbb`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         icon_background: Option<String>,
+        /// Keep the artifacts the project's sessions publish private, never uploaded for a
+        /// public link.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private_artifacts: bool,
     },
     /// Stop managing a project on this host; owners only. Answered with `applied`; the
     /// project list without it follows. Its clones leave the daemon's `[[project]]` entries

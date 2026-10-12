@@ -577,6 +577,21 @@ impl Session {
                 None
             }
             EventBody::SessionForked { from_host, .. } => Some(Entry::Forked { from_host }),
+            EventBody::ArtifactPublished {
+                title,
+                url,
+                expires_at,
+                ..
+            } => {
+                let link = match url {
+                    Some(_) if expires_at.is_some_and(|expires| expires <= Timestamp::now()) => {
+                        "link expired".to_owned()
+                    }
+                    Some(url) => url,
+                    None => "private, no link".to_owned(),
+                };
+                Some(notice(format!("artifact: {title} · {link}"), Tone::Info))
+            }
             EventBody::Unknown => None,
         };
         self.entries.extend(entry);
@@ -963,6 +978,54 @@ mod tests {
         );
         assert_eq!(session.account_id, Some(AccountId::new("claude-spare")));
         assert_eq!(session.provider, Some(herder_protocol::Provider::Claude));
+    }
+
+    #[test]
+    fn a_published_artifact_shows_its_link_until_it_expires() {
+        let artifact = |title: &str, url: Option<&str>, expires_at: Option<&str>| {
+            EventBody::ArtifactPublished {
+                title: title.into(),
+                attachment: herder_protocol::Attachment {
+                    attachment_id: herder_protocol::AttachmentId::new("a1"),
+                    media_type: herder_protocol::FILE_MEDIA_TYPE.into(),
+                    size: 3,
+                    name: Some("shot.png".into()),
+                },
+                url: url.map(str::to_owned),
+                expires_at: expires_at.map(|at| at.parse().unwrap()),
+            }
+        };
+        let mut session = Session::new(SessionId::new("s1"));
+        session.apply(update(
+            "s1",
+            1,
+            vec![
+                artifact(
+                    "Settings",
+                    Some("https://krowk.com/a/1"),
+                    Some("2999-01-01T00:00:00Z"),
+                ),
+                artifact(
+                    "Old",
+                    Some("https://krowk.com/a/2"),
+                    Some("2020-01-01T00:00:00Z"),
+                ),
+                artifact("Report", None, None),
+            ],
+            vec![],
+        ));
+        let notice = |text: &str| Entry::Notice {
+            text: text.into(),
+            tone: Tone::Info,
+        };
+        assert_eq!(
+            session.entries,
+            [
+                notice("artifact: Settings · https://krowk.com/a/1"),
+                notice("artifact: Old · link expired"),
+                notice("artifact: Report · private, no link"),
+            ]
+        );
     }
 
     #[test]

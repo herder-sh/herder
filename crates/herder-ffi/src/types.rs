@@ -314,6 +314,12 @@ pub enum EventBody {
         from_session: SessionId,
         from_host: HostId,
     },
+    ArtifactPublished {
+        title: String,
+        attachment: Attachment,
+        url: Option<String>,
+        expires_at: Option<Timestamp>,
+    },
     Unknown,
 }
 
@@ -645,6 +651,7 @@ pub enum CommandBody {
         default_account: Option<AccountId>,
         setup_command: Option<String>,
         icon_background: Option<String>,
+        private_artifacts: bool,
     },
     RemoveProject {
         project_id: ProjectId,
@@ -1185,6 +1192,8 @@ pub struct Project {
     pub icon_uploaded: bool,
     #[uniffi(default)]
     pub icon_background: Option<String>,
+    #[uniffi(default)]
+    pub private_artifacts: bool,
 }
 
 // Resources

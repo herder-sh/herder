@@ -196,7 +196,7 @@ struct SessionModel {
             prs.removeAll { $0.number == number }
         case .titleChanged(let title, _):
             titled = title
-        case .itemAdded, .childSpawned, .childReported, .sessionForked, .unknown:
+        case .itemAdded, .childSpawned, .childReported, .sessionForked, .artifactPublished, .unknown:
             break
         }
     }
@@ -261,6 +261,9 @@ struct SessionModel {
             } else {
                 log.append(.handoff(handoff))
             }
+        case .artifactPublished(let title, let attachment, let url, let expiresAt):
+            log.append(.artifact(Artifact(id: event.seq, title: title, attachment: attachment, url: url,
+                                          expiresAt: expiresAt)))
         case .permissionModeChanged(let mode): notice("Permission mode set to \(mode.label.lowercased())")
         case .prLinked(let pr): notice("Pull request #\(pr.number) linked: \(pr.title)")
         case .prUnlinked(let number): notice("Pull request #\(number) unlinked")
@@ -358,7 +361,8 @@ struct SessionModel {
             }
         case .prUnlinked(let number): add(.prUnlinked(number))
         case .titleChanged(let title, _): add(.titled(title))
-        case .sessionStatusChanged, .turnStarted, .itemAdded, .approvalEscalated, .questionEscalated, .unknown:
+        case .sessionStatusChanged, .turnStarted, .itemAdded, .approvalEscalated, .questionEscalated, .artifactPublished,
+             .unknown:
             break
         }
     }
@@ -463,6 +467,7 @@ struct SessionModel {
         case .prUnlinked(let number): return "PR #\(number) unlinked"
         case .titleChanged(let title, _): return "Title: \(title)"
         case .sessionForked(let fromSession, let fromHost): return "Machine: from \(fromHost) (\(fromSession))"
+        case .artifactPublished(let title, _, _, _): return "Published: \(title)"
         case .unknown: return "Event"
         }
     }
@@ -691,6 +696,7 @@ enum LogEntry: Hashable {
     case child(sessionId: SessionId, task: String)
     case report(ChildReport)
     case question(AskedQuestion)
+    case artifact(Artifact)
 }
 
 /// A question the agent asked, with its answer once it has one.

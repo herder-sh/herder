@@ -129,6 +129,7 @@ pub(crate) fn apply(tx: &Transaction<'_>, event: &Event) -> Result<()> {
         | EventBody::ChildSpawned { .. }
         | EventBody::ChildReported { .. }
         | EventBody::SessionForked { .. }
+        | EventBody::ArtifactPublished { .. }
         | EventBody::Unknown => {}
     }
     tx.prepare_cached("UPDATE sessions SET last_seq = ?2, updated_at = ?3 WHERE session_id = ?1")?

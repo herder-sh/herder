@@ -389,11 +389,11 @@ public final class Fleet {
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
         _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,
-        setupCommand: String?, iconBackground: String?
+        setupCommand: String?, iconBackground: String?, privateArtifacts: Bool
     ) async throws {
         _ = try await client.send(hostId: hostId, command: .setProjectSettings(
             projectId: projectId, name: name, defaultPermissionMode: mode, defaultAccount: account,
-            setupCommand: setupCommand, iconBackground: iconBackground))
+            setupCommand: setupCommand, iconBackground: iconBackground, privateArtifacts: privateArtifacts))
     }
 
     /// Uploads a PNG as a project's icon on every connected machine this device owns that
@@ -415,7 +415,7 @@ public final class Fleet {
         where project.name != name || project.iconBackground != background {
             try await setProjectSettings(projectId, on: machine.hostId, name: name, mode: project.defaultPermissionMode,
                                          account: project.defaultAccount, setupCommand: project.setupCommand,
-                                         iconBackground: background)
+                                         iconBackground: background, privateArtifacts: project.privateArtifacts)
         }
     }
 

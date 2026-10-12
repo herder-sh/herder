@@ -119,10 +119,13 @@
 //! icon = "design/mark.svg"         # the project's icon, relative to its clone; found in the
 //!                                  # repository when absent or missing
 //! icon_background = "#ffffff"      # drawn behind the icon, for one that needs it
+//! private_artifacts = true         # what sessions publish is never uploaded for a public
+//!                                  # link; false by default
 //! ```
 //!
 //! Owners add `[[project]]` entries and change their `name`, `default_permission_mode`,
-//! `default_account`, `setup_command` and `icon_background` from a client too ([`add_project`],
+//! `default_account`, `setup_command`, `icon_background` and `private_artifacts` from a client
+//! too ([`add_project`],
 //! [`set_project_settings`]), and remove projects ([`remove_project`]): a removed project's
 //! clones leave every entry's `paths` and go into `exclude`; the rest of the file is kept as
 //! written.
@@ -458,6 +461,8 @@ struct ProjectFile {
     setup_command: Option<String>,
     icon: Option<PathBuf>,
     icon_background: Option<String>,
+    #[serde(default)]
+    private_artifacts: bool,
 }
 
 /// One `[[accounts]]` entry as written.
@@ -797,6 +802,7 @@ fn resolve_projects(
                 setup_command: entry.setup_command,
                 icon: entry.icon,
                 icon_background: entry.icon_background,
+                private_artifacts: entry.private_artifacts,
             })
         })
         .collect::<Result<_>>()?;
@@ -1059,6 +1065,8 @@ pub struct ProjectSettings {
     pub setup_command: Option<String>,
     /// Colour drawn behind the project's icon, as `#rrggbb`.
     pub icon_background: Option<String>,
+    /// Keep the artifacts the project's sessions publish private.
+    pub private_artifacts: bool,
 }
 
 /// Replaces the settings of the `[[project]]` entry `entry` of the config file at `path`,
@@ -1104,6 +1112,11 @@ pub fn set_project_settings(
                     table.remove(key);
                 }
             }
+        }
+        if settings.private_artifacts {
+            table.insert("private_artifacts", toml_edit::value(true));
+        } else {
+            table.remove("private_artifacts");
         }
         Ok(())
     })
@@ -2395,6 +2408,7 @@ mod tests {
                         setup_command: Some("make bootstrap".to_owned()),
                         icon: Some(PathBuf::from("design/mark.svg")),
                         icon_background: Some("#FFFFFF".to_owned()),
+                        private_artifacts: false,
                     },
                     ProjectEntry {
                         paths: vec![PathBuf::from("/srv/scratch")],
@@ -2483,6 +2497,7 @@ mod tests {
             default_account: Some(AccountId::new("main")),
             setup_command: Some("make \"setup\"".into()),
             icon_background: Some("#1a1a1a".into()),
+            private_artifacts: false,
         };
         set_project_settings(&path, Some(1), Path::new("/src/app"), &settings).unwrap();
         let projects = set_project_settings(&path, None, Path::new("/src/new"), &settings).unwrap();

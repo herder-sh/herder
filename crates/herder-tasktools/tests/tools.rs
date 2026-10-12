@@ -43,7 +43,7 @@ fn tools_list_is_the_mcp_shape() {
             "wait_for",
             "answer",
             "escalate",
-            "show_html",
+            "publish",
             "overview",
             "command"
         ]
@@ -223,9 +223,18 @@ fn calls_parse_validate_and_round_trip() {
         ),
         (
             json!({ "title": "Latency", "html": "<!doctype html><p>p50</p>" }),
-            ToolCall::ShowHtml(ShowHtmlInput {
+            ToolCall::Publish(PublishInput {
                 title: "Latency".into(),
-                html: "<!doctype html><p>p50</p>".into(),
+                path: None,
+                html: Some("<!doctype html><p>p50</p>".into()),
+            }),
+        ),
+        (
+            json!({ "title": "Settings screen", "path": "shots/settings.png" }),
+            ToolCall::Publish(PublishInput {
+                title: "Settings screen".into(),
+                path: Some("shots/settings.png".into()),
+                html: None,
             }),
         ),
         (json!({}), ToolCall::Overview(OverviewInput {})),
@@ -257,7 +266,7 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::WaitFor(input) => serde_json::to_value(input),
             ToolCall::Answer(input) => serde_json::to_value(input),
             ToolCall::Escalate(input) => serde_json::to_value(input),
-            ToolCall::ShowHtml(input) => serde_json::to_value(input),
+            ToolCall::Publish(input) => serde_json::to_value(input),
             ToolCall::Overview(input) => serde_json::to_value(input),
             ToolCall::Command(input) => serde_json::to_value(input),
         };
@@ -328,10 +337,9 @@ fn malformed_calls_are_invalid_arguments() {
             json!({ "question_id": "01J9Q", "text": "yes" }),
         ),
         (Tool::Escalate, json!({ "question_id": "01J9Q" })),
-        (Tool::ShowHtml, json!({ "title": "No page" })),
-        (Tool::ShowHtml, json!({ "html": "<p>untitled</p>" })),
+        (Tool::Publish, json!({ "html": "<p>untitled</p>" })),
         (
-            Tool::ShowHtml,
+            Tool::Publish,
             json!({ "title": "t", "html": "<p></p>", "height": 400 }),
         ),
         (Tool::Overview, json!({ "all": true })),
@@ -433,8 +441,18 @@ fn outputs_match_their_schemas() {
         (Tool::Answer, serde_json::to_value(AnswerOutput {})),
         (Tool::Escalate, serde_json::to_value(EscalateOutput {})),
         (
-            Tool::ShowHtml,
-            serde_json::to_value(ShowHtmlOutput { shown: true }),
+            Tool::Publish,
+            serde_json::to_value(PublishOutput {
+                url: Some("https://krowk.com/a/art_1".into()),
+                expires_at: Some("2026-10-11T17:57:01Z".parse().unwrap()),
+            }),
+        ),
+        (
+            Tool::Publish,
+            serde_json::to_value(PublishOutput {
+                url: None,
+                expires_at: None,
+            }),
         ),
         (
             Tool::Overview,

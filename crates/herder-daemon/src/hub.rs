@@ -1220,6 +1220,7 @@ mod tests {
             icon: None,
             icon_uploaded: false,
             icon_background: None,
+            private_artifacts: false,
         }];
         hub.projects_changed(projects.clone());
         let message = ServerMessage::Projects { projects };

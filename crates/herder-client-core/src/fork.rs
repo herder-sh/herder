@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     AccountId, Attachment, Bytes, Command, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event,
-    EventBody, HistoryPart, HostId, Image, ItemBody, Relay, SessionId,
+    HistoryPart, HostId, Image, Relay, SessionId,
 };
 
 use crate::supervisor::{Subscription, Supervisor};
@@ -113,13 +113,7 @@ async fn read(
     }
     let mut kept = Vec::new();
     for event in &events {
-        let EventBody::ItemAdded { item } = &event.body else {
-            continue;
-        };
-        let ItemBody::UserMessage { attachments, .. } = &item.body else {
-            continue;
-        };
-        for attachment in attachments {
+        for attachment in event.body.attachments() {
             let command = CommandBody::GetAttachment {
                 session_id: session_id.clone(),
                 attachment_id: attachment.attachment_id.clone(),

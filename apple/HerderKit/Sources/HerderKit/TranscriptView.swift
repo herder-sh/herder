@@ -92,8 +92,8 @@ struct TranscriptBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         case .tools(_, let calls):
             ToolGroup(calls: calls)
-        case .visual(let visual):
-            HtmlVisualBlock(visual: visual)
+        case .artifact(let artifact):
+            ArtifactBlock(artifact: artifact, fleet: fleet, key: key)
         case .agents(_, let agents):
             NativeAgentGroup(agents: agents, fleet: fleet, key: key)
         case .children(_, let children):

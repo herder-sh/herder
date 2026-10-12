@@ -1,3 +1,4 @@
+import AVKit
 import Foundation
 import Herder
 import SwiftUI
@@ -9,40 +10,67 @@ import UIKit
 import AppKit
 #endif
 
-/// A self-contained page an agent showed with herder's `show_html` tool: a chart, a code map, a
-/// UI mock. It renders live in the thread, where the call happened, as in T3 Code's visual
-/// replies.
-struct HtmlVisual: Hashable, Identifiable {
-    let id: String
+/// What an agent published with herder's `publish` tool to show its work: a screenshot, a
+/// recording, a page, a log. The thread renders the file, fetched from its machine, and offers
+/// the public link, which opens on any device and can be sent to anyone.
+struct Artifact: Hashable, Identifiable {
+    enum Kind: Hashable { case image, video, page, text, file }
+
+    /// The event's seq.
+    let id: UInt64
     let title: String
-    /// The page; `nil` while the call streams in, or when its input has none.
-    let html: String?
-    /// The call's input is still streaming in.
-    let building: Bool
+    let attachment: Attachment
+    /// `nil` when the project keeps its artifacts private.
+    let url: URL?
+    /// When `url` stops working; `nil` when it never does.
+    let expiresAt: Date?
 
-    init(id: String, input: Json, streaming: Bool) {
-        let object = streaming ? nil : (try? JSONSerialization.jsonObject(with: Data(input.utf8))) as? [String: Any]
-        let title = (object?["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let html = object?["html"] as? String
+    init(id: UInt64, title: String, attachment: Attachment, url: String?, expiresAt: String?) {
         self.id = id
-        self.title = title.isEmpty ? "Visual" : title
-        self.html = html?.isEmpty == false ? html : nil
-        building = streaming
+        self.title = title
+        self.attachment = attachment
+        self.url = url.flatMap(URL.init(string:))
+        self.expiresAt = expiresAt.flatMap(Timestamp.date)
     }
 
-    /// The tool's name as each provider calls it: `mcp__herder__show_html` for Claude,
-    /// `herder.show_html` for Codex, and so on.
-    static func isShowHtml(_ name: String) -> Bool {
-        name == "show_html" || ["__", ".", "-"].contains { name.hasSuffix("\($0)show_html") }
+    var name: String { attachment.name ?? "artifact" }
+
+    /// How it renders, by its name's extension, as the daemon picks its media type.
+    var kind: Kind {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic": .image
+        case "mp4", "m4v", "mov": .video
+        case "html", "htm", "svg": .page
+        case "txt", "log", "md", "markdown", "json", "csv", "diff", "patch", "xml", "yaml", "yml": .text
+        default: .file
+        }
     }
 
-    /// No network at all: scripts and styles inline, images, fonts and media from data only.
+    /// The link to offer at `now`: `nil` once it has expired, or when there is none.
+    func link(at now: Date) -> URL? {
+        guard let url, expiresAt.map({ $0 > now }) ?? true else { return nil }
+        return url
+    }
+
+    var symbol: String {
+        switch kind {
+        case .image: "photo"
+        case .video: "play.rectangle"
+        case .page: "macwindow"
+        case .text: "doc.text"
+        case .file: "doc"
+        }
+    }
+}
+
+/// No network at all: scripts and styles inline, images, fonts and media from data only.
+enum SandboxedPage {
     static let policy =
         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:"
 
     /// The page with the policy and the dark colour scheme ahead of anything it holds, after its
     /// doctype so it keeps standards mode.
-    static func sandboxed(_ html: String) -> String {
+    static func wrapped(_ html: String) -> String {
         let head = """
             <meta http-equiv="Content-Security-Policy" content="\(policy)">
             <meta name="color-scheme" content="dark">
@@ -58,59 +86,66 @@ struct HtmlVisual: Hashable, Identifiable {
     }
 }
 
-/// A `show_html` call as a card, like `MermaidBlock`: the title, a toggle to the source, copy,
-/// and a larger view. The page sizes the card up to `cap`; on the Mac a taller one scrolls inside
-/// it, on iOS it is cut there so a swipe on it always scrolls the thread, and the larger view
-/// shows it all.
-struct HtmlVisualBlock: View {
-    let visual: HtmlVisual
+/// An artifact as a card: its title, the file rendered as what it is, and its link to copy,
+/// share or open. A page or picture sizes the card up to `cap`; on iOS a taller one is cut there
+/// so a swipe on it always scrolls the thread, and the larger view shows it all.
+struct ArtifactBlock: View {
+    let artifact: Artifact
+    let fleet: Fleet
+    let key: SessionKey
     @State private var height: CGFloat = 0
-    @State private var showCode = false
     @State private var expanded = false
     @State private var copied = false
 
     private static let cap: CGFloat = 600
 
+    private var data: Data? { fleet.attachments[artifact.attachment.attachmentId] }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 2) {
-                Image(systemName: "macwindow").font(.caption).foregroundStyle(Theme.tertiary)
-                Text(visual.title).font(.caption.weight(.medium)).foregroundStyle(Theme.secondary).lineLimit(1)
+                Image(systemName: artifact.symbol).font(.caption).foregroundStyle(Theme.tertiary)
+                Text(artifact.title).font(.caption.weight(.medium)).foregroundStyle(Theme.secondary).lineLimit(1)
                     .padding(.leading, 4)
                 Spacer()
-                if visual.html != nil {
-                    action(showCode ? "macwindow" : "chevron.left.forwardslash.chevron.right",
-                           showCode ? "Show visual" : "Show code") { showCode.toggle() }
-                    if !showCode {
-                        action("arrow.up.left.and.arrow.down.right", "Expand visual") { expanded = true }
-                    }
-                    action(copied ? "checkmark" : "doc.on.doc", copied ? "Copied" : "Copy source") {
-                        Clipboard.string = visual.html
-                        copied = true
-                    }
+                if data != nil, [.image, .page, .text].contains(artifact.kind) {
+                    action("arrow.up.left.and.arrow.down.right", "Expand") { expanded = true }
                 }
             }
             .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
             content
+            Rectangle().fill(Theme.stroke).frame(height: 1)
+            linkLine
         }
         .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
         .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+        .task { await fleet.fetchAttachment(artifact.attachment.attachmentId, of: key) }
         .task(id: copied) {
             guard copied else { return }
             try? await Task.sleep(for: .seconds(1.5))
             copied = false
         }
         .sheet(isPresented: $expanded) {
-            if let html = visual.html { HtmlVisualExpanded(title: visual.title, html: html) }
+            if let data { ArtifactExpanded(artifact: artifact, data: data) }
         }
+        .accessibilityIdentifier("artifact")
     }
 
     @ViewBuilder private var content: some View {
-        if let html = visual.html {
-            if showCode {
-                MarkdownText.codeText(html, language: "html")
-            } else {
-                HtmlVisualWebView(html: html, inline: true) { height = $0 }
+        if let data {
+            switch artifact.kind {
+            case .image:
+                Picture(data: data, height: 280)
+                    .frame(maxWidth: .infinity)
+                    .padding(8)
+                    .onTapGesture { expanded = true }
+            case .video:
+                ArtifactVideo(name: artifact.name, data: data)
+                    .frame(height: 280)
+                    .clipShape(.rect(cornerRadius: Theme.corner))
+                    .padding(8)
+            case .page:
+                SandboxedWebView(html: String(decoding: data, as: UTF8.self), inline: true) { height = $0 }
                     .frame(height: height > 0 ? min(height, Self.cap) : 160)
                     .clipShape(.rect(cornerRadius: Theme.corner))
                     #if os(iOS)
@@ -123,11 +158,61 @@ struct HtmlVisualBlock: View {
                         }
                     }
                     #endif
+            case .text:
+                ScrollView {
+                    Text(String(decoding: data.prefix(64 * 1024), as: UTF8.self))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(Theme.text)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxHeight: 280)
+                .fixedSize(horizontal: false, vertical: true)
+            case .file:
+                Label("\(artifact.name) · \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))",
+                      systemImage: "doc")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
             }
         } else {
-            Text(visual.building ? "Building visual…" : "The visual has no page to show.")
-                .font(.caption).foregroundStyle(Theme.tertiary)
+            ProgressView().controlSize(.small).tint(Theme.tertiary)
                 .frame(maxWidth: .infinity, minHeight: 72)
+        }
+    }
+
+    /// The public link with copy, share and open; or why there is none.
+    @ViewBuilder private var linkLine: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            HStack(spacing: 2) {
+                if let url = artifact.link(at: context.date) {
+                    Link(destination: url) {
+                        Text(url.absoluteString).font(.caption).foregroundStyle(Theme.link).lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    action(copied ? "checkmark" : "link", copied ? "Copied" : "Copy link") {
+                        Clipboard.string = url.absoluteString
+                        copied = true
+                    }
+                    ShareLink(item: url, subject: Text(artifact.title)) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(width: 24, height: 22)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Share link")
+                    .accessibilityLabel("Share link")
+                } else {
+                    Text(artifact.url == nil ? "Private: this project's artifacts get no public link" : "Link expired")
+                        .font(.caption).foregroundStyle(Theme.tertiary)
+                    Spacer()
+                }
+            }
+            .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
         }
     }
 
@@ -145,24 +230,61 @@ struct HtmlVisualBlock: View {
     }
 }
 
-/// The page filling a sheet, scrolling as a whole.
-private struct HtmlVisualExpanded: View {
-    let title: String
-    let html: String
+/// A recording, played from a file of its own: AVPlayer plays files, not bytes.
+private struct ArtifactVideo: View {
+    let name: String
+    let data: Data
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        Group {
+            if let player { VideoPlayer(player: player) } else { Theme.raised }
+        }
+        .task(id: data) {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("herder-artifacts", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent(name)
+            do {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try data.write(to: file)
+                player = AVPlayer(url: file)
+            } catch {
+                player = nil
+            }
+        }
+    }
+}
+
+/// The artifact filling a sheet, scrolling as a whole.
+private struct ArtifactExpanded: View {
+    let artifact: Artifact
+    let data: Data
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(title).font(.headline).foregroundStyle(Theme.text).lineLimit(1)
+                Text(artifact.title).font(.headline).foregroundStyle(Theme.text).lineLimit(1)
                 Spacer()
-                IconButton(symbol: "doc.on.doc", help: "Copy source") { Clipboard.string = html }
                 IconButton(symbol: "xmark", help: "Close") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             .padding(16)
             Rectangle().fill(Theme.stroke).frame(height: 1)
-            HtmlVisualWebView(html: html, inline: false) { _ in }
+            switch artifact.kind {
+            case .page:
+                SandboxedWebView(html: String(decoding: data, as: UTF8.self), inline: false) { _ in }
+            case .image:
+                ScrollView([.horizontal, .vertical]) { Picture(data: data, height: 900) }
+            default:
+                ScrollView {
+                    Text(String(decoding: data, as: UTF8.self))
+                        .font(.caption.monospaced()).foregroundStyle(Theme.text).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                }
+            }
         }
         .background(Theme.surface)
         #if os(macOS)
@@ -176,7 +298,7 @@ private struct HtmlVisualExpanded: View {
 /// network load, and only the page itself may load in it. A link the user follows opens in the
 /// browser; popups, dialogs and any other navigation do nothing.
 @MainActor
-struct HtmlVisualWebView {
+struct SandboxedWebView {
     let html: String
     let inline: Bool
     /// The page's height, as it lays out and on every resize.
@@ -193,7 +315,7 @@ struct HtmlVisualWebView {
         func load(_ html: String, in web: WKWebView) {
             self.html = html
             started = false
-            web.loadHTMLString(HtmlVisual.sandboxed(html), baseURL: nil)
+            web.loadHTMLString(SandboxedPage.wrapped(html), baseURL: nil)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -277,12 +399,12 @@ struct HtmlVisualWebView {
 }
 
 #if os(iOS)
-extension HtmlVisualWebView: UIViewRepresentable {
+extension SandboxedWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
     func updateUIView(_ web: WKWebView, context: Context) { update(web, context.coordinator, context.environment.openURL) }
 }
 #else
-extension HtmlVisualWebView: NSViewRepresentable {
+extension SandboxedWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
     func updateNSView(_ web: WKWebView, context: Context) { update(web, context.coordinator, context.environment.openURL) }
 }

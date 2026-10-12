@@ -13,8 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Attachment, Bytes, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorCode, Event, EventBody, FleetHost, ItemBody, PROTOCOL_VERSION, ServerMessage,
-    SessionHead, SessionId,
+    Cursor, ErrorCode, Event, FleetHost, PROTOCOL_VERSION, ServerMessage, SessionHead, SessionId,
 };
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
@@ -129,20 +128,14 @@ async fn read_view(
     Ok(view)
 }
 
-/// Fetches every image and file a `user_message` of `events` names, one at a time; one the
-/// vault does not hold, such as one its host lost, is left out.
+/// Fetches every image and file `events` name, one at a time; one the vault does not hold,
+/// such as one its host lost, is left out.
 async fn attachments(
     ws: &mut Ws,
     session_id: &SessionId,
     events: &[Event],
 ) -> Result<Vec<(Attachment, Bytes)>> {
-    let named = events.iter().flat_map(|event| match &event.body {
-        EventBody::ItemAdded { item } => match &item.body {
-            ItemBody::UserMessage { attachments, .. } => attachments.as_slice(),
-            _ => &[],
-        },
-        _ => &[],
-    });
+    let named = events.iter().flat_map(|event| event.body.attachments());
     let mut fetched = Vec::new();
     for attachment in named {
         let id = CommandId::new(format!("image-{}", attachment.attachment_id));

@@ -5,7 +5,7 @@
 
 use herder_protocol::{
     Account, Answer, ApprovalDecision, ApprovalId, CommandBody, PermissionMode, Project, Provider,
-    QuestionId, SessionHead, SessionId, SessionStatus, TurnId,
+    QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -410,21 +410,31 @@ pub struct SendSessionOutput {
     pub duplicate: bool,
 }
 
-/// Arguments of `show_html`.
+/// Arguments of `publish`: `title` and exactly one of `path` and `html`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ShowHtmlInput {
-    /// Short label shown above the page, e.g. "Request latency by endpoint".
+pub struct PublishInput {
+    /// Short label shown with the artifact, e.g. "Settings screen after the fix".
     pub title: String,
-    /// One complete, self-contained HTML document, at most 1 MiB, with all CSS, JavaScript, SVG and data inline.
-    pub html: String,
+    /// A file to publish, of any type: absolute, or relative to your working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// One complete, self-contained HTML document to publish, with all CSS, JavaScript, SVG
+    /// and data inline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
 }
 
-/// Result of `show_html`: the page is in the thread.
+/// Result of `publish`: the artifact is in the thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ShowHtmlOutput {
-    /// Always true.
-    pub shown: bool,
+pub struct PublishOutput {
+    /// Public link to the artifact, for your reply; absent when the project keeps artifacts
+    /// private.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// When `url` stops working; absent when it never expires or there is no `url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<Timestamp>,
 }
 
 /// Arguments of `overview`: none.

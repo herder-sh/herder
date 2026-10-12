@@ -29,14 +29,21 @@ const DEFAULT_VERSION: &str = "2025-06-18";
 
 /// The `initialize` result's `instructions`, which clients such as Claude Code show the model
 /// up front, so it delegates through `spawn` before trying a built-in subagent that the Claude
-/// adapter's PreToolUse hook would deny.
+/// adapter's PreToolUse hook would deny, and proves its work with `publish` unasked.
 const INSTRUCTIONS: &str = "herder runs this session. To delegate work that edits files, \
 builds, or opens pull requests, call `spawn`: one child per independent piece of work, each \
 with a complete prompt, then collect results with `wait_for`. Use `send_session` for \
 follow-ups to an existing child. Never delegate such work to a built-in subagent with its own \
 worktree (Claude Code's Agent tool with `isolation: \"worktree\"`): it is denied, and its \
 work would not show in herder. Built-in subagents for read-only lookups are fine. In a child \
-session, where `spawn` is refused, do the work yourself.";
+session, where `spawn` is refused, do the work yourself.
+
+The user often reads this session from a phone or another machine, so a local file path or \
+localhost URL is useless to them. Whenever your work has an observable result, prove it \
+without being asked: publish a screenshot or screen recording of a UI change, the captured \
+output of a CLI or API change, or the test run of a refactor with `publish`, before your \
+final reply. It shows the artifact in this thread and returns a public link; put that link \
+in your reply as a Markdown link, never a local path.";
 
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;

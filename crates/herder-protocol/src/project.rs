@@ -132,4 +132,8 @@ pub struct Project {
     /// so a transparent icon shows through to the client's own background.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_background: Option<String>,
+    /// Whether the project keeps the artifacts its sessions publish private: shown in the
+    /// thread, never uploaded for a public link.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private_artifacts: bool,
 }

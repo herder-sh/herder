@@ -267,10 +267,42 @@ pub enum EventBody {
         /// The host that session ran on.
         from_host: HostId,
     },
+    /// The agent published an artifact with herder's `publish` tool: a screenshot, recording,
+    /// page, log or any other file showing its work. Clients render it in the thread from the
+    /// bytes `get_attachment` fetches, and offer `url` to open or share it anywhere.
+    ArtifactPublished {
+        /// Short label of the artifact.
+        title: String,
+        /// The file, kept on the session's host like a prompt's file; its name's extension
+        /// tells its type.
+        attachment: Attachment,
+        /// Public link to the artifact, which anyone with it can open; absent when the project
+        /// keeps its artifacts private.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        /// When `url` stops working; absent when it never expires or there is no `url`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<Timestamp>,
+    },
     /// An event type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
     Unknown,
+}
+
+impl EventBody {
+    /// The images and files the event names, kept on the session's host for `get_attachment`:
+    /// a prompt's, or a published artifact.
+    pub fn attachments(&self) -> &[Attachment] {
+        match self {
+            EventBody::ItemAdded { item } => match &item.body {
+                ItemBody::UserMessage { attachments, .. } => attachments,
+                _ => &[],
+            },
+            EventBody::ArtifactPublished { attachment, .. } => std::slice::from_ref(attachment),
+            _ => &[],
+        }
+    }
 }
 
 /// Where a session stands, as shown in lists.

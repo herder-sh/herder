@@ -2140,6 +2140,44 @@
             "from_session",
             "from_host"
           ]
+        },
+        {
+          "description": "The agent published an artifact with herder's `publish` tool: a screenshot, recording,\npage, log or any other file showing its work. Clients render it in the thread from the\nbytes `get_attachment` fetches, and offer `url` to open or share it anywhere.",
+          "type": "object",
+          "properties": {
+            "attachment": {
+              "description": "The file, kept on the session's host like a prompt's file; its name's extension\ntells its type.",
+              "$ref": "#/$defs/Attachment"
+            },
+            "expires_at": {
+              "description": "When `url` stops working; absent when it never expires or there is no `url`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            },
+            "title": {
+              "description": "Short label of the artifact.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "artifact_published"
+            },
+            "url": {
+              "description": "Public link to the artifact, which anyone with it can open; absent when the project\nkeeps its artifacts private.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "title",
+            "attachment"
+          ]
         }
       ]
     },
@@ -2894,6 +2932,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "private_artifacts": {
+          "description": "Whether the project keeps the artifacts its sessions publish private: shown in the\nthread, never uploaded for a public link.",
+          "type": "boolean"
         },
         "project_id": {
           "description": "The project.",
