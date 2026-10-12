@@ -185,6 +185,21 @@ jobs:
         env:
           HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
         run: swift test --disable-index-store --package-path apple/HerderKit
+      - name: TEMPORARY render table snapshots, before and after
+        if: always()
+        env:
+          HERDER_FAKE_DAEMON: ${{ github.workspace }}/target/debug/examples/fake_daemon
+        run: |
+          HERDER_TABLE_SNAPSHOTS="$RUNNER_TEMP/snapshots/after" swift test --disable-index-store --package-path apple/HerderKit --filter TableSnapshot
+          git fetch origin main --depth=1
+          git checkout FETCH_HEAD -- apple/HerderKit/Sources/HerderKit/MarkdownTable.swift apple/HerderKit/Tests/HerderKitTests/MarkdownTableTests.swift
+          HERDER_TABLE_SNAPSHOTS="$RUNNER_TEMP/snapshots/before" swift test --disable-index-store --package-path apple/HerderKit --filter TableSnapshot
+          git checkout HEAD -- apple/HerderKit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: table-snapshots
+          path: ${{ runner.temp }}/snapshots
       - name: Build, ad-hoc sign and zip the macOS app
         if: github.event_name == 'push'
         run: |
