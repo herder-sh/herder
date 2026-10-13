@@ -120,9 +120,10 @@ struct HandoffTests {
     }
 
     /// The original of a session handed off to another machine is archived, its running turn
-    /// interrupted first, so the session is listed once; the toast's Undo brings it back.
-    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
-    func handingOffToAnotherMachineArchivesTheOriginal() async throws {
+    /// interrupted first, so the session is listed once; the toast's Undo brings it back. Each
+    /// case has its own daemon: the fake's scripts expect their machine's first turn.
+    @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"), arguments: [false, true])
+    func handingOffToAnotherMachineArchivesTheOriginal(midTurn: Bool) async throws {
         let daemon = try FakeDaemon()
         guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
             Issue.record("cannot open a fresh profile")
@@ -131,22 +132,21 @@ struct HandoffTests {
         let following = Task { await fleet.follow() }
         defer { following.cancel() }
         let host = try await fleet.pair(daemon)
+        try await fleet.client.synced(hostId: host.hostId)
 
-        let idle = try await fleet.createSession(
-            on: host.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.account, model: "",
-            mode: .ask, prompt: "Say hello.")
-        #expect(await eventually { fleet.sessions[idle]?.lastMessage != nil && fleet.sessions[idle]?.status == .idle })
-        await fleet.retire(idle, midTurn: false, handedOffTo: "Studio")
-        #expect(await eventually { fleet.sessions[idle]?.state == .archived })
-        #expect(fleet.toast?.text == "Handed off to Studio" && fleet.toast?.undo == idle)
-
-        // Its turn runs until interrupted: the archive waits for the interrupt to end it.
-        let running = try await fleet.createSession(
-            on: host.hostId, repo: daemon.repo, projectId: nil, accountId: daemon.holdAccount, model: "",
-            mode: .ask, prompt: "Hold.")
-        #expect(await eventually { fleet.sessions[running]?.status == .running })
-        await fleet.retire(running, midTurn: true, handedOffTo: "Studio")
-        #expect(await eventually { fleet.sessions[running]?.state == .archived })
+        // The hold account's turn runs until it is interrupted: the archive waits for it to end.
+        let original = try await fleet.createSession(
+            on: host.hostId, repo: daemon.repo, projectId: nil,
+            accountId: midTurn ? daemon.holdAccount : daemon.account, model: "",
+            mode: .fullAccess, prompt: midTurn ? "Hold." : "Say hello.")
+        #expect(await eventually {
+            guard let session = fleet.sessions[original] else { return false }
+            return midTurn ? session.state == .running && session.turn != nil
+                : session.lastMessage != nil && session.status == .idle
+        })
+        await fleet.retire(original, midTurn: midTurn, handedOffTo: "Studio")
+        #expect(await eventually { fleet.sessions[original]?.state == .archived })
         #expect(fleet.archiveRefusal == nil)
+        #expect(fleet.toast?.text == "Handed off to Studio" && fleet.toast?.undo == original)
     }
 }
