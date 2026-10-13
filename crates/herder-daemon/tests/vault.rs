@@ -1533,13 +1533,16 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
     };
     assert_eq!(refused.code, ErrorCode::Unsupported);
     assert!(
-        refused.message.contains("HERDER_VAULT_SECRETS_KEY"),
+        refused
+            .message
+            .starts_with("this vault has no secrets key; set HERDER_VAULT_SECRETS_KEY"),
         "{}",
         refused.message
     );
     let error = fetch(&host, "s2", &["TOKEN"]).await.unwrap_err();
     assert!(
-        error.message.contains("HERDER_VAULT_SECRETS_KEY"),
+        error.message.starts_with("the vault has no secrets key")
+            && error.message.contains("HERDER_VAULT_SECRETS_KEY"),
         "{}",
         error.message
     );
