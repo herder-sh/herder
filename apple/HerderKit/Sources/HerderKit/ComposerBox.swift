@@ -69,7 +69,8 @@ struct ComposerBox<Footer: View>: View {
                 #if os(macOS)
                 PromptEditor(
                     text: $text, focused: $editing, images: images, pastes: pastes, skills: skills,
-                    addImages: add, addFiles: attach, addPaste: addPaste, submit: submit)
+                    addImages: add, addFiles: attach, addPaste: addPaste, submit: submit,
+                    complete: completeMention)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
                     }
@@ -82,7 +83,9 @@ struct ComposerBox<Footer: View>: View {
                 if !mentioned.isEmpty {
                     SkillStrip(skills: mentioned) { text = SkillMention.remove($0.name, from: text) }
                 }
-                PromptEditor(text: $text, focused: $editing, addImages: add, addPaste: addPaste, submit: submit)
+                PromptEditor(
+                    text: $text, focused: $editing, addImages: add, addPaste: addPaste, submit: submit,
+                    complete: completeMention)
                     .overlay(alignment: .topLeading) {
                         if text.isEmpty { Text(placeholder).foregroundStyle(Theme.tertiary).allowsHitTesting(false) }
                     }
@@ -248,12 +251,16 @@ struct ComposerBox<Footer: View>: View {
         focus()
     }
 
+    /// Chooses the skill picker's first skill, as Tab does; `false` when the picker is closed.
+    private func completeMention() -> Bool {
+        guard let first = skillMatches.first else { return false }
+        mention(first)
+        return true
+    }
+
     /// Sends the prompt; while the skill picker is open, Return chooses its first skill instead.
     private func submit() {
-        if let first = skillMatches.first {
-            mention(first)
-            return
-        }
+        if completeMention() { return }
         dictation.cancel()
         text = PromptText.expand(text, pastes: pastes)
         pastes = []

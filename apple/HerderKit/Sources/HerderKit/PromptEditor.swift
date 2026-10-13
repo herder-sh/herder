@@ -26,6 +26,9 @@ struct PromptEditor: NSViewRepresentable {
     let addPaste: (String) -> String
     /// Return without Shift.
     let submit: () -> Void
+    /// Tab: accepts the completion open above the prompt; `false` when none is, and Tab does
+    /// what it otherwise would.
+    let complete: () -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -188,6 +191,7 @@ struct PromptEditor: NSViewRepresentable {
         func textDidEndEditing(_ notification: Notification) { parent.focused = false }
 
         func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if selector == #selector(NSResponder.insertTab(_:)) { return parent.complete() }
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             if NSApp?.currentEvent?.modifierFlags.contains(.shift) == true {
                 newline(in: textView)
@@ -435,6 +439,9 @@ struct PromptEditor: UIViewRepresentable {
     let addPaste: (String) -> String
     /// Return on a hardware keyboard, without Shift.
     let submit: () -> Void
+    /// Tab on a hardware keyboard: accepts the completion open above the prompt; `false` when
+    /// none is, and the tab goes in.
+    let complete: () -> Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -499,6 +506,10 @@ struct PromptEditor: UIViewRepresentable {
         /// on-screen keyboard it makes a new line, the send button being right there. A new line
         /// at the end continues a list.
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            if text == "\t", textView.markedTextRange == nil, parent.complete() {
+                if textView.text != parent.text { show(parent.text, in: textView) }
+                return false
+            }
             guard text == "\n", textView.markedTextRange == nil else { return true }
             if let keyboard = GCKeyboard.coalesced?.keyboardInput {
                 let shift = keyboard.button(forKeyCode: .leftShift)?.isPressed == true

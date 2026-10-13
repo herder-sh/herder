@@ -50,4 +50,32 @@ final class SkillMentionUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["$deploy to staging."].waitForExistence(timeout: 10))
         XCTAssertFalse(chip.exists)
     }
+
+    /// Tab, on a hardware keyboard, accepts the picker's first skill as Return does.
+    @MainActor
+    func testTabChoosesTheFirstSkill() throws {
+        let app = XCUIApplication()
+        app.launch()
+        try app.pairUnlessPaired()
+
+        let session = app.descendants(matching: .any)["request-session"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 15))
+        session.tap()
+        let composer = app.descendants(matching: .any)["composer"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        composer.tap()
+
+        composer.typeText("$dep")
+        let option = app.buttons["skill-option-deploy"]
+        XCTAssertTrue(option.waitForExistence(timeout: 10), "typing $dep opened no skill picker")
+        composer.typeText("\t")
+        XCTAssertTrue(option.waitForNonExistence(timeout: 5), "Tab left the picker open")
+        XCTAssertTrue(app.descendants(matching: .any)["skill-chip-deploy"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertEqual(composer.value as? String, "$deploy ")
+
+        // Sent, so no draft is left for the next test.
+        composer.typeText("now.")
+        app.buttons["Send"].tap()
+        XCTAssertTrue(app.staticTexts["$deploy now."].waitForExistence(timeout: 10))
+    }
 }
