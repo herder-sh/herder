@@ -1159,6 +1159,7 @@
                   "revoke_secret_set",
                   "list_secrets",
                   "list_secret_audit",
+                  "set_vault_host_access",
                   "set_skills_repo",
                   "put_skill",
                   "delete_skill",

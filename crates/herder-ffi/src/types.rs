@@ -717,6 +717,10 @@ pub enum CommandBody {
     ListSecretAudit {
         before: Option<u64>,
     },
+    SetVaultHostAccess {
+        host_id: HostId,
+        read: bool,
+    },
     SetSkillsRepo {
         url: String,
     },
@@ -1043,6 +1047,7 @@ pub struct HostReplication {
     pub events: u64,
     pub last_event_at: Option<Timestamp>,
     pub lag_ms: Option<u64>,
+    pub read: bool,
 }
 
 #[uniffi::remote(Enum)]

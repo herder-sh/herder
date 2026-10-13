@@ -423,7 +423,7 @@ impl VaultStore {
     }
 
     /// What the vault holds, in total and of every host that ever replicated here, ordered by
-    /// host id. Lags are left out: the store does not know them.
+    /// host id. Lags and read access are left out: the store does not know them.
     pub fn status(&self) -> Result<VaultStatus> {
         let mut hosts: BTreeMap<HostId, HostReplication> = self
             .hosts()?
@@ -435,6 +435,7 @@ impl VaultStore {
                     events: 0,
                     last_event_at: None,
                     lag_ms: None,
+                    read: false,
                 };
                 (host.host_id, replication)
             })
@@ -1284,6 +1285,7 @@ mod tests {
             events,
             last_event_at: last.map(at),
             lag_ms: None,
+            read: false,
         };
         assert_eq!(
             status.hosts,
