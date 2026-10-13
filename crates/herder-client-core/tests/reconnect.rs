@@ -1612,13 +1612,11 @@ async fn the_offline_cache_shows_the_last_state_and_live_data_wins() {
     drop(client);
     daemon.kill().await;
     let client = Client::open(config, "herder-test/0".into()).unwrap();
-    assert_eq!(client.machines()[0].sessions, live);
+    // The first update waits for the cache and carries all of it.
     let sub = client.subscribe_session(host, session_id).unwrap();
-    let mut reopened = View::default();
-    reopened
-        .read_until(&sub, |reopened| !reopened.events.is_empty())
-        .await;
+    let reopened = sub.next().await.unwrap();
     assert_eq!(reopened.events, view.events);
+    wait_machine(&client, |machine| machine.sessions == live).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

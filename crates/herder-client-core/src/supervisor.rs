@@ -17,6 +17,7 @@
 //! terminal this client holds a stream for on each new connection, with fresh command ids (a
 //! resent id would be answered from the daemon's memory without attaching anything).
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -132,6 +133,8 @@ pub(crate) struct Supervisor {
     client: String,
     /// Held across each offline cache save, from taking the state to writing it.
     saving: Mutex<()>,
+    /// Whether the offline cache was read into the state; it is, before the first connect.
+    loaded: watch::Sender<bool>,
 }
 
 #[derive(Default)]
@@ -296,8 +299,9 @@ impl Default for Log {
 }
 
 impl Supervisor {
-    /// Starts the task that keeps `saved` connected until `stop`, holding what the offline
-    /// cache in `config_dir` has for it until the daemon says otherwise.
+    /// Starts the task that keeps `saved` connected until `stop`. The task first reads what
+    /// the offline cache in `config_dir` has for it, off the async runtime, and holds that
+    /// until the daemon says otherwise.
     pub(crate) fn start(
         saved: SavedMachine,
         config_dir: PathBuf,
@@ -311,7 +315,7 @@ impl Supervisor {
         let (ops, queue) = mpsc::unbounded_channel();
         let state = State {
             addresses: saved.addresses.clone(),
-            ..State::cached(offline::load(&config_dir, &saved.host_id))
+            ..State::default()
         };
         let supervisor = Arc::new(Self {
             saved,
@@ -322,9 +326,51 @@ impl Supervisor {
             config_dir,
             client,
             saving: Mutex::new(()),
+            loaded: watch::Sender::new(false),
         });
         tokio::spawn(run(Arc::clone(&supervisor), device, queue));
         Ok(supervisor)
+    }
+
+    /// Reads the offline cache on the blocking pool: it can hold many complete transcripts.
+    async fn load(&self) -> State {
+        let config_dir = self.config_dir.clone();
+        let host_id = self.saved.host_id.clone();
+        tokio::task::spawn_blocking(move || State::cached(offline::load(&config_dir, &host_id)))
+            .await
+            .unwrap_or_else(|err| {
+                warn!(machine = %self.saved.name, "reading the offline cache: {err}");
+                State::default()
+            })
+    }
+
+    /// Takes in what the offline cache had. Nothing was connected yet, so the lists are the
+    /// cache's; a session subscribed to meanwhile has an empty log, which the cached one
+    /// replaces, waking its subscribers.
+    fn restore(&self, cached: State) {
+        let mut state = self.lock();
+        state.role = cached.role;
+        state.sessions = cached.sessions;
+        state.hosts = cached.hosts;
+        state.projects = cached.projects;
+        state.accounts = cached.accounts;
+        state.failover = cached.failover;
+        state.providers = cached.providers;
+        for (session_id, log) in cached.logs {
+            match state.logs.entry(session_id) {
+                Entry::Occupied(mut entry) => {
+                    let held = entry.get_mut();
+                    held.log = log.log;
+                    held.changed.send_modify(|version| *version += 1);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(log);
+                }
+            }
+        }
+        drop(state);
+        self.loaded.send_replace(true);
+        self.notify();
     }
 
     /// Stops the task; subscriptions end.
@@ -987,7 +1033,18 @@ impl Subscription {
 
     pub(crate) async fn next(&self) -> Option<SessionUpdate> {
         let mut reader = self.reader.lock().await;
-        if !reader.first {
+        if reader.first {
+            // The first update carries every cached event, so it waits for the cache.
+            let mut loaded = self.supervisor.loaded.subscribe();
+            tokio::select! {
+                () = self.supervisor.stop.cancelled() => return None,
+                loaded = loaded.wait_for(|loaded| *loaded) => {
+                    loaded.ok()?;
+                }
+            }
+            // Loading it woke the log's watchers; this update covers that.
+            reader.changed.borrow_and_update();
+        } else {
             tokio::select! {
                 () = self.supervisor.stop.cancelled() => return None,
                 changed = reader.changed.changed() => changed.ok()?,
@@ -1039,6 +1096,11 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
     let mut attempt = 0;
     let mut suspended = false;
     let saved = &supervisor.saved;
+    let cached = tokio::select! {
+        () = supervisor.stop.cancelled() => return,
+        cached = supervisor.load() => cached,
+    };
+    supervisor.restore(cached);
     loop {
         supervisor.set_connection(ConnectionState::Connecting);
         let addresses = supervisor.lock().addresses.clone();

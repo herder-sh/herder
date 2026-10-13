@@ -6,10 +6,11 @@
 //! the newest. A session's events are saved complete, from its first, because its subscription
 //! resumes after the last one held: a trimmed log would hide the older ones for good.
 //!
-//! Live data always wins. A supervisor reads its file only when it starts, before it connects;
-//! from then on the daemon's lists replace the cached ones and its events extend the cached
-//! logs by seq. Each save writes what is held at that moment, under the supervisor's save lock,
-//! so a slower save of older state never lands after a newer one.
+//! Live data always wins. A supervisor reads its file only when it starts, on the blocking
+//! pool before it first connects; from then on the daemon's lists replace the cached ones and
+//! its events extend the cached logs by seq. Each save writes what is held at that moment,
+//! under the supervisor's save lock, so a slower save of older state never lands after a newer
+//! one.
 //!
 //! The files hold transcripts, so they are private like the profile. A missing or unreadable
 //! file is an empty cache: it is only a cache.
@@ -60,9 +61,14 @@ fn dir(config_dir: &Path) -> PathBuf {
     config_dir.join(DIR)
 }
 
+/// Where `host_id`'s cache is kept.
+pub(crate) fn path(config_dir: &Path, host_id: &HostId) -> PathBuf {
+    dir(config_dir).join(file(host_id))
+}
+
 /// What is cached for `host_id`; empty when nothing is, or the file is unreadable.
 pub(crate) fn load(config_dir: &Path, host_id: &HostId) -> Cached {
-    let path = dir(config_dir).join(file(host_id));
+    let path = path(config_dir, host_id);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Cached::default(),
@@ -85,7 +91,7 @@ pub(crate) fn save(config_dir: &Path, host_id: &HostId, cached: &Cached) -> Resu
 
 /// Deletes what is cached for `host_id`.
 pub(crate) fn remove(config_dir: &Path, host_id: &HostId) {
-    let path = dir(config_dir).join(file(host_id));
+    let path = path(config_dir, host_id);
     if let Err(err) = fs::remove_file(&path)
         && err.kind() != io::ErrorKind::NotFound
     {
