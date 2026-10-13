@@ -14,7 +14,8 @@
 //! A device is a client or a host ([`DeviceRole`]), as its code says. A client connects as a
 //! client and reads everything, and may replicate to a vault too. A host, paired by
 //! `herder pair --host` on a vault, may only replicate: every client connection it opens is
-//! refused, so its key, if stolen, reads nothing.
+//! refused, so its key, if stolen, reads nothing. An owner may let a host read the vault too, so
+//! it can take handoffs ([`Auth::set_device_role`]), and take that back.
 //!
 //! Users and devices persist in `<data_dir>/auth.json`, written atomically on every change.
 
@@ -142,8 +143,9 @@ struct State {
     users: Users,
     /// Unexpired codes by their normalized form.
     codes: HashMap<String, Pending>,
-    /// Cancels the open connections of each device, so revoking one disconnects it.
-    connections: HashMap<DeviceId, Vec<CancellationToken>>,
+    /// Cancels the open connections of each device, with what each was opened as, so revoking
+    /// one disconnects it.
+    connections: HashMap<DeviceId, Vec<(DeviceRole, CancellationToken)>>,
 }
 
 /// The daemon's users, devices and pending pairing codes.
@@ -270,7 +272,15 @@ impl Auth {
         let mut state = self.lock();
         let identity = match identity(&state.users, fingerprint) {
             Some((identity, role)) if role.allows(peer) => identity,
-            Some(_) => return Err(host_only()),
+            Some((identity, _)) => {
+                let host = state
+                    .users
+                    .users
+                    .iter()
+                    .find(|user| user.user_id == identity.user_id)
+                    .map_or("this host", |user| user.name.as_str());
+                return Err(host_only(host));
+            }
             None => {
                 let Some(code) = code else {
                     return Err(forbidden(
@@ -285,8 +295,8 @@ impl Auth {
             .connections
             .entry(identity.device_id.clone())
             .or_default();
-        open.retain(|token| !token.is_cancelled());
-        open.push(connection.clone());
+        open.retain(|(_, token)| !token.is_cancelled());
+        open.push((peer, connection.clone()));
         Ok(identity)
     }
 
@@ -307,7 +317,10 @@ impl Auth {
         }
         // The code stays, for the host's config.
         if !pending.device_role.allows(peer) {
-            return Err(host_only());
+            return Err(forbidden(
+                "this code pairs a host, which may only back its sessions up to the vault; \
+                 pair a client with `herder pair` on the vault",
+            ));
         }
         let now = Timestamp::now();
         let mut users = state.users.clone();
@@ -427,6 +440,47 @@ impl Auth {
         Ok(demoted)
     }
 
+    /// What the paired device `device_id` may connect as; `None` if it is not paired.
+    pub fn device_role(&self, device_id: &DeviceId) -> Option<DeviceRole> {
+        self.lock()
+            .users
+            .devices
+            .iter()
+            .find(|device| &device.device_id == device_id)
+            .map(|device| device.role)
+    }
+
+    /// Lets the paired device `device_id` connect as `role` from now on, keeping it paired;
+    /// `false` if it is not paired. Made a host, its client connections close and its host
+    /// connections stay.
+    pub fn set_device_role(&self, device_id: &DeviceId, role: DeviceRole) -> Result<bool> {
+        let mut state = self.lock();
+        let mut users = state.users.clone();
+        let Some(device) = users
+            .devices
+            .iter_mut()
+            .find(|device| &device.device_id == device_id)
+        else {
+            return Ok(false);
+        };
+        if device.role == role {
+            return Ok(true);
+        }
+        device.role = role;
+        self.save(&users)?;
+        state.users = users;
+        if let Some(open) = state.connections.get_mut(device_id) {
+            open.retain(|(peer, token)| {
+                if !role.allows(*peer) {
+                    token.cancel();
+                }
+                !token.is_cancelled()
+            });
+        }
+        info!(%device_id, ?role, "device role changed");
+        Ok(true)
+    }
+
     /// Unpairs a device and closes its open connections; `false` if it was not paired.
     pub fn revoke(&self, device_id: &DeviceId) -> Result<bool> {
         let mut state = self.lock();
@@ -440,7 +494,7 @@ impl Auth {
         }
         self.save(&users)?;
         state.users = users;
-        for token in state.connections.remove(device_id).unwrap_or_default() {
+        for (_, token) in state.connections.remove(device_id).unwrap_or_default() {
             token.cancel();
         }
         info!(%device_id, "device revoked");
@@ -521,6 +575,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::UnlinkVault
             | CommandBody::PairVaultHost { .. }
             | CommandBody::RevokeVaultHost { .. }
+            | CommandBody::SetVaultHostAccess { .. }
     );
     if backup && role != Role::Owner {
         return Err(forbidden(
@@ -580,11 +635,13 @@ fn user_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-fn host_only() -> ErrorInfo {
-    forbidden(
-        "this device is paired as a host: it may only replicate its sessions to the vault, \
-         not read it; pair a client with `herder pair` on the vault",
-    )
+/// The refusal of a client connection from a device of the host-only `host`, worded for the
+/// person handing a session off to it, to whom the host relays it.
+fn host_only(host: &str) -> ErrorInfo {
+    forbidden(&format!(
+        "{host} only backs its sessions up to the vault, so it cannot read other machines' \
+         sessions; turn on \"Takes handoffs\" for it on the vault's page in the app"
+    ))
 }
 
 fn forbidden(message: &str) -> ErrorInfo {
@@ -762,7 +819,7 @@ mod tests {
         // A host code does not pair a client, and is not used up by trying.
         let refused = pair(&auth, "fp-h", &pairing.code).unwrap_err();
         assert_eq!(refused.code, ErrorCode::Forbidden);
-        assert!(refused.message.contains("paired as a host"), "{refused:?}");
+        assert!(refused.message.contains("pairs a host"), "{refused:?}");
         let host = auth
             .authenticate(
                 "fp-h",
@@ -775,12 +832,60 @@ mod tests {
         assert_eq!(connect(&auth, "fp-h", DeviceRole::Host), Ok(host));
         let stolen = connect(&auth, "fp-h", DeviceRole::Client).unwrap_err();
         assert_eq!(stolen.code, ErrorCode::Forbidden);
+        assert!(
+            stolen.message.starts_with("devbox only backs"),
+            "{stolen:?}"
+        );
 
         // A client device connects as either.
         assert!(connect(&auth, "fp-a", DeviceRole::Client).is_ok());
         assert!(connect(&auth, "fp-a", DeviceRole::Host).is_ok());
         let roles: Vec<_> = auth.devices().iter().map(|(d, _)| d.role).collect();
         assert_eq!(roles, [DeviceRole::Client, DeviceRole::Host]);
+    }
+
+    #[test]
+    fn a_host_device_reads_once_let_and_stops_when_no_longer_let() {
+        let (tmp, auth) = open();
+        let code = auth.mint_host("devbox", PAIRING_TTL).unwrap().code;
+        let replication = CancellationToken::new();
+        let host = auth
+            .authenticate("fp-h", Some(&code), "test", DeviceRole::Host, &replication)
+            .unwrap();
+        assert_eq!(auth.device_role(&host.device_id), Some(DeviceRole::Host));
+
+        assert!(
+            auth.set_device_role(&host.device_id, DeviceRole::Client)
+                .unwrap()
+        );
+        let reading = CancellationToken::new();
+        let client = auth
+            .authenticate("fp-h", None, "test", DeviceRole::Client, &reading)
+            .unwrap();
+        assert_eq!(client, host);
+        // Kept across a restart.
+        let auth = Auth::open(tmp.path()).unwrap();
+        assert_eq!(auth.device_role(&host.device_id), Some(DeviceRole::Client));
+        let reading = CancellationToken::new();
+        let replication = CancellationToken::new();
+        auth.authenticate("fp-h", None, "test", DeviceRole::Client, &reading)
+            .unwrap();
+        auth.authenticate("fp-h", None, "test", DeviceRole::Host, &replication)
+            .unwrap();
+
+        // Taking it back closes the client connection, not the replication.
+        assert!(
+            auth.set_device_role(&host.device_id, DeviceRole::Host)
+                .unwrap()
+        );
+        assert!(reading.is_cancelled());
+        assert!(!replication.is_cancelled());
+        assert!(connect(&auth, "fp-h", DeviceRole::Client).is_err());
+        assert!(connect(&auth, "fp-h", DeviceRole::Host).is_ok());
+
+        let unknown = DeviceId::new("nobody");
+        assert!(!auth.set_device_role(&unknown, DeviceRole::Client).unwrap());
+        assert_eq!(auth.device_role(&unknown), None);
     }
 
     #[test]

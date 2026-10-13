@@ -313,6 +313,10 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
         CommandBody::RevokeVaultHost {
             host_id: host_id.clone(),
         },
+        CommandBody::SetVaultHostAccess {
+            host_id: host_id.clone(),
+            read: true,
+        },
     ] {
         assert_eq!(
             refused(&vault_member, &carol_vault, command).await,
@@ -363,7 +367,68 @@ async fn an_owner_links_a_host_to_the_vault_and_unlinks_it() {
     // read other sessions as a client, so the vault refuses the read.
     assert_eq!(
         refused(&owner, &host_id, missing_fork.clone()).await,
-        ErrorCode::Internal
+        ErrorCode::Forbidden
+    );
+    let reads = |read: bool| {
+        let (host_id, vault_id) = (host_id.clone(), vault_id.clone());
+        move |m: &Machine| {
+            m.host_id == vault_id
+                && m.vault.as_ref().is_some_and(|vault| {
+                    vault
+                        .hosts
+                        .iter()
+                        .any(|h| h.host_id == host_id && h.read == read)
+                })
+        }
+    };
+    machine_when(&owner, reads(false)).await;
+
+    // The owner lets it take handoffs: the same device reads the vault, with no pairing
+    // again, and the session is just not there.
+    let access = |read| CommandBody::SetVaultHostAccess {
+        host_id: host_id.clone(),
+        read,
+    };
+    assert_eq!(
+        send(&owner, &vault_id, access(true)).await,
+        CommandResult::Applied
+    );
+    machine_when(&owner, reads(true)).await;
+    assert_eq!(
+        refused(&owner, &host_id, missing_fork.clone()).await,
+        ErrorCode::NotFound
+    );
+    // Replication went on all along.
+    assert!(
+        owner
+            .machines()
+            .iter()
+            .any(|m| m.host_id == vault_id
+                && m.hosts.iter().any(|h| h.host_id == host_id && h.online))
+    );
+
+    // And takes it back: host-only again.
+    assert_eq!(
+        send(&owner, &vault_id, access(false)).await,
+        CommandResult::Applied
+    );
+    machine_when(&owner, reads(false)).await;
+    assert_eq!(
+        refused(&owner, &host_id, missing_fork.clone()).await,
+        ErrorCode::Forbidden
+    );
+    // A host that never replicated here, and a daemon that is no vault, are refused.
+    let stranger_host = CommandBody::SetVaultHostAccess {
+        host_id: HostId::new("never-replicated"),
+        read: true,
+    };
+    assert_eq!(
+        refused(&owner, &vault_id, stranger_host).await,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        refused(&owner, &host_id, access(true)).await,
+        ErrorCode::Unsupported
     );
 
     // A second link waits for the first to stop.
