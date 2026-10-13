@@ -37,7 +37,7 @@ struct MachinesView: View {
                     }
                 }
                 if showsVaults {
-                    ForEach(fleet.vaults) { VaultSection(fleet: fleet, vault: $0) }
+                    ForEach(fleet.vaults) { VaultSection(fleet: fleet, vault: $0, sheet: $sheet) }
                 }
             }
             .padding(.horizontal, 16)

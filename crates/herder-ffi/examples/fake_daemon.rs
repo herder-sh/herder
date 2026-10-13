@@ -9,11 +9,15 @@
 //! repository is the first's, and the first has a session waiting on an approval.
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints
 //! only the link a device paired with all of it shares.
+//! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its
+//! owner's pairing link.
 
 #[path = "fake_daemon/demo.rs"]
 mod demo;
 #[path = "../tests/support/mod.rs"]
 mod support;
+#[path = "fake_daemon/vault.rs"]
+mod vault;
 
 use std::time::Duration;
 
@@ -30,6 +34,12 @@ async fn main() -> Result<()> {
             println!("{}", demo.link);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return demo.stop().await;
+        }
+        Some("--vault") => {
+            let vault = vault::Vault::start().await?;
+            println!("{}", vault.link);
+            tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
+            return vault.stop().await;
         }
         Some("--share") => {
             let daemons = vec![
