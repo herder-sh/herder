@@ -1303,6 +1303,7 @@ fn a_vaults_status_shows_in_the_machines_panel() {
                 events: 1000,
                 last_event_at: Some(herder_protocol::Timestamp::now()),
                 lag_ms: Some(40),
+                read: false,
             },
             HostReplication {
                 host_id: HostId::new("laptop"),
@@ -1310,6 +1311,7 @@ fn a_vaults_status_shows_in_the_machines_panel() {
                 events: 250,
                 last_event_at: None,
                 lag_ms: None,
+                read: false,
             },
         ],
     });

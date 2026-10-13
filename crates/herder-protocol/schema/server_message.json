@@ -2439,6 +2439,10 @@
           ],
           "format": "date-time"
         },
+        "read": {
+          "description": "Whether a device the host replicates from may read the vault as a client too, so the\nhost can take handoffs of other hosts' sessions; false for a host paired host-only.\n`set_vault_host_access` changes it.",
+          "type": "boolean"
+        },
         "sessions": {
           "description": "Sessions of the host held, without copies another host took over.",
           "type": "integer",
