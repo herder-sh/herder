@@ -243,11 +243,7 @@ struct VaultSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeading(title: "Hosts", count: vault.hosts.count)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
-                    ForEach(vault.hosts) { host in
-                        HostCard(host: host, setTakesHandoffs: vault.owned ? { on in
-                            try await fleet.setTakesHandoffs(on, host: host.id, vault: vault.hostId)
-                        } : nil)
-                    }
+                    ForEach(vault.hosts) { HostCard(fleet: fleet, vault: vault, host: $0) }
                 }
             }
             VStack(alignment: .leading, spacing: 10) {
@@ -313,9 +309,9 @@ private struct Stat: View {
 
 /// A replicated host: whether it is online, its sessions by state, and its busiest projects.
 private struct HostCard: View {
+    let fleet: Fleet
+    let vault: VaultStats
     let host: VaultStats.Host
-    /// Changes whether the host takes handoffs; `nil` unless this device owns the vault.
-    let setTakesHandoffs: ((Bool) async throws -> Void)?
 
     var body: some View {
         Card {
@@ -358,8 +354,8 @@ private struct HostCard: View {
                     }
                     .font(.caption)
                 }
-                if let setTakesHandoffs, let takesHandoffs = host.takesHandoffs {
-                    HandoffToggle(takesHandoffs: takesHandoffs, set: setTakesHandoffs)
+                if vault.owned, let takesHandoffs = host.takesHandoffs {
+                    HandoffToggle(fleet: fleet, vault: vault.hostId, host: host.id, takesHandoffs: takesHandoffs)
                 }
             }
         }
@@ -370,8 +366,10 @@ private struct HostCard: View {
 /// Whether a host may read the vault, so a session can be handed off to it, for the vault's
 /// owners. Shows the change at once and keeps it until the vault's status agrees.
 private struct HandoffToggle: View {
+    let fleet: Fleet
+    let vault: HostId
+    let host: HostId
     let takesHandoffs: Bool
-    let set: (Bool) async throws -> Void
     @State private var asked: Bool?
     @State private var error: String?
 
@@ -397,7 +395,7 @@ private struct HandoffToggle: View {
         error = nil
         Task {
             do {
-                try await set(on)
+                try await fleet.setTakesHandoffs(on, host: host, vault: vault)
                 if on == takesHandoffs { asked = nil }
             } catch {
                 self.error = describe(error)
