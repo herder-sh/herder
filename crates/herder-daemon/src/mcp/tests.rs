@@ -26,6 +26,15 @@ impl ToolHandler for Unimplemented {
         };
         Box::pin(std::future::ready(result))
     }
+
+    fn fetch_secrets(&self, _caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture {
+        Box::pin(std::future::ready(Err(SecretError {
+            code: herder_protocol::SecretErrorCode::NoVault,
+            message: "no vault".into(),
+            secret: secrets.first().cloned(),
+            candidates: Vec::new(),
+        })))
+    }
 }
 
 struct Daemon {
@@ -273,6 +282,20 @@ impl ToolHandler for Arc<Recorder> {
             CallToolResult::success(&json!({})).unwrap(),
         ))
     }
+
+    /// Hands out `<caller>-<NAME>` for every secret.
+    fn fetch_secrets(&self, caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture {
+        let values = secrets
+            .into_iter()
+            .map(|secret| FetchedSecret {
+                value: herder_protocol::SecretValue::new(format!("{caller}-{}", secret.name))
+                    .unwrap(),
+                set: "prod".into(),
+                secret,
+            })
+            .collect();
+        Box::pin(std::future::ready(Ok(values)))
+    }
 }
 
 #[tokio::test]
@@ -297,6 +320,10 @@ impl ToolHandler for Blocks {
     fn call(&self, _caller: SessionId, _call: ToolCall) -> ToolFuture {
         Box::pin(std::future::pending())
     }
+
+    fn fetch_secrets(&self, _caller: SessionId, _secrets: Vec<SecretRef>) -> SecretsFuture {
+        Box::pin(std::future::pending())
+    }
 }
 
 #[tokio::test]
@@ -314,4 +341,54 @@ async fn a_blocked_call_does_not_hold_up_the_others_or_the_shims_exit() {
     assert_eq!(ping["result"], json!({}));
     client.close().await.unwrap();
     daemon.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn secrets_go_to_the_tokens_session_only_and_refusals_come_back_whole() {
+    let daemon = daemon(Arc::new(Arc::new(Recorder::default())));
+    daemon.mcp.grant(&SessionId::new("S1")).unwrap();
+    let secrets = ["TOKEN".parse().unwrap(), "prod/KEY".parse().unwrap()];
+    let fetched = fetch_secrets(&daemon.dir, &SessionId::new("S1"), &secrets)
+        .await
+        .unwrap()
+        .unwrap();
+    let values: Vec<_> = fetched
+        .iter()
+        .map(|secret| (secret.secret.to_string(), secret.value.expose().to_owned()))
+        .collect();
+    assert_eq!(
+        values,
+        [
+            ("TOKEN".to_owned(), "S1-TOKEN".to_owned()),
+            ("prod/KEY".to_owned(), "S1-KEY".to_owned())
+        ]
+    );
+
+    // A session without a grant, or with a forged token, gets nothing.
+    let refused = fetch_secrets(&daemon.dir, &SessionId::new("S2"), &secrets)
+        .await
+        .unwrap_err();
+    assert!(format!("{refused:#}").contains("S2.token"), "{refused:#}");
+    std::fs::write(
+        token_path(&daemon.dir, &SessionId::new("S2")).unwrap(),
+        "forged",
+    )
+    .unwrap();
+    let refused = fetch_secrets(&daemon.dir, &SessionId::new("S2"), &secrets)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("no valid herder MCP token"),
+        "{refused:#}"
+    );
+
+    // The handler's refusal reaches the caller as it was.
+    let daemon = self::daemon(Arc::new(Unimplemented));
+    daemon.mcp.grant(&SessionId::new("S1")).unwrap();
+    let refusal = fetch_secrets(&daemon.dir, &SessionId::new("S1"), &secrets)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(refusal.code, herder_protocol::SecretErrorCode::NoVault);
+    assert_eq!(refusal.secret, Some(secrets[0].clone()));
 }

@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     Cursor, DeviceId, HostId, HostMessage, REPLICATION_VERSION, ReplicationError,
-    ReplicationErrorCode, SecretError, SecretErrorCode, VaultHello, VaultMessage,
+    ReplicationErrorCode, VaultHello, VaultMessage,
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::store::{self, Kept, Outcome};
-use super::{BUILD, Shared, blocking};
+use super::{BUILD, Shared, blocking, secrets};
 use crate::auth::DeviceRole;
 use crate::ws::{self, Ws};
 
@@ -291,20 +291,13 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
                     },
                 }
             }
-            // Secrets are not implemented yet: this vault holds none.
-            Ok(HostMessage::ListSecrets { request_id }) => VaultMessage::SecretList {
-                request_id,
-                secrets: Vec::new(),
-            },
-            Ok(HostMessage::FetchSecrets(fetch)) => VaultMessage::SecretsRefused {
-                request_id: fetch.request_id,
-                error: SecretError {
-                    code: SecretErrorCode::Unknown,
-                    message: "secrets are not implemented yet on this vault".to_owned(),
-                    secret: None,
-                    candidates: Vec::new(),
-                },
-            },
+            Ok(HostMessage::ListSecrets { request_id }) => {
+                secrets::list(&shared.store, host, request_id).await?
+            }
+            Ok(HostMessage::FetchSecrets(fetch)) => {
+                let key = shared.secrets_key.as_ref();
+                secrets::fetch(&shared.store, key, host, fetch).await?
+            }
             Ok(HostMessage::Unknown) => continue,
             Err(err) => return fail(ws, bad(&err)).await,
         };

@@ -7,7 +7,8 @@
 //! only wakes it, so a slow or unreachable vault never holds up a session. When the vault is
 //! unreachable it retries with a backoff of up to [`BACKOFF_CAP`]. When the host backs up
 //! images (`[vault] attachments`), every image a batch's prompts carried goes just ahead of
-//! the batch; otherwise none does.
+//! the batch; otherwise none does. While connected, it carries the host's secret requests
+//! too ([`HostSecrets`]).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -18,11 +19,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    Account, Attachment, AttachmentData, Batch, Cursor, Event, HostHello, HostMessage, Item,
-    ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason, Seq, SessionHead,
-    SessionId, SessionStatus, SessionSummary, VaultMessage,
+    Account, Attachment, AttachmentData, Batch, Cursor, Event, FetchedSecret, HostHello,
+    HostMessage, Item, ItemId, JournalRecord, MAX_BATCH_EVENTS, REPLICATION_VERSION, RejectReason,
+    SecretError, SecretFetch, SecretInfo, Seq, SessionHead, SessionId, SessionStatus,
+    SessionSummary, VaultMessage,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::Message;
@@ -31,6 +33,7 @@ use tracing::{debug, info, warn};
 
 use super::BUILD;
 use super::client::{self, Ws};
+use super::host_secrets::{Ask, HostSecrets};
 use crate::config::VaultConfig;
 use crate::data_dir::write_private;
 use crate::session::{EventSink, SessionManager};
@@ -102,6 +105,8 @@ pub struct Replicator {
     pub sessions: SessionManager,
     /// Notified when the journal grows; see [`WakeOnEvent`].
     pub changed: Arc<Notify>,
+    /// The host's secret requests, sent while connected.
+    pub secrets: Arc<HostSecrets>,
 }
 
 impl Replicator {
@@ -178,12 +183,14 @@ impl Replicator {
         // connection when one is taken over later.
         let mut released = self.release_recovered().await;
         let mut link = Link::new(acked);
+        let (_attached, mut asks) = self.secrets.attach();
         let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
         let mut heard = Instant::now();
         loop {
             self.pump(&mut ws, &mut link).await?;
             tokio::select! {
                 () = self.changed.notified() => {}
+                Some(ask) = asks.recv() => send(&mut ws, link.ask(ask)).await?,
                 _ = keepalive.tick() => {
                     if heard.elapsed() > SILENCE {
                         bail!("the vault stopped answering");
@@ -337,6 +344,16 @@ struct Link {
     stopped: HashSet<SessionId>,
     /// The summary last sent per session.
     published: HashMap<SessionId, SessionSummary>,
+    /// Secret requests sent and not answered yet, by request id.
+    pending: HashMap<u64, Pending>,
+    /// The id of the last secret request sent.
+    requested: u64,
+}
+
+/// Who waits for the answer to a secret request.
+enum Pending {
+    List(oneshot::Sender<Vec<SecretInfo>>),
+    Fetch(oneshot::Sender<Result<Vec<FetchedSecret>, SecretError>>),
 }
 
 impl Link {
@@ -350,6 +367,32 @@ impl Link {
             acked,
             stopped: HashSet::new(),
             published: HashMap::new(),
+            pending: HashMap::new(),
+            requested: 0,
+        }
+    }
+
+    /// The message asking the vault for `ask`, whose answer goes where `ask` says.
+    fn ask(&mut self, ask: Ask) -> HostMessage {
+        self.requested += 1;
+        let request_id = self.requested;
+        match ask {
+            Ask::List(answer) => {
+                self.pending.insert(request_id, Pending::List(answer));
+                HostMessage::ListSecrets { request_id }
+            }
+            Ask::Fetch {
+                session_id,
+                secrets,
+                answer,
+            } => {
+                self.pending.insert(request_id, Pending::Fetch(answer));
+                HostMessage::FetchSecrets(SecretFetch {
+                    request_id,
+                    session_id,
+                    secrets,
+                })
+            }
         }
     }
 
@@ -379,12 +422,29 @@ impl Link {
                 self.stopped.insert(cursor.session_id);
             }
             VaultMessage::Error { error } => bail!("the vault refused: {}", error.message),
-            // This host asks for no secrets yet, so any answer is stray.
-            VaultMessage::Hello(_)
-            | VaultMessage::SecretList { .. }
-            | VaultMessage::SecretValues { .. }
-            | VaultMessage::SecretsRefused { .. }
-            | VaultMessage::Unknown => {}
+            // A requester that gave up gets nothing.
+            VaultMessage::SecretList {
+                request_id,
+                secrets,
+            } => {
+                if let Some(Pending::List(answer)) = self.pending.remove(&request_id) {
+                    let _ = answer.send(secrets);
+                }
+            }
+            VaultMessage::SecretValues {
+                request_id,
+                secrets,
+            } => {
+                if let Some(Pending::Fetch(answer)) = self.pending.remove(&request_id) {
+                    let _ = answer.send(Ok(secrets));
+                }
+            }
+            VaultMessage::SecretsRefused { request_id, error } => {
+                if let Some(Pending::Fetch(answer)) = self.pending.remove(&request_id) {
+                    let _ = answer.send(Err(error));
+                }
+            }
+            VaultMessage::Hello(_) | VaultMessage::Unknown => {}
         }
         Ok(())
     }

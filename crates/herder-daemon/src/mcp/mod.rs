@@ -25,6 +25,13 @@
 //! and `tools/call`; notifications are ignored. Calls run concurrently, since `wait_for` blocks,
 //! and go to a [`ToolHandler`].
 //!
+//! # Secrets
+//!
+//! `herder secret run`, which a session's agent runs, connects the same way with the session's
+//! id and token and asks for values with one `herder/fetch_secrets` request, which no MCP client
+//! sends. The values go to the program it starts, in its environment; the `secrets` tool lists
+//! names only.
+//!
 //! # Driving herder
 //!
 //! `overview` and `command` let an agent drive the daemon it runs in as the herder apps do,
@@ -46,7 +53,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use herder_adapters::McpServer;
 use herder_protocol::{
-    Account, CommandBody, CommandResult, ErrorInfo, Project, SessionHead, SessionId, UserId,
+    Account, CommandBody, CommandResult, ErrorInfo, FetchedSecret, Project, SecretError, SecretRef,
+    SessionHead, SessionId, UserId,
 };
 use herder_tasktools::{CallToolResult, ToolCall};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -58,10 +66,18 @@ use tracing::{debug, warn};
 
 use crate::data_dir::write_private;
 
-pub use shim::{run_shim, shim};
+pub use shim::{fetch_secrets, run_shim, shim};
 
 /// File name of the socket in the data dir.
 pub const SOCKET: &str = "mcp.sock";
+
+/// The variable every session's CLI gets the daemon's data dir in, so `herder secret run`
+/// finds the socket and its session's token.
+pub const DATA_DIR_ENV: &str = "HERDER_DATA_DIR";
+
+/// The JSON-RPC method `herder secret run` asks for values with; not an MCP method, and no
+/// tool, so values never reach an agent's transcript through MCP.
+const FETCH_SECRETS: &str = "herder/fetch_secrets";
 
 /// Directory of the session tokens in the data dir.
 const TOKENS: &str = "mcp";
@@ -77,15 +93,23 @@ pub struct Config {
     pub herder: PathBuf,
 }
 
-/// Runs task tool calls.
+/// Runs task tool calls, and hands `herder secret run` its secrets.
 pub trait ToolHandler: Send + Sync + 'static {
     /// Runs `call`, made by the agent of `caller`: the session whose token the connection
     /// presented, never one named in the arguments.
     fn call(&self, caller: SessionId, call: ToolCall) -> ToolFuture;
+
+    /// The values of `secrets` for `caller`, the session whose token the connection presented,
+    /// for `herder secret run` only: no tool returns a value.
+    fn fetch_secrets(&self, caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture;
 }
 
 /// What [`ToolHandler::call`] returns.
 pub type ToolFuture = Pin<Box<dyn Future<Output = CallToolResult> + Send>>;
+
+/// What [`ToolHandler::fetch_secrets`] returns.
+pub type SecretsFuture =
+    Pin<Box<dyn Future<Output = Result<Vec<FetchedSecret>, SecretError>> + Send>>;
 
 /// The daemon as its apps drive it, for the `overview` and `command` tools: the WebSocket
 /// server runs the same commands for clients.
@@ -180,6 +204,16 @@ impl Mcp {
                 session_id.to_string(),
             ],
         })
+    }
+
+    /// The herder binary sessions' CLIs run.
+    pub fn herder(&self) -> &Path {
+        &self.herder
+    }
+
+    /// The daemon's data dir, which holds the socket and the tokens.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
     /// Withdraws `session_id`'s token; its connections take no further calls.

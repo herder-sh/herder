@@ -192,6 +192,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             changed: Arc::new(tokio::sync::Notify::new()),
             data_dir: dir.to_owned(),
             shutdown: shutdown.clone(),
+            secrets: Default::default(),
         },
         vault,
     )

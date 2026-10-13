@@ -18,8 +18,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::Replicator;
 use super::fork::FromVault;
+use super::{HostSecrets, Replicator};
 use crate::config::{self, VaultConfig};
 use crate::session::SessionManager;
 use crate::session::fork::Forks;
@@ -39,6 +39,8 @@ pub struct Setup {
     pub data_dir: PathBuf,
     /// Stops replicating, with the daemon.
     pub shutdown: CancellationToken,
+    /// What the host's sessions get of the vault's secrets.
+    pub secrets: Arc<HostSecrets>,
 }
 
 /// The vault this host replicates to, if any, and the replicator streaming there.
@@ -198,6 +200,7 @@ impl Link {
         if let Some(replicating) = state.replicating.take() {
             replicating.cancel();
         }
+        self.setup.secrets.set_linked(false);
         info!(vault = %vault.address, "stopped backing up to the vault");
         Ok(CommandResult::Applied)
     }
@@ -222,6 +225,7 @@ impl Link {
         if let Some(previous) = state.replicating.replace(stop) {
             previous.cancel();
         }
+        self.setup.secrets.set_linked(true);
         Ok(())
     }
 
@@ -232,6 +236,7 @@ impl Link {
             host: self.setup.host.clone(),
             sessions: self.setup.sessions.clone(),
             changed: Arc::clone(&self.setup.changed),
+            secrets: Arc::clone(&self.setup.secrets),
         })
     }
 

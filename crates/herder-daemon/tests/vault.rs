@@ -2,6 +2,7 @@
 //! appear in the vault, a vault restarted mid-stream gets the rest, images included, a host that was offline
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
 //! read-only, and the hosts with their liveness. A host's device replicates and reads nothing.
+//! A host fetches the secrets of the sets granted to it, and only those, each fetch audited.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -17,15 +18,18 @@ use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::{Accounts, Adapters, EventSink, SessionManager, Setup};
-use herder_daemon::vault::{Admin, LIVENESS_TIMEOUT, Replicator, Server, VaultStore, WakeOnEvent};
+use herder_daemon::vault::{
+    Admin, HostSecrets, LIVENESS_TIMEOUT, Replicator, SecretsKey, Server, VaultStore, WakeOnEvent,
+};
 use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Tls};
 use herder_protocol::{
     AccountId, Attachment, AttachmentId, ClientHello, ClientMessage, Command, CommandBody,
     CommandId, CommandResult, Cursor, ErrorCode, Event, EventBody, HostHello, HostId, HostMessage,
     Item, ItemBody, ItemId, JournalRecord, PROTOCOL_VERSION, PermissionMode, Provider,
-    REPLICATION_VERSION, ReplicationErrorCode, ServerMessage, SessionId, SessionStatus,
-    SessionSummary, Timestamp, TurnId, UserId, VaultMessage,
+    REPLICATION_VERSION, ReplicationErrorCode, SecretError, SecretErrorCode, SecretRef,
+    SecretValue, ServerMessage, SessionId, SessionStatus, SessionSummary, Timestamp, TurnId,
+    UserId, VaultMessage,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -37,6 +41,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The master key test vaults keep secrets under.
+const SECRETS_KEY: [u8; 32] = [7; 32];
 
 fn host_id() -> HostId {
     HostId::new("host-1")
@@ -88,11 +95,17 @@ struct Vault {
 impl Vault {
     /// Starts a vault on `dir`, listening on `port` (0 for any).
     async fn start(dir: &Path, port: u16) -> Self {
-        Self::start_with(dir, port, LIVENESS_TIMEOUT).await
+        Self::start_with(dir, port, LIVENESS_TIMEOUT, Some(SECRETS_KEY)).await
     }
 
-    /// Starts a vault that takes a host silent for `liveness` for gone.
-    async fn start_with(dir: &Path, port: u16, liveness: Duration) -> Self {
+    /// Starts a vault that takes a host silent for `liveness` for gone, and keeps secrets
+    /// under `secrets_key`.
+    async fn start_with(
+        dir: &Path,
+        port: u16,
+        liveness: Duration,
+        secrets_key: Option<[u8; 32]>,
+    ) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
         std::fs::create_dir_all(dir.join("tls")).unwrap();
@@ -116,6 +129,7 @@ impl Vault {
                     host,
                     liveness,
                     Retention::default(),
+                    secrets_key.as_ref().map(SecretsKey::new),
                 );
                 started
                     .send((addr, fingerprint, auth, server.admin()))
@@ -182,12 +196,16 @@ impl Vault {
 struct HostDaemon {
     runtime: Runtime,
     sessions: SessionManager,
+    secrets: Arc<HostSecrets>,
 }
 
 impl HostDaemon {
     async fn start(dir: &Path, vault: VaultConfig) -> Self {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
+        let secrets = Arc::new(HostSecrets::default());
+        secrets.set_linked(true);
+        let host_secrets = Arc::clone(&secrets);
         let sessions = runtime
             .handle()
             .spawn(async move {
@@ -217,13 +235,18 @@ impl HostDaemon {
                     },
                     sessions: sessions.clone(),
                     changed,
+                    secrets: host_secrets,
                 };
                 tokio::spawn(replicator.run(shutdown));
                 sessions
             })
             .await
             .unwrap();
-        Self { runtime, sessions }
+        Self {
+            runtime,
+            sessions,
+            secrets,
+        }
     }
 
     /// Records a model switch in `session` through the session manager, as a client would.
@@ -766,7 +789,7 @@ async fn a_silent_host_is_offline_after_the_liveness_timeout() {
     std::fs::create_dir_all(&host_dir).unwrap();
     seed(&host_dir, 1, 0);
     let liveness = Duration::from_millis(500);
-    let vault = Vault::start_with(&vault_dir, 0, liveness).await;
+    let vault = Vault::start_with(&vault_dir, 0, liveness, None).await;
     // A real host replicates the session, then stops for good.
     let host = HostDaemon::start(&host_dir, vault.config()).await;
     caught_up(&host_dir, &vault_dir).await;
@@ -875,8 +898,8 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     host.runtime.kill().await;
 
     // Its key, stolen, speaks the client protocol, as `herder fork` reads the vault too:
-    // every read is refused at the hello, before the vault sends a host list, a session list
-    // or a journal.
+    // every read is refused at the hello, before the vault sends a host list, a session list,
+    // a journal or the secrets.
     let mut ws = dial(&vault, &host_dir).await;
     let hello = ClientMessage::Hello(ClientHello {
         protocol_version: PROTOCOL_VERSION,
@@ -899,6 +922,10 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
                 session_id: SessionId::new("s1"),
                 attachment_id: AttachmentId::new("a1"),
             },
+        }),
+        ClientMessage::Command(Command {
+            id: CommandId::new("c2"),
+            body: CommandBody::ListSecrets,
         }),
         ClientMessage::Sync {
             token: "read".into(),
@@ -1194,5 +1221,343 @@ async fn a_forgotten_host_leaves_nothing_on_the_vault() {
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0].0.role, DeviceRole::Client);
     machine_when(&client, |m| m.hosts.is_empty() && m.sessions.is_empty()).await;
+    vault.runtime.kill().await;
+}
+
+/// Runs a secret command on the vault as the paired `client`.
+async fn secret_command(client: &Client, command: CommandBody) -> Result<CommandResult, ErrorCode> {
+    match client.send(HostId::new("vault"), command).await {
+        Ok(result) => Ok(result),
+        Err(Error::Rejected { info }) => Err(info.code),
+        Err(other) => panic!("the command failed: {other:?}"),
+    }
+}
+
+fn secret(text: &str) -> SecretRef {
+    text.parse().unwrap()
+}
+
+/// What each value fetched for `session` is, by set and name.
+async fn fetch(
+    host: &HostDaemon,
+    session: &str,
+    secrets: &[&str],
+) -> Result<Vec<(String, String)>, SecretError> {
+    let secrets: Vec<SecretRef> = secrets.iter().map(|text| secret(text)).collect();
+    let fetched = host
+        .secrets
+        .fetch(&SessionId::new(session), &secrets)
+        .await?;
+    Ok(fetched
+        .into_iter()
+        .map(|value| {
+            (
+                format!("{}/{}", value.set, value.secret.name),
+                value.value.expose().to_owned(),
+            )
+        })
+        .collect())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_fetches_only_the_secrets_granted_to_it_and_each_fetch_is_audited() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 1, 1);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
+
+    for set in ["prod", "dev", "other"] {
+        let created = CommandBody::CreateSecretSet { set: set.into() };
+        assert_eq!(
+            secret_command(&client, created).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    let again = CommandBody::CreateSecretSet { set: "prod".into() };
+    assert_eq!(
+        secret_command(&client, again).await,
+        Err(ErrorCode::Conflict)
+    );
+    let bad = CommandBody::CreateSecretSet { set: "Prod".into() };
+    assert_eq!(
+        secret_command(&client, bad).await,
+        Err(ErrorCode::BadRequest)
+    );
+    for (set, name, value) in [
+        ("prod", "TOKEN", "prod-token-value"),
+        ("dev", "TOKEN", "dev-token-value"),
+        ("prod", "STRIPE_KEY", "stripe-key-value"),
+        ("other", "HIDDEN", "hidden-value"),
+    ] {
+        let put = CommandBody::PutSecret {
+            set: set.into(),
+            name: name.into(),
+            description: format!("{name} of {set}"),
+            value: SecretValue::new(value).unwrap(),
+        };
+        assert_eq!(
+            secret_command(&client, put).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    let nowhere = CommandBody::PutSecret {
+        set: "nowhere".into(),
+        name: "TOKEN".into(),
+        description: "x".into(),
+        value: SecretValue::new("x").unwrap(),
+    };
+    assert_eq!(
+        secret_command(&client, nowhere).await,
+        Err(ErrorCode::NotFound)
+    );
+    for set in ["prod", "dev"] {
+        let grant = CommandBody::GrantSecretSet {
+            set: set.into(),
+            host_id: host_id(),
+        };
+        assert_eq!(
+            secret_command(&client, grant).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    let stranger = CommandBody::GrantSecretSet {
+        set: "other".into(),
+        host_id: HostId::new("stranger"),
+    };
+    assert_eq!(
+        secret_command(&client, stranger).await,
+        Err(ErrorCode::NotFound)
+    );
+
+    // The owner sees every set and secret, never a value.
+    let listed = secret_command(&client, CommandBody::ListSecrets)
+        .await
+        .unwrap();
+    let CommandResult::Secrets { sets, secrets } = &listed else {
+        panic!("expected secrets: {listed:?}");
+    };
+    let granted: Vec<_> = sets
+        .iter()
+        .map(|set| (set.name.as_str(), set.hosts.len()))
+        .collect();
+    assert_eq!(granted, [("dev", 1), ("other", 0), ("prod", 1)]);
+    assert_eq!(secrets.len(), 4);
+    let wire = serde_json::to_string(&listed).unwrap();
+    assert!(!wire.contains("-value"), "{wire}");
+
+    // The host lists and fetches what its sets hold, and nothing else.
+    let names: Vec<_> = host
+        .secrets
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|secret| format!("{}/{}", secret.set, secret.name))
+        .collect();
+    assert_eq!(names, ["dev/TOKEN", "prod/STRIPE_KEY", "prod/TOKEN"]);
+    assert_eq!(
+        fetch(&host, "s1", &["STRIPE_KEY", "prod/TOKEN"])
+            .await
+            .unwrap(),
+        [
+            ("prod/STRIPE_KEY".to_owned(), "stripe-key-value".to_owned()),
+            ("prod/TOKEN".to_owned(), "prod-token-value".to_owned())
+        ]
+    );
+    let ambiguous = fetch(&host, "s1", &["TOKEN"]).await.unwrap_err();
+    assert_eq!(ambiguous.code, SecretErrorCode::Ambiguous);
+    assert_eq!(
+        ambiguous.candidates,
+        [secret("dev/TOKEN"), secret("prod/TOKEN")]
+    );
+    let not_granted = fetch(&host, "s1", &["other/HIDDEN"]).await.unwrap_err();
+    assert_eq!(not_granted.code, SecretErrorCode::NotGranted);
+    assert_eq!(not_granted.secret, Some(secret("other/HIDDEN")));
+    for unknown in ["HIDDEN", "nowhere/TOKEN", "prod/NOPE"] {
+        let error = fetch(&host, "s1", &[unknown]).await.unwrap_err();
+        assert_eq!(error.code, SecretErrorCode::Unknown, "{unknown}");
+    }
+    // One secret refused refuses them all, and none is handed out.
+    let mixed = fetch(&host, "s2", &["dev/TOKEN", "other/HIDDEN"]).await;
+    assert_eq!(mixed.unwrap_err().code, SecretErrorCode::NotGranted);
+
+    // A revoked set is out of reach for any session not holding its values yet.
+    let revoke = CommandBody::RevokeSecretSet {
+        set: "prod".into(),
+        host_id: host_id(),
+    };
+    assert_eq!(
+        secret_command(&client, revoke).await,
+        Ok(CommandResult::Applied)
+    );
+    let revoked = fetch(&host, "s3", &["prod/TOKEN"]).await.unwrap_err();
+    assert_eq!(revoked.code, SecretErrorCode::NotGranted);
+    assert_eq!(
+        fetch(&host, "s3", &["TOKEN"]).await.unwrap(),
+        [("dev/TOKEN".to_owned(), "dev-token-value".to_owned())]
+    );
+
+    // One audit row per value handed out, newest first, without the value.
+    let audit = secret_command(&client, CommandBody::ListSecretAudit { before: None })
+        .await
+        .unwrap();
+    let CommandResult::SecretAudit { entries } = &audit else {
+        panic!("expected the audit: {audit:?}");
+    };
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.host_id.as_str(),
+                entry.session_id.as_str(),
+                format!("{}/{}", entry.set, entry.name),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("host-1", "s3", "dev/TOKEN".to_owned()),
+            ("host-1", "s1", "prod/TOKEN".to_owned()),
+            ("host-1", "s1", "prod/STRIPE_KEY".to_owned()),
+        ]
+    );
+    let older = CommandBody::ListSecretAudit {
+        before: Some(entries[1].id),
+    };
+    let CommandResult::SecretAudit { entries: older } =
+        secret_command(&client, older).await.unwrap()
+    else {
+        panic!("expected the audit");
+    };
+    assert_eq!(older.len(), 1);
+    assert_eq!(older[0].name, "STRIPE_KEY");
+    let wire = serde_json::to_string(&audit).unwrap();
+    assert!(!wire.contains("-value"), "{wire}");
+
+    // Sets go once they are empty; deleting a secret takes it out of the host's reach.
+    let busy = CommandBody::DeleteSecretSet { set: "dev".into() };
+    assert_eq!(
+        secret_command(&client, busy).await,
+        Err(ErrorCode::Conflict)
+    );
+    let delete = CommandBody::DeleteSecret {
+        set: "dev".into(),
+        name: "TOKEN".into(),
+    };
+    assert_eq!(
+        secret_command(&client, delete).await,
+        Ok(CommandResult::Applied)
+    );
+    let gone = fetch(&host, "s4", &["TOKEN"]).await.unwrap_err();
+    assert_eq!(gone.code, SecretErrorCode::Unknown);
+    let delete = CommandBody::DeleteSecretSet { set: "dev".into() };
+    assert_eq!(
+        secret_command(&client, delete).await,
+        Ok(CommandResult::Applied)
+    );
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 1, 1);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let host = HostDaemon::start(&host_dir, vault.config()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
+    for command in [
+        CommandBody::CreateSecretSet { set: "prod".into() },
+        CommandBody::PutSecret {
+            set: "prod".into(),
+            name: "TOKEN".into(),
+            description: "Token".into(),
+            value: SecretValue::new("token-value").unwrap(),
+        },
+        CommandBody::GrantSecretSet {
+            set: "prod".into(),
+            host_id: host_id(),
+        },
+    ] {
+        assert_eq!(
+            secret_command(&client, command).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    assert_eq!(fetch(&host, "s1", &["TOKEN"]).await.unwrap().len(), 1);
+    host.runtime.kill().await;
+    let addr = vault.addr;
+    vault.runtime.kill().await;
+
+    // Without a key: hosts replicate as before, secret commands and fetches are refused.
+    let vault = Vault::start_with(&vault_dir, addr.port(), LIVENESS_TIMEOUT, None).await;
+    seed(&host_dir, 1, 3);
+    let config = VaultConfig {
+        pairing_code: None,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config.clone()).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let refused = match client
+        .send(HostId::new("vault"), CommandBody::ListSecrets)
+        .await
+    {
+        Err(Error::Rejected { info }) => info,
+        other => panic!("expected a refusal: {other:?}"),
+    };
+    assert_eq!(refused.code, ErrorCode::Unsupported);
+    assert!(
+        refused.message.contains("HERDER_VAULT_SECRETS_KEY"),
+        "{}",
+        refused.message
+    );
+    let error = fetch(&host, "s2", &["TOKEN"]).await.unwrap_err();
+    assert!(
+        error.message.contains("HERDER_VAULT_SECRETS_KEY"),
+        "{}",
+        error.message
+    );
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+
+    // With another key: what was stored under the old one does not open.
+    let vault = Vault::start_with(&vault_dir, addr.port(), LIVENESS_TIMEOUT, Some([8; 32])).await;
+    // New events, so catching up means the host is connected again.
+    seed(&host_dir, 1, 5);
+    let host = HostDaemon::start(&host_dir, config).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let error = fetch(&host, "s3", &["TOKEN"]).await.unwrap_err();
+    assert!(
+        error.message.contains("cannot decrypt"),
+        "{}",
+        error.message
+    );
+    host.runtime.kill().await;
     vault.runtime.kill().await;
 }
