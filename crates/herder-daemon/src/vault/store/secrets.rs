@@ -290,7 +290,9 @@ impl VaultStore {
     /// Why `secret` does not resolve for `host`.
     fn unresolved(&self, host: &HostId, secret: &SecretRef) -> Result<SecretError> {
         let Some(set) = &secret.set else {
-            let message = format!("no set granted to this host has {secret}");
+            let message = format!(
+                "no set granted to this host has {secret}; ask the vault's owner to grant its set"
+            );
             return Ok(refusal(
                 SecretErrorCode::Unknown,
                 message,
@@ -305,7 +307,9 @@ impl VaultStore {
             .optional()?
             .is_some();
         if !granted && set_exists(&self.conn, set)? {
-            let message = format!("the set {set} is not granted to this host");
+            let message = format!(
+                "the set {set} is not granted to this host; ask the vault's owner to grant it"
+            );
             return Ok(refusal(
                 SecretErrorCode::NotGranted,
                 message,
@@ -316,7 +320,7 @@ impl VaultStore {
         let message = if granted {
             format!("the set {set} has no secret {}", secret.name)
         } else {
-            format!("there is no set {set}")
+            format!("there is no secret set {set}")
         };
         Ok(refusal(
             SecretErrorCode::Unknown,
