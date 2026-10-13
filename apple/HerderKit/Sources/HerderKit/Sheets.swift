@@ -17,6 +17,8 @@ enum AppSheet: Identifiable, Hashable {
     case newProject
     case projectSettings(projectId: String)
     case machineSettings(hostId: HostId)
+    /// A vault's secrets, for its owners.
+    case secrets(vault: HostId)
     /// A new provider account: pick its machine first.
     case addAccount
 
@@ -33,6 +35,7 @@ extension AppSheet {
         case .newProject: ProjectPicker(fleet: fleet, newProject: true, picked: drafted)
         case .projectSettings(let projectId): ProjectSettingsSheet(fleet: fleet, projectId: projectId)
         case .machineSettings(let hostId): MachineSettingsSheet(fleet: fleet, hostId: hostId)
+        case .secrets(let vault): SecretsSheet(fleet: fleet, vault: vault)
         case .addAccount: NewAccountSheet(fleet: fleet)
         }
     }
