@@ -75,6 +75,8 @@ pub enum Origin {
     NewSession(HostId),
     /// A step of backing a machine up to a vault.
     Backup(crate::backup::Sent),
+    /// A command of the secrets screen to a vault.
+    Secrets(crate::secrets::Sent),
     /// Fetching a transcript's image: which one, its file name, and whether to open it or
     /// only save it.
     Image {
@@ -492,6 +494,7 @@ impl App {
                 self.session_result(key, result.err());
             }
             Origin::Backup(sent) => return self.backup_sent(sent, result),
+            Origin::Secrets(sent) => return self.secrets_sent(sent, result),
             Origin::Fork(host_id) => {
                 let forked = result.and_then(|result| match result {
                     CommandResult::SessionForked { session_id, .. } => Ok(session_id),

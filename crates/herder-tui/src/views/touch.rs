@@ -12,6 +12,7 @@ use crate::compose::Act;
 use crate::inbox::{InboxAction, What};
 use crate::mouse::{self, Click, Hits};
 use crate::prs::PrAction;
+use crate::secrets::Pick;
 use crate::ui::hints::{ButtonBar, Hint};
 
 /// Most characters of a question's choice its button shows.
@@ -81,15 +82,43 @@ fn buttons(app: &App) -> Vec<Button> {
         && panel.edit.is_none()
         && panel.account.is_none()
         && panel.backup.is_none()
+        && panel.secrets.is_none()
     {
         return vec![
             button("a", "add", char('a')),
             button("n", "account", char('n')),
             button("e", "rename", char('e')),
             button("d", "forget", char('d')),
-            button("b", "backup", char('b')),
+            if app.on_vault() {
+                button("s", "secrets", char('s'))
+            } else {
+                button("b", "backup", char('b'))
+            },
             esc(),
         ];
+    }
+    if let Some(secrets) = app
+        .machine_panel
+        .as_ref()
+        .and_then(|panel| panel.secrets.as_ref())
+        .filter(|secrets| secrets.dialog.is_none())
+    {
+        let mut buttons = vec![button("n", "set", char('n'))];
+        match secrets.pick() {
+            Some(Pick::Secret { .. }) => buttons.extend([
+                button("e", "replace", char('e')),
+                button("s", "hosts", char('s')),
+                button("d", "delete", char('d')),
+            ]),
+            Some(Pick::Set(_)) => buttons.extend([
+                button("a", "add", char('a')),
+                button("s", "hosts", char('s')),
+                button("d", "delete", char('d')),
+            ]),
+            None => {}
+        }
+        buttons.push(esc());
+        return buttons;
     }
     if app
         .account_screen
