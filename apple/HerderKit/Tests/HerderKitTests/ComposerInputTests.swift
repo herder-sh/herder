@@ -14,6 +14,8 @@ struct PromptEditorTests {
     final class Box {
         var text = ""
         var submitted = 0
+        /// What Tab completes the text to; `nil` while no completion is open.
+        var completion: String?
     }
 
     func editor(_ initial: String) -> (ChipTextView, PromptEditor.Coordinator, Box) {
@@ -21,7 +23,12 @@ struct PromptEditorTests {
         box.text = initial
         let editor = PromptEditor(
             text: Binding(get: { box.text }, set: { box.text = $0 }), focused: .constant(true),
-            images: [], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: { box.submitted += 1 })
+            images: [], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: { box.submitted += 1 },
+            complete: {
+                guard let completion = box.completion else { return false }
+                box.text = completion
+                return true
+            })
         let coordinator = editor.makeCoordinator()
         let view = ChipTextView(usingTextLayoutManager: true)
         view.allowsUndo = true
@@ -73,6 +80,20 @@ struct PromptEditorTests {
         #expect(box.text == "send me")
     }
 
+    @Test func tabAcceptsTheOpenCompletion() {
+        let (view, coordinator, box) = editor("$dep")
+        box.completion = "$deploy "
+        #expect(coordinator.textView(view, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        #expect(box.text == "$deploy ")
+        #expect(box.submitted == 0)
+    }
+
+    @Test func tabWithNoCompletionOpenIsLeftToTheTextView() {
+        let (view, coordinator, box) = editor("plain")
+        #expect(!coordinator.textView(view, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        #expect(box.text == "plain")
+    }
+
     /// A pasted image's chip goes in before the binding holds the image; once it does, the chip
     /// draws again, with its thumbnail and size.
     @Test func aChipDrawsAgainOnceItsImageArrives() throws {
@@ -84,7 +105,7 @@ struct PromptEditorTests {
         let image = Herder.Image(mediaType: "image/png", data: png)
         coordinator.parent = PromptEditor(
             text: Binding(get: { box.text }, set: { box.text = $0 }), focused: .constant(true),
-            images: [image], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: {})
+            images: [image], pastes: [], addImages: { _ in "" }, addFiles: { _ in }, addPaste: { _ in "" }, submit: {}, complete: { false })
         coordinator.refresh(view)
         let after = try #require(view.attributedString().attribute(.attachment, at: 0, effectiveRange: nil) as? ChipAttachment)
         #expect(after !== before)
