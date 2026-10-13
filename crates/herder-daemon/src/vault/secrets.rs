@@ -130,8 +130,8 @@ pub(super) async fn command(
         return Err(error(
             ErrorCode::Unsupported,
             format!(
-                "this vault keeps no secrets: start it with a 32-byte key, base64, in \
-                 {KEY_ENV} (`openssl rand -base64 32`)"
+                "this vault has no secrets key; set {KEY_ENV} to 32 random bytes in base64 \
+                 (`openssl rand -base64 32`) and restart the vault (see deploy/README.md)"
             ),
         ));
     };
@@ -146,7 +146,10 @@ pub(super) async fn command(
                 run(store, move |store| store.create_secret_set(&set, now)).await?
             };
             if !created {
-                return Err(error(ErrorCode::Conflict, format!("the set {set} exists")));
+                return Err(error(
+                    ErrorCode::Conflict,
+                    format!("a secret set named {set} exists already"),
+                ));
             }
             info!(set, "secret set created");
         }
@@ -161,7 +164,7 @@ pub(super) async fn command(
                 SetDeleted::NotEmpty => {
                     return Err(error(
                         ErrorCode::Conflict,
-                        format!("the set {set} holds secrets; delete them first"),
+                        format!("the set {set} still holds secrets; delete them first"),
                     ));
                 }
             }
@@ -219,7 +222,7 @@ pub(super) async fn command(
             if !deleted {
                 return Err(error(
                     ErrorCode::NotFound,
-                    format!("there is no secret {set}/{name}"),
+                    format!("the set {set} has no secret {name}"),
                 ));
             }
             info!(set, name, "secret deleted");
@@ -235,7 +238,9 @@ pub(super) async fn command(
                 Grant::NoHost => {
                     return Err(error(
                         ErrorCode::NotFound,
-                        format!("the host {host_id} never replicated to this vault"),
+                        format!(
+                            "no host {host_id} backs up to this vault; link that host to it first"
+                        ),
                     ));
                 }
             }
@@ -248,7 +253,7 @@ pub(super) async fn command(
             if !revoked {
                 return Err(error(
                     ErrorCode::NotFound,
-                    format!("the set {set} is not granted to {host_id}"),
+                    format!("the set {set} is not granted to the host {host_id}"),
                 ));
             }
             info!(set, %host_id, "secret set revoked");
@@ -320,13 +325,16 @@ async fn fetch_values(
     let Some(key) = key.cloned() else {
         return Ok(Err(refused(
             SecretErrorCode::NoVault,
-            format!("the vault keeps no secrets: its owner has not set {KEY_ENV}"),
+            format!(
+                "the vault has no secrets key, so it hands out no secrets; its owner sets \
+                 {KEY_ENV} (see deploy/README.md)"
+            ),
         )));
     };
     if fetch.secrets.is_empty() {
         return Ok(Err(refused(
             SecretErrorCode::Unknown,
-            "the fetch names no secret".to_owned(),
+            "name at least one secret to fetch".to_owned(),
         )));
     }
     let owner = host.clone();
@@ -341,7 +349,8 @@ async fn fetch_values(
                 return Ok(Err(SecretError {
                     code: SecretErrorCode::Unknown,
                     message: format!(
-                        "the vault cannot decrypt {}/{}: it was stored under another secrets key",
+                        "the vault cannot decrypt {}/{}: it was stored under another secrets key than \
+                         the one in HERDER_VAULT_SECRETS_KEY; restore that key or store it again",
                         secret.set, secret.secret.name
                     ),
                     secret: Some(secret.secret),
@@ -405,7 +414,7 @@ fn internal(err: &anyhow::Error) -> ErrorInfo {
 }
 
 fn no_set(set: &str) -> ErrorInfo {
-    error(ErrorCode::NotFound, format!("there is no set {set}"))
+    error(ErrorCode::NotFound, format!("there is no secret set {set}"))
 }
 
 fn bad_set(set: &str) -> ErrorInfo {
