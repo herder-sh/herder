@@ -59,6 +59,9 @@ pub(super) fn draw(
     panel: &MachinePanel,
     hits: &mut Hits,
 ) {
+    if let Some(secrets) = &panel.secrets {
+        return super::secrets::draw(frame, area, app, secrets, hits);
+    }
     list(frame, area, app, panel, hits);
     match (&panel.account, &panel.add, &panel.backup) {
         (Some(account), _, _) => account_dialog(frame, area, app, account),

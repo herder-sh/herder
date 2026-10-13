@@ -9,6 +9,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::app::{App, Effect};
+use crate::secrets::Secrets;
 
 impl App {
     /// Folds in `key` if it drives the action bar; `None` hands it on.
@@ -47,10 +48,11 @@ impl App {
     fn tab_moves_fields(&self) -> bool {
         self.compose.dialog.is_some()
             || self.switch.is_some()
-            || self
-                .machine_panel
-                .as_ref()
-                .is_some_and(|panel| panel.add.is_some() || panel.account.is_some())
+            || self.machine_panel.as_ref().is_some_and(|panel| {
+                panel.add.is_some()
+                    || panel.account.is_some()
+                    || panel.secrets.as_ref().is_some_and(Secrets::types)
+            })
             || self
                 .account_screen
                 .as_ref()
