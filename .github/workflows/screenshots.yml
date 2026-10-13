@@ -31,7 +31,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The bindings, the xcframework and the fake daemon, as the `apple` workflow builds and
       # caches them.
       - id: key
@@ -39,7 +39,7 @@ jobs:
           echo "key=apple-ffi-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**',
           'apple/scripts/build-ffi.sh', '.github/workflows/apple.yml') }}" >> "$GITHUB_OUTPUT"
       - id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -57,7 +57,7 @@ jobs:
         run: apple/scripts/build-ffi.sh
       - name: Save the bindings, the xcframework and the fake daemon
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -149,13 +149,13 @@ jobs:
             done
           done
           ls -l screenshots
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: success() || failure()
         with:
           name: screenshots
           path: screenshots
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: screenshots-xcresult

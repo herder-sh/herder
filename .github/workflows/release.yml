@@ -38,7 +38,7 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install musl and the toolchain from rust-toolchain.toml
         run: |
           sudo apt-get update -q
@@ -83,7 +83,7 @@ jobs:
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           rm -r "$name"
           cat "$name.tar.gz.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: herder-${{ matrix.target }}
           path: dist/*
@@ -93,7 +93,7 @@ jobs:
     name: build macOS app
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the toolchain and the Apple targets
         run: |
           rustup show active-toolchain || rustup toolchain install
@@ -115,7 +115,7 @@ jobs:
         run: apple/scripts/build-ffi.sh
       - name: Build, ad-hoc sign and zip the app
         run: apple/scripts/build-mac-release.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: herder-app-macos-arm64
           path: dist/*
@@ -126,7 +126,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the toolchain and the iOS target
         run: |
           rustup show active-toolchain || rustup toolchain install
@@ -159,7 +159,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: herder-*
           path: dist
