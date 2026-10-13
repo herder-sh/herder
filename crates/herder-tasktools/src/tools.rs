@@ -5,7 +5,7 @@
 
 use herder_protocol::{
     Account, Answer, ApprovalDecision, ApprovalId, CommandBody, PermissionMode, Project, Provider,
-    QuestionId, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
+    QuestionId, SecretRef, SessionHead, SessionId, SessionStatus, Timestamp, TurnId,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -453,6 +453,35 @@ pub struct OverviewOutput {
     pub projects: Vec<Project>,
     /// Every account sessions may run on, with its usage.
     pub accounts: Vec<Account>,
+}
+
+/// Arguments of `secrets`: none.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsInput {}
+
+/// Result of `secrets`: what you may use, never the values.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretsOutput {
+    /// Every secret this host may use, ordered by set, then name.
+    pub secrets: Vec<SecretEntry>,
+    /// The command that runs a program with secrets in its environment: append the secrets,
+    /// `--` and the program with its arguments.
+    pub run: String,
+}
+
+/// A secret you may use.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretEntry {
+    /// What to pass to `herder secret run`: the name, or `set/name` when more than one set has
+    /// the name.
+    pub secret: SecretRef,
+    /// The environment variable the program gets it as.
+    pub name: String,
+    /// Its set.
+    pub set: String,
+    /// What it is for.
+    pub description: String,
 }
 
 /// Arguments of `command`.

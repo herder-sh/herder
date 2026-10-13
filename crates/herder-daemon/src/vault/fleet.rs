@@ -26,8 +26,8 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::VaultStore;
-use super::blocking;
+use super::secrets::{self, SecretsKey};
+use super::{VaultStore, blocking};
 use crate::auth::{Auth, PAIRING_TTL};
 use crate::hub::Hub;
 use crate::session::EventSink;
@@ -47,13 +47,20 @@ pub(crate) struct Fleet {
     sending_hosts: Arc<tokio::sync::Mutex<()>>,
     /// Woken when what the vault holds changed, for [`Fleet::publish_status`].
     status_changed: Arc<Notify>,
+    /// Encrypts secrets' values; without it, secret commands are refused.
+    secrets_key: Option<Arc<SecretsKey>>,
 }
 
 /// How often at most clients get the vault's status.
 pub(crate) const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 
 impl Fleet {
-    pub(crate) fn new(store: Arc<Mutex<VaultStore>>, hub: Arc<Hub>, auth: Arc<Auth>) -> Self {
+    pub(crate) fn new(
+        store: Arc<Mutex<VaultStore>>,
+        hub: Arc<Hub>,
+        auth: Arc<Auth>,
+        secrets_key: Option<Arc<SecretsKey>>,
+    ) -> Self {
         Self {
             store,
             hub,
@@ -62,6 +69,7 @@ impl Fleet {
             listed: Arc::default(),
             sending_hosts: Arc::default(),
             status_changed: Arc::default(),
+            secrets_key,
         }
     }
 
@@ -357,6 +365,16 @@ impl Backend for Fleet {
                     "a vault backs up nowhere; link a host to it instead".into(),
                 ));
             }
+            CommandBody::CreateSecretSet { .. }
+            | CommandBody::DeleteSecretSet { .. }
+            | CommandBody::PutSecret { .. }
+            | CommandBody::DeleteSecret { .. }
+            | CommandBody::GrantSecretSet { .. }
+            | CommandBody::RevokeSecretSet { .. }
+            | CommandBody::ListSecrets
+            | CommandBody::ListSecretAudit { .. } => {
+                return secrets::command(&self.store, self.secrets_key.as_ref(), command).await;
+            }
             _ => {}
         }
         match target(&command) {
@@ -413,6 +431,14 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UnlinkVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }
+        | CommandBody::CreateSecretSet { .. }
+        | CommandBody::DeleteSecretSet { .. }
+        | CommandBody::PutSecret { .. }
+        | CommandBody::DeleteSecret { .. }
+        | CommandBody::GrantSecretSet { .. }
+        | CommandBody::RevokeSecretSet { .. }
+        | CommandBody::ListSecrets
+        | CommandBody::ListSecretAudit { .. }
         | CommandBody::PairDevice
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }

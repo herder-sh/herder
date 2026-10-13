@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use herder_protocol::{
     AccountId, Attachment, Bytes, Command, CommandBody, CommandResult, ErrorCode, ErrorInfo, Event,
-    HistoryPart, HostId, Image, Relay, SessionId,
+    HistoryPart, HostId, Image, Relay, SessionHead, SessionId,
 };
 
 use crate::supervisor::{Subscription, Supervisor};
@@ -19,9 +19,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// this goes in a part of its own. Well under a daemon's 16 MiB WebSocket frame limit.
 const PART_BYTES: usize = 4 * 1024 * 1024;
 
-/// Forks `session_id`, listed by `source`, onto `destination`.
+/// Forks `session_id`, listed by the machine `source_id`, onto `destination`; `machines` are
+/// all of the client's, which may relay the history.
 pub(crate) async fn fork(
-    source: Option<Arc<Supervisor>>,
+    machines: Vec<Arc<Supervisor>>,
     source_id: HostId,
     destination: Arc<Supervisor>,
     session_id: SessionId,
@@ -32,39 +33,51 @@ pub(crate) async fn fork(
         account_id: account_id.clone(),
         relay,
     };
-    let view = source.as_ref().map(|source| source.view());
-    let head = view
-        .as_ref()
-        .and_then(|view| view.sessions.iter().find(|s| s.session_id == session_id));
+    let source = machines
+        .iter()
+        .find(|machine| machine.saved.host_id == source_id);
+    let view = source.map(|source| source.view());
     // A vault lists sessions of other hosts; a daemon's are its own.
-    let host_id = head
+    let host_id = view
+        .as_ref()
+        .and_then(|view| listed(view, &session_id))
         .and_then(|head| head.host_id.clone())
         .unwrap_or_else(|| source_id.clone());
     if host_id == destination.saved.host_id {
         return send(&destination, fork(None)).await;
     }
-    let connected = view
-        .as_ref()
-        .is_some_and(|view| view.connection == ConnectionState::Connected);
-    if let (Some(source), Some(head), true) = (&source, head, connected) {
-        let Some(project_id) = head.project_id.clone() else {
+    // Any connected machine that lists the session of that host relays it: the source first,
+    // then the session's own machine, then a vault.
+    let mut relays = machines
+        .iter()
+        .filter(|machine| machine.saved.host_id != destination.saved.host_id)
+        .collect::<Vec<_>>();
+    relays.sort_by_key(|machine| {
+        (
+            machine.saved.host_id != source_id,
+            machine.saved.host_id != host_id,
+        )
+    });
+    let relay = relays.into_iter().find_map(|machine| {
+        let view = machine.view();
+        let head = listed(&view, &session_id)?;
+        let lists = head.host_id.as_ref().unwrap_or(&view.host_id) == &host_id;
+        (lists && view.connection == ConnectionState::Connected)
+            .then(|| (machine, view.name.clone(), head.project_id.clone()))
+    });
+    if let Some((relay, name, project_id)) = relay {
+        let Some(project_id) = project_id else {
             return Err(rejected(
                 ErrorCode::Conflict,
-                format!(
-                    "{} has not resolved the project of this session yet",
-                    head_name(view.as_ref(), &source_id)
-                ),
+                format!("{name} has not resolved the project of this session yet"),
             ));
         };
-        let (events, attachments) = tokio::time::timeout(READ_TIMEOUT, read(source, &session_id))
+        let (events, attachments) = tokio::time::timeout(READ_TIMEOUT, read(relay, &session_id))
             .await
             .map_err(|_| {
                 rejected(
                     ErrorCode::Internal,
-                    format!(
-                        "{} did not send the session in {READ_TIMEOUT:?}",
-                        head_name(view.as_ref(), &source_id)
-                    ),
+                    format!("{name} did not send the session in {READ_TIMEOUT:?}"),
                 )
             })??;
         upload(&destination, &session_id, events, attachments).await?;
@@ -77,7 +90,7 @@ pub(crate) async fn fork(
         )
         .await;
     }
-    // The source is unavailable: the destination's vault is the only other copy.
+    // No machine the client reaches has it: the destination's vault is the only other copy.
     let link = send(&destination, CommandBody::GetVaultLink).await?;
     if !matches!(link, CommandResult::VaultLink { vault: Some(_), .. }) {
         return Err(rejected(
@@ -90,6 +103,11 @@ pub(crate) async fn fork(
         ));
     }
     send(&destination, fork(None)).await
+}
+
+/// The head of `session_id` among the sessions `view` lists.
+fn listed<'a>(view: &'a crate::Machine, session_id: &SessionId) -> Option<&'a SessionHead> {
+    view.sessions.iter().find(|s| &s.session_id == session_id)
 }
 
 /// The whole journal of `session_id` as `source` holds it, and every image and file its

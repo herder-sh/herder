@@ -95,6 +95,7 @@ impl Vault {
                     host,
                     LIVENESS_TIMEOUT,
                     Retention::default(),
+                    None,
                 );
                 tokio::spawn(server.run(vec![listener], CancellationToken::new()));
                 (addr, fingerprint, auth)
@@ -268,6 +269,7 @@ impl HostDaemon {
                     host: me.clone(),
                     sessions: sessions.clone(),
                     changed,
+                    secrets: Default::default(),
                 };
                 tokio::spawn(replicator.run(shutdown));
                 sessions

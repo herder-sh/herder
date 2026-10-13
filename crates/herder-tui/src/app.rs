@@ -497,6 +497,7 @@ impl App {
             Action::Reconnect => return vec![Effect::Wake],
             Action::Machines(input) => return self.machine_input(input),
             Action::Backup(input) => return self.backup_input(input),
+            Action::Secrets(input) => return self.secrets_input(input),
             Action::OpenMachines => return self.open_machines(false),
             Action::AddMachine => return self.open_machines(true),
             Action::ToggleHelp => self.help = !self.help,
@@ -705,32 +706,23 @@ impl App {
     }
 
     /// The sessions the session list leaves out: none while archived sessions are shown, else
-    /// the archived ones whose whole task tree is archived. A task tree with a session that is
-    /// not archived stays whole, so archiving a parent or a child never takes it apart.
+    /// the archived ones that lead no live session. An archived parent with a live child stays
+    /// as its root, so archiving a parent never takes its tree apart.
     pub(crate) fn hidden(&self) -> HashSet<SessionKey> {
         if self.show_archived {
             return HashSet::new();
         }
-        let top = |key: &SessionKey| {
-            let mut top = key.clone();
-            let mut seen = HashSet::new();
-            while seen.insert(top.clone()) {
-                match self.primary(&top) {
-                    Some((parent, _)) => top = parent,
-                    None => break,
-                }
+        // Every live session and its ancestors; `insert` stops a parent cycle.
+        let mut leading = HashSet::new();
+        for key in self.sessions.keys().filter(|key| !self.archived(key)) {
+            let mut key = Some(key.clone());
+            while let Some(current) = key.filter(|current| leading.insert(current.clone())) {
+                key = self.primary(&current).map(|(parent, _)| parent);
             }
-            top
-        };
-        let live: HashSet<SessionKey> = self
-            .sessions
-            .keys()
-            .filter(|key| !self.archived(key))
-            .map(top)
-            .collect();
+        }
         self.sessions
             .keys()
-            .filter(|key| self.archived(key) && !live.contains(&top(key)))
+            .filter(|key| self.archived(key) && !leading.contains(*key))
             .cloned()
             .collect()
     }
@@ -1036,9 +1028,19 @@ mod tests {
     }
 
     #[test]
-    fn archiving_a_child_keeps_it_under_its_live_parent_after_the_live_children() {
+    fn archiving_a_child_hides_it_until_archived_sessions_are_shown() {
         let mut app = fake::tree();
         archive(&mut app, "s3");
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s2", 0),
+                session("h1", "s4", 1),
+                session("h1", "s1", 0),
+            ]
+        );
+        app.show_archived = true;
         assert_eq!(
             app.rows(),
             [

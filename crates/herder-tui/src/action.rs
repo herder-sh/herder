@@ -64,6 +64,8 @@ pub enum Action {
     Machines(crate::machines::Input),
     /// Input to the machines panel's backup dialog.
     Backup(crate::backup::Input),
+    /// Input to the fleet's secrets screen.
+    Secrets(crate::secrets::Input),
     /// Open the selected session's terminal picker, or close it.
     Terminals,
     /// Something in the inbox.

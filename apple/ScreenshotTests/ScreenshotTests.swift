@@ -25,7 +25,7 @@ final class ScreenshotTests: XCTestCase {
         if app.windows.firstMatch.frame.width >= 1300, expand.waitForExistence(timeout: 5) { expand.click() }
         #endif
 
-        // The Board: the approval waiting on you, then where each session's work stands.
+        // The Board: the approval waiting on you, then every task tree with its agents folded.
         guard wait(row("Upgrade date-fns to v4"), "board") else { return finish() }
         settle()
         #if os(macOS)
@@ -39,6 +39,8 @@ final class ScreenshotTests: XCTestCase {
             #if os(iOS)
             shoot("ios-session")
             #endif
+            let agents = app.buttons["Agents of Audit webhook retries"].firstMatch
+            if wait(agents, "agents fold") { press(agents) }
             let agent = app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH 'Open sub-agent: Review retry backoff'")).firstMatch
             if wait(agent, "subagent row") {

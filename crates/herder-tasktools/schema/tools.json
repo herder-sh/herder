@@ -1151,6 +1151,14 @@
                   "pair_device",
                   "pair_vault_host",
                   "revoke_vault_host",
+                  "create_secret_set",
+                  "delete_secret_set",
+                  "put_secret",
+                  "delete_secret",
+                  "grant_secret_set",
+                  "revoke_secret_set",
+                  "list_secrets",
+                  "list_secret_audit",
                   "set_skills_repo",
                   "put_skill",
                   "delete_skill",
@@ -1184,6 +1192,60 @@
         },
         "required": [
           "type"
+        ]
+      }
+    },
+    {
+      "name": "secrets",
+      "description": "List the secrets you may use on this host: API keys, tokens and passwords that herder keeps for you, each with its name, set and what it is for. Never returns a value, and you never need one: run the command that needs it through `herder secret run NAME [set/NAME ...] -- command args...` (`run` holds its full path), which starts the command with each secret in its environment as the variable `NAME`. Refer to it there as `$NAME`, e.g. `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a secret `set/NAME` only when `secret` says so. Never print, log, commit or publish a value. Fails with `unavailable` when this host has no vault or cannot reach it now.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "description": "The command that runs a program with secrets in its environment: append the secrets,\n`--` and the program with its arguments.",
+            "type": "string"
+          },
+          "secrets": {
+            "description": "Every secret this host may use, ordered by set, then name.",
+            "type": "array",
+            "items": {
+              "description": "A secret you may use.",
+              "type": "object",
+              "properties": {
+                "description": {
+                  "description": "What it is for.",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "The environment variable the program gets it as.",
+                  "type": "string"
+                },
+                "secret": {
+                  "description": "What to pass to `herder secret run`: the name, or `set/name` when more than one set has\nthe name.",
+                  "type": "string",
+                  "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+                },
+                "set": {
+                  "description": "Its set.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "secret",
+                "name",
+                "set",
+                "description"
+              ]
+            }
+          }
+        },
+        "required": [
+          "secrets",
+          "run"
         ]
       }
     }

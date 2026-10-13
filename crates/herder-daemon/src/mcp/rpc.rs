@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use herder_protocol::SessionId;
+use herder_protocol::{SecretRef, SessionId};
 use herder_tasktools::{Tool, ToolCall, tools_list};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::sync::CancellationToken;
 
-use super::{Hello, Mcp, TIMEOUT, Welcome, digest};
+use super::{FETCH_SECRETS, Hello, Mcp, TIMEOUT, Welcome, digest};
 
 /// Longest message accepted, in bytes.
 const MAX_MESSAGE: usize = 4 * 1024 * 1024;
@@ -52,6 +52,8 @@ const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 /// The connection's token was replaced or withdrawn; the session's CLI restarted or stopped.
 const REVOKED: i64 = -32001;
+/// The secrets asked for were refused; `data` is the [`herder_protocol::SecretError`].
+pub(super) const SECRETS_REFUSED: i64 = -32002;
 
 /// Serves one shim until it disconnects or `shutdown`.
 pub(super) async fn connection(
@@ -127,6 +129,11 @@ struct Caller {
 }
 
 #[derive(Deserialize)]
+struct FetchParams {
+    secrets: Vec<SecretRef>,
+}
+
+#[derive(Deserialize)]
 struct CallParams {
     name: String,
     #[serde(default)]
@@ -159,6 +166,7 @@ impl Caller {
                 Err(err) => self.error(id, INTERNAL_ERROR, err.to_string()),
             },
             "tools/call" => self.call(id, params),
+            FETCH_SECRETS => self.fetch_secrets(id, params),
             _ => self.error(id, METHOD_NOT_FOUND, format!("unknown method {method}")),
         }
     }
@@ -188,6 +196,40 @@ impl Caller {
             let message = match serde_json::to_value(result) {
                 Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
                 Err(err) => error_message(id, INTERNAL_ERROR, err.to_string()),
+            };
+            let _ = out.send(message);
+        });
+    }
+
+    /// `herder secret run`'s request: values go to the program it starts, never to a tool.
+    fn fetch_secrets(&self, id: Value, params: Value) {
+        let params: FetchParams = match serde_json::from_value(params) {
+            Ok(params) => params,
+            Err(err) => return self.error(id, INVALID_PARAMS, err.to_string()),
+        };
+        if !self.mcp.holds(&self.session_id, &self.token) {
+            let message = "this herder MCP connection is no longer valid: the session restarted";
+            return self.error(id, REVOKED, message);
+        }
+        let fetched = self
+            .mcp
+            .tools
+            .fetch_secrets(self.session_id.clone(), params.secrets);
+        let (out, done) = (self.out.clone(), self.done.clone());
+        tokio::spawn(async move {
+            let fetched = tokio::select! {
+                () = done.cancelled() => return,
+                fetched = fetched => fetched,
+            };
+            let message = match fetched {
+                Ok(secrets) => {
+                    json!({ "jsonrpc": "2.0", "id": id, "result": { "secrets": secrets } })
+                }
+                Err(error) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": { "code": SECRETS_REFUSED, "message": error.message, "data": error },
+                }),
             };
             let _ = out.send(message);
         });

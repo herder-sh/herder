@@ -276,6 +276,7 @@ use crate::resources::{Admission, Docker, Scopes};
 use crate::skills::Skills;
 use crate::stalls::{self, Stalls};
 use crate::usage::{self, Usage};
+use crate::vault::HostSecrets;
 use crate::worktree::{self, Worktree, Worktrees, checkpoint};
 
 /// How long an archived session's worktree is kept before it is removed.
@@ -405,6 +406,8 @@ struct Inner {
     mcp: OnceLock<Arc<Mcp>>,
     /// The daemon as agents drive it through `overview` and `command`, once set.
     control: OnceLock<Arc<dyn Control>>,
+    /// The vault's secrets, for `secrets` and `herder secret run`, once set.
+    secrets: OnceLock<Arc<HostSecrets>>,
     /// Children's reports and requests waiting for their primaries.
     tasks: Tasks,
     /// Where children's requests that go to the user are announced, once set.
@@ -574,6 +577,7 @@ impl SessionManager {
                 stalls: OnceLock::new(),
                 mcp: OnceLock::new(),
                 control: OnceLock::new(),
+                secrets: OnceLock::new(),
                 tasks,
                 notifier: OnceLock::new(),
                 scopes: OnceLock::new(),
@@ -867,6 +871,19 @@ impl SessionManager {
                     "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
+            CommandBody::CreateSecretSet { .. }
+            | CommandBody::DeleteSecretSet { .. }
+            | CommandBody::PutSecret { .. }
+            | CommandBody::DeleteSecret { .. }
+            | CommandBody::GrantSecretSet { .. }
+            | CommandBody::RevokeSecretSet { .. }
+            | CommandBody::ListSecrets
+            | CommandBody::ListSecretAudit { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon is not a vault; manage secrets on the vault",
+                ));
+            }
             // Every user sees every session, children included, so owners and members get
             // the same totals.
             CommandBody::GetUsageSummary { period } => {
@@ -1043,6 +1060,15 @@ impl SessionManager {
             .control
             .set(control)
             .map_err(|_| anyhow::anyhow!("agents drive the daemon already"))
+    }
+
+    /// Lets sessions use the secrets their host's vault grants it, through `secrets`; once per
+    /// manager. Without it, sessions have no secrets.
+    pub fn use_secrets(&self, secrets: Arc<HostSecrets>) -> anyhow::Result<()> {
+        self.inner
+            .secrets
+            .set(secrets)
+            .map_err(|_| anyhow::anyhow!("sessions use secrets already"))
     }
 
     /// Runs every session's CLI in a scope of `scopes` from its next start; once per manager.

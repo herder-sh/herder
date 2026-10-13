@@ -550,6 +550,20 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             "changing the skill library is for the daemon's owners only",
         ));
     }
+    let secrets = matches!(
+        command,
+        CommandBody::CreateSecretSet { .. }
+            | CommandBody::DeleteSecretSet { .. }
+            | CommandBody::PutSecret { .. }
+            | CommandBody::DeleteSecret { .. }
+            | CommandBody::GrantSecretSet { .. }
+            | CommandBody::RevokeSecretSet { .. }
+            | CommandBody::ListSecrets
+            | CommandBody::ListSecretAudit { .. }
+    );
+    if secrets && role != Role::Owner {
+        return Err(forbidden("managing secrets is for the vault's owners only"));
+    }
     Ok(())
 }
 
@@ -969,6 +983,48 @@ mod tests {
             },
             CommandBody::SetResourceLimits { max_turns: 4 },
             CommandBody::RestartDaemon,
+        ];
+        for command in &commands {
+            assert!(authorize(alice.role, command).is_ok());
+        }
+        alice.role = Role::Member;
+        for command in &commands {
+            assert_eq!(
+                authorize(alice.role, command).unwrap_err().code,
+                ErrorCode::Forbidden
+            );
+        }
+    }
+
+    #[test]
+    fn only_owners_may_manage_secrets() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let (set, host_id) = (|| "prod".to_owned(), || herder_protocol::HostId::new("h1"));
+        let commands = [
+            CommandBody::CreateSecretSet { set: set() },
+            CommandBody::DeleteSecretSet { set: set() },
+            CommandBody::PutSecret {
+                set: set(),
+                name: "STRIPE_KEY".into(),
+                description: "Stripe".into(),
+                value: herder_protocol::SecretValue::new("sk").unwrap(),
+            },
+            CommandBody::DeleteSecret {
+                set: set(),
+                name: "STRIPE_KEY".into(),
+            },
+            CommandBody::GrantSecretSet {
+                set: set(),
+                host_id: host_id(),
+            },
+            CommandBody::RevokeSecretSet {
+                set: set(),
+                host_id: host_id(),
+            },
+            CommandBody::ListSecrets,
+            CommandBody::ListSecretAudit { before: None },
         ];
         for command in &commands {
             assert!(authorize(alice.role, command).is_ok());

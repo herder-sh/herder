@@ -1,7 +1,7 @@
-//! Handing a session off between machines: three real daemons, with the fake adapter, over
-//! TLS on localhost, each with a clone of one repository, and no vault that answers. The client
-//! relays a session's history from its machine to another, whether that one has a vault or
-//! not; once the session's machine is offline, the destination's vault is the only way.
+//! Handing a session off between machines: real daemons, with the fake adapter, over TLS on
+//! localhost, each with a clone of one repository. The client relays a session's history from
+//! its machine to another, whether that one has a vault or not. Once the session's machine is
+//! offline, a vault the client reaches relays it, else the destination's vault is the only way.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,12 +14,12 @@ use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_client_core::{Client, ConnectionState, Error, PairResult};
 use herder_daemon::Hub;
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::config::VaultConfig;
+use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::login::Logins;
 use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
-use herder_daemon::vault::{Link, LinkSetup};
+use herder_daemon::vault::{LIVENESS_TIMEOUT, Link, LinkSetup, VaultStore};
 use herder_daemon::worktree::{Worktrees, checkpoint};
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_protocol::{
@@ -192,6 +192,7 @@ async fn daemon(dir: &Path, id: &str, vault: Option<VaultConfig>) -> Daemon {
             changed: Arc::new(tokio::sync::Notify::new()),
             data_dir: dir.to_owned(),
             shutdown: shutdown.clone(),
+            secrets: Default::default(),
         },
         vault,
     )
@@ -232,6 +233,67 @@ fn dead_vault() -> VaultConfig {
     let address = listener.local_addr().unwrap().to_string();
     drop(listener);
     VaultConfig::new(address, "00".repeat(32), None)
+}
+
+/// A running vault that backs up images.
+struct Vault {
+    link: String,
+    config: VaultConfig,
+    auth: Arc<Auth>,
+    shutdown: CancellationToken,
+}
+
+impl Vault {
+    /// Starts a vault on `dir`; pairs a client as its owner with the returned link.
+    async fn start(dir: &Path) -> Self {
+        std::fs::create_dir_all(dir.join("tls")).unwrap();
+        let tls = Tls::load_or_create(&dir.join("tls"), "vault").unwrap();
+        let auth = Arc::new(Auth::open(dir).unwrap());
+        let store = VaultStore::open(dir.join("vault.db")).unwrap();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let fingerprint = tls.fingerprint().to_owned();
+        let host = Host {
+            id: HostId::new("vault"),
+            name: "vault".into(),
+        };
+        let server = herder_daemon::vault::Server::new(
+            tls,
+            Arc::clone(&auth),
+            store,
+            host,
+            LIVENESS_TIMEOUT,
+            Retention::default(),
+            None,
+        );
+        let shutdown = CancellationToken::new();
+        tokio::spawn(server.run(vec![listener], shutdown.clone()));
+        let link = herder_client_core::PairingUri {
+            hosts: vec![addr.clone()],
+            fingerprint: fingerprint.clone(),
+            code: auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+        }
+        .to_string();
+        let config = VaultConfig {
+            attachments: true,
+            ..VaultConfig::new(addr, fingerprint, None)
+        };
+        Self {
+            link,
+            config,
+            auth,
+            shutdown,
+        }
+    }
+
+    /// Where `host` replicates to, as the host-only device a host linked from a client is:
+    /// the vault refuses it reads of other hosts' sessions.
+    fn host_config(&self, host: &str) -> VaultConfig {
+        VaultConfig {
+            pairing_code: Some(self.auth.mint_host(host, PAIRING_TTL).unwrap().code),
+            ..self.config.clone()
+        }
+    }
 }
 
 async fn create(client: &Client, host: &str, repo: &str) -> SessionId {
@@ -456,4 +518,152 @@ async fn a_session_hands_off_to_another_machine_through_the_client() {
     assert!(refused.to_string().contains("vault"), "{refused}");
     b.shutdown.cancel();
     c.shutdown.cancel();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_session_of_an_offline_machine_hands_off_through_a_vault_the_client_reaches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = ["a", "b"].map(|name| tmp.path().join(name));
+    clones(tmp.path(), &[&dirs[0], &dirs[1]]);
+    // A and B replicate to the vault as host-only devices, so B cannot read A's sessions there.
+    let vault = Vault::start(&tmp.path().join("vault")).await;
+    let a = daemon(&dirs[0], "host-a", Some(vault.host_config("host-a"))).await;
+    let b = daemon(&dirs[1], "host-b", Some(vault.host_config("host-b"))).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-tui/test".into(),
+    )
+    .unwrap();
+    for link in [&a.link, &b.link, &vault.link] {
+        let paired = client.pair(link.clone()).await.unwrap();
+        assert!(
+            matches!(&paired[..], [PairResult::Paired { .. }]),
+            "{paired:?}"
+        );
+    }
+    let session_id = create(&client, "host-a", &a.repo).await;
+    create(&client, "host-b", &b.repo).await;
+    until(&client, "both hosts resolved their project", |machines| {
+        machines[..2].iter().all(|m| {
+            !m.sessions.is_empty() && m.sessions.iter().all(|s| s.project_id == Some(project()))
+        })
+    })
+    .await;
+
+    // A turn with an image, backed up to the vault.
+    let image = Image {
+        media_type: "image/png".into(),
+        data: Bytes(b"\x89PNG\r\n\x1a\nscreenshot".to_vec()),
+    };
+    client
+        .send(
+            HostId::new("host-a"),
+            CommandBody::SendPrompt {
+                session_id: session_id.clone(),
+                text: "First.".into(),
+                images: vec![image.clone()],
+                files: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    until(&client, "the turn ended", |machines| {
+        machines[0].sessions.iter().any(|s| {
+            s.session_id == session_id && s.head_seq > 3 && s.status == SessionStatus::Idle
+        })
+    })
+    .await;
+    let a_journal = journal(&client, "host-a", &session_id).await;
+    let head_seq = a_journal.last().unwrap().seq;
+    until(&client, "the vault has the whole session", |machines| {
+        machines[2].sessions.iter().any(|s| {
+            s.session_id == session_id
+                && s.host_id == Some(HostId::new("host-a"))
+                && s.head_seq == head_seq
+                && s.project_id == Some(project())
+        })
+    })
+    .await;
+    let first_image = |journal: &[Event]| {
+        journal
+            .iter()
+            .find_map(|event| match &event.body {
+                EventBody::ItemAdded { item } => match &item.body {
+                    ItemBody::UserMessage { attachments, .. } => {
+                        attachments.first().map(|a| a.attachment_id.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap()
+    };
+    let get_image = CommandBody::GetAttachment {
+        session_id: session_id.clone(),
+        attachment_id: first_image(&a_journal),
+    };
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while client
+        .send(HostId::new("vault"), get_image.clone())
+        .await
+        .is_err()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the image never reached the vault"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // A goes offline: the client relays the session from the vault to B.
+    a.shutdown.cancel();
+    until(&client, "host-a is offline", |machines| {
+        !matches!(machines[0].connection, ConnectionState::Connected)
+    })
+    .await;
+    let forked = client
+        .fork_session(
+            HostId::new("host-a"),
+            session_id.clone(),
+            HostId::new("host-b"),
+            None,
+        )
+        .await
+        .unwrap();
+    let CommandResult::SessionForked {
+        session_id: fork,
+        forked_from,
+        from_host_id,
+        ..
+    } = forked
+    else {
+        panic!("expected a fork, got {forked:?}");
+    };
+    assert_eq!(
+        (&forked_from, from_host_id.as_str()),
+        (&session_id, "host-a")
+    );
+    let copy = journal(&client, "host-b", &fork).await;
+    for (copied, original) in copy.iter().zip(&a_journal).skip(1) {
+        assert_eq!((copied.seq, &copied.body), (original.seq, &original.body));
+    }
+    let fetched = client
+        .send(
+            HostId::new("host-b"),
+            CommandBody::GetAttachment {
+                session_id: fork.clone(),
+                attachment_id: first_image(&copy),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        fetched,
+        CommandResult::Attachment {
+            media_type: image.media_type,
+            data: image.data,
+        }
+    );
+    b.shutdown.cancel();
+    vault.shutdown.cancel();
 }

@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AccountId, AgentMessage, Bytes, CommandId, DaemonSettings, DeviceId, Event, FailoverTotal,
-    HostId, HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, Seq, SessionId,
-    SessionStatus, SessionUsage, TerminalId, Timestamp, UsagePeriod, UsageTotal, UserId,
+    HostId, HostResources, Item, ItemId, Project, ProjectId, PromptId, Provider, SecretAccess,
+    SecretInfo, SecretSet, Seq, SessionId, SessionStatus, SessionUsage, TerminalId, Timestamp,
+    UsagePeriod, UsageTotal, UserId,
 };
 
 /// A daemon-to-client message.
@@ -542,6 +543,19 @@ pub enum CommandResult {
         code: String,
         /// When the code stops working.
         expires_at: Timestamp,
+    },
+    /// A vault's secrets without their values, answering `list_secrets`.
+    Secrets {
+        /// Every set, ordered by name.
+        sets: Vec<SecretSet>,
+        /// Every secret, ordered by set, then name.
+        secrets: Vec<SecretInfo>,
+    },
+    /// The latest fetches of secrets by hosts, answering `list_secret_audit`.
+    SecretAudit {
+        /// The fetches, newest first; fewer than [`crate::MAX_SECRET_AUDIT_ENTRIES`] when no
+        /// older ones are left.
+        entries: Vec<SecretAccess>,
     },
 }
 

@@ -19,6 +19,7 @@ use crate::accounts::{self, AddAccount};
 use crate::action::Action;
 use crate::app::{App, Effect, Focus};
 use crate::backup::{self, Backup, Links};
+use crate::secrets::{self, Secrets};
 use crate::terminal;
 
 /// The port a daemon listens on unless configured otherwise, as `herder daemon` has it; added
@@ -38,6 +39,8 @@ pub struct MachinePanel {
     pub edit: Option<PanelEdit>,
     /// The backup dialog, over the panel.
     pub backup: Option<Backup>,
+    /// The secrets screen of the selected vault, over the panel.
+    pub secrets: Option<Secrets>,
     /// Where each machine this client owns backs up, as it last said.
     pub links: Links,
     /// How full each vault's disk is, as it said with its link when the panel opened.
@@ -215,6 +218,8 @@ pub enum Input {
     Forget,
     /// Back the selected machine up to a vault, or stop.
     Backup,
+    /// Manage the secrets of the selected vault.
+    Secrets,
     /// Pick the previous choice.
     Left,
     /// Pick the next choice.
@@ -239,6 +244,9 @@ pub fn for_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
     }
     if let Some(backup) = &panel.backup {
         return backup::for_key(key, backup);
+    }
+    if let Some(screen) = &panel.secrets {
+        return secrets::for_key(key, screen);
     }
     let input = match &panel.edit {
         Some(PanelEdit::Rename(_)) => match key.code {
@@ -303,6 +311,7 @@ fn panel_key(key: KeyEvent, panel: &MachinePanel) -> Option<Action> {
             KeyCode::Char('e') => Input::Rename,
             KeyCode::Char('d') => Input::Forget,
             KeyCode::Char('b') => Input::Backup,
+            KeyCode::Char('s') => Input::Secrets,
             KeyCode::Char('r') => return Some(Action::Reconnect),
             KeyCode::Char('?') => return Some(Action::ToggleHelp),
             _ => return None,
@@ -384,6 +393,7 @@ impl App {
                     }
                 }
                 Input::Backup => return self.open_backup(),
+                Input::Secrets => return self.open_secrets(),
                 Input::AddAccount => {
                     let Some(at) = panel.selected(&self.machines) else {
                         return Vec::new();
@@ -466,7 +476,9 @@ impl App {
             });
             return true;
         };
-        if let Some(field) = panel.account.as_mut().and_then(AddAccount::field) {
+        if let Some(screen) = &mut panel.secrets {
+            screen.paste(text);
+        } else if let Some(field) = panel.account.as_mut().and_then(AddAccount::field) {
             field.push_str(text.lines().next().unwrap_or(""));
         } else if let Some(add) = &mut panel.add
             && matches!(add.step, Step::Edit | Step::Failed(_))

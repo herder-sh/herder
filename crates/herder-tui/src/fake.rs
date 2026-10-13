@@ -1442,3 +1442,87 @@ pub fn board() -> App {
     }
     app
 }
+
+/// The secrets screen of [`backups`]' vault, which `devbox` and `laptop` back up to, as the
+/// vault lists them: `coingate-prod` (granted to `devbox`) with `API_KEY` and `DB_URL`,
+/// `personal` (granted to both) with `GITHUB_TOKEN`, and `staging`, empty; and three fetches.
+pub fn secrets() -> App {
+    use herder_protocol::{CommandResult, SecretAccess, SecretInfo, SecretSet, SessionId};
+    let mut app = backups();
+    let mut machines = app.machines.clone();
+    let now = Timestamp::UNIX_EPOCH;
+    let ago = |secs: u64| now - std::time::Duration::from_secs(secs);
+    if let Some(vault) = machines.iter_mut().find(|m| m.host_id.as_str() == "v") {
+        vault.hosts = ["devbox", "laptop"]
+            .map(|name| FleetHost {
+                host_id: HostId::new(name),
+                host_name: name.into(),
+                online: true,
+                last_seen: now,
+                usage: None,
+            })
+            .into();
+    }
+    app.update(Msg::Machines(machines));
+    let press = |app: &mut App, c: char| {
+        app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char(c),
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        )))
+    };
+    press(&mut app, 'j');
+    press(&mut app, 'j');
+    let set = |name: &str, hosts: &[&str]| SecretSet {
+        name: name.into(),
+        hosts: hosts.iter().map(|h| HostId::new(*h)).collect(),
+    };
+    let secret = |set: &str, name: &str, description: &str, secs: u64| SecretInfo {
+        set: set.into(),
+        name: name.into(),
+        description: description.into(),
+        updated_at: ago(secs),
+    };
+    let fetch =
+        |id: u64, secs: u64, host: &str, session: &str, set: &str, name: &str| SecretAccess {
+            id,
+            at: ago(secs),
+            host_id: HostId::new(host),
+            session_id: SessionId::new(session),
+            set: set.into(),
+            name: name.into(),
+        };
+    for effect in press(&mut app, 's') {
+        let crate::app::Effect::Send {
+            origin, command, ..
+        } = effect
+        else {
+            continue;
+        };
+        let result = match command {
+            herder_protocol::CommandBody::ListSecrets => CommandResult::Secrets {
+                sets: vec![
+                    set("coingate-prod", &["devbox"]),
+                    set("personal", &["devbox", "laptop"]),
+                    set("staging", &[]),
+                ],
+                secrets: vec![
+                    secret("coingate-prod", "API_KEY", "coingate merchant api", 266_400),
+                    secret("coingate-prod", "DB_URL", "primary database", 18_000),
+                    secret("personal", "GITHUB_TOKEN", "gh cli, repo scope", 1_036_800),
+                ],
+            },
+            _ => CommandResult::SecretAudit {
+                entries: vec![
+                    fetch(3, 120, "devbox", "s-7f3a", "coingate-prod", "API_KEY"),
+                    fetch(2, 3_900, "laptop", "s-19c2", "personal", "GITHUB_TOKEN"),
+                    fetch(1, 90_000, "devbox", "s-02be", "coingate-prod", "DB_URL"),
+                ],
+            },
+        };
+        app.update(Msg::Sent {
+            origin,
+            result: Ok(result),
+        });
+    }
+    app
+}

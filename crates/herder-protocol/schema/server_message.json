@@ -1095,6 +1095,56 @@
             "code",
             "expires_at"
           ]
+        },
+        {
+          "description": "A vault's secrets without their values, answering `list_secrets`.",
+          "type": "object",
+          "properties": {
+            "secrets": {
+              "description": "Every secret, ordered by set, then name.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SecretInfo"
+              }
+            },
+            "sets": {
+              "description": "Every set, ordered by name.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SecretSet"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "secrets"
+            }
+          },
+          "required": [
+            "type",
+            "sets",
+            "secrets"
+          ]
+        },
+        {
+          "description": "The latest fetches of secrets by hosts, answering `list_secret_audit`.",
+          "type": "object",
+          "properties": {
+            "entries": {
+              "description": "The fetches, newest first; fewer than [`crate::MAX_SECRET_AUDIT_ENTRIES`] when no\nolder ones are left.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SecretAccess"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "secret_audit"
+            }
+          },
+          "required": [
+            "type",
+            "entries"
+          ]
         }
       ]
     },
@@ -3347,6 +3397,97 @@
           "type": "string",
           "const": "user"
         }
+      ]
+    },
+    "SecretAccess": {
+      "description": "One fetch of a secret's value by a host, as the vault recorded it.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "When the vault handed the value out.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "host_id": {
+          "description": "The host that fetched it.",
+          "$ref": "#/$defs/HostId"
+        },
+        "id": {
+          "description": "Position in the vault's audit log, increasing; for `list_secret_audit`'s `before`.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "description": "The secret's name.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session of that host it was fetched for.",
+          "$ref": "#/$defs/SessionId"
+        },
+        "set": {
+          "description": "The secret's set.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "host_id",
+        "session_id",
+        "set",
+        "name"
+      ]
+    },
+    "SecretInfo": {
+      "description": "A secret, without its value.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What it is for, on one line.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "set": {
+          "description": "Its set.",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "When its value was last set.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "set",
+        "name",
+        "description",
+        "updated_at"
+      ]
+    },
+    "SecretSet": {
+      "description": "A set of secrets on a vault, and the hosts it is granted to.",
+      "type": "object",
+      "properties": {
+        "hosts": {
+          "description": "The hosts it is granted to, ordered by host id; every session on them may use its\nsecrets.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HostId"
+          }
+        },
+        "name": {
+          "description": "The set's name, as [`is_valid_secret_set_name`] accepts it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hosts"
       ]
     },
     "ServerHello": {

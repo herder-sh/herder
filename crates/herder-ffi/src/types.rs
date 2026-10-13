@@ -18,10 +18,11 @@ use herder_protocol::{
     LibrarySkill, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState,
     Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
     ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings,
-    ReviewStatus, Role, Route, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage,
-    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
-    UsageWindow, UserId, VaultStatus, VaultVolume,
+    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretSet, SecretValue, SessionHead,
+    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
+    SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
+    VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -68,6 +69,14 @@ uniffi::custom_type!(Bytes, Vec<u8>, {
     remote,
     lower: |bytes| bytes.0,
     try_lift: |bytes| Ok(Bytes(bytes)),
+});
+
+// A secret's value, sent to a vault and never back; refused as `SecretValue::new` refuses it.
+uniffi::custom_type!(SecretValue, String, {
+    remote,
+    lower: |value| value.expose().to_owned(),
+    try_lift: |value| SecretValue::new(value)
+        .ok_or_else(|| uniffi::deps::anyhow::anyhow!("a secret's value is 1 to 64 KiB without a NUL")),
 });
 
 // A tool call's arguments, as JSON text.
@@ -680,6 +689,34 @@ pub enum CommandBody {
     RevokeVaultHost {
         host_id: HostId,
     },
+    CreateSecretSet {
+        set: String,
+    },
+    DeleteSecretSet {
+        set: String,
+    },
+    PutSecret {
+        set: String,
+        name: String,
+        description: String,
+        value: SecretValue,
+    },
+    DeleteSecret {
+        set: String,
+        name: String,
+    },
+    GrantSecretSet {
+        set: String,
+        host_id: HostId,
+    },
+    RevokeSecretSet {
+        set: String,
+        host_id: HostId,
+    },
+    ListSecrets,
+    ListSecretAudit {
+        before: Option<u64>,
+    },
     SetSkillsRepo {
         url: String,
     },
@@ -833,12 +870,43 @@ pub enum CommandResult {
         code: String,
         expires_at: Timestamp,
     },
+    Secrets {
+        sets: Vec<SecretSet>,
+        secrets: Vec<SecretInfo>,
+    },
+    SecretAudit {
+        entries: Vec<SecretAccess>,
+    },
     SessionForked {
         session_id: SessionId,
         account_id: AccountId,
         forked_from: SessionId,
         from_host_id: HostId,
     },
+}
+
+#[uniffi::remote(Record)]
+pub struct SecretSet {
+    pub name: String,
+    pub hosts: Vec<HostId>,
+}
+
+#[uniffi::remote(Record)]
+pub struct SecretInfo {
+    pub set: String,
+    pub name: String,
+    pub description: String,
+    pub updated_at: Timestamp,
+}
+
+#[uniffi::remote(Record)]
+pub struct SecretAccess {
+    pub id: u64,
+    pub at: Timestamp,
+    pub host_id: HostId,
+    pub session_id: SessionId,
+    pub set: String,
+    pub name: String,
 }
 
 #[uniffi::remote(Record)]

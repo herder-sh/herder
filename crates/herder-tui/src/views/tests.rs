@@ -1735,3 +1735,91 @@ fn a_follow_up_shows_as_from_herder() {
     assert!(line("CI failed on #7").contains(" herder "), "{text:?}");
     assert!(!line("Fix the build.").contains(" herder "), "{text:?}");
 }
+
+#[test]
+fn the_secrets_screen_at_three_widths() {
+    let mut app = fake::secrets();
+    press(&mut app, KeyCode::Char('j'));
+    at_three_widths("secrets", &mut app);
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(
+        screen.contains("j/k move  n new set  e replace  a add secret  s hosts  d delete"),
+        "{screen}"
+    );
+    press(&mut app, KeyCode::Char('s'));
+    at_three_widths("secrets_hosts", &mut app);
+}
+
+#[test]
+fn the_secret_value_is_masked_as_it_is_typed_and_never_drawn() {
+    let mut app = fake::secrets();
+    press(&mut app, KeyCode::Char('a'));
+    for c in "NPM_TOKEN\tpublishes packages\tnpm_s3cr3t".chars() {
+        press(
+            &mut app,
+            if c == '\t' {
+                KeyCode::Tab
+            } else {
+                KeyCode::Char(c)
+            },
+        );
+    }
+    for (width, height) in [(45, 40), (100, 30), (160, 40)] {
+        let screen = render(&mut app, width, height).backend().to_string();
+        assert!(!screen.contains("npm_s3cr3t"), "{screen}");
+        assert!(!screen.contains("s3cr3t"), "{screen}");
+    }
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(screen.contains(&"•".repeat(10)), "{screen}");
+    insta::assert_snapshot!("secrets_put", render(&mut app, 100, 30).backend());
+    // Sent: nothing of it is left to draw, and a refusal asks for it again.
+    let effects = app.update(key(KeyCode::Enter));
+    let [Effect::Send { origin, .. }] = effects.as_slice() else {
+        panic!("one command");
+    };
+    app.update(Msg::Sent {
+        origin: origin.clone(),
+        result: Err("the vault is unreachable".into()),
+    });
+    let screen = render(&mut app, 100, 30).backend().to_string();
+    assert!(!screen.contains('•'), "{screen}");
+    assert!(screen.contains("the vault is unreachable"), "{screen}");
+}
+
+#[test]
+fn a_vault_that_refuses_secrets_says_why_on_the_screen() {
+    let mut app = fake::secrets();
+    let effects = app.update(key(KeyCode::Char('r')));
+    for effect in effects {
+        let Effect::Send { origin, .. } = effect else {
+            continue;
+        };
+        app.update(Msg::Sent {
+            origin,
+            result: Err("this vault has no secrets key configured".into()),
+        });
+    }
+    let screen = render(&mut app, 100, 20).backend().to_string();
+    assert!(screen.contains("vault has no secrets to show"), "{screen}");
+    assert!(
+        screen.contains("this vault has no secrets key configured"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn the_fleet_offers_secrets_on_a_vault_and_backup_elsewhere() {
+    let mut app = fake::backups();
+    let screen = render(&mut app, 120, 20).backend().to_string();
+    assert!(
+        screen.contains("b backup") && !screen.contains("s secrets"),
+        "{screen}"
+    );
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    let screen = render(&mut app, 120, 20).backend().to_string();
+    assert!(
+        screen.contains("s secrets") && !screen.contains("b backup"),
+        "{screen}"
+    );
+}
