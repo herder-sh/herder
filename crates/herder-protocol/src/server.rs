@@ -253,6 +253,11 @@ pub struct HostReplication {
     /// the vault started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lag_ms: Option<u64>,
+    /// Whether a device the host replicates from may read the vault as a client too, so the
+    /// host can take handoffs of other hosts' sessions; false for a host paired host-only.
+    /// `set_vault_host_access` changes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read: bool,
 }
 
 /// A user's role on a daemon.
