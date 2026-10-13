@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use herder_protocol::{
     Cursor, DeviceId, HostId, HostMessage, REPLICATION_VERSION, ReplicationError,
-    ReplicationErrorCode, VaultHello, VaultMessage,
+    ReplicationErrorCode, SecretError, SecretErrorCode, VaultHello, VaultMessage,
 };
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -291,6 +291,20 @@ async fn receive(ws: &mut Ws, shared: &Shared, host: &HostId, cap: Option<u64>) 
                     },
                 }
             }
+            // Secrets are not implemented yet: this vault holds none.
+            Ok(HostMessage::ListSecrets { request_id }) => VaultMessage::SecretList {
+                request_id,
+                secrets: Vec::new(),
+            },
+            Ok(HostMessage::FetchSecrets(fetch)) => VaultMessage::SecretsRefused {
+                request_id: fetch.request_id,
+                error: SecretError {
+                    code: SecretErrorCode::Unknown,
+                    message: "secrets are not implemented yet on this vault".to_owned(),
+                    secret: None,
+                    candidates: Vec::new(),
+                },
+            },
             Ok(HostMessage::Unknown) => continue,
             Err(err) => return fail(ws, bad(&err)).await,
         };

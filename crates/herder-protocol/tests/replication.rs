@@ -131,7 +131,11 @@ impl Host {
                 self.link = None;
                 Vec::new()
             }
-            VaultMessage::Unknown => Vec::new(),
+            // Secrets are not modelled here: they never touch the journals.
+            VaultMessage::SecretList { .. }
+            | VaultMessage::SecretValues { .. }
+            | VaultMessage::SecretsRefused { .. }
+            | VaultMessage::Unknown => Vec::new(),
         }
     }
 
@@ -242,8 +246,11 @@ impl Vault {
                 Vec::new()
             }
             HostMessage::Batch(batch) => self.batch(host, batch),
-            // Images are not modelled here; the daemon's vault tests cover them.
-            HostMessage::Attachment(_) | HostMessage::Unknown => Vec::new(),
+            // Images and secrets are not modelled here; the daemon's vault tests cover them.
+            HostMessage::Attachment(_)
+            | HostMessage::ListSecrets { .. }
+            | HostMessage::FetchSecrets(_)
+            | HostMessage::Unknown => Vec::new(),
         }
     }
 

@@ -261,6 +261,29 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::RevokeVaultHost {
             host_id: HostId::new("01J9HOST"),
         }),
+        command(CommandBody::CreateSecretSet { set: "prod".into() }),
+        command(CommandBody::DeleteSecretSet { set: "prod".into() }),
+        command(CommandBody::PutSecret {
+            set: "prod".into(),
+            name: "STRIPE_KEY".into(),
+            description: "Stripe API key for the prod account".into(),
+            value: SecretValue::new("sk_test_123").unwrap(),
+        }),
+        command(CommandBody::DeleteSecret {
+            set: "prod".into(),
+            name: "STRIPE_KEY".into(),
+        }),
+        command(CommandBody::GrantSecretSet {
+            set: "prod".into(),
+            host_id: HostId::new("01J9HOST"),
+        }),
+        command(CommandBody::RevokeSecretSet {
+            set: "prod".into(),
+            host_id: HostId::new("01J9HOST"),
+        }),
+        command(CommandBody::ListSecrets),
+        command(CommandBody::ListSecretAudit { before: None }),
+        command(CommandBody::ListSecretAudit { before: Some(41) }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
         }),
@@ -732,6 +755,29 @@ fn server_fixtures() -> Vec<ServerMessage> {
             result: CommandResult::HostPairing {
                 code: "ABCDE-FGHJK".into(),
                 expires_at: "2026-10-03T12:10:00Z".parse().unwrap(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::Secrets {
+                sets: vec![SecretSet {
+                    name: "prod".into(),
+                    hosts: vec![HostId::new("01J9HOST")],
+                }],
+                secrets: vec![secret_info()],
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::SecretAudit {
+                entries: vec![SecretAccess {
+                    id: 42,
+                    at: at(),
+                    host_id: HostId::new("01J9HOST"),
+                    session_id: SessionId::new("01J9SESSION"),
+                    set: "prod".into(),
+                    name: "STRIPE_KEY".into(),
+                }],
             },
         },
         ServerMessage::CommandAccepted {
@@ -2727,8 +2773,26 @@ fn summary(status: SessionStatus, prs: Vec<PullRequest>) -> SessionSummary {
 }
 
 /// One message per variant of every host-sent replication type, and every value of its enums.
+fn secret_info() -> SecretInfo {
+    SecretInfo {
+        set: "prod".into(),
+        name: "STRIPE_KEY".into(),
+        description: "Stripe API key for the prod account".into(),
+        updated_at: at(),
+    }
+}
+
 fn host_fixtures() -> Vec<HostMessage> {
     let mut messages = vec![
+        HostMessage::ListSecrets { request_id: 7 },
+        HostMessage::FetchSecrets(SecretFetch {
+            request_id: 8,
+            session_id: SessionId::new("01J9SESSION"),
+            secrets: vec![
+                "STRIPE_KEY".parse().unwrap(),
+                "prod/DB_URL".parse().unwrap(),
+            ],
+        }),
         HostMessage::Hello(HostHello {
             replication_version: REPLICATION_VERSION,
             host_id: HostId::new("01J9HOST"),
@@ -2858,6 +2922,38 @@ fn vault_fixtures() -> Vec<VaultMessage> {
             reason: RejectReason::Conflict,
         },
     ];
+    messages.push(VaultMessage::SecretList {
+        request_id: 7,
+        secrets: vec![secret_info()],
+    });
+    messages.push(VaultMessage::SecretValues {
+        request_id: 8,
+        secrets: vec![FetchedSecret {
+            secret: "STRIPE_KEY".parse().unwrap(),
+            set: "prod".into(),
+            value: SecretValue::new("sk_test_123").unwrap(),
+        }],
+    });
+    for code in [
+        SecretErrorCode::Ambiguous,
+        SecretErrorCode::Unknown,
+        SecretErrorCode::NotGranted,
+        SecretErrorCode::NoVault,
+        SecretErrorCode::VaultUnreachable,
+    ] {
+        messages.push(VaultMessage::SecretsRefused {
+            request_id: 8,
+            error: SecretError {
+                code,
+                message: "no".into(),
+                secret: Some("DB_URL".parse().unwrap()),
+                candidates: vec![
+                    "prod/DB_URL".parse().unwrap(),
+                    "staging/DB_URL".parse().unwrap(),
+                ],
+            },
+        });
+    }
     let codes = [
         ReplicationErrorCode::BadRequest,
         ReplicationErrorCode::Forbidden,
@@ -3305,4 +3401,127 @@ fn prompts_and_published_artifacts_name_their_attachments() {
         source: TitleSource::User,
     };
     assert!(title.attachments().is_empty());
+}
+
+#[test]
+fn secret_values_go_out_only_in_put_secret_and_fetches() {
+    let value = SecretValue::new("sk_test_123").unwrap();
+    assert_eq!(value.expose(), "sk_test_123");
+    // Logging a message that carries a value shows none of it.
+    let put = CommandBody::PutSecret {
+        set: "prod".into(),
+        name: "STRIPE_KEY".into(),
+        description: "Stripe".into(),
+        value: value.clone(),
+    };
+    assert!(!format!("{put:?}").contains("sk_test_123"));
+    assert_eq!(
+        serde_json::to_value(&put).unwrap(),
+        json!({
+            "type": "put_secret",
+            "set": "prod",
+            "name": "STRIPE_KEY",
+            "description": "Stripe",
+            "value": "sk_test_123",
+        })
+    );
+    for refused in ["", "a\0b"] {
+        assert!(SecretValue::new(refused).is_none());
+    }
+    assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES)).is_some());
+    assert!(SecretValue::new("x".repeat(MAX_SECRET_VALUE_BYTES + 1)).is_none());
+    // No server message carries a value: the only value in any fixture is the fetch's.
+    for message in server_fixtures() {
+        assert!(
+            !serde_json::to_string(&message)
+                .unwrap()
+                .contains("sk_test_123")
+        );
+    }
+}
+
+#[test]
+fn secret_and_set_names_follow_their_rules() {
+    for name in ["A", "_", "STRIPE_KEY", "DB_URL_2", "_PRIVATE"] {
+        assert!(is_valid_secret_name(name), "{name}");
+    }
+    for name in ["", "1KEY", "stripe_key", "STRIPE-KEY", "KEY ", "ÄKEY"] {
+        assert!(!is_valid_secret_name(name), "{name}");
+    }
+    assert!(is_valid_secret_name(&"A".repeat(MAX_SECRET_NAME_BYTES)));
+    assert!(!is_valid_secret_name(
+        &"A".repeat(MAX_SECRET_NAME_BYTES + 1)
+    ));
+    for set in ["personal", "coingate-prod", "p2"] {
+        assert!(is_valid_secret_set_name(set), "{set}");
+    }
+    for set in ["", "Prod", "-prod", "prod-", "a--b", "a_b", "a/b"] {
+        assert!(!is_valid_secret_set_name(set), "{set}");
+    }
+}
+
+#[test]
+fn secret_refs_are_name_or_set_slash_name() {
+    let bare: SecretRef = "STRIPE_KEY".parse().unwrap();
+    assert_eq!(bare.set, None);
+    assert_eq!(bare.name, "STRIPE_KEY");
+    let qualified: SecretRef = "coingate-prod/DB_URL".parse().unwrap();
+    assert_eq!(qualified.set.as_deref(), Some("coingate-prod"));
+    assert_eq!(qualified.name, "DB_URL");
+    assert_eq!(qualified.to_string(), "coingate-prod/DB_URL");
+    assert_eq!(
+        serde_json::to_value(&qualified).unwrap(),
+        json!("coingate-prod/DB_URL")
+    );
+    for refused in [
+        "",
+        "db_url",
+        "prod/",
+        "/DB_URL",
+        "Prod/DB_URL",
+        "a/b/C",
+        "prod DB_URL",
+    ] {
+        assert!(refused.parse::<SecretRef>().is_err(), "{refused}");
+        assert!(serde_json::from_value::<SecretRef>(json!(refused)).is_err());
+    }
+}
+
+#[test]
+fn secret_fetches_have_their_wire_form() {
+    let fetch = HostMessage::FetchSecrets(SecretFetch {
+        request_id: 8,
+        session_id: SessionId::new("01J9SESSION"),
+        secrets: vec!["prod/DB_URL".parse().unwrap()],
+    });
+    assert_eq!(
+        serde_json::to_value(&fetch).unwrap(),
+        json!({
+            "type": "fetch_secrets",
+            "request_id": 8,
+            "session_id": "01J9SESSION",
+            "secrets": ["prod/DB_URL"],
+        })
+    );
+    let refused = VaultMessage::SecretsRefused {
+        request_id: 8,
+        error: SecretError {
+            code: SecretErrorCode::NotGranted,
+            message: "set prod is not granted to this host".into(),
+            secret: Some("prod/DB_URL".parse().unwrap()),
+            candidates: Vec::new(),
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap(),
+        json!({
+            "type": "secrets_refused",
+            "request_id": 8,
+            "error": {
+                "code": "not_granted",
+                "message": "set prod is not granted to this host",
+                "secret": "prod/DB_URL",
+            },
+        })
+    );
 }
