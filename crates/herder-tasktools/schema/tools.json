@@ -1151,6 +1151,7 @@
                   "pair_device",
                   "pair_vault_host",
                   "revoke_vault_host",
+                  "set_vault_host_access",
                   "set_skills_repo",
                   "put_skill",
                   "delete_skill",

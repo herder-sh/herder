@@ -56,14 +56,16 @@ every session's journal from then on, and catches up after either side was offli
 A host paired with `--host` may only replicate its own sessions. It reads nothing on the
 vault: no hosts, sessions, transcripts, PRs, attachments or devices, so a shared machine, or
 a stolen copy of its device key, sees nothing of the others. It cannot `herder fork`
-another host's session either, since that reads the vault.
+another host's session either, nor take a session handed off to it, since that reads the
+vault, until an owner turns on "Takes handoffs" for it (see [Devices](#devices)).
 
 ## Pair a client
 
 `herder pair` without `--host` mints a client code, as on any daemon: the device reads every
 host's sessions, read-only. A host that should be able to `herder fork` sessions of other
-hosts is paired with a client code instead (`/herder pair --user devbox`); it replicates as
-well.
+hosts, or take handoffs, is paired with a client code instead (`/herder pair --user devbox`);
+it replicates as well. A host already paired with `--host` needs no new code: turn on "Takes
+handoffs" for it instead.
 
 ## Devices
 
@@ -71,10 +73,16 @@ well.
 `ACCESS` column says which are `host` (replicate only) and which `client` (read everything).
 `--revoke <device>` unpairs one, and a host revoked this way pairs again with a new code.
 
+In the app, each host on the vault's page has a "Takes handoffs" switch, for the vault's
+owners. Turned on, every device the host replicates from may read the vault as a client too,
+so the host can fork other hosts' sessions and take handoffs; it stays paired, and its
+replication goes on. Turned off, it is host-only again, and its open client connections
+close.
+
 Devices paired before host codes existed could both replicate and read. The first time a
 vault with host codes starts, every device that has replicated as a host becomes host-only;
-the rest stay clients. To let such a host fork other hosts' sessions, revoke it and pair it again
-with a client code.
+the rest stay clients. To let such a host fork other hosts' sessions, turn on "Takes handoffs"
+for it.
 
 ## Storage
 

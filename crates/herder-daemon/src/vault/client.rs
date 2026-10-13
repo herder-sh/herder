@@ -13,7 +13,8 @@ use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
     Attachment, Bytes, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, ErrorCode, Event, FleetHost, PROTOCOL_VERSION, ServerMessage, SessionHead, SessionId,
+    Cursor, ErrorCode, ErrorInfo, Event, FleetHost, PROTOCOL_VERSION, ServerMessage, SessionHead,
+    SessionId,
 };
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
@@ -45,6 +46,19 @@ pub(super) struct View {
     /// Every image the journal names that the vault holds.
     pub(super) attachments: Vec<(Attachment, Bytes)>,
 }
+
+/// The vault refusing this host, in its own words: they are meant for whoever asked the host
+/// to read it.
+#[derive(Debug)]
+pub(super) struct Refused(pub(super) ErrorInfo);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the vault refused: {}", self.0.message)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// Opens a WebSocket to the vault over TLS, pinned through `connector`.
 pub(super) async fn dial(vault: &VaultConfig, connector: &TlsConnector) -> Result<Ws> {
@@ -116,7 +130,7 @@ async fn read_view(
             ServerMessage::Event(event) if Some(&event.session_id) == journal => {
                 view.events.push(event);
             }
-            ServerMessage::Error { error } => bail!("the vault refused: {}", error.message),
+            ServerMessage::Error { error } => return Err(Refused(error).into()),
             ServerMessage::Synced { token: synced } if synced == token => break,
             _ => {}
         }

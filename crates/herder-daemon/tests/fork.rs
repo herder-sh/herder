@@ -11,7 +11,7 @@ use std::time::Duration;
 use herder_adapters::fake::FakeAdapter;
 use herder_adapters::{Adapter, StartFuture, StartRequest};
 use herder_daemon::Hub;
-use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::auth::{Auth, DeviceRole, PAIRING_TTL};
 use herder_daemon::config::{Retention, VaultConfig};
 use herder_daemon::session::fork::Forks;
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
@@ -575,12 +575,13 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         })
         .await
         .unwrap_err();
-    assert!(
-        refused.message.contains("paired as a host"),
-        "{}",
-        refused.message
+    // In words the person handing off can act on, not a chain of causes.
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert_eq!(
+        refused.message,
+        "host-c only backs its sessions up to the vault, so it cannot read other machines' \
+         sessions; turn on \"Takes handoffs\" for it on the vault's page in the app"
     );
-    c.runtime.kill().await;
 
     // A is up and mid-turn: B forks its session all the same.
     let forked = b
@@ -760,6 +761,21 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         .await
         .unwrap_err();
     assert_eq!(missing.code, ErrorCode::NotFound, "{missing:?}");
+
+    // Once its device may read the vault, C takes the handoff too, paired as it was.
+    for (device, user) in vault.auth.devices() {
+        if user.name == "host-c" {
+            assert!(
+                vault
+                    .auth
+                    .set_device_role(&device.device_id, DeviceRole::Client)
+                    .unwrap()
+            );
+        }
+    }
+    let on_c = c.fork(&session_id).await;
+    assert!(c.sessions.worktree(&on_c).await.is_ok());
+    c.runtime.kill().await;
 }
 
 /// A vault nothing answers at: a host configured with it forks only what it holds or is

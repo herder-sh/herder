@@ -27,6 +27,9 @@ struct VaultStats: Hashable, Identifiable {
         var replicatedEvents: UInt64?
         var replicationLagMs: UInt64?
         var lastReplicatedEvent: String?
+        /// Whether it may read the vault, so it can take handoffs of other hosts' sessions;
+        /// `nil` until the vault's status arrives.
+        var takesHandoffs: Bool?
 
         var replicationSummary: String {
             guard let replicatedEvents else { return "Replication status unavailable" }
@@ -43,6 +46,8 @@ struct VaultStats: Hashable, Identifiable {
     let name: String
     let connection: ConnectionState
     let hosts: [Host]
+    /// Whether this device's user owns the vault, and so may change what its hosts may do.
+    let owned: Bool
     let byState: [SessionState: Int]
     /// Open and draft pull requests linked to its sessions.
     let openPRs: Int
@@ -75,6 +80,7 @@ struct VaultStats: Hashable, Identifiable {
         hostId = machine.hostId
         name = machine.name
         connection = machine.connection
+        owned = machine.role == .owner
         storedEvents = machine.vault?.events
         storageBytes = machine.vault?.storageBytes
         byState = tally(entries)
@@ -95,7 +101,8 @@ struct VaultStats: Hashable, Identifiable {
                     .map { $0 },
                 replicatedEvents: replication?.events,
                 replicationLagMs: replication?.lagMs,
-                lastReplicatedEvent: replication?.lastEventAt)
+                lastReplicatedEvent: replication?.lastEventAt,
+                takesHandoffs: replication?.read)
         }
         .sorted { ($1.online ? 1 : 0, $0.name.lowercased()) < ($0.online ? 1 : 0, $1.name.lowercased()) }
     }
@@ -133,6 +140,12 @@ extension Fleet {
     /// The paired vaults' statistics.
     var vaults: [VaultStats] {
         machines.compactMap { VaultStats(machine: $0, sessions: sessions) }
+    }
+
+    /// Lets `hostId` read `vault` so it can take handoffs of other hosts' sessions, or makes
+    /// it only back up there again. The host stays paired; the vault's status follows.
+    func setTakesHandoffs(_ on: Bool, host hostId: HostId, vault: HostId) async throws {
+        _ = try await client.send(hostId: vault, command: .setVaultHostAccess(hostId: hostId, read: on))
     }
 
     /// The vaults the connected machines back up to that this device is not paired with. Only
@@ -175,7 +188,7 @@ struct VaultView: View {
                 if vaults.isEmpty && unpaired.isEmpty {
                     Text("No vault paired.").foregroundStyle(Theme.tertiary).padding(.top, 30)
                 }
-                ForEach(vaults) { VaultSection(vault: $0) }
+                ForEach(vaults) { VaultSection(fleet: fleet, vault: $0) }
                 ForEach(unpaired) { vault in UnpairedVaultCard(vault: vault) { sheet = .pair } }
             }
             .padding(.horizontal, 16)
@@ -216,6 +229,7 @@ private struct UnpairedVaultCard: View {
 
 /// One vault: what `VaultView` lists, apart so it renders outside a scroll view too.
 struct VaultSection: View {
+    let fleet: Fleet
     let vault: VaultStats
 
     var body: some View {
@@ -229,7 +243,11 @@ struct VaultSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 SectionHeading(title: "Hosts", count: vault.hosts.count)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14, alignment: .top)], spacing: 14) {
-                    ForEach(vault.hosts) { HostCard(host: $0) }
+                    ForEach(vault.hosts) { host in
+                        HostCard(host: host, setTakesHandoffs: vault.owned ? { on in
+                            try await fleet.setTakesHandoffs(on, host: host.id, vault: vault.hostId)
+                        } : nil)
+                    }
                 }
             }
             VStack(alignment: .leading, spacing: 10) {
@@ -296,6 +314,8 @@ private struct Stat: View {
 /// A replicated host: whether it is online, its sessions by state, and its busiest projects.
 private struct HostCard: View {
     let host: VaultStats.Host
+    /// Changes whether the host takes handoffs; `nil` unless this device owns the vault.
+    let setTakesHandoffs: ((Bool) async throws -> Void)?
 
     var body: some View {
         Card {
@@ -338,9 +358,52 @@ private struct HostCard: View {
                     }
                     .font(.caption)
                 }
+                if let setTakesHandoffs, let takesHandoffs = host.takesHandoffs {
+                    HandoffToggle(takesHandoffs: takesHandoffs, set: setTakesHandoffs)
+                }
             }
         }
         .opacity(host.online ? 1 : 0.8)
+    }
+}
+
+/// Whether a host may read the vault, so a session can be handed off to it, for the vault's
+/// owners. Shows the change at once and keeps it until the vault's status agrees.
+private struct HandoffToggle: View {
+    let takesHandoffs: Bool
+    let set: (Bool) async throws -> Void
+    @State private var asked: Bool?
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(get: { asked ?? takesHandoffs }, set: change)) {
+                Text("Takes handoffs").font(.subheadline).foregroundStyle(Theme.text)
+            }
+            .toggleStyle(.switch)
+            .disabled(asked != nil)
+            Text("Lets this machine read other machines' sessions from the vault when you hand one off to it")
+                .font(.caption).foregroundStyle(Theme.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let error {
+                Text(error).font(.caption).foregroundStyle(Theme.failure)
+            }
+        }
+        .onChange(of: takesHandoffs) { asked = nil }
+    }
+
+    private func change(_ on: Bool) {
+        asked = on
+        error = nil
+        Task {
+            do {
+                try await set(on)
+                if on == takesHandoffs { asked = nil }
+            } catch {
+                self.error = describe(error)
+                asked = nil
+            }
+        }
     }
 }
 
