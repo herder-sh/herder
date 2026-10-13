@@ -19,4 +19,17 @@ struct SplashTests {
         fleet.setMachinesForTesting([machine("host-a", name: "a", sessions: []), failed])
         #expect(fleet.opened)
     }
+
+    @Test func theFleetHasOpenedOnceOneMachineConnectsWhileAnotherIsStillConnecting() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("the profile did not open")
+            return
+        }
+        var asleep = machine("host-b", name: "b", sessions: [])
+        asleep.connection = .connecting
+        fleet.setMachinesForTesting([asleep])
+        #expect(!fleet.opened)
+        fleet.setMachinesForTesting([machine("host-a", name: "a", sessions: []), asleep])
+        #expect(fleet.opened)
+    }
 }
