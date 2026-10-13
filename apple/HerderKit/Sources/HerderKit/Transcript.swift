@@ -41,7 +41,7 @@ enum TranscriptBlock: Hashable, Identifiable {
     case notice(Notice)
     case question(AskedQuestion)
     case handoff(Handoff)
-    /// A finished turn's tool calls, reasoning and passing prose, behind one line.
+    /// A turn's tool calls and reasoning behind one line; a finished turn's passing prose too.
     case work(TurnWork)
 
     var id: String {
@@ -61,17 +61,21 @@ enum TranscriptBlock: Hashable, Identifiable {
 
 }
 
-/// What a finished turn did on the way to its answer, in order.
+/// What a turn did on the way to its answer, in order.
 struct TurnWork: Hashable, Identifiable {
     let turnId: TurnId
     /// From the turn's start to its end; `nil` when the journal lacks either.
     let duration: TimeInterval?
     let blocks: [TranscriptBlock]
+    /// The turn runs now, so its work is still growing.
+    var running = false
 
+    /// The same for the running turn and once it is done, so a fold opened while it runs stays open.
     var id: String { "work-\(turnId)" }
 
-    /// "Worked for 1m 5s", or "Worked" without a duration.
+    /// "Working" while the turn runs; then "Worked for 1m 5s", or "Worked" without a duration.
     var title: String {
+        if running { return "Working" }
         guard let duration else { return "Worked" }
         let seconds = Int(duration.rounded())
         let (hours, minutes) = (seconds / 3600, seconds % 3600 / 60)
@@ -96,16 +100,17 @@ enum Transcript {
         build(model, parent: parent).blocks
     }
 
-    /// The session's transcript with each finished turn's work folded behind a `.work` block:
-    /// what stays in view is the user's messages, each turn's last reply, and what needs the user.
+    /// The session's transcript with each turn's work folded behind a `.work` block: what stays
+    /// in view is the user's messages, each finished turn's last reply, the running turn's prose,
+    /// and what needs the user.
     static func collapsed(_ model: SessionModel) -> [TranscriptBlock] {
         let (blocks, turns) = build(model, parent: nil)
         var hidden: [TurnId: [Int]] = [:]
         var replies: [TurnId: Int] = [:]
         for (index, block) in blocks.enumerated() {
-            guard let turn = turns[index], turn != model.turn else { continue }
+            guard let turn = turns[index] else { continue }
             switch block {
-            case .assistant:
+            case .assistant where turn != model.turn:
                 if let reply = replies[turn] { hidden[turn, default: []].append(reply) }
                 replies[turn] = index
             case .tools, .reasoning, .agents:
@@ -115,13 +120,14 @@ enum Transcript {
             }
         }
         // The work sits above the turn's last reply, or where it starts when it follows that reply.
+        // The running turn's sits where it starts, so it stays put as the turn goes on.
         var folds: [Int: TurnWork] = [:]
         for (turn, indices) in hidden {
             let indices = indices.sorted()
             guard let first = indices.first else { continue }
             let reply = replies[turn].flatMap { $0 > first ? $0 : nil }
             folds[reply ?? first] = TurnWork(turnId: turn, duration: model.turnTimes[turn]?.duration,
-                                             blocks: indices.map { blocks[$0] })
+                                             blocks: indices.map { blocks[$0] }, running: turn == model.turn)
         }
         let folded = Set(hidden.values.joined())
         var result: [TranscriptBlock] = []
@@ -286,7 +292,11 @@ enum Transcript {
         if parent != nil { return (blocks, turns) }
         // The turn running now, then what waits behind it; or, idle, what was sent and the wait
         // for the agent to take it.
-        let streamingVisible = model.streaming.contains { $0.parentCallId == nil && $0.body.text?.isEmpty == false }
+        // Streaming reasoning folds into the turn's work, so only a streaming reply shows it going.
+        let streamingVisible = model.streaming.contains {
+            guard $0.parentCallId == nil, case .assistantMessage(let text) = $0.body else { return false }
+            return !text.isEmpty
+        }
         if model.turn != nil && !streamingVisible {
             append(.working(since: model.turnStartedAt, waiting: false))
         }

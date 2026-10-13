@@ -324,7 +324,7 @@ struct DefaultAccountTests {
         #expect(notice.text == "Turn failed: boom")
     }
 
-    @Test func theRunningTurnShowsItsWorkAsItGoes() {
+    @Test func theRunningTurnFoldsItsToolCallsUnderWorkingAndKeepsItsProse() {
         var script = Script()
         let model = script.model([
             created(), .turnStarted(turnId: "t1"),
@@ -332,11 +332,45 @@ struct DefaultAccountTests {
             item("a", .assistantMessage(text: "Done.")),
             .turnCompleted(turnId: "t1", usage: nil), .turnStarted(turnId: "t2"),
             item("u", .userMessage(text: "Again", attachments: []), turn: "t2"),
-            item("c1", .toolCall(name: "Bash", input: "{}"), turn: "t2"),
-            item("a", .assistantMessage(text: "Running it."), turn: "t2"),
+            item("c1", .toolCall(name: "Bash", input: #"{"command":"ls"}"#), turn: "t2"),
+            item("r1", .toolResult(callId: "c1", output: "a.rs", isError: false), turn: "t2"),
+            item("c2", .toolCall(name: "Bash", input: #"{"command":"pwd"}"#), turn: "t2"),
+            item("a", .assistantMessage(text: "Found it."), turn: "t2"),
+            item("th", .reasoning(text: "Now the logs."), turn: "t2"),
+            item("c3", .toolCall(name: "Bash", input: #"{"command":"tail log"}"#), turn: "t2"),
         ])
-        // A turn with only its reply has no work to fold, and the running one shows all of it.
-        #expect(Transcript.collapsed(model) == Transcript.blocks(model))
+        let blocks = Transcript.collapsed(model)
+        // A turn with only its reply has no work to fold; the running one folds all of its work
+        // where it starts, around its prose, and stays at work below.
+        guard blocks.count == 6, case .assistant(_, "Done.", _) = blocks[1], case .user(_, "Again", _, _, _, _) = blocks[2],
+              case .work(let work) = blocks[3], case .assistant(_, "Found it.", _) = blocks[4],
+              case .working = blocks[5] else {
+            Issue.record("unexpected blocks: \(blocks)")
+            return
+        }
+        #expect(work.id == "work-t2")
+        #expect(work.title == "Working")
+        #expect(work.blocks.map(\.id) == ["tools-t2/c1", "t2/th", "tools-t2/c3"])
+        guard case .tools(_, let calls) = work.blocks[0] else { return }
+        #expect(calls.map(\.output) == ["a.rs", ""])
+    }
+
+    @Test func theRunningTurnStaysAtWorkWhileItsReasoningStreams() {
+        var script = Script()
+        var model = script.model([
+            created(), .turnStarted(turnId: "t1"),
+            item("u", .userMessage(text: "Fix it", attachments: [])),
+        ])
+        model.streaming = [Item(agentMessage: nil, parentCallId: nil, id: "th", turnId: "t1", body: .reasoning(text: "Hmm"))]
+        guard case .working = Transcript.collapsed(model).last else {
+            Issue.record("no working line: \(Transcript.collapsed(model))")
+            return
+        }
+        model.streaming = [Item(agentMessage: nil, parentCallId: nil, id: "a", turnId: "t1", body: .assistantMessage(text: "On it"))]
+        guard case .assistant = Transcript.collapsed(model).last else {
+            Issue.record("the streaming reply is not last: \(Transcript.collapsed(model))")
+            return
+        }
     }
 
     @Test func eachTurnKeepsHowLongItRan() {
