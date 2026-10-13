@@ -294,6 +294,7 @@ fn is_pub(vis: &Visibility) -> bool {
 fn pretty(item: Item) -> String {
     prettyplease::unparse(&syn::File {
         shebang: None,
+        frontmatter: None,
         attrs: Vec::new(),
         items: vec![item],
     })

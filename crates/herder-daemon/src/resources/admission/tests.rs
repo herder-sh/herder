@@ -68,7 +68,7 @@ fn admission(max_turns: u32) -> (Admission, Fake) {
 
 /// A session of its own for each turn.
 fn turn() -> SessionId {
-    SessionId::new(ulid::Ulid::new().to_string())
+    SessionId::new(ulid::Ulid::generate().to_string())
 }
 
 fn admitted(ticket: Ticket) -> Permit {

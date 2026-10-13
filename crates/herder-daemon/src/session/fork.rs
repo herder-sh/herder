@@ -392,7 +392,7 @@ impl SessionManager {
                     .map_err(worktree_error)?,
             }
         };
-        let session_id = SessionId::new(ulid::Ulid::new().to_string());
+        let session_id = SessionId::new(ulid::Ulid::generate().to_string());
         let slug = worktree::slug(&session_id);
         let worktree = inner
             .worktrees

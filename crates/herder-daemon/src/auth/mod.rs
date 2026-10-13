@@ -332,7 +332,7 @@ impl Auth {
             Some(user) => user.clone(),
             None => {
                 let user = User {
-                    user_id: UserId::new(ulid::Ulid::new().to_string()),
+                    user_id: UserId::new(ulid::Ulid::generate().to_string()),
                     name: pending.user.clone(),
                     role: pending.role,
                     created_at: now,
@@ -342,7 +342,7 @@ impl Auth {
             }
         };
         let device = Device {
-            device_id: DeviceId::new(ulid::Ulid::new().to_string()),
+            device_id: DeviceId::new(ulid::Ulid::generate().to_string()),
             user_id: user.user_id.clone(),
             client: client.to_owned(),
             fingerprint: fingerprint.to_owned(),
