@@ -86,7 +86,7 @@ pub(super) async fn save(
     images: Vec<Image>,
     files: Vec<PromptFile>,
 ) -> Result<Vec<Attachment>, ErrorInfo> {
-    let new_id = || AttachmentId::new(ulid::Ulid::new().to_string());
+    let new_id = || AttachmentId::new(ulid::Ulid::generate().to_string());
     let images = images.into_iter().map(|image| {
         let attachment = Attachment {
             attachment_id: new_id(),

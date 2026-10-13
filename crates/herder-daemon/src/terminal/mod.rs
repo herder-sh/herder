@@ -216,7 +216,7 @@ impl Terminals {
             .master
             .take_writer()
             .map_err(|err| internal("cannot write to the pseudo-terminal", &err))?;
-        let terminal_id = TerminalId::new(ulid::Ulid::new().to_string());
+        let terminal_id = TerminalId::new(ulid::Ulid::generate().to_string());
         let term = Arc::new(Term {
             purpose: purpose.clone(),
             master: Mutex::new(pair.master),

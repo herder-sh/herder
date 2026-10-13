@@ -436,7 +436,7 @@ impl<B: Backend> Control for AgentControl<B> {
                 });
             };
             auth::authorize(role, &command)?;
-            let command_id = CommandId::new(ulid::Ulid::new().to_string());
+            let command_id = CommandId::new(ulid::Ulid::generate().to_string());
             shared.run(&user_id, &command_id, command).await
         })
     }

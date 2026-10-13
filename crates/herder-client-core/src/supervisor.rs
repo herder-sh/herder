@@ -1196,7 +1196,7 @@ async fn run(supervisor: Arc<Supervisor>, device: DeviceKey, mut ops: mpsc::Unbo
                         open: Some(events),
                     }),
                     Some(Op::Sync(reply)) => {
-                        syncs.insert(ulid::Ulid::new().to_string(), reply);
+                        syncs.insert(ulid::Ulid::generate().to_string(), reply);
                     }
                     // The next hello resumes whatever is wanted by then, and the next
                     // connection attaches every stream; terminal commands are best effort.
@@ -1303,7 +1303,7 @@ async fn serve(
                 if pinged.is_some() {
                     supervisor.missed_pong();
                 }
-                let payload = ulid::Ulid::new().to_string();
+                let payload = ulid::Ulid::generate().to_string();
                 let message = Message::Ping(payload.clone().into_bytes().into());
                 pinged = Some((payload, Instant::now()));
                 if let Err(error) = write(&mut sink, message).await {
@@ -1345,7 +1345,7 @@ async fn serve(
                     }
                     Some(Op::Once(body)) => once(body),
                     Some(Op::Sync(reply)) => {
-                        let token = ulid::Ulid::new().to_string();
+                        let token = ulid::Ulid::generate().to_string();
                         syncs.insert(token.clone(), reply);
                         ClientMessage::Sync { token }
                     }
@@ -1364,7 +1364,7 @@ async fn serve(
                             better = supervisor.better();
                         }
                         if probe.is_none() {
-                            let payload = ulid::Ulid::new().to_string();
+                            let payload = ulid::Ulid::generate().to_string();
                             let ping = Message::Ping(payload.clone().into_bytes().into());
                             probe = Some((payload, Instant::now()));
                             if let Err(error) = write(&mut sink, ping).await {

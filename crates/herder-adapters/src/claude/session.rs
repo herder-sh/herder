@@ -728,7 +728,7 @@ impl Session {
         if self.turn.is_some() {
             return;
         }
-        let turn_id = TurnId::new(ulid::Ulid::new().to_string());
+        let turn_id = TurnId::new(ulid::Ulid::generate().to_string());
         self.turn = Some(OpenTurn {
             id: turn_id.clone(),
             interrupted: false,

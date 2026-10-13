@@ -447,7 +447,7 @@ mod tests {
             agent_message: None,
             follow_up: None,
             parent_call_id: None,
-            id: ItemId::new(ulid::Ulid::new().to_string()),
+            id: ItemId::new(ulid::Ulid::generate().to_string()),
             turn_id: TurnId::new(turn),
             body,
         }

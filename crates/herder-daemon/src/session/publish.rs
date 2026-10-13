@@ -265,7 +265,7 @@ impl SessionManager {
             _ => None,
         };
         let attachment = Attachment {
-            attachment_id: AttachmentId::new(ulid::Ulid::new().to_string()),
+            attachment_id: AttachmentId::new(ulid::Ulid::generate().to_string()),
             media_type: FILE_MEDIA_TYPE.to_owned(),
             size: data.0.len() as u64,
             name: Some(name),

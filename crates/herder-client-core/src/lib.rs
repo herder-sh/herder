@@ -936,7 +936,7 @@ const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fresh command id.
 pub(crate) fn new_command_id() -> CommandId {
-    CommandId::new(ulid::Ulid::new().to_string())
+    CommandId::new(ulid::Ulid::generate().to_string())
 }
 
 #[cfg(test)]

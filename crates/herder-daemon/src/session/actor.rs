@@ -1738,7 +1738,7 @@ impl Actor {
             agent_message: None,
             follow_up: None,
             parent_call_id: None,
-            id: ItemId::new(ulid::Ulid::new().to_string()),
+            id: ItemId::new(ulid::Ulid::generate().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::ToolCall {
                 name: SETUP_TOOL.to_owned(),
@@ -1792,7 +1792,7 @@ impl Actor {
             agent_message: None,
             follow_up: None,
             parent_call_id: None,
-            id: ItemId::new(ulid::Ulid::new().to_string()),
+            id: ItemId::new(ulid::Ulid::generate().to_string()),
             turn_id: setup.turn_id.clone(),
             body: ItemBody::ToolResult {
                 call_id: setup.call_id,
@@ -2584,7 +2584,7 @@ impl Actor {
             agent_message: prompt.agent_message.clone(),
             follow_up: prompt.follow_up.clone(),
             parent_call_id: None,
-            id: ItemId::new(ulid::Ulid::new().to_string()),
+            id: ItemId::new(ulid::Ulid::generate().to_string()),
             turn_id: turn_id.clone(),
             body: ItemBody::UserMessage {
                 text: prompt.text.clone(),
@@ -2841,7 +2841,7 @@ fn fatal(message: String) -> TurnError {
 
 /// A new id for a queued prompt.
 pub(super) fn new_prompt_id() -> PromptId {
-    PromptId::new(ulid::Ulid::new().to_string())
+    PromptId::new(ulid::Ulid::generate().to_string())
 }
 
 fn started(prompt_id: &PromptId) -> ErrorInfo {

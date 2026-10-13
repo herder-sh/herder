@@ -344,7 +344,7 @@ pub type TurnIds = Box<dyn Fn() -> TurnId + Send + Sync>;
 
 /// Turn ids as ULIDs, the daemon's default.
 pub fn ulid_turn_ids() -> TurnIds {
-    Box::new(|| TurnId::new(ulid::Ulid::new().to_string()))
+    Box::new(|| TurnId::new(ulid::Ulid::generate().to_string()))
 }
 
 /// What a session manager runs on.
@@ -2028,7 +2028,7 @@ impl SessionManager {
                 format!("no adapter runs {} sessions", account.provider.as_str()),
             ));
         }
-        let session_id = SessionId::new(ulid::Ulid::new().to_string());
+        let session_id = SessionId::new(ulid::Ulid::generate().to_string());
         let (repo, worktree) = if request.chat {
             let folder = inner.chats.join(worktree::slug(&session_id));
             tokio::fs::create_dir_all(&folder).await.map_err(|err| {
@@ -2115,7 +2115,7 @@ impl SessionManager {
             .parent
             .ok_or_else(|| error(ErrorCode::Forbidden, "not a child session"))?;
         let message = self
-            .agent_message(&caller, ulid::Ulid::new().to_string())
+            .agent_message(&caller, ulid::Ulid::generate().to_string())
             .await?;
         Ok(self
             .deliver_agent_message(session_id, text, message)
