@@ -44,8 +44,9 @@ struct Splash: View {
                 rows = row
             }
         }
-        // Stay until every machine has connected or failed to, a few seconds at most.
-        while !fleet.opened, ContinuousClock.now - start < .seconds(4) {
+        // Stay until a machine answers, or all have failed to, a moment at most: the cached
+        // sessions are already there underneath, and one asleep machine must not hold them.
+        while !fleet.opened, ContinuousClock.now - start < .seconds(1.5) {
             try? await Task.sleep(for: .milliseconds(100))
         }
         withAnimation(.easeOut(duration: 0.35)) { shown = false }
@@ -53,9 +54,10 @@ struct Splash: View {
 }
 
 extension Fleet {
-    /// Whether the machines have answered: none is still connecting.
+    /// Whether the machines have answered: one has connected, or none is still connecting.
     var opened: Bool {
-        !machines.contains { if case .connecting = $0.connection { true } else { false } }
+        machines.contains { $0.connection == .connected }
+            || !machines.contains { if case .connecting = $0.connection { true } else { false } }
     }
 }
 

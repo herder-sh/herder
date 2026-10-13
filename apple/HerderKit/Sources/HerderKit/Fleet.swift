@@ -148,17 +148,18 @@ public final class Fleet {
         sessions[key] = sessions[key] ?? SessionModel(key: key)
         // Releasing the subscription when this returns unsubscribes.
         while let update = await subscription.next(), !Task.isCancelled {
-            guard let before = sessions[key] else { break }
+            // Only what `observe` needs: holding the whole session would copy its transcript
+            // on every update.
+            guard let before = sessions[key].map({ (status: $0.status, loaded: $0.loaded) }) else { break }
             sessions[key]?.apply(update)
-            observe(key, before: before)
+            observe(key, before: before.status, wasLoaded: before.loaded)
         }
     }
 
-    /// Notes what an update did to `key`'s status, from the session as it was before it.
-    func observe(_ key: SessionKey, before: SessionModel) {
+    /// Notes what an update did to `key`'s status, from its status and load before it.
+    func observe(_ key: SessionKey, before: SessionStatus, wasLoaded: Bool) {
         guard let after = sessions[key]?.status else { return }
-        done.observe(key, before: before.status, after: after, wasLoaded: before.loaded,
-                     open: watching.contains(key))
+        done.observe(key, before: before, after: after, wasLoaded: wasLoaded, open: watching.contains(key))
     }
 
     /// Sends a command about a session; a refusal is kept to show with it.
