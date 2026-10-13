@@ -138,6 +138,12 @@ pub(super) fn header(frame: &mut Frame, area: Rect, app: &App, focused: bool, hi
 fn dialog_title(app: &App) -> &'static str {
     if app.help {
         "keys"
+    } else if app
+        .machine_panel
+        .as_ref()
+        .is_some_and(|panel| panel.secrets.is_some())
+    {
+        "secrets"
     } else if app.machine_panel.is_some() {
         "fleet"
     } else if app.account_screen.is_some() {

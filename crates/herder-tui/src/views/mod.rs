@@ -45,6 +45,7 @@ mod phone;
 mod projects;
 mod prs;
 mod resources;
+mod secrets;
 mod sessions;
 mod status;
 mod switch;

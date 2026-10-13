@@ -37,6 +37,7 @@ mod palette;
 mod projects;
 mod prompt;
 mod prs;
+mod secrets;
 mod session;
 mod settings;
 mod switch;

@@ -21,6 +21,7 @@ use crate::compose::Act;
 use crate::machines::PanelEdit;
 use crate::mouse::{self, Click, Hits};
 use crate::nav::{LEADER_KEYS, Mode};
+use crate::secrets::Pick;
 use crate::ui::badge;
 use crate::ui::hints::{Hint, ModeBar};
 use crate::ui::state::{self, State};
@@ -97,10 +98,38 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
     let help = tap("?", "help", char('?'));
     let running = app.open_session().is_some_and(|s| s.turn.is_some());
     let stop = act("ctrl+c", "stop", Action::Compose(Act::CtrlC));
+    let secrets = app
+        .machine_panel
+        .as_ref()
+        .and_then(|panel| panel.secrets.as_ref())
+        .filter(|secrets| secrets.dialog.is_none());
+    if let Some(secrets) = secrets
+        && app.mode().is_none()
+    {
+        let mut hints = vec![hint("j/k", "move"), tap("n", "new set", char('n'))];
+        if let Some(pick) = secrets.pick() {
+            if matches!(pick, Pick::Secret { .. }) {
+                hints.push(tap("e", "replace", char('e')));
+            }
+            hints.extend([
+                tap("a", "add secret", char('a')),
+                tap("s", "hosts", char('s')),
+                tap("d", "delete", char('d')),
+            ]);
+        }
+        hints.extend([
+            tap("r", "reload", char('r')),
+            tap("esc", "back", KeyCode::Esc),
+        ]);
+        return hints;
+    }
     match app.mode() {
         // The fleet and the accounts are views, whose keys the bar shows.
         None if app.machine_panel.as_ref().is_some_and(|panel| {
-            panel.add.is_none() && panel.account.is_none() && panel.backup.is_none()
+            panel.add.is_none()
+                && panel.account.is_none()
+                && panel.backup.is_none()
+                && panel.secrets.is_none()
         }) =>
         {
             match app
@@ -120,8 +149,13 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("a", "add machine", char('a')),
                     tap("n", "add account", char('n')),
                     tap("e", "rename", char('e')),
+                    // A vault backs nothing up; its secrets are managed there.
+                    if app.on_vault() {
+                        tap("s", "secrets", char('s'))
+                    } else {
+                        tap("b", "backup", char('b'))
+                    },
                     tap("d", "forget", char('d')),
-                    tap("b", "backup", char('b')),
                     tap("r", "reconnect", char('r')),
                     tap("esc", "back", KeyCode::Esc),
                 ],
