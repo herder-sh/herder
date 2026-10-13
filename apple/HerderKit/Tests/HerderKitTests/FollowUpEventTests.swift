@@ -35,11 +35,4 @@ struct FollowUpEventTests {
             #expect(followUp(.unknown, pr: pr).request == "herder sent the agent a prompt")
         }
     }
-
-    @Test func aFollowUpSharesItsBoardColumnsSymbol() {
-        #expect(followUp(.ciFailed).symbol == WorkState.ciFailed.symbol)
-        #expect(followUp(.ciPassed).symbol == WorkState.readyToMerge.symbol)
-        #expect(followUp(.conflicting).symbol == WorkState.conflicting.symbol)
-        #expect(followUp(.changesRequested).symbol == WorkState.changesRequested.symbol)
-    }
 }

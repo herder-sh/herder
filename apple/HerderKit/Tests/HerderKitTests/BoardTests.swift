@@ -12,53 +12,7 @@ private func pr(
 }
 
 struct BoardTests {
-    @Test func whatTheSessionDoesComesBeforeItsPRs() {
-        let failing = [pr(1, ci: .failing)]
-        #expect(WorkState(state: .needsYou, prs: failing) == .needsYou)
-        #expect(WorkState(state: .error, prs: []) == .needsYou)
-        #expect(WorkState(state: .running, prs: failing) == .working)
-        #expect(WorkState(state: .waiting, prs: []) == .working)
-    }
-
-    @Test func aStoppedSessionStandsWhereItsOpenPRDoes() {
-        #expect(WorkState(state: .idle, prs: [pr(1, ci: .failing)]) == .ciFailed)
-        #expect(WorkState(state: .idle, prs: [pr(1, review: .changesRequested)]) == .changesRequested)
-        #expect(WorkState(state: .idle, prs: [pr(1, mergeable: .conflicting)]) == .conflicting)
-        #expect(WorkState(state: .idle, prs: [pr(1, ci: .pending)]) == .waitingOnCI)
-        // GitHub has not worked out whether it merges yet.
-        #expect(WorkState(state: .idle, prs: [pr(1, mergeable: .unknown)]) == .waitingOnCI)
-        #expect(WorkState(state: .idle, prs: [pr(1)]) == .readyToMerge)
-        // A repository without checks merges on review and mergeability alone.
-        #expect(WorkState(state: .idle, prs: [pr(1, ci: .none)]) == .readyToMerge)
-        // Done is idle, unseen.
-        #expect(WorkState(state: .done, prs: [pr(1)]) == .readyToMerge)
-    }
-
-    @Test func aDraftIsNotReadyToMerge() {
-        #expect(WorkState(state: .idle, prs: [pr(1, .draft)]) == .idle)
-        #expect(WorkState(state: .idle, prs: [pr(1, .draft, ci: .failing)]) == .ciFailed)
-    }
-
-    @Test func aFailingCheckOutranksTheRestOfAPR() {
-        #expect(WorkState(pr: pr(1, ci: .failing, review: .changesRequested, mergeable: .conflicting)) == .ciFailed)
-        #expect(WorkState(pr: pr(2, review: .changesRequested, mergeable: .conflicting)) == .changesRequested)
-    }
-
-    @Test func theMostUrgentOpenPRWinsAndFinishedOnesOnlyCountWithoutOne() {
-        #expect(WorkState(state: .idle, prs: [pr(1), pr(2, mergeable: .conflicting), pr(3, .merged)]) == .conflicting)
-        #expect(WorkState(state: .idle, prs: [pr(1, .merged), pr(2, .closed)]) == .merged)
-        #expect(WorkState(state: .idle, prs: [pr(1, .closed)]) == .idle)
-        #expect(WorkState(state: .idle, prs: []) == .idle)
-    }
-
-    @Test func attentionComesFirstAndMergedLast() {
-        #expect(WorkState.allCases == [
-            .needsYou, .ciFailed, .changesRequested, .conflicting, .readyToMerge, .idle, .working, .waitingOnCI, .merged,
-        ])
-        #expect(WorkState.allCases.sorted() == WorkState.allCases)
-    }
-
-    @Test func theBoardGroupsLiveSessionsByWorkStateNewestFirst() {
+    @Test func theBoardListsLiveTreesInOneListNewestFirst() {
         var ready = Script("01A")
         var failing = Script("01B")
         var running = Script("01C")
@@ -76,13 +30,12 @@ struct BoardTests {
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D", "01E"])],
                           sessions: sessions)
         let board = lists.board
-        #expect(board.map(\.state) == [.ciFailed, .readyToMerge, .working])
-        #expect(board.map { $0.trees.map(\.lead.title) } == [["Failing"], ["Ready"], ["Running"]])
-        #expect(board[1].trees[0].children.map(\.title) == ["Ready too"])
+        #expect(board.map(\.lead.title) == ["Running", "Failing", "Ready"])
+        #expect(board[2].children.map(\.title) == ["Ready too"])
     }
 
     /// The Board of `sessions`, all in one project on one machine.
-    private func board(_ sessions: [SessionModel]) -> [BoardColumn] {
+    private func board(_ sessions: [SessionModel]) -> [BoardTree] {
         var host = machine("host-a", name: "a", sessions: sessions.map(\.key.sessionId))
         for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
         return Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) })).board
@@ -95,40 +48,33 @@ struct BoardTests {
             parent.model([created(task: "Lead"), .prLinked(pr: pr(1))]),
             child.model([created(task: "Child", parent: "01A"), .prLinked(pr: pr(2))]),
         ])
-        #expect(columns.map(\.state) == [.readyToMerge])
-        #expect(columns[0].trees.map(\.lead.title) == ["Lead"])
-        #expect(columns[0].trees[0].children.map(\.title) == ["Child"])
+        #expect(columns.map(\.lead.title) == ["Lead"])
+        #expect(columns[0].children.map(\.title) == ["Child"])
     }
 
-    @Test func aTreeStandsWhereItsMostUrgentLiveSessionDoes() {
+    @Test func aTreesAgentsRollUpToTheirMostPressingState() {
         var parent = Script("01A")
         var asking = Script("01B")
-        var failing = Script("01C")
+        var running = Script("01C")
         var archived = Script("01D")
-        let columns = board([
-            parent.model([created(task: "Lead"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+        let trees = board([
+            parent.model([created(task: "Lead"), .prLinked(pr: pr(1, ci: .failing))]),
             asking.model([
                 created(task: "Asking", parent: "01A"),
                 .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "s", routedTo: .user, reason: nil),
             ]),
-            failing.model([created(task: "Failing", parent: "01A"), .prLinked(pr: pr(1, ci: .failing))]),
-            // An archived child's work no longer counts.
-            archived.model([
-                created(task: "Archived", parent: "01A"), .prLinked(pr: pr(2, ci: .failing)),
-                .sessionStatusChanged(status: .archived, retryAt: nil),
-            ]),
+            running.model([created(task: "Running", parent: "01A"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+            // An archived child leaves the board.
+            archived.model([created(task: "Archived", parent: "01A"), .sessionStatusChanged(status: .archived, retryAt: nil)]),
         ])
-        // A child that needs you does not hide in its parent's Working column.
-        #expect(columns.map(\.state) == [.needsYou])
-        #expect(columns[0].trees.count == 1)
+        #expect(trees.count == 1)
+        #expect(trees[0].agentCount == 2)
+        #expect(trees[0].agentsState == .needsYou)
 
-        var lead = Script("01E")
-        var child = Script("01F")
-        let failingChild = board([
-            lead.model([created(task: "Lead"), .sessionStatusChanged(status: .running, retryAt: nil)]),
-            child.model([created(task: "Child", parent: "01E"), .prLinked(pr: pr(3, ci: .failing))]),
-        ])
-        #expect(failingChild.map(\.state) == [.ciFailed])
+        var lone = Script("01E")
+        let alone = board([lone.model([created(task: "Alone")])])
+        #expect(alone[0].agentCount == 0)
+        #expect(alone[0].agentsState == nil)
     }
 
     @Test func archivedChildrenLeaveTheBoardAndAnArchivedParentStillLeadsItsLiveChild() {
@@ -142,8 +88,7 @@ struct BoardTests {
             scripts[4].model([created(task: "Archived lead"), archive]),
             scripts[5].model([created(task: "Its live child", parent: "01E")]),
         ])
-        #expect(columns.map(\.state) == [.idle])
-        let trees = columns[0].trees
+        let trees = columns
         #expect(trees.map(\.lead.title) == ["Archived lead", "Lead"])
         #expect(trees[0].lead.state == .archived)
         #expect(trees[0].listed.map(\.title) == ["Its live child"])
@@ -157,13 +102,13 @@ struct BoardTests {
         var child = Script("01B")
         let tree = board([
             parent.model([created(task: "Lead")]), child.model([created(task: "Unlock deal pages", parent: "01A")]),
-        ])[0].trees[0]
+        ])[0]
         #expect(tree.matches("deal pages"))
         #expect(tree.matches("lead"))
         #expect(!tree.matches("nothing"))
     }
 
-    @Test func aSearchKeepsTheTreesItFindsAndDropsTheColumnsItEmpties() {
+    @Test func aSearchKeepsTheTreesItFinds() {
         var deal = Script("01A")
         var child = Script("01B")
         var running = Script("01C")
@@ -173,12 +118,10 @@ struct BoardTests {
             running.key: running.model([created(task: "Run the tests"), .sessionStatusChanged(status: .running, retryAt: nil)]),
         ]
         let lists = Lists(machines: [machine("host-a", name: "a", sessions: ["01A", "01B", "01C"])], sessions: sessions)
-        #expect(lists.board(matching: "").map(\.state) == [.readyToMerge, .working])
-        // A child's branch finds its whole tree; the column it leaves empty goes.
-        let found = lists.board(matching: "CHECKOUT")
-        #expect(found.map(\.state) == [.readyToMerge])
-        #expect(found.map { $0.trees.map(\.lead.title) } == [["Fix the deal pages"]])
-        #expect(lists.board(matching: "tests").map { $0.trees.map(\.lead.title) } == [["Run the tests"]])
+        #expect(lists.board(matching: "").map(\.lead.title) == ["Run the tests", "Fix the deal pages"])
+        // A child's branch finds its whole tree.
+        #expect(lists.board(matching: "CHECKOUT").map(\.lead.title) == ["Fix the deal pages"])
+        #expect(lists.board(matching: "tests").map(\.lead.title) == ["Run the tests"])
         #expect(lists.board(matching: "nothing").isEmpty)
     }
 }
