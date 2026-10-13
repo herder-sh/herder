@@ -1597,6 +1597,29 @@
           ]
         },
         {
+          "description": "On a vault, let every device that replicates as `host_id` read the vault as a client\ntoo, or make them host-only again; owners only. A host that reads the vault can take\nhandoffs: fork another host's session from it. The devices stay paired, so nothing\npairs again; taking read away closes their client connections, not their\nreplication. Answered with `applied`; `vault_status` follows with the host's `read`.\nRefused with `not_found` when no paired device replicates as it.",
+          "type": "object",
+          "properties": {
+            "host_id": {
+              "description": "The host.",
+              "$ref": "#/$defs/HostId"
+            },
+            "read": {
+              "description": "Whether its devices may read the vault.",
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_vault_host_access"
+            }
+          },
+          "required": [
+            "type",
+            "host_id",
+            "read"
+          ]
+        },
+        {
           "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. The skills of a library that was the machine's own and\nthat the repository lacks are added to it, committed and pushed. Answered with\n`applied`; `skills_status` follows.",
           "type": "object",
           "properties": {

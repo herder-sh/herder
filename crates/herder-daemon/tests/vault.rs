@@ -919,7 +919,9 @@ async fn a_host_device_replicates_and_resumes_but_reads_nothing() {
     };
     assert_eq!(error.code, ErrorCode::Forbidden);
     assert!(
-        error.message.contains("paired as a host"),
+        error
+            .message
+            .contains("only backs its sessions up to the vault"),
         "{}",
         error.message
     );

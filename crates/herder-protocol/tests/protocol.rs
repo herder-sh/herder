@@ -261,6 +261,10 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::RevokeVaultHost {
             host_id: HostId::new("01J9HOST"),
         }),
+        command(CommandBody::SetVaultHostAccess {
+            host_id: HostId::new("01J9HOST"),
+            read: true,
+        }),
         command(CommandBody::ArchiveSession {
             session_id: session_id(),
         }),
@@ -1286,6 +1290,7 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                     events: 100,
                     last_event_at: Some(at()),
                     lag_ms: Some(42),
+                    read: true,
                 },
                 HostReplication {
                     host_id: HostId::new("01J9HOST2"),
@@ -1293,6 +1298,7 @@ fn fleet_fixtures() -> Vec<ServerMessage> {
                     events: 20,
                     last_event_at: Some(at()),
                     lag_ms: None,
+                    read: false,
                 },
             ],
         }),
@@ -2088,6 +2094,7 @@ fn fork_and_vault_status_wire_shape() {
             events: 2,
             last_event_at: None,
             lag_ms: None,
+            read: false,
         }]
     );
 }

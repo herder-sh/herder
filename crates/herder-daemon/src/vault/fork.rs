@@ -25,11 +25,15 @@ impl FromVault {
         let read = async |journal| {
             client::read(&self.vault, &self.device, journal)
                 .await
-                .map_err(|err| {
-                    error(
+                .map_err(|err| match err.downcast_ref::<client::Refused>() {
+                    // Such as a host-only device's: it says what to do, so it is passed on as is.
+                    Some(client::Refused(refusal)) if refusal.code == ErrorCode::Forbidden => {
+                        refusal.clone()
+                    }
+                    _ => error(
                         ErrorCode::Internal,
                         format!("cannot read the vault: {err:#}"),
-                    )
+                    ),
                 })
         };
         // The list first: the vault refuses the journal of a session it does not hold.
