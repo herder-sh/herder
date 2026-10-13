@@ -567,6 +567,20 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         vault.host_config("host-c"),
     )
     .await;
+    // Once its replication paired, so the read is refused as the host's, not as its code's.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while !vault
+        .auth
+        .devices()
+        .iter()
+        .any(|(_, user)| user.name == "host-c")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "host C never paired with the vault"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let refused = c
         .handle(CommandBody::ForkSession {
             session_id: session_id.clone(),
