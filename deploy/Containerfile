@@ -4,7 +4,7 @@
 #
 # Run from the repository root; the build context is the whole workspace.
 
-FROM docker.io/library/rust:1.97-alpine AS build
+FROM docker.io/library/rust:1.99-alpine AS build
 # ring compiles C; on Alpine the toolchain links against musl, so the binary is static.
 RUN apk add --no-cache musl-dev
 WORKDIR /src
