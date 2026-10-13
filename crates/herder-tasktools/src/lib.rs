@@ -20,8 +20,9 @@ use serde_json::{Map, Value};
 pub use tools::{
     AnswerArgs, AnswerInput, AnswerOutput, ChildStatus, CommandInput, EscalateArgs, EscalateInput,
     EscalateOutput, OverviewInput, OverviewOutput, PublishInput, PublishOutput, Request,
-    RequestRef, SendInput, SendOutput, SendSessionInput, SendSessionOutput, SpawnInput,
-    SpawnOutput, StatusInput, StatusOutput, WaitForInput, WaitForOutput,
+    RequestRef, SecretEntry, SecretsInput, SecretsOutput, SendInput, SendOutput, SendSessionInput,
+    SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput, WaitForInput,
+    WaitForOutput,
 };
 
 /// One of the task tools.
@@ -47,11 +48,13 @@ pub enum Tool {
     Overview,
     /// Run a herder command as the session's user.
     Command,
+    /// The secrets the session may use, without values.
+    Secrets,
 }
 
 impl Tool {
     /// Every tool, in `tools/list` order.
-    pub const ALL: [Tool; 10] = [
+    pub const ALL: [Tool; 11] = [
         Tool::Spawn,
         Tool::Send,
         Tool::SendSession,
@@ -62,6 +65,7 @@ impl Tool {
         Tool::Publish,
         Tool::Overview,
         Tool::Command,
+        Tool::Secrets,
     ];
 
     /// Name the agent calls the tool by.
@@ -77,6 +81,7 @@ impl Tool {
             Tool::Publish => "publish",
             Tool::Overview => "overview",
             Tool::Command => "command",
+            Tool::Secrets => "secrets",
         }
     }
 
@@ -193,6 +198,18 @@ impl Tool {
                  asked for: these commands change the user's real sessions and settings. Call \
                  overview first for the ids. Returns the command's result."
             }
+            Tool::Secrets => {
+                "List the secrets you may use on this host: API keys, tokens and passwords \
+                 that herder keeps for you, each with its name, set and what it is for. Never \
+                 returns a value, and you never need one: run the command that needs it \
+                 through `herder secret run NAME [set/NAME ...] -- command args...` (`run` \
+                 holds its full path), which starts the command with each secret in its \
+                 environment as the variable `NAME`. Refer to it there as `$NAME`, e.g. \
+                 `herder secret run STRIPE_KEY -- sh -c 'curl -u \"$STRIPE_KEY:\" ...'`. Name a \
+                 secret `set/NAME` only when `secret` says so. Never print, log, commit or \
+                 publish a value. Fails with `unavailable` when this host has no vault or \
+                 cannot reach it now."
+            }
         }
     }
 
@@ -209,6 +226,7 @@ impl Tool {
             Tool::Publish => tool_schema::<PublishInput>(),
             Tool::Overview => tool_schema::<OverviewInput>(),
             Tool::Command => tool_schema::<CommandInput>(),
+            Tool::Secrets => tool_schema::<SecretsInput>(),
         }
     }
 
@@ -224,6 +242,7 @@ impl Tool {
             Tool::Escalate => tool_schema::<EscalateOutput>(),
             Tool::Publish => tool_schema::<PublishOutput>(),
             Tool::Overview => tool_schema::<OverviewOutput>(),
+            Tool::Secrets => tool_schema::<SecretsOutput>(),
             Tool::Command => json_schema!({
                 "type": "object",
                 "properties": {
@@ -346,6 +365,8 @@ pub enum ToolCall {
     Overview(OverviewInput),
     /// `command`.
     Command(CommandInput),
+    /// `secrets`.
+    Secrets(SecretsInput),
 }
 
 impl ToolCall {
@@ -368,6 +389,7 @@ impl ToolCall {
             Tool::Publish => serde_json::from_value(arguments).map(ToolCall::Publish),
             Tool::Overview => serde_json::from_value(arguments).map(ToolCall::Overview),
             Tool::Command => serde_json::from_value(arguments).map(ToolCall::Command),
+            Tool::Secrets => serde_json::from_value(arguments).map(ToolCall::Secrets),
         };
         call.map_err(|error| {
             let mut message = error.to_string();
@@ -394,6 +416,7 @@ impl ToolCall {
             ToolCall::Publish(_) => Tool::Publish,
             ToolCall::Overview(_) => Tool::Overview,
             ToolCall::Command(_) => Tool::Command,
+            ToolCall::Secrets(_) => Tool::Secrets,
         }
     }
 }
@@ -421,6 +444,8 @@ pub enum ErrorCode {
     HostBusy,
     /// `publish` could not upload the artifact for its public link.
     UploadFailed,
+    /// `secrets` found this host without a vault, or unable to reach it now.
+    Unavailable,
     /// The daemon failed.
     Internal,
 }

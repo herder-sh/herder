@@ -26,14 +26,20 @@
 //! The vault keeps a host's images only up to the cap its hello gives, and drops archived
 //! sessions after its retention period; a host and its sessions go only when an owner forgets
 //! it ([`retention`]).
+//!
+//! The vault keeps secrets too, encrypted under its master key, in sets its owners grant to
+//! hosts ([`SecretsKey`]). A host fetches their values over its replication connection, for its
+//! sessions, and keeps them in memory for a few minutes ([`HostSecrets`]).
 
 mod client;
 mod conn;
 mod fleet;
 pub mod fork;
+mod host_secrets;
 mod link;
 mod replicator;
 mod retention;
+mod secrets;
 mod store;
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -45,9 +51,11 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub use host_secrets::{CACHE_TTL as SECRETS_CACHE_TTL, HostSecrets};
 pub use link::{Link, Setup as LinkSetup};
 pub use replicator::{Replicator, WakeOnEvent};
 pub use retention::{Admin, Forgot, PRUNE_EVERY};
+pub use secrets::{KEY_ENV as SECRETS_KEY_ENV, SecretsKey};
 pub use store::{HostRecord, Kept, Outcome, VaultStore};
 
 use crate::auth::{self, Auth};
@@ -85,6 +93,8 @@ struct Shared {
     retention: Retention,
     /// Hosts whose copy of a session another host just took over; their connections drop.
     superseded: tokio::sync::broadcast::Sender<HostId>,
+    /// Encrypts secrets' values; without it the vault keeps no secrets.
+    secrets_key: Option<Arc<SecretsKey>>,
 }
 
 impl Shared {
@@ -102,7 +112,8 @@ impl Shared {
 impl Server {
     /// A server keeping what hosts send in `store` for as long as `retention` says, and
     /// showing it to clients as the vault on `host`; `auth` decides which devices may
-    /// connect, and a host silent for `liveness` is disconnected.
+    /// connect, and a host silent for `liveness` is disconnected. Secrets are kept under
+    /// `secrets_key`, and refused without one.
     pub fn new(
         tls: Tls,
         auth: Arc<Auth>,
@@ -110,10 +121,17 @@ impl Server {
         host: Host,
         liveness: Duration,
         retention: Retention,
+        secrets_key: Option<SecretsKey>,
     ) -> Self {
         let store = Arc::new(Mutex::new(store));
         let hub = Arc::new(Hub::default());
-        let fleet = Fleet::new(Arc::clone(&store), Arc::clone(&hub), Arc::clone(&auth));
+        let secrets_key = secrets_key.map(Arc::new);
+        let fleet = Fleet::new(
+            Arc::clone(&store),
+            Arc::clone(&hub),
+            Arc::clone(&auth),
+            secrets_key.clone(),
+        );
         // No session has a worktree here, so no terminal ever opens.
         let terminals = Terminals::new(Arc::clone(&hub), terminal::login_shell());
         let clients = ws::Server::new(
@@ -136,6 +154,7 @@ impl Server {
                 liveness,
                 retention,
                 superseded: tokio::sync::broadcast::channel(16).0,
+                secrets_key,
             }),
         }
     }
@@ -215,6 +234,10 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
     let store_path = data_dir.root().join("db/vault.db");
     let store = VaultStore::open(&store_path)
         .with_context(|| format!("opening the vault database {}", store_path.display()))?;
+    let secrets_key = SecretsKey::from_env()?;
+    if secrets_key.is_none() {
+        info!("no secrets key in {SECRETS_KEY_ENV}: this vault keeps no secrets");
+    }
     let demoted = auth.migrate_device_roles(&store.host_devices()?)?;
     if !demoted.is_empty() {
         info!(
@@ -232,6 +255,7 @@ pub async fn serve(config: &Config, shutdown: CancellationToken) -> Result<()> {
         host,
         LIVENESS_TIMEOUT,
         config.retention,
+        secrets_key,
     );
     server.manage_settings(Arc::new(crate::settings::Settings::new(
         config,

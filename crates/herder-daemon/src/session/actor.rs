@@ -1972,17 +1972,24 @@ impl Actor {
     fn start_request(
         &self,
         account: &AccountConfig,
-        env: BTreeMap<String, String>,
+        mut env: BTreeMap<String, String>,
         seed: Vec<Item>,
         resume: Option<String>,
     ) -> Result<StartRequest, TurnError> {
         let session = &self.session;
         let mcp = match self.inner.mcp.get() {
-            Some(mcp) => Some(mcp.grant(&session.session_id).map_err(|err| {
-                fatal(format!(
-                    "granting the session its herder MCP token: {err:#}"
-                ))
-            })?),
+            Some(mcp) => {
+                // `herder secret run` finds the socket and the session's token there.
+                env.insert(
+                    crate::mcp::DATA_DIR_ENV.to_owned(),
+                    mcp.data_dir().to_string_lossy().into_owned(),
+                );
+                Some(mcp.grant(&session.session_id).map_err(|err| {
+                    fatal(format!(
+                        "granting the session its herder MCP token: {err:#}"
+                    ))
+                })?)
+            }
             None => None,
         };
         let launcher = match self.inner.scopes.get() {

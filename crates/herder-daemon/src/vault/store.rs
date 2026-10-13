@@ -35,6 +35,10 @@ use rusqlite::types::Type;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
+mod secrets;
+
+pub use secrets::{Grant, Sealed, SetDeleted};
+
 /// Migration `i` takes the schema from version `i` to `i + 1`. Append only.
 const MIGRATIONS: &[&str] = &[
     "

@@ -2,6 +2,8 @@
 #
 #   kubectl apply -n herder -f deploy/vault.yaml
 #
+# Secrets need a master key in the Secret herder-vault-secrets; see README.md.
+#
 # Replace the image with the one you built from deploy/Containerfile.
 apiVersion: v1
 kind: ConfigMap
@@ -71,6 +73,14 @@ spec:
             # `herder pair` run in the pod finds the data dir through the same config.
             - name: HERDER_CONFIG
               value: /etc/herder/daemon.toml
+            # Encrypts secrets' values at rest; without it the vault keeps no secrets. See
+            # README.md for how to create it.
+            - name: HERDER_VAULT_SECRETS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: herder-vault-secrets
+                  key: key
+                  optional: true
           ports:
             - name: replication
               containerPort: 7447

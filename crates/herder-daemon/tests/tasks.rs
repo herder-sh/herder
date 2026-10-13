@@ -2256,3 +2256,21 @@ async fn agents_drive_the_daemon_as_the_user_who_started_their_task() {
     );
     assert!(matches!(&ran[2].1, CommandBody::Interrupt { session_id } if session_id == &child));
 }
+
+#[tokio::test]
+async fn secrets_are_unavailable_on_a_host_without_a_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = Daemon::open(dir.path()).await;
+    let primary = daemon.primary(PermissionMode::Ask).await;
+    let mut tools = daemon.connect(&primary);
+    assert_eq!(tools.fails("secrets", json!({})).await, "unavailable");
+    daemon
+        .manager
+        .use_secrets(Arc::new(herder_daemon::vault::HostSecrets::default()))
+        .unwrap();
+    assert_eq!(tools.fails("secrets", json!({})).await, "unavailable");
+    assert_eq!(
+        tools.fails("secrets", json!({ "set": "prod" })).await,
+        "invalid_arguments"
+    );
+}

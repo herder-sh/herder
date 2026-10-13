@@ -111,3 +111,25 @@ kubectl exec -n herder herder-vault-0 -- /herder vault forget-host devbox
 A host is forgotten only while it is offline; stop it backing up first. The fleet view shows
 each host's sessions and image bytes against its cap, and warns once the vault's disk is
 more than 80% full.
+
+## Secrets
+
+The vault keeps secrets that agents use to call services without seeing them: API keys and
+tokens, in named sets an owner grants to hosts. Every session on a granted host may run a
+command with them through `herder secret run NAME -- command`, which hands the values to the
+command in its environment; the agent sees names only.
+
+Values are encrypted at rest under a master key the vault reads from
+`HERDER_VAULT_SECRETS_KEY` at start: 32 random bytes, base64. Without it the vault keeps
+working, and refuses every secret command. Generate one and keep it in a Kubernetes Secret,
+which `vault.yaml` reads:
+
+```sh
+kubectl create secret generic -n herder herder-vault-secrets \
+  --from-literal=key="$(openssl rand -base64 32)"
+kubectl rollout restart -n herder statefulset/herder-vault
+```
+
+Back the key up with the volume: the values stored under it cannot be read without it, and a
+vault started with another key hands none of them out. It is not a `daemon.toml` key, so no
+client can read or change it.
