@@ -1,0 +1,236 @@
+//! Secrets: values agents use to call services without ever seeing them.
+//!
+//! Secrets live only on a vault, encrypted at rest under a master key the vault reads at start;
+//! a daemon not linked to a vault has none. They are grouped into named sets, such as
+//! `personal` or `prod`; within its set, each secret has a name, as an environment variable
+//! has, and a one-line description. The vault's owners manage them from clients (`put_secret`,
+//! `list_secrets`, ...) and grant sets to hosts, the devices that replicate to the vault.
+//!
+//! Values are write-only: `put_secret` carries one to the vault, and no result, event or
+//! client message ever carries one back. The only way out is a host's fetch over its
+//! replication connection ([`HostMessage::FetchSecrets`](crate::HostMessage::FetchSecrets)),
+//! for secrets in sets granted to that host, on behalf of one of its sessions. The vault
+//! records each fetch ([`SecretAccess`]), never the value. Hosts keep fetched values in memory
+//! only, for a short while, and hand them to a session's command as environment variables.
+//!
+//! On a host, a secret is named `NAME` when exactly one set granted to the host has it, and
+//! `set/NAME` otherwise ([`SecretRef`]); the environment variable is `NAME` either way.
+
+use std::fmt;
+use std::str::FromStr;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::{HostId, SessionId, Timestamp};
+
+/// Most bytes a secret name or set name may have.
+pub const MAX_SECRET_NAME_BYTES: usize = 64;
+
+/// Most characters a secret's description may have.
+pub const MAX_SECRET_DESCRIPTION_CHARS: usize = 200;
+
+/// Most bytes a secret's value may have.
+pub const MAX_SECRET_VALUE_BYTES: usize = 64 * 1024;
+
+/// Most entries one `secret_audit` answer holds.
+pub const MAX_SECRET_AUDIT_ENTRIES: usize = 200;
+
+/// Whether `name` may name a secret, as an environment variable: 1 to
+/// [`MAX_SECRET_NAME_BYTES`] uppercase ASCII letters, digits and underscores, not starting with
+/// a digit (`[A-Z_][A-Z0-9_]*`).
+pub fn is_valid_secret_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_SECRET_NAME_BYTES
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// Whether `name` may name a set of secrets: 1 to [`MAX_SECRET_NAME_BYTES`] lowercase ASCII
+/// letters, digits and hyphens, neither starting nor ending with a hyphen nor holding two in a
+/// row, as a skill name.
+pub fn is_valid_secret_set_name(name: &str) -> bool {
+    name.len() <= MAX_SECRET_NAME_BYTES && crate::is_valid_skill_name(name)
+}
+
+/// A secret's value. Its `Debug` never shows it, so logging a message that carries one leaks
+/// nothing; read it with [`Self::expose`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct SecretValue(String);
+
+impl SecretValue {
+    /// A value; refused unless it is 1 to [`MAX_SECRET_VALUE_BYTES`] bytes without a NUL,
+    /// as an environment variable can hold.
+    pub fn new(value: impl Into<String>) -> Option<Self> {
+        let value = value.into();
+        let valid =
+            !value.is_empty() && value.len() <= MAX_SECRET_VALUE_BYTES && !value.contains('\0');
+        valid.then_some(Self(value))
+    }
+
+    /// The value itself.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretValue(‹redacted›)")
+    }
+}
+
+/// How a host's session names a secret: `NAME`, or `set/NAME` when more than one set granted
+/// to the host has `NAME`. On the wire, that string.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SecretRef {
+    /// The set, when named.
+    pub set: Option<String>,
+    /// The secret's name, and the environment variable it is given as.
+    pub name: String,
+}
+
+impl FromStr for SecretRef {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let (set, name) = match text.split_once('/') {
+            Some((set, name)) => (Some(set), name),
+            None => (None, text),
+        };
+        if set.is_some_and(|set| !is_valid_secret_set_name(set)) || !is_valid_secret_name(name) {
+            return Err(format!(
+                "`{text}` is not a secret name: NAME or set/NAME, NAME as an environment \
+                 variable, set in lowercase letters, digits and hyphens"
+            ));
+        }
+        Ok(Self {
+            set: set.map(str::to_owned),
+            name: name.to_owned(),
+        })
+    }
+}
+
+impl fmt::Display for SecretRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.set {
+            Some(set) => write!(f, "{set}/{}", self.name),
+            None => f.write_str(&self.name),
+        }
+    }
+}
+
+impl TryFrom<String> for SecretRef {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
+}
+
+impl From<SecretRef> for String {
+    fn from(secret: SecretRef) -> Self {
+        secret.to_string()
+    }
+}
+
+impl JsonSchema for SecretRef {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SecretRef".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when \
+                            more than one set granted to the host has `NAME`.",
+            "type": "string",
+            "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+        })
+    }
+}
+
+/// A secret, without its value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretInfo {
+    /// Its set.
+    pub set: String,
+    /// Its name, as [`is_valid_secret_name`] accepts it.
+    pub name: String,
+    /// What it is for, on one line.
+    pub description: String,
+    /// When its value was last set.
+    pub updated_at: Timestamp,
+}
+
+/// A set of secrets on a vault, and the hosts it is granted to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretSet {
+    /// The set's name, as [`is_valid_secret_set_name`] accepts it.
+    pub name: String,
+    /// The hosts it is granted to, ordered by host id; every session on them may use its
+    /// secrets.
+    pub hosts: Vec<HostId>,
+}
+
+/// One fetch of a secret's value by a host, as the vault recorded it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretAccess {
+    /// Position in the vault's audit log, increasing; for `list_secret_audit`'s `before`.
+    pub id: u64,
+    /// When the vault handed the value out.
+    pub at: Timestamp,
+    /// The host that fetched it.
+    pub host_id: HostId,
+    /// The session of that host it was fetched for.
+    pub session_id: SessionId,
+    /// The secret's set.
+    pub set: String,
+    /// The secret's name.
+    pub name: String,
+}
+
+/// A secret's value, as the vault hands it to a host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FetchedSecret {
+    /// The secret, as the fetch named it.
+    pub secret: SecretRef,
+    /// The set it resolved to.
+    pub set: String,
+    /// The value.
+    pub value: SecretValue,
+}
+
+/// Why secrets could not be handed out; nothing was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretError {
+    /// What kind of failure.
+    pub code: SecretErrorCode,
+    /// Human-readable detail.
+    pub message: String,
+    /// The secret it is about, as named; absent when it is about none in particular.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<SecretRef>,
+    /// For `ambiguous`, every `set/NAME` the secret could be, ordered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<SecretRef>,
+}
+
+/// Kind of failure handing secrets out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretErrorCode {
+    /// A bare `NAME` is in more than one set granted to the host; name it as `set/NAME`.
+    Ambiguous,
+    /// No set granted to the host has the secret, or the named set has no such secret.
+    Unknown,
+    /// The named set exists but is not granted to the host.
+    NotGranted,
+    /// The host is not linked to a vault, so it has no secrets.
+    NoVault,
+    /// The host is linked to a vault but cannot reach it now.
+    VaultUnreachable,
+}

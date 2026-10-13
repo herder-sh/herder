@@ -1597,6 +1597,179 @@
           ]
         },
         {
+          "description": "On a vault, create an empty set of secrets; owners only. Answered with `applied`.\nRefused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,\n`conflict` when the set exists, and `unsupported` on a daemon that is not a vault.",
+          "type": "object",
+          "properties": {
+            "set": {
+              "description": "The set's name.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "create_secret_set"
+            }
+          },
+          "required": [
+            "type",
+            "set"
+          ]
+        },
+        {
+          "description": "On a vault, delete an empty set of secrets and its grants; owners only. Answered with\n`applied`. Refused with `not_found` for an unknown set, `conflict` while it holds\nsecrets, and `unsupported` on a daemon that is not a vault.",
+          "type": "object",
+          "properties": {
+            "set": {
+              "description": "The set.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "delete_secret_set"
+            }
+          },
+          "required": [
+            "type",
+            "set"
+          ]
+        },
+        {
+          "description": "On a vault, create a secret in a set, or replace its description and value; owners\nonly. The vault keeps the value encrypted and never sends it to a client. Answered with\n`applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]\nrefuses or a description that is not one line of at most\n[`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and\n`unsupported` on a daemon that is not a vault.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "description": "What it is for, on one line; agents read it to pick a secret.",
+              "type": "string"
+            },
+            "name": {
+              "description": "The secret's name, the environment variable a command gets it as.",
+              "type": "string"
+            },
+            "set": {
+              "description": "The set to keep it in.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "put_secret"
+            },
+            "value": {
+              "description": "The value.",
+              "$ref": "#/$defs/SecretValue"
+            }
+          },
+          "required": [
+            "type",
+            "set",
+            "name",
+            "description",
+            "value"
+          ]
+        },
+        {
+          "description": "On a vault, delete a secret; owners only. Answered with `applied`. Refused with\n`not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a\nvault.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "The secret's name.",
+              "type": "string"
+            },
+            "set": {
+              "description": "The secret's set.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "delete_secret"
+            }
+          },
+          "required": [
+            "type",
+            "set",
+            "name"
+          ]
+        },
+        {
+          "description": "On a vault, let a host fetch the secrets of a set for every session it runs; owners\nonly. Answered with `applied`; granting it again changes nothing. Refused with\n`not_found` for an unknown set or a host that never replicated here, and `unsupported`\non a daemon that is not a vault.",
+          "type": "object",
+          "properties": {
+            "host_id": {
+              "description": "The host.",
+              "$ref": "#/$defs/HostId"
+            },
+            "set": {
+              "description": "The set.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "grant_secret_set"
+            }
+          },
+          "required": [
+            "type",
+            "set",
+            "host_id"
+          ]
+        },
+        {
+          "description": "On a vault, stop a host fetching the secrets of a set; owners only. Values the host\nfetched already stay in its memory until they expire. Answered with `applied`. Refused\nwith `not_found` when the set is not granted to the host, and `unsupported` on a daemon\nthat is not a vault.",
+          "type": "object",
+          "properties": {
+            "host_id": {
+              "description": "The host.",
+              "$ref": "#/$defs/HostId"
+            },
+            "set": {
+              "description": "The set.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "revoke_secret_set"
+            }
+          },
+          "required": [
+            "type",
+            "set",
+            "host_id"
+          ]
+        },
+        {
+          "description": "On a vault, list every set of secrets with its grants, and every secret without its\nvalue; owners only. Answered with `secrets`. It changes nothing, so a resend is answered\nafresh. Refused with `unsupported` on a daemon that is not a vault.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_secrets"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "On a vault, list the latest fetches of secrets by hosts, newest first, at most\n[`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It\nchanges nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon\nthat is not a vault.",
+          "type": "object",
+          "properties": {
+            "before": {
+              "description": "Only fetches older than this one, by its `id`, to page back; the latest when absent.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "list_secret_audit"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
           "description": "Use the git repository at `url` as the skill library: the daemon replaces its checkout\nwith a clone of it; owners only. The skills of a library that was the machine's own and\nthat the repository lacks are added to it, committed and pushed. Answered with\n`applied`; `skills_status` follows.",
           "type": "object",
           "properties": {
@@ -3501,6 +3674,10 @@
           "const": "user"
         }
       ]
+    },
+    "SecretValue": {
+      "description": "A secret's value. Its `Debug` never shows it, so logging a message that carries one leaks\nnothing; read it with [`Self::expose`].",
+      "type": "string"
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",

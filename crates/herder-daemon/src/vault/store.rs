@@ -17,6 +17,10 @@
 //! a dropped session leaves a tombstone at the seq held, so its host, which still has it, is
 //! not asked to send it again. A host and everything it replicated go only when an owner
 //! forgets it ([`VaultStore::forget`]).
+//!
+//! Secrets are kept here too, in named sets: each value encrypted under the vault's master key,
+//! as ciphertext and nonce, never in plaintext. A set granted to a host lets that host fetch
+//! its values; every fetch is recorded in the audit log, without the value.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -92,6 +96,38 @@ CREATE TABLE pruned (
     session_id TEXT    NOT NULL,
     seq        INTEGER NOT NULL,
     PRIMARY KEY (host_id, session_id)
+) STRICT;
+",
+    "
+CREATE TABLE secret_sets (
+    name       TEXT NOT NULL PRIMARY KEY,
+    created_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE secrets (
+    set_name    TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    nonce       BLOB NOT NULL,
+    ciphertext  BLOB NOT NULL,
+    updated_at  TEXT NOT NULL,
+    PRIMARY KEY (set_name, name)
+) STRICT;
+
+CREATE TABLE secret_grants (
+    set_name TEXT NOT NULL,
+    host_id  TEXT NOT NULL,
+    PRIMARY KEY (set_name, host_id)
+) STRICT;
+CREATE INDEX secret_grants_host ON secret_grants (host_id);
+
+CREATE TABLE secret_audit (
+    id         INTEGER PRIMARY KEY,
+    at         TEXT    NOT NULL,
+    host_id    TEXT    NOT NULL,
+    session_id TEXT    NOT NULL,
+    set_name   TEXT    NOT NULL,
+    name       TEXT    NOT NULL
 ) STRICT;
 ",
 ];
@@ -866,6 +902,7 @@ impl VaultStore {
             "recovered",
             "pruned",
             "hosts",
+            "secret_grants",
         ] {
             tx.prepare_cached(&format!("DELETE FROM {table} WHERE host_id = ?1"))?
                 .execute([host.as_str()])?;
@@ -1536,5 +1573,72 @@ mod tests {
         let fleet = store.fleet().unwrap();
         assert_eq!(fleet.len(), 1);
         assert_eq!(fleet[0].host_id, Some(kept));
+    }
+
+    #[test]
+    fn secrets_are_kept_encrypted_and_a_forgotten_host_loses_its_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vault.db");
+        let mut store = VaultStore::open(&path).unwrap();
+        let (granted, other) = (HostId::new("granted"), HostId::new("other"));
+        store
+            .conn
+            .execute_batch(
+                "INSERT INTO secret_sets VALUES ('prod', '2027-01-15T08:00:00Z');
+                 INSERT INTO secrets VALUES ('prod', 'STRIPE_KEY', 'Stripe', x'00', x'01',
+                     '2027-01-15T08:00:00Z');
+                 INSERT INTO secret_grants VALUES ('prod', 'granted'), ('prod', 'other');
+                 INSERT INTO secret_audit (at, host_id, session_id, set_name, name)
+                     VALUES ('2027-01-15T08:00:00Z', 'granted', 's1', 'prod', 'STRIPE_KEY');",
+            )
+            .unwrap();
+        // The columns hold ciphertext and nonce; no column could hold a plaintext value.
+        let columns: Vec<String> = store
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('secrets')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            [
+                "set_name",
+                "name",
+                "description",
+                "nonce",
+                "ciphertext",
+                "updated_at"
+            ]
+        );
+        // A set is granted to a host at most once.
+        assert!(
+            store
+                .conn
+                .execute("INSERT INTO secret_grants VALUES ('prod', 'granted')", [])
+                .is_err()
+        );
+
+        store.forget(&granted).unwrap();
+        let grants: Vec<String> = store
+            .conn
+            .prepare("SELECT host_id FROM secret_grants")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(grants, [other.as_str()]);
+        // The audit outlives the host it records.
+        let audited: u32 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM secret_audit", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(audited, 1);
+
+        // Reopening migrates nothing twice.
+        drop(store);
+        VaultStore::open(&path).unwrap();
     }
 }

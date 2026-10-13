@@ -18,6 +18,7 @@ mod ids;
 mod project;
 pub mod replication;
 mod resources;
+mod secrets;
 mod server;
 mod settings;
 mod skills;
@@ -43,9 +44,14 @@ pub use project::{MAX_PROJECT_ICON_BYTES, PROJECT_ICON_MEDIA_TYPES, Project, Pro
 pub use replication::{
     AttachmentData, Batch, HostHello, HostMessage, JournalRecord, MAX_BATCH_EVENTS,
     REPLICATION_VERSION, RawEventBody, RejectReason, ReplicationError, ReplicationErrorCode,
-    SessionSummary, VaultHello, VaultMessage,
+    SecretFetch, SessionSummary, VaultHello, VaultMessage,
 };
 pub use resources::{Constraint, Container, ContainerState, HostResources, Pressure, SessionUsage};
+pub use secrets::{
+    FetchedSecret, MAX_SECRET_AUDIT_ENTRIES, MAX_SECRET_DESCRIPTION_CHARS, MAX_SECRET_NAME_BYTES,
+    MAX_SECRET_VALUE_BYTES, SecretAccess, SecretError, SecretErrorCode, SecretInfo, SecretRef,
+    SecretSet, SecretValue, is_valid_secret_name, is_valid_secret_set_name,
+};
 pub use server::{
     Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
     HostReplication, HostUsage, LinkedVault, ProviderStatus, QueuedPrompt, Role, ServerHello,

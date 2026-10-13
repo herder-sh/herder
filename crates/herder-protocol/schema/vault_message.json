@@ -71,6 +71,87 @@
         "type",
         "error"
       ]
+    },
+    {
+      "description": "The secrets in the sets granted to this host, answering [`HostMessage::ListSecrets`].",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "The request's id.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "secrets": {
+          "description": "The secrets, without values, ordered by set, then name.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretInfo"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "secret_list"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "secrets"
+      ]
+    },
+    {
+      "description": "Every secret a [`HostMessage::FetchSecrets`] asked for, with its value.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "The request's id.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "secrets": {
+          "description": "One per secret asked for, in the order asked.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FetchedSecret"
+          }
+        },
+        "type": {
+          "type": "string",
+          "const": "secret_values"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "secrets"
+      ]
+    },
+    {
+      "description": "A [`HostMessage::FetchSecrets`] was refused and handed nothing out.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Why.",
+          "$ref": "#/$defs/SecretError"
+        },
+        "request_id": {
+          "description": "The request's id.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "secrets_refused"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "error"
+      ]
     }
   ],
   "$defs": {
@@ -92,6 +173,29 @@
       "required": [
         "session_id",
         "after_seq"
+      ]
+    },
+    "FetchedSecret": {
+      "description": "A secret's value, as the vault hands it to a host.",
+      "type": "object",
+      "properties": {
+        "secret": {
+          "description": "The secret, as the fetch named it.",
+          "$ref": "#/$defs/SecretRef"
+        },
+        "set": {
+          "description": "The set it resolved to.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value.",
+          "$ref": "#/$defs/SecretValue"
+        }
+      },
+      "required": [
+        "secret",
+        "set",
+        "value"
       ]
     },
     "RejectReason": {
@@ -146,6 +250,110 @@
           "const": "internal"
         }
       ]
+    },
+    "SecretError": {
+      "description": "Why secrets could not be handed out; nothing was.",
+      "type": "object",
+      "properties": {
+        "candidates": {
+          "description": "For `ambiguous`, every `set/NAME` the secret could be, ordered.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          }
+        },
+        "code": {
+          "description": "What kind of failure.",
+          "$ref": "#/$defs/SecretErrorCode"
+        },
+        "message": {
+          "description": "Human-readable detail.",
+          "type": "string"
+        },
+        "secret": {
+          "description": "The secret it is about, as named; absent when it is about none in particular.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SecretRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "SecretErrorCode": {
+      "description": "Kind of failure handing secrets out.",
+      "oneOf": [
+        {
+          "description": "A bare `NAME` is in more than one set granted to the host; name it as `set/NAME`.",
+          "type": "string",
+          "const": "ambiguous"
+        },
+        {
+          "description": "No set granted to the host has the secret, or the named set has no such secret.",
+          "type": "string",
+          "const": "unknown"
+        },
+        {
+          "description": "The named set exists but is not granted to the host.",
+          "type": "string",
+          "const": "not_granted"
+        },
+        {
+          "description": "The host is not linked to a vault, so it has no secrets.",
+          "type": "string",
+          "const": "no_vault"
+        },
+        {
+          "description": "The host is linked to a vault but cannot reach it now.",
+          "type": "string",
+          "const": "vault_unreachable"
+        }
+      ]
+    },
+    "SecretInfo": {
+      "description": "A secret, without its value.",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "What it is for, on one line.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name, as [`is_valid_secret_name`] accepts it.",
+          "type": "string"
+        },
+        "set": {
+          "description": "Its set.",
+          "type": "string"
+        },
+        "updated_at": {
+          "description": "When its value was last set.",
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "set",
+        "name",
+        "description",
+        "updated_at"
+      ]
+    },
+    "SecretRef": {
+      "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
+      "type": "string",
+      "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
+    },
+    "SecretValue": {
+      "description": "A secret's value. Its `Debug` never shows it, so logging a message that carries one leaks\nnothing; read it with [`Self::expose`].",
+      "type": "string"
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",

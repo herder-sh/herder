@@ -867,6 +867,19 @@ impl SessionManager {
                     "this daemon is not a vault; pair hosts on the vault",
                 ));
             }
+            CommandBody::CreateSecretSet { .. }
+            | CommandBody::DeleteSecretSet { .. }
+            | CommandBody::PutSecret { .. }
+            | CommandBody::DeleteSecret { .. }
+            | CommandBody::GrantSecretSet { .. }
+            | CommandBody::RevokeSecretSet { .. }
+            | CommandBody::ListSecrets
+            | CommandBody::ListSecretAudit { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "this daemon is not a vault; manage secrets on the vault",
+                ));
+            }
             // Every user sees every session, children included, so owners and members get
             // the same totals.
             CommandBody::GetUsageSummary { period } => {
