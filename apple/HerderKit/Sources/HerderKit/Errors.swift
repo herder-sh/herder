@@ -19,3 +19,11 @@ extension HerderError {
 public func describe(_ error: any Error) -> String {
     (error as? HerderError)?.message ?? error.localizedDescription
 }
+
+/// An error's "context: cause: root cause" chain, one link a line.
+func chainLines(_ message: String) -> String {
+    message.components(separatedBy: ": ")
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+}
