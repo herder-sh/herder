@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 futures-util.workspace = true
 herder-adapters.workspace = true
 herder-client-core.workspace = true

@@ -6,6 +6,7 @@ mod doctor;
 mod fork;
 mod hook;
 mod pair;
+mod secret;
 mod service;
 mod session;
 mod update;
@@ -49,6 +50,11 @@ enum Command {
     Session(session::Args),
     /// Fork a session onto this host: its history goes on in a new session here.
     Fork(fork::Args),
+    /// Use the secrets this host's vault grants it, from a session herder runs.
+    Secret {
+        #[command(subcommand)]
+        command: secret::Command,
+    },
     /// Look after what the vault on this machine holds.
     Vault {
         #[command(subcommand)]
@@ -122,6 +128,7 @@ fn main() -> ExitCode {
         Some(Command::Connect { link }) => connect::run(&link).map(|()| ExitCode::SUCCESS),
         Some(Command::Session(args)) => session::run(args),
         Some(Command::Fork(args)) => fork::run(args).map(|()| ExitCode::SUCCESS),
+        Some(Command::Secret { command }) => secret::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Vault { command }) => vault::run(command).map(|()| ExitCode::SUCCESS),
         Some(Command::Service { action }) => service::run(action),
         Some(Command::Doctor { config }) => Ok(doctor::run(config)),
@@ -340,6 +347,30 @@ mod tests {
         };
         assert_eq!((data_dir, session.as_str()), (PathBuf::from("/d"), "01J"));
         assert!(Cli::try_parse_from(["herder", "mcp", "--data-dir", "/d"]).is_err());
+    }
+
+    #[test]
+    fn parses_secret_run() {
+        let cli = Cli::try_parse_from([
+            "herder",
+            "secret",
+            "run",
+            "TOKEN",
+            "prod/KEY",
+            "--",
+            "sh",
+            "-c",
+            "echo $TOKEN",
+        ]);
+        let Some(Command::Secret { .. }) = cli.unwrap().command else {
+            panic!("expected secret");
+        };
+        for args in [
+            &["herder", "secret", "run", "TOKEN"][..],
+            &["herder", "secret", "run", "--", "env"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

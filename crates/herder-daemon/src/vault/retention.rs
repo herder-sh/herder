@@ -234,6 +234,7 @@ mod tests {
             },
             LIVENESS_TIMEOUT,
             Retention { archive_days: 90 },
+            None,
         );
         server
             .shared

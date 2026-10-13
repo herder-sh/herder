@@ -35,14 +35,15 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use herder_protocol::{
-    CommandResult, ErrorInfo, EventBody, PermissionMode, SessionId, SessionStatus, UserId,
+    CommandResult, ErrorInfo, EventBody, PermissionMode, SecretError, SecretErrorCode, SecretRef,
+    SessionId, SessionStatus, UserId,
 };
 use herder_store::Session;
 use herder_tasktools::{
     AnswerInput, AnswerOutput, CallToolResult, ChildStatus, CommandInput, ErrorCode, EscalateInput,
-    EscalateOutput, OverviewInput, OverviewOutput, Request, RequestRef, SendInput, SendOutput,
-    SendSessionInput, SendSessionOutput, SpawnInput, SpawnOutput, StatusInput, StatusOutput,
-    ToolCall, ToolError, WaitForInput, WaitForOutput,
+    EscalateOutput, OverviewInput, OverviewOutput, Request, RequestRef, SecretEntry, SecretsInput,
+    SecretsOutput, SendInput, SendOutput, SendSessionInput, SendSessionOutput, SpawnInput,
+    SpawnOutput, StatusInput, StatusOutput, ToolCall, ToolError, WaitForInput, WaitForOutput,
 };
 use serde::Serialize;
 use tokio::sync::{oneshot, watch};
@@ -50,7 +51,7 @@ use tokio::time::Instant;
 
 use super::actor::{self, PrimaryAct};
 use super::{CreateRequest, Inner, SessionManager};
-use crate::mcp::{Control, ToolFuture, ToolHandler};
+use crate::mcp::{Control, SecretsFuture, ToolFuture, ToolHandler};
 use crate::resources::admission::RETRY_AFTER_SECS;
 
 /// What every primary session waits for: its children's reports, and which children are
@@ -259,8 +260,27 @@ impl ToolHandler for TaskTools {
                 ToolCall::Publish(input) => success(manager.publish(caller, input).await),
                 ToolCall::Overview(OverviewInput {}) => success(manager.overview(caller).await),
                 ToolCall::Command(input) => success(manager.command(caller, input).await),
+                ToolCall::Secrets(SecretsInput {}) => success(manager.list_secrets().await),
             };
             result.unwrap_or_else(CallToolResult::from)
+        })
+    }
+
+    fn fetch_secrets(&self, caller: SessionId, secrets: Vec<SecretRef>) -> SecretsFuture {
+        let inner = self.inner.upgrade();
+        Box::pin(async move {
+            let secrets_of_host = inner
+                .as_ref()
+                .and_then(|inner| inner.secrets.get().cloned());
+            match secrets_of_host {
+                Some(host) => host.fetch(&caller, &secrets).await,
+                None => Err(SecretError {
+                    code: SecretErrorCode::NoVault,
+                    message: "this host is not linked to a vault, so it has no secrets".into(),
+                    secret: None,
+                    candidates: Vec::new(),
+                }),
+            }
         })
     }
 }
@@ -286,6 +306,19 @@ fn tool_error(error: ErrorInfo) -> ToolError {
         _ => ErrorCode::Internal,
     };
     ToolError::new(code, error.message)
+}
+
+/// `path` as one shell word: as it is when it needs no quoting, otherwise single-quoted.
+fn shell_word(path: &std::path::Path) -> String {
+    let path = path.to_string_lossy();
+    let plain = path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c));
+    if plain {
+        path.into_owned()
+    } else {
+        format!("'{}'", path.replace('\'', r"'\''"))
+    }
 }
 
 /// Permission modes from least to most allowed.
@@ -322,6 +355,43 @@ impl SessionManager {
             .command(user_id, input.command)
             .await
             .map_err(tool_error)
+    }
+
+    /// `secrets`: the secrets this host's vault grants it, never their values.
+    async fn list_secrets(&self) -> Result<SecretsOutput, ToolError> {
+        let unavailable = |message: String| ToolError::new(ErrorCode::Unavailable, message);
+        let secrets = self.inner.secrets.get().ok_or_else(|| {
+            unavailable("this host is not linked to a vault, so it has no secrets".into())
+        })?;
+        let listed = secrets
+            .list()
+            .await
+            .map_err(|error| unavailable(error.message))?;
+        let mut sets_of: HashMap<&str, usize> = HashMap::new();
+        for secret in &listed {
+            *sets_of.entry(secret.name.as_str()).or_default() += 1;
+        }
+        let secrets = listed
+            .iter()
+            .map(|secret| SecretEntry {
+                secret: SecretRef {
+                    set: (sets_of[secret.name.as_str()] > 1).then(|| secret.set.clone()),
+                    name: secret.name.clone(),
+                },
+                name: secret.name.clone(),
+                set: secret.set.clone(),
+                description: secret.description.clone(),
+            })
+            .collect();
+        let herder = self
+            .inner
+            .mcp
+            .get()
+            .map_or_else(|| "herder".to_owned(), |mcp| shell_word(mcp.herder()));
+        Ok(SecretsOutput {
+            secrets,
+            run: format!("{herder} secret run"),
+        })
     }
 
     fn control(&self) -> Result<Arc<dyn Control>, ToolError> {

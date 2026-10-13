@@ -151,6 +151,8 @@ pub async fn serve(
         keep: worktree::checkpoint::KEEP,
         push_timeout: worktree::checkpoint::PUSH_TIMEOUT,
     })?;
+    let secrets = Arc::new(vault::HostSecrets::default());
+    sessions.use_secrets(Arc::clone(&secrets))?;
     let link = Arc::new(vault::Link::start(
         vault::LinkSetup {
             config_file: config.path.clone(),
@@ -159,6 +161,7 @@ pub async fn serve(
             changed: journal_grew,
             data_dir: data_dir.root().to_owned(),
             shutdown: shutdown.clone(),
+            secrets,
         },
         config.vault.clone(),
     )?);
