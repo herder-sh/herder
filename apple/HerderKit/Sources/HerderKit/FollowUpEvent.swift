@@ -26,23 +26,24 @@ extension FollowUp {
         }
     }
 
-    /// The Board column a pull request in this state lands in, whose symbol and colour it shares.
-    private var state: WorkState? {
+    var symbol: String {
         switch reason {
-        case .ciFailed: .ciFailed
-        case .ciPassed: .readyToMerge
-        case .conflicting: .conflicting
-        case .changesRequested: .changesRequested
-        case .stalled, .unknown: nil
+        case .ciFailed: "xmark.circle.fill"
+        case .ciPassed: "checkmark.circle.fill"
+        case .conflicting: "arrow.triangle.branch"
+        case .changesRequested: "text.bubble"
+        case .stalled: "pause.circle.fill"
+        case .unknown: "arrow.triangle.pull"
         }
     }
 
-    var symbol: String {
-        state?.symbol ?? (reason == .stalled ? "pause.circle.fill" : "arrow.triangle.pull")
-    }
-
     var tint: Color {
-        state?.tint ?? (reason == .stalled ? Theme.accent : Theme.secondary)
+        switch reason {
+        case .ciFailed, .conflicting, .changesRequested: Theme.failure
+        case .ciPassed: Theme.success
+        case .stalled: Theme.accent
+        case .unknown: Theme.secondary
+        }
     }
 }
 
