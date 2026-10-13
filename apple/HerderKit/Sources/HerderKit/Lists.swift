@@ -9,10 +9,10 @@ struct ProjectGroup: Hashable, Identifiable {
     let projectId: String?
     let name: String
     let machines: [String]
-    /// Its task trees with a session that is not archived, whole: an archived parent stays to
-    /// lead its live children, and archived children stay under their parent.
+    /// Its task trees with a session that is not archived, without their archived children: an
+    /// archived parent stays only to lead its live children.
     var live: [SessionSummary]
-    /// Its task trees whose every session is archived.
+    /// Its archived sessions, each tree of them that no live session hangs from.
     var archived: [SessionSummary]
     /// Where its machines keep its clones.
     var paths: [String] = []
@@ -61,7 +61,7 @@ struct Lists: Equatable {
     var requests: [PendingRequest] = []
     var projects: [ProjectGroup] = []
     /// The chats, sessions about no project, in task-tree order: the trees with a live
-    /// session, then those archived whole.
+    /// session, then the archived ones.
     var chats: [SessionSummary] = []
     var archivedChats: [SessionSummary] = []
     var machines: [MachineSummary] = []
@@ -159,23 +159,35 @@ struct Lists: Equatable {
         }
     }
 
-    /// `members`' task trees with a live session, whole, then those archived whole. A session
-    /// counts only the children among `members`.
+    /// `members`' task trees with a live session, then the archived sessions: a tree archived
+    /// whole, and an archived child no live session hangs from, as a tree of its own. An
+    /// archived parent stays to lead its live children. A session counts only the children
+    /// among `members`.
     private static func split(_ members: [Entry], now: Date) -> (live: [SessionSummary], archived: [SessionSummary]) {
         let sorted = members.sorted { ($0.key.sessionId, $0.key.hostId) < ($1.key.sessionId, $1.key.hostId) }
         let children = Self.children(members)
         var live: [SessionSummary] = []
         var archived: [SessionSummary] = []
-        for tree in trees(forest(sorted)) {
-            let summaries = tree.map { entry, depth in
-                var summary = entry.summary(now: now, children: children)
+        // The sessions that are live or lead a live one: every live session and its ancestors.
+        let byKey = Dictionary(members.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        var leading: Set<SessionKey> = []
+        for entry in members where entry.model.state != .archived {
+            var key: SessionKey? = entry.key
+            while let current = key, leading.insert(current).inserted { key = byKey[current]?.parentKey }
+        }
+        let nodes = forest(sorted)
+        let leads = nodes.map { leading.contains($0.0.key) }
+        // The depth an archived subtree hangs from, so it is listed as a tree of its own.
+        var root = 0
+        for (index, (entry, depth)) in nodes.enumerated() {
+            var summary = entry.summary(now: now, children: children)
+            if leads[index] {
                 summary.depth = depth
-                return summary
-            }
-            if tree.allSatisfy({ $0.0.model.state == .archived }) {
-                archived += summaries
+                live.append(summary)
             } else {
-                live += summaries
+                if index == 0 || leads[index - 1] || depth <= root { root = depth }
+                summary.depth = depth - root
+                archived.append(summary)
             }
         }
         return (live, archived)
@@ -212,15 +224,6 @@ struct Lists: Equatable {
             visit(top, depth: 0)
         }
         return ordered
-    }
-
-    /// A forest's task trees, each its top-level session and everything under it.
-    static func trees(_ forest: [(Entry, Int)]) -> [[(Entry, Int)]] {
-        var trees: [[(Entry, Int)]] = []
-        for node in forest {
-            if node.1 == 0 || trees.isEmpty { trees.append([node]) } else { trees[trees.count - 1].append(node) }
-        }
-        return trees
     }
 
     /// Each session's children among `entries`, in their order, by the parent's key.
