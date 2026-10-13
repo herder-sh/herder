@@ -79,7 +79,7 @@ extension Fleet {
             return fork
         } catch {
             let what = hostId == key.hostId ? "fork the session" : "hand off to \(name)"
-            toast = Toast(text: "Could not \(what): \(describe(error))", failed: true)
+            toast = .failure("Could not \(what)", error)
             return nil
         }
     }

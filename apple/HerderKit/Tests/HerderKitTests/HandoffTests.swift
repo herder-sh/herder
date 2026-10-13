@@ -113,7 +113,8 @@ struct HandoffTests {
         #expect(await fleet.handOff(missing, to: host.hostId, account: nil) == nil)
         let toast = try #require(fleet.toast)
         #expect(toast.failed)
-        #expect(toast.text.hasPrefix("Could not fork the session: "))
+        #expect(toast.text == "Could not fork the session")
+        #expect(toast.detail?.isEmpty == false)
         #expect(fleet.handoffs.isEmpty)
     }
 }

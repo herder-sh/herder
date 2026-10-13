@@ -496,7 +496,7 @@ public final class Fleet {
                                       command: .renameSession(sessionId: key.sessionId, title: title))
             refusals[key] = nil
         } catch {
-            toast = Toast(text: "Could not rename: \(describe(error))", failed: true)
+            toast = .failure("Could not rename", error)
         }
     }
 
@@ -512,7 +512,7 @@ public final class Fleet {
         do {
             _ = try await client.send(hostId: key.hostId, command: .unarchiveSession(sessionId: key.sessionId))
         } catch {
-            toast = Toast(text: describe(error))
+            toast = .failure("Could not unarchive", error)
         }
     }
 
@@ -650,10 +650,18 @@ struct ArchiveRefusal: Identifiable {
 /// A brief note, with Undo when the session it is about can be brought back.
 struct Toast: Identifiable, Equatable {
     let id = UUID()
+    /// The headline, on one line in the toast.
     let text: String
+    /// The whole error, shown when the toast is tapped.
+    var detail: String?
     var undo: SessionKey?
-    /// Says what went wrong, rather than what finished.
+    /// Says what went wrong, rather than what finished. It stays until dismissed.
     var failed = false
+
+    /// A failure: `headline` says what could not be done, the error why.
+    static func failure(_ headline: String, _ error: any Error) -> Toast {
+        Toast(text: headline, detail: describe(error), failed: true)
+    }
 }
 
 struct ConnectionChange: Hashable {
