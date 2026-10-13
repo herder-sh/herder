@@ -357,6 +357,19 @@ impl Backend for Fleet {
                     "a vault backs up nowhere; link a host to it instead".into(),
                 ));
             }
+            CommandBody::CreateSecretSet { .. }
+            | CommandBody::DeleteSecretSet { .. }
+            | CommandBody::PutSecret { .. }
+            | CommandBody::DeleteSecret { .. }
+            | CommandBody::GrantSecretSet { .. }
+            | CommandBody::RevokeSecretSet { .. }
+            | CommandBody::ListSecrets
+            | CommandBody::ListSecretAudit { .. } => {
+                return Err(error(
+                    ErrorCode::Unsupported,
+                    "secrets are not implemented yet".into(),
+                ));
+            }
             _ => {}
         }
         match target(&command) {
@@ -413,6 +426,14 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::UnlinkVault
         | CommandBody::PairVaultHost { .. }
         | CommandBody::RevokeVaultHost { .. }
+        | CommandBody::CreateSecretSet { .. }
+        | CommandBody::DeleteSecretSet { .. }
+        | CommandBody::PutSecret { .. }
+        | CommandBody::DeleteSecret { .. }
+        | CommandBody::GrantSecretSet { .. }
+        | CommandBody::RevokeSecretSet { .. }
+        | CommandBody::ListSecrets
+        | CommandBody::ListSecretAudit { .. }
         | CommandBody::PairDevice
         | CommandBody::SetAccountSettings { .. }
         | CommandBody::SetResourceLimits { .. }

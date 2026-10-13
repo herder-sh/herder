@@ -41,12 +41,17 @@
 //! with [`VaultMessage::Rejected`].
 //!
 //! The vault never writes to a host's sessions: [`VaultMessage`] carries no events and no
-//! commands, only acknowledgements and errors. Only durable journal events and the images
+//! commands, only acknowledgements, errors and answers to the host's secret requests. Only durable journal events and the images
 //! they name are replicated; deltas, snapshots, terminals and resource usage never are.
 //!
 //! Events travel as stored ([`JournalRecord`]), with the body as raw JSON, so the vault keeps
 //! event types newer than its own build intact instead of decoding them to
 //! [`EventBody::Unknown`].
+//!
+//! Secrets (see [`crate::SecretInfo`]) travel over the same connection, on the host's request
+//! only: [`HostMessage::ListSecrets`] and [`HostMessage::FetchSecrets`], each answered once,
+//! under its `request_id`, in any order relative to acks. The vault answers for the sets
+//! granted to this connection's host, and nothing else.
 //!
 //! Evolution follows the same rules as the client protocol, under its own
 //! [`REPLICATION_VERSION`]; peers with different versions disconnect after the hellos.
@@ -58,8 +63,8 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Map, Value};
 
 use crate::{
-    Attachment, Bytes, Cursor, Event, EventBody, HostId, ProjectId, PullRequest, Seq, SessionId,
-    SessionStatus, Timestamp, UserId,
+    Attachment, Bytes, Cursor, Event, EventBody, FetchedSecret, HostId, ProjectId, PullRequest,
+    SecretError, SecretInfo, SecretRef, Seq, SessionId, SessionStatus, Timestamp, UserId,
 };
 
 /// Replication protocol version, exchanged in both hellos; peers with different versions
@@ -82,6 +87,16 @@ pub enum HostMessage {
     Batch(Batch),
     /// An image a `user_message` of the next batch names; sent just before that batch.
     Attachment(AttachmentData),
+    /// List the secrets in the sets granted to this host, without values; answered with
+    /// [`VaultMessage::SecretList`].
+    ListSecrets {
+        /// Chosen by the host to match the answer.
+        request_id: u64,
+    },
+    /// Fetch secrets' values for one of this host's sessions; answered with
+    /// [`VaultMessage::SecretValues`], or [`VaultMessage::SecretsRefused`] when any of them
+    /// cannot be handed out. The vault records each value it hands out.
+    FetchSecrets(SecretFetch),
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]
     #[schemars(skip)]
@@ -172,6 +187,17 @@ pub struct AttachmentData {
     pub attachment: Attachment,
     /// The image's or file's bytes.
     pub data: Bytes,
+}
+
+/// A host's request for secrets' values.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretFetch {
+    /// Chosen by the host to match the answer.
+    pub request_id: u64,
+    /// The session of this host the values are for, as the vault's audit records it.
+    pub session_id: SessionId,
+    /// The secrets, as the session named them; at least one.
+    pub secrets: Vec<SecretRef>,
 }
 
 /// One event of a session's journal, exactly as the host stored it.
@@ -298,6 +324,27 @@ pub enum VaultMessage {
     Error {
         /// What went wrong.
         error: ReplicationError,
+    },
+    /// The secrets in the sets granted to this host, answering [`HostMessage::ListSecrets`].
+    SecretList {
+        /// The request's id.
+        request_id: u64,
+        /// The secrets, without values, ordered by set, then name.
+        secrets: Vec<SecretInfo>,
+    },
+    /// Every secret a [`HostMessage::FetchSecrets`] asked for, with its value.
+    SecretValues {
+        /// The request's id.
+        request_id: u64,
+        /// One per secret asked for, in the order asked.
+        secrets: Vec<FetchedSecret>,
+    },
+    /// A [`HostMessage::FetchSecrets`] was refused and handed nothing out.
+    SecretsRefused {
+        /// The request's id.
+        request_id: u64,
+        /// Why.
+        error: SecretError,
     },
     /// A message type newer than this build; skip it.
     #[serde(other, skip_serializing)]

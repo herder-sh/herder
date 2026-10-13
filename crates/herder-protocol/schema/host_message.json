@@ -58,6 +58,40 @@
       "required": [
         "type"
       ]
+    },
+    {
+      "description": "List the secrets in the sets granted to this host, without values; answered with\n[`VaultMessage::SecretList`].",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "Chosen by the host to match the answer.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "const": "list_secrets"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Fetch secrets' values for one of this host's sessions; answered with\n[`VaultMessage::SecretValues`], or [`VaultMessage::SecretsRefused`] when any of them\ncannot be handed out. The vault records each value it hands out.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "fetch_secrets"
+        }
+      },
+      "$ref": "#/$defs/SecretFetch",
+      "required": [
+        "type"
+      ]
     }
   ],
   "$defs": {
@@ -411,6 +445,39 @@
           "const": "changes_requested"
         }
       ]
+    },
+    "SecretFetch": {
+      "description": "A host's request for secrets' values.",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "description": "Chosen by the host to match the answer.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "secrets": {
+          "description": "The secrets, as the session named them; at least one.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretRef"
+          }
+        },
+        "session_id": {
+          "description": "The session of this host the values are for, as the vault's audit records it.",
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "request_id",
+        "session_id",
+        "secrets"
+      ]
+    },
+    "SecretRef": {
+      "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
+      "type": "string",
+      "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
     },
     "SessionId": {
       "description": "Identifies a session; a ULID string, opaque to receivers.",

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccountId, Answer, ApprovalDecision, ApprovalId, Attachment, AttachmentId, Bytes, CommandId,
     DaemonSettings, Event, HostId, Image, PermissionMode, ProjectId, PromptFile, PromptId,
-    Provider, QuestionId, Seq, SessionId, TerminalId, UsagePeriod,
+    Provider, QuestionId, SecretValue, Seq, SessionId, TerminalId, UsagePeriod,
 };
 
 /// A client-to-daemon message.
@@ -570,6 +570,78 @@ pub enum CommandBody {
     RevokeVaultHost {
         /// The host.
         host_id: HostId,
+    },
+    /// On a vault, create an empty set of secrets; owners only. Answered with `applied`.
+    /// Refused with `bad_request` for a name [`crate::is_valid_secret_set_name`] refuses,
+    /// `conflict` when the set exists, and `unsupported` on a daemon that is not a vault.
+    CreateSecretSet {
+        /// The set's name.
+        set: String,
+    },
+    /// On a vault, delete an empty set of secrets and its grants; owners only. Answered with
+    /// `applied`. Refused with `not_found` for an unknown set, `conflict` while it holds
+    /// secrets, and `unsupported` on a daemon that is not a vault.
+    DeleteSecretSet {
+        /// The set.
+        set: String,
+    },
+    /// On a vault, create a secret in a set, or replace its description and value; owners
+    /// only. The vault keeps the value encrypted and never sends it to a client. Answered with
+    /// `applied`. Refused with `bad_request` for a name [`crate::is_valid_secret_name`]
+    /// refuses or a description that is not one line of at most
+    /// [`crate::MAX_SECRET_DESCRIPTION_CHARS`], `not_found` for an unknown set, and
+    /// `unsupported` on a daemon that is not a vault.
+    PutSecret {
+        /// The set to keep it in.
+        set: String,
+        /// The secret's name, the environment variable a command gets it as.
+        name: String,
+        /// What it is for, on one line; agents read it to pick a secret.
+        description: String,
+        /// The value.
+        value: SecretValue,
+    },
+    /// On a vault, delete a secret; owners only. Answered with `applied`. Refused with
+    /// `not_found` for an unknown set or secret, and `unsupported` on a daemon that is not a
+    /// vault.
+    DeleteSecret {
+        /// The secret's set.
+        set: String,
+        /// The secret's name.
+        name: String,
+    },
+    /// On a vault, let a host fetch the secrets of a set for every session it runs; owners
+    /// only. Answered with `applied`; granting it again changes nothing. Refused with
+    /// `not_found` for an unknown set or a host that never replicated here, and `unsupported`
+    /// on a daemon that is not a vault.
+    GrantSecretSet {
+        /// The set.
+        set: String,
+        /// The host.
+        host_id: HostId,
+    },
+    /// On a vault, stop a host fetching the secrets of a set; owners only. Values the host
+    /// fetched already stay in its memory until they expire. Answered with `applied`. Refused
+    /// with `not_found` when the set is not granted to the host, and `unsupported` on a daemon
+    /// that is not a vault.
+    RevokeSecretSet {
+        /// The set.
+        set: String,
+        /// The host.
+        host_id: HostId,
+    },
+    /// On a vault, list every set of secrets with its grants, and every secret without its
+    /// value; owners only. Answered with `secrets`. It changes nothing, so a resend is answered
+    /// afresh. Refused with `unsupported` on a daemon that is not a vault.
+    ListSecrets,
+    /// On a vault, list the latest fetches of secrets by hosts, newest first, at most
+    /// [`crate::MAX_SECRET_AUDIT_ENTRIES`]; owners only. Answered with `secret_audit`. It
+    /// changes nothing, so a resend is answered afresh. Refused with `unsupported` on a daemon
+    /// that is not a vault.
+    ListSecretAudit {
+        /// Only fetches older than this one, by its `id`, to page back; the latest when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<u64>,
     },
     /// Use the git repository at `url` as the skill library: the daemon replaces its checkout
     /// with a clone of it; owners only. The skills of a library that was the machine's own and

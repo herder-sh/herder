@@ -379,7 +379,12 @@ impl Link {
                 self.stopped.insert(cursor.session_id);
             }
             VaultMessage::Error { error } => bail!("the vault refused: {}", error.message),
-            VaultMessage::Hello(_) | VaultMessage::Unknown => {}
+            // This host asks for no secrets yet, so any answer is stray.
+            VaultMessage::Hello(_)
+            | VaultMessage::SecretList { .. }
+            | VaultMessage::SecretValues { .. }
+            | VaultMessage::SecretsRefused { .. }
+            | VaultMessage::Unknown => {}
         }
         Ok(())
     }
