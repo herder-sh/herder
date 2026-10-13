@@ -264,6 +264,7 @@ impl Vault {
             host,
             LIVENESS_TIMEOUT,
             Retention::default(),
+            None,
         );
         let shutdown = CancellationToken::new();
         tokio::spawn(server.run(vec![listener], shutdown.clone()));
