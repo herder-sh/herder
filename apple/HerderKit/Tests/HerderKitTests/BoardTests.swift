@@ -131,7 +131,7 @@ struct BoardTests {
         #expect(failingChild.map(\.state) == [.ciFailed])
     }
 
-    @Test func archivedChildrenAreListedLastAndAnArchivedParentStillLeadsItsLiveChild() {
+    @Test func archivedChildrenLeaveTheBoardAndAnArchivedParentStillLeadsItsLiveChild() {
         let archive = EventBody.sessionStatusChanged(status: .archived, retryAt: nil)
         var scripts = ["01A", "01B", "01C", "01D", "01E", "01F"].map { Script($0) }
         let columns = board([
@@ -147,8 +147,9 @@ struct BoardTests {
         #expect(trees.map(\.lead.title) == ["Archived lead", "Lead"])
         #expect(trees[0].lead.state == .archived)
         #expect(trees[0].listed.map(\.title) == ["Its live child"])
-        #expect(trees[1].listed.map(\.title) == ["Live", "Archived first", "Archived second"])
-        #expect(trees[1].archived.map(\.title) == ["Archived first", "Archived second"])
+        // Archived children no live session hangs from are in the project's Archived group.
+        #expect(trees[1].listed.map(\.title) == ["Live"])
+        #expect(trees[1].archived.isEmpty)
     }
 
     @Test func aSearchFindsATreeByAnyOfItsSessions() {

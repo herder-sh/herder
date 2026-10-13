@@ -236,9 +236,10 @@ task trees, not sessions, newest first, and its count counts trees.
   are not shown on the Board.
 - **Column:** the most urgent `WorkState` among the tree's sessions that are neither archived
   nor moved, so a child that needs you or failed CI never hides in its parent's Working column.
-- **Archived:** archived children come last, dimmed, badged "Archived"; several fold into one
-  "N archived" row that expands. A tree whose top is archived but that has a live child stays,
-  its top row dimmed. A tree with no live session is not on the Board.
+- **Archived:** the Board lists a project's live trees (§4.7), so an archived child is on it
+  only while a live session hangs from it: dimmed, badged "Archived", after the live children;
+  several fold into one "N archived" row that expands. A tree whose top is archived but that
+  has a live child stays, its top row dimmed. A tree with no live session is not on the Board.
 - **Search** keeps a tree when its top or any of its children matches.
 
 ---
