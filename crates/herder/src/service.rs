@@ -40,8 +40,13 @@ pub fn run(action: Action) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The systemd user unit that runs `exe daemon`.
-pub fn unit_file(exe: &Path) -> Result<String> {
+/// The systemd user unit that runs `exe daemon` with `path` as its `PATH`.
+///
+/// A user service started at boot gets only systemd's bare default `PATH`, which leaves out
+/// where agent CLIs are usually installed (`~/.local/bin`, version manager shims), so every
+/// session would fail to start its CLI. The installing shell's `PATH` is the one the user's
+/// CLIs are found on.
+pub fn unit_file(exe: &Path, path: &str) -> Result<String> {
     let exe = exe
         .to_str()
         .with_context(|| format!("{} is not valid UTF-8", exe.display()))?;
@@ -50,13 +55,15 @@ pub fn unit_file(exe: &Path) -> Result<String> {
     }
     Ok(format!(
         "\
-# Written by `herder service install`; rerun it after moving the herder binary.
+# Written by `herder service install`; rerun it after moving the herder binary or
+# changing PATH.
 [Unit]
 Description=herder daemon
 Documentation=https://github.com/herder-sh/herder
 
 [Service]
 Type=exec
+Environment={}
 ExecStart={} daemon
 Restart=on-failure
 RestartSec=5
@@ -64,8 +71,26 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 ",
+        quote_environment(&format!("PATH={path}")),
         quote_exec_arg(exe)
     ))
+}
+
+/// Quotes one `Environment=` assignment so systemd reads it back verbatim: inside double
+/// quotes `\` and `"` are escaped and `%` starts a specifier; `$` is not expanded there.
+fn quote_environment(assignment: &str) -> String {
+    let mut quoted = String::with_capacity(assignment.len() + 2);
+    quoted.push('"');
+    for c in assignment.chars() {
+        match c {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '%' => quoted.push_str("%%"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('"');
+    quoted
 }
 
 /// Quotes one ExecStart argument so systemd reads it back verbatim: inside double quotes
@@ -100,13 +125,14 @@ fn unit_path(xdg_config_home: Option<&OsStr>, home: Option<&OsStr>) -> Result<Pa
 
 fn install() -> Result<()> {
     let exe = std::env::current_exe().context("finding the herder binary")?;
+    let search_path = std::env::var("PATH").context("reading PATH")?;
     let path = unit_path(
         std::env::var_os("XDG_CONFIG_HOME").as_deref(),
         std::env::var_os("HOME").as_deref(),
     )?;
     let dir = path.parent().context("unit path has no parent")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    std::fs::write(&path, unit_file(&exe)?)
+    std::fs::write(&path, unit_file(&exe, &search_path)?)
         .with_context(|| format!("writing {}", path.display()))?;
     println!("wrote {}", path.display());
 
@@ -231,17 +257,23 @@ mod tests {
 
     #[test]
     fn unit_runs_the_daemon_and_restarts_on_failure() {
-        let unit = unit_file(Path::new("/home/ann/.local/bin/herder")).unwrap();
+        let unit = unit_file(
+            Path::new("/home/ann/.local/bin/herder"),
+            "/home/ann/.local/bin:/usr/bin",
+        )
+        .unwrap();
         assert_eq!(
             unit,
             "\
-# Written by `herder service install`; rerun it after moving the herder binary.
+# Written by `herder service install`; rerun it after moving the herder binary or
+# changing PATH.
 [Unit]
 Description=herder daemon
 Documentation=https://github.com/herder-sh/herder
 
 [Service]
 Type=exec
+Environment=\"PATH=/home/ann/.local/bin:/usr/bin\"
 ExecStart=\"/home/ann/.local/bin/herder\" daemon
 Restart=on-failure
 RestartSec=5
@@ -254,7 +286,7 @@ WantedBy=default.target
 
     #[test]
     fn exec_path_is_quoted_for_systemd() {
-        let unit = unit_file(Path::new("/opt/my apps/100%/$x/a\"b\\c")).unwrap();
+        let unit = unit_file(Path::new("/opt/my apps/100%/$x/a\"b\\c"), "/usr/bin").unwrap();
         assert!(
             unit.contains(r#"ExecStart="/opt/my apps/100%%/$$x/a\"b\\c" daemon"#),
             "{unit}"
@@ -262,8 +294,17 @@ WantedBy=default.target
     }
 
     #[test]
+    fn path_is_quoted_for_systemd() {
+        let unit = unit_file(Path::new("/bin/herder"), "/opt/100%/$x/a\"b\\c:/usr/bin").unwrap();
+        assert!(
+            unit.contains(r#"Environment="PATH=/opt/100%%/$x/a\"b\\c:/usr/bin""#),
+            "{unit}"
+        );
+    }
+
+    #[test]
     fn relative_exe_is_rejected() {
-        assert!(unit_file(Path::new("bin/herder")).is_err());
+        assert!(unit_file(Path::new("bin/herder"), "/usr/bin").is_err());
     }
 
     #[test]
