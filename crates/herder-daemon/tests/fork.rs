@@ -575,10 +575,12 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         })
         .await
         .unwrap_err();
-    assert!(
-        refused.message.contains("paired as a host"),
-        "{}",
-        refused.message
+    // In words the person handing off can act on, not a chain of causes.
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert_eq!(
+        refused.message,
+        "host-c only backs its sessions up to the vault, so it cannot read other machines' \
+         sessions; turn on \"Takes handoffs\" for it on the vault's page in the app"
     );
     c.runtime.kill().await;
 
