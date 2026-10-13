@@ -46,13 +46,13 @@ jobs:
       key: ${{ steps.key.outputs.key }}
       hit: ${{ steps.cache.outputs.cache-hit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: key
         run: >-
           echo "key=apple-ffi-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'crates/**',
           'apple/scripts/build-ffi.sh', '.github/workflows/apple.yml') }}" >> "$GITHUB_OUTPUT"
       - id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -66,7 +66,7 @@ jobs:
     if: needs.key.outputs.hit != 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the toolchain and the Apple targets
         run: |
           rustup show active-toolchain || rustup toolchain install
@@ -80,7 +80,7 @@ jobs:
       # Saved by its own step, not by actions/cache's post step: rust-cache's post step, which
       # runs first, cleans target/ of the fake daemon.
       - name: Save the bindings, the xcframework and the fake daemon
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -95,8 +95,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache/restore@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -151,7 +151,7 @@ jobs:
           for file in "$RUNNER_TEMP"/attachments/*.txt; do
             if [ -f "$file" ]; then echo "::group::$(basename "$file")"; cat "$file"; echo "::endgroup::"; fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-tests-xcresult
@@ -171,8 +171,8 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/cache/restore@v4
+      - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
         with:
           path: |
             crates/herder-ffi/swift/build
@@ -194,7 +194,7 @@ jobs:
         run: |
           brew install xcodegen
           apple/scripts/build-mac-release.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: github.event_name == 'push'
         with:
           name: herder-app-macos-arm64
