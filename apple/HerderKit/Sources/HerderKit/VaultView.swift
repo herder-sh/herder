@@ -375,7 +375,7 @@ private struct HandoffToggle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Toggle(isOn: Binding(get: { asked ?? takesHandoffs }, set: change)) {
+            Toggle(isOn: Binding(get: { asked ?? takesHandoffs }, set: { change($0) })) {
                 Text("Takes handoffs").font(.subheadline).foregroundStyle(Theme.text)
             }
             .toggleStyle(.switch)
