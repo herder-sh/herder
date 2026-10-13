@@ -471,15 +471,15 @@ public final class Fleet {
         }
     }
 
-    /// Archives a session: the lists show it archived, with its Undo toast, while the machine
-    /// works on it. A refusal, such as a running turn, brings it back and goes to
-    /// `archiveRefusal` to show.
-    func archive(_ key: SessionKey) async {
+    /// Archives a session: the lists show it archived, with its Undo toast, saying `text` when
+    /// given, while the machine works on it. A refusal, such as a running turn, brings it back
+    /// and goes to `archiveRefusal` to show.
+    func archive(_ key: SessionKey, toast text: String? = nil) async {
         guard !archiving.contains(key) else { return }
         let title = sessions[key]?.title ?? "Session"
         archiving.insert(key)
         defer { archiving.remove(key) }
-        let archived = Toast(text: "Archived “\(title)”", undo: key)
+        let archived = Toast(text: text ?? "Archived “\(title)”", undo: key)
         toast = archived
         do {
             _ = try await client.send(hostId: key.hostId, command: .archiveSession(sessionId: key.sessionId))

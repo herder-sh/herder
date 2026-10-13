@@ -8,9 +8,10 @@ struct ForkOrigin: Equatable {
 }
 
 /// Handing a session off to a machine, from the composer's machine menu: picking a machine
-/// forks the session there and opens the fork, with no sheet in between. The client core finds
-/// the history: on the machine itself, relayed from the session's machine while it is
-/// connected, else in the destination's vault.
+/// forks the session there and opens the fork, with no sheet in between, and archives the
+/// original, so the session is listed once, where it now runs. The client core finds the
+/// history: on the machine itself, relayed from the session's machine while it is connected,
+/// else in the destination's vault.
 extension Fleet {
     /// Why `machine` cannot take a session of `provider`, if it cannot.
     static func handoffBlocker(_ machine: Machine, provider: Provider?) -> String? {
@@ -55,9 +56,8 @@ extension Fleet {
 
     /// Forks `key` onto `hostId`, on `accountId` or the machine's default for the session's
     /// provider, showing it in `handoffs` meanwhile; returns the fork to open. A failure shows
-    /// in a toast. Handed off mid-turn, the session's turn runs again on the other machine, so
-    /// its own is interrupted once the fork is made, as far as its machine can be reached: the
-    /// original must not go on with the same work unseen.
+    /// in a toast. Handed off to another machine, the original is archived, as `retire` does;
+    /// a fork onto its own machine leaves it be.
     func handOff(_ key: SessionKey, to hostId: HostId, account accountId: AccountId?) async -> SessionKey? {
         guard handoffs[key] == nil else { return nil }
         let midTurn = hostId != key.hostId && [.running, .needsYou].contains(sessions[key]?.status)
@@ -72,15 +72,36 @@ extension Fleet {
             }
             let fork = SessionKey(hostId: hostId, sessionId: sessionId)
             forkOrigins[fork] = ForkOrigin(sessionId: original, hostId: fromHost)
-            if midTurn {
-                Task { _ = try? await client.send(hostId: key.hostId, command: .interrupt(sessionId: key.sessionId)) }
+            if hostId == key.hostId {
+                toast = Toast(text: "Forked the session")
+            } else if machines.first(where: { $0.hostId == key.hostId })?.connection == .connected {
+                Task { await retire(key, midTurn: midTurn, handedOffTo: name) }
+            } else {
+                // Its machine cannot archive it now: it stays, read-only, until that machine is back.
+                toast = Toast(text: "Handed off to \(name)")
             }
-            toast = Toast(text: hostId == key.hostId ? "Forked the session" : "Handed off to \(name)")
             return fork
         } catch {
             let what = hostId == key.hostId ? "fork the session" : "hand off to \(name)"
             toast = Toast(text: "Could not \(what): \(describe(error))", failed: true)
             return nil
         }
+    }
+
+    /// Archives `key` once it is handed off to the machine named `name`, so the fork is the one
+    /// session left to go on with. Handed off mid-turn, the session's turn runs again on the
+    /// other machine, so its own is interrupted first, as far as its machine can be reached:
+    /// the original must not go on with the same work unseen. A machine refuses to archive while
+    /// a turn runs, so the archive waits a while for it to end; a refusal, such as a child still
+    /// at work, goes to `archiveRefusal` as any archive's does.
+    func retire(_ key: SessionKey, midTurn: Bool, handedOffTo name: String) async {
+        if midTurn {
+            _ = try? await client.send(hostId: key.hostId, command: .interrupt(sessionId: key.sessionId))
+            let deadline = ContinuousClock.now + .seconds(10)
+            while [.running, .needsYou].contains(sessions[key]?.status), ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        await archive(key, toast: "Handed off to \(name)")
     }
 }
