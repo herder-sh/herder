@@ -643,6 +643,18 @@ pub enum CommandBody {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before: Option<u64>,
     },
+    /// On a vault, let every device that replicates as `host_id` read the vault as a client
+    /// too, or make them host-only again; owners only. A host that reads the vault can take
+    /// handoffs: fork another host's session from it. The devices stay paired, so nothing
+    /// pairs again; taking read away closes their client connections, not their
+    /// replication. Answered with `applied`; `vault_status` follows with the host's `read`.
+    /// Refused with `not_found` when no paired device replicates as it.
+    SetVaultHostAccess {
+        /// The host.
+        host_id: HostId,
+        /// Whether its devices may read the vault.
+        read: bool,
+    },
     /// Use the git repository at `url` as the skill library: the daemon replaces its checkout
     /// with a clone of it; owners only. The skills of a library that was the machine's own and
     /// that the repository lacks are added to it, committed and pushed. Answered with

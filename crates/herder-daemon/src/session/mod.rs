@@ -865,7 +865,9 @@ impl SessionManager {
                 })?;
                 return skills.command(command).await;
             }
-            CommandBody::PairVaultHost { .. } | CommandBody::RevokeVaultHost { .. } => {
+            CommandBody::PairVaultHost { .. }
+            | CommandBody::RevokeVaultHost { .. }
+            | CommandBody::SetVaultHostAccess { .. } => {
                 return Err(error(
                     ErrorCode::Unsupported,
                     "this daemon is not a vault; pair hosts on the vault",
