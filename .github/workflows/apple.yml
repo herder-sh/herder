@@ -135,7 +135,12 @@ jobs:
           (sleep 3600 | target/debug/examples/fake_daemon --share > "$RUNNER_TEMP/fake_daemon.out" &)
           for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_daemon.out" ] && break; sleep 1; done
           [ -s "$RUNNER_TEMP/fake_daemon.out" ] || { echo "the fake daemons did not start"; exit 1; }
+          # And a vault that keeps secrets, for the secrets screen.
+          (sleep 3600 | target/debug/examples/fake_daemon --vault > "$RUNNER_TEMP/fake_vault.out" &)
+          for _ in $(seq 60); do [ -s "$RUNNER_TEMP/fake_vault.out" ] && break; sleep 1; done
+          [ -s "$RUNNER_TEMP/fake_vault.out" ] || { echo "the fake vault did not start"; exit 1; }
           TEST_RUNNER_HERDER_PAIR_LINK=$(head -1 "$RUNNER_TEMP/fake_daemon.out") \
+          TEST_RUNNER_HERDER_VAULT_LINK=$(head -1 "$RUNNER_TEMP/fake_vault.out") \
             xcodebuild test-without-building -quiet -skipPackagePluginValidation -project apple/herder.xcodeproj -scheme herder-iOS \
             -destination "platform=iOS Simulator,id=$device" -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult"
       # -quiet prints a failing UI test's name but not its assertion; the result bundle has both,

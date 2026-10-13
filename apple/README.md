@@ -71,7 +71,8 @@ open the session waiting on an approval on the first from its card on Home:
 
 ```sh
 cargo run -p herder-ffi --example fake_daemon -- --share   # prints the shared link first
-TEST_RUNNER_HERDER_PAIR_LINK='<link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
+cargo run -p herder-ffi --example fake_daemon -- --vault   # a vault that keeps secrets
+TEST_RUNNER_HERDER_PAIR_LINK='<link>' TEST_RUNNER_HERDER_VAULT_LINK='<vault link>' xcodebuild test -skipPackagePluginValidation -project apple/herder.xcodeproj \
   -scheme herder-iOS -destination 'platform=iOS Simulator,name=iPhone 18 Pro'
 ```
 
