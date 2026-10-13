@@ -34,8 +34,8 @@ screenshots in [`docs/screenshots/p7-20`](screenshots/p7-20).
    sheet on compact width (§6).
 4. **Nothing is ever wider than the screen.** No fixed width over 320 pt on iOS outside a
    regular-width branch; content columns cap at 760 pt and centre (§5.2).
-5. **Lists put live work first.** Needs you, then running, then idle; task trees archived whole
-   go in a collapsed **Archived** group at the end; children sit under their parent (§4.7).
+5. **Lists put live work first.** Needs you, then running, then idle; archived sessions go in a
+   collapsed **Archived** group at the end; children sit under their parent (§4.7).
 6. **State is a glyph plus a colour, never colour alone** (`StatusGlyph`), the same set on every
    row, header and card, as in the TUI.
 7. **Touch is first-class on iOS.** 44 pt hit areas on iOS and iPadOS; the Mac keeps its
@@ -204,14 +204,14 @@ top of Machines. Screenshots are still to come, in `docs/screenshots/p11-9`.
 - **Children under parents:** a child is indented under its parent with a tree line
   (`SessionRow.depth`, `TreeLine`, 14 pt per level); a parent row shows its child count and how
   many need you.
-- **Task trees stay whole:** each tree is built from all of a project's sessions before the list
-  splits them, so archiving a parent or a child never takes a tree apart. A tree with any
-  session that is not archived is listed with the live ones: an archived parent stays, dimmed,
-  to lead its live children, and archived children stay under their parent, dimmed, after its
-  live children. A parent's child count counts all its children.
-- **Archived last and collapsed:** a tree whose every session is archived goes, whole, in an
-  **Archived** group at the end of its project, collapsed, showing a count; opening it shows
-  it, dimmed. Archived sessions with no project are not listed.
+- **Archiving hides a session, never its live children:** each tree is built from all of a
+  project's sessions before the list splits them. A tree with any session that is not archived
+  is listed with the live ones, without its archived sessions, except an archived parent, which
+  stays, dimmed, to lead its live children. A parent's child count counts all its children.
+- **Archived last and collapsed:** the archived sessions go in an **Archived** group at the end
+  of their project, collapsed, showing a count; opening it shows them, dimmed, each archived
+  child no live session hangs from as a tree of its own. Archived sessions with no project are
+  not listed.
 - **One row component:** `SessionRow` everywhere: glyph, title (one line), age, activity (one
   line, accent when it needs you), project · branch, PR badges (two at most, then `+N`),
   machine. Rows are wrapped by `SessionLink` (Mac/iPad: selection, hover archive button,
