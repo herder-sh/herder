@@ -582,6 +582,7 @@ mod tests {
             host,
             crate::vault::LIVENESS_TIMEOUT,
             crate::config::Retention::default(),
+            None,
         )
         .admin()
     }

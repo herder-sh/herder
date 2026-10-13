@@ -45,7 +45,8 @@ fn tools_list_is_the_mcp_shape() {
             "escalate",
             "publish",
             "overview",
-            "command"
+            "command",
+            "secrets"
         ]
     );
     for tool in tools {
@@ -238,6 +239,7 @@ fn calls_parse_validate_and_round_trip() {
             }),
         ),
         (json!({}), ToolCall::Overview(OverviewInput {})),
+        (json!({}), ToolCall::Secrets(SecretsInput {})),
         (
             json!({ "command": { "type": "rename_session", "session_id": "01J9CHILD", "title": "Auth" } }),
             ToolCall::Command(CommandInput {
@@ -269,6 +271,7 @@ fn calls_parse_validate_and_round_trip() {
             ToolCall::Publish(input) => serde_json::to_value(input),
             ToolCall::Overview(input) => serde_json::to_value(input),
             ToolCall::Command(input) => serde_json::to_value(input),
+            ToolCall::Secrets(input) => serde_json::to_value(input),
         };
         assert_eq!(back.unwrap(), arguments);
     }
@@ -461,6 +464,18 @@ fn outputs_match_their_schemas() {
                 sessions: Vec::new(),
                 projects: Vec::new(),
                 accounts: Vec::new(),
+            }),
+        ),
+        (
+            Tool::Secrets,
+            serde_json::to_value(SecretsOutput {
+                secrets: vec![SecretEntry {
+                    secret: "prod/STRIPE_KEY".parse().unwrap(),
+                    name: "STRIPE_KEY".into(),
+                    set: "prod".into(),
+                    description: "Stripe live key".into(),
+                }],
+                run: "/usr/local/bin/herder secret run".into(),
             }),
         ),
         (Tool::Command, serde_json::to_value(CommandResult::Applied)),
