@@ -84,13 +84,15 @@
 //!
 //! What each machine last said is saved in `<config_dir>/cache/`, private to the user: the
 //! role, the session, fleet host, project and account lists, and every event of the 20 listed
-//! sessions with the newest events. A new [`Client`] starts from it, so [`Client::machines`]
-//! and a subscription's first update show the last known state at once, offline too; the
-//! subscription resumes after the cached events. Live data always wins: the cache is read only
-//! when a machine's supervisor starts, the daemon's lists replace the cached ones, and its
-//! events extend the cached ones by seq. The cache is saved every 30 s while something
-//! changed, when a connection ends, and on [`Client::suspend`]. Streaming items, terminals and
-//! resource figures are live only and never cached.
+//! sessions with the newest events. [`Client::open`] does not wait for it: each machine's
+//! supervisor reads its cache off the async runtime, then shows it in [`Client::machines`],
+//! offline too, with a [`Client::changes`] notification, before it first connects; until then
+//! the machine is `Connecting`. A subscription's first update waits for the cache and carries
+//! every cached event; the subscription resumes after them. Live data always wins: the cache
+//! is read only when a machine's supervisor starts, the daemon's lists replace the cached
+//! ones, and its events extend the cached ones by seq. The cache is saved every 30 s while
+//! something changed, when a connection ends, and on [`Client::suspend`]. Streaming items,
+//! terminals and resource figures are live only and never cached.
 //!
 //! # Commands
 //!
@@ -380,7 +382,7 @@ impl Drop for Inner {
 
 impl Client {
     /// Opens the profile in `config_dir`, a directory path, and starts connecting to every
-    /// saved machine.
+    /// saved machine. Returns without waiting for the offline cache; see the crate docs, Offline cache.
     ///
     /// `client` names this client in daemon logs, e.g. `herder-tui/0.1.0`. Call within a tokio
     /// runtime, which runs the supervisors. One client per config dir at a time.
@@ -905,8 +907,8 @@ fn find(machines: &[Arc<Supervisor>], host_id: &HostId) -> Result<Arc<Supervisor
 pub struct SessionSubscription(Subscription);
 
 impl SessionSubscription {
-    /// The next update: immediately for the first, then once something changed, coalescing
-    /// whatever changed meanwhile. `None` once the client or the machine stops.
+    /// The next update: the first as soon as the machine's offline cache is read, then once
+    /// something changed, coalescing whatever changed meanwhile. `None` once the client or the machine stops.
     pub async fn next(&self) -> Option<SessionUpdate> {
         self.0.next().await
     }
@@ -936,4 +938,117 @@ const SHARE_TIMEOUT: Duration = Duration::from_secs(10);
 /// A fresh command id.
 pub(crate) fn new_command_id() -> CommandId {
     CommandId::new(ulid::Ulid::new().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::process::Command;
+    use std::sync::mpsc;
+
+    use herder_protocol::{
+        AccountId, Event, EventBody, HostId, SessionHead, SessionStatus, Timestamp,
+    };
+
+    use super::*;
+    use crate::offline::Cached;
+
+    /// Opening a client never waits for the offline cache, however long it takes to read: here
+    /// it is a FIFO, which blocks its reader until something writes it. Once written, the
+    /// machine shows it and a subscription's first update carries it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn opening_does_not_wait_for_the_offline_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let host_id = HostId::new("host");
+        let machine = SavedMachine {
+            host_id: host_id.clone(),
+            name: "laptop".to_owned(),
+            // Nothing listens on port 1.
+            addresses: vec!["127.0.0.1:1".to_owned()],
+            fingerprint: "00".repeat(32),
+            device_key: DeviceKey::generate().unwrap().to_pem().to_owned(),
+        };
+        profile::save(tmp.path(), &[machine]).unwrap();
+        let cache = offline::path(tmp.path(), &host_id);
+        fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        assert!(
+            Command::new("mkfifo")
+                .arg(&cache)
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        // On a thread of its own, so an open that waits fails the test rather than hangs it.
+        let (opened, open) = mpsc::channel();
+        let config = tmp.path().display().to_string();
+        let runtime = tokio::runtime::Handle::current();
+        std::thread::spawn(move || {
+            let _entered = runtime.enter();
+            let _ = opened.send(Client::open(config, "herder-test/0".into()));
+        });
+        let client = open
+            .recv_timeout(Duration::from_secs(5))
+            .expect("opening waited for the offline cache")
+            .unwrap();
+        let machine = &client.machines()[0];
+        assert_eq!(machine.connection, ConnectionState::Connecting);
+        assert!(machine.sessions.is_empty());
+
+        let session_id = SessionId::new("s");
+        let sub = client
+            .subscribe_session(host_id, session_id.clone())
+            .unwrap();
+        let first = tokio::spawn(async move { sub.next().await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !first.is_finished(),
+            "the first update came before the cache"
+        );
+
+        let cached = Cached {
+            role: Some(Role::Owner),
+            sessions: vec![SessionHead {
+                session_id: session_id.clone(),
+                host_id: None,
+                head_seq: 1,
+                status: SessionStatus::Idle,
+                parent: None,
+                parent_host: None,
+                task: None,
+                title: None,
+                project_id: None,
+                account_id: AccountId::new("a"),
+                children_need_you: 0,
+                queue: Vec::new(),
+                chat: false,
+            }],
+            logs: vec![vec![Event {
+                session_id,
+                seq: 1,
+                at: Timestamp::UNIX_EPOCH,
+                by: None,
+                body: EventBody::SessionStatusChanged {
+                    retry_at: None,
+                    status: SessionStatus::Idle,
+                },
+            }]],
+            ..Cached::default()
+        };
+        let json = serde_json::to_vec(&cached).unwrap();
+        tokio::task::spawn_blocking(move || fs::write(cache, json))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let first = tokio::time::timeout(Duration::from_secs(5), first)
+            .await
+            .expect("the cache never came")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.events, cached.logs[0]);
+        let machine = &client.machines()[0];
+        assert_eq!(machine.sessions, cached.sessions);
+        assert_eq!(machine.role, Some(Role::Owner));
+    }
 }
