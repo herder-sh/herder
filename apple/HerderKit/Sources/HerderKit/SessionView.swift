@@ -34,7 +34,7 @@ struct SessionView: View {
     /// Bumped on every send, so the transcript jumps to its end.
     @State private var sent = 0
     @State private var find = TranscriptFind()
-    /// The folded blocks shown open, by id; outside the lazy rows, so scrolling keeps them.
+    /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
 
     var body: some View {
@@ -60,7 +60,10 @@ struct SessionView: View {
             } else {
             ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // Not lazy: a lazy stack places the rows it hasn't drawn by estimated heights, and
+                // as a running turn grows under the bottom anchor, the view can land on a stretch
+                // of them with nothing drawn: the transcript goes blank until something scrolls it.
+                VStack(alignment: .leading, spacing: 16) {
                     if model?.loaded != true && blocks.isEmpty {
                         ProgressView().tint(Theme.secondary).frame(maxWidth: .infinity).padding(40)
                     } else if blocks.isEmpty && model?.status != .waitingForCapacity {
@@ -87,19 +90,14 @@ struct SessionView: View {
             .accessibilityIdentifier("transcript")
             .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top))
             .id(key)
-            // To the last row, unanimated: a lazy stack lays that row out to scroll to it, while
-            // the end marker sits where estimated heights put it, which in a long transcript can
-            // be past every row drawn: blank until something scrolls it.
-            .onChange(of: sent) { proxy.scrollTo(blocks.last?.id ?? TranscriptScroll.end, anchor: .bottom) }
+            .onChange(of: sent) { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
             // The prompt joins the transcript only once the send is under way, after `sent`.
             .onChange(of: model?.outbox.count ?? 0) { old, new in
-                if new > old { proxy.scrollTo(blocks.last?.id ?? TranscriptScroll.end, anchor: .bottom) }
+                if new > old { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
             }
             .task(id: model?.loaded == true) {
                 guard model?.loaded == true else { return }
-                // Once laid out, land where it was left, else at the end. The bottom anchor alone
-                // lands where the lazy rows' estimated heights put the end, which in a long
-                // transcript can be past every row drawn: blank until something scrolls it.
+                // Once laid out, land where it was left, else at the end.
                 await Task.yield()
                 if let top = scroll.land() {
                     proxy.scrollTo(top, anchor: .top)
