@@ -154,21 +154,14 @@ struct ChildAvatar: View {
 private struct StateDot: View {
     let progress: ChildProgress
     let size: CGFloat
-    @State private var pulsing = false
 
     var body: some View {
         ZStack {
-            if progress == .running {
-                Circle().fill(Theme.running.opacity(0.4))
-                    .scaleEffect(pulsing ? 2 : 1)
-                    .opacity(pulsing ? 0 : 1)
-                    .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
-            }
-            Circle().fill(progress == .idle ? Theme.idle : progress.color)
+            if progress == .running { RunningPulse(diameter: size * 2, opacity: 0.4) }
+            Circle().fill(progress == .idle ? Theme.idle : progress.color).frame(width: size, height: size)
         }
         .frame(width: size, height: size)
         .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2).padding(-2))
-        .onAppear { pulsing = true }
     }
 }
 
