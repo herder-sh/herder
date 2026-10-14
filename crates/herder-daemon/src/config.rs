@@ -94,16 +94,15 @@
 //!
 //! # Projects
 //!
-//! The daemon finds repositories in its sessions, in the `[projects]` dir and at the paths
-//! `[[project]]` entries declare; a project is identified by its `origin` remote. Each
-//! `[[project]]` entry overrides one project; see [`crate::projects`]:
+//! The daemon's repositories are the paths `[[project]]` entries declare and the repos of its
+//! sessions; nothing else on the host is a project. A project is identified by its `origin`
+//! remote. Each `[[project]]` entry overrides one project; see [`crate::projects`]:
 //!
 //! ```toml
 //! [projects]
-//! dir = "~/Projects"       # scanned 3 levels deep, and where clone_project clones to;
-//!                          # ~/Projects by default
+//! dir = "~/Projects"       # where clone_project clones to; ~/Projects by default
 //! setup_timeout_secs = 600 # how long a setup command may run; 10 minutes by default
-//! exclude = ["~/Projects/old"] # repositories left out wherever they are found
+//! exclude = ["~/Projects/old"] # repositories left out though a session ran in them
 //!
 //! [[project]]
 //! name = "herder"                  # the last segment of the id when absent

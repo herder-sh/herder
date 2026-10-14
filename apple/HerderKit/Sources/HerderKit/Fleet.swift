@@ -380,7 +380,7 @@ public final class Fleet {
         return projectId
     }
 
-    /// The folder a machine scans for projects and clones them into; owners only.
+    /// The folder a machine clones projects into; owners only.
     func projectsDir(on hostId: HostId) async throws -> String {
         guard case .settings(let settings, _, _, _) = try await client.send(hostId: hostId, command: .getSettings)
         else { throw HerderError.Local(detail: "the machine did not send its settings") }
