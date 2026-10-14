@@ -8,7 +8,7 @@ use herder_protocol::{AccountId, EventBody, ItemBody, SessionStatus};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
-    let demo = demo::Demo::start().await?;
+    let demo = demo::Demo::start(false).await?;
     assert!(demo.link.starts_with("herder://pair?"), "{}", demo.link);
     let scenes = demo.scenes().await?;
     let scene = |host: &str, title: &str| {
@@ -96,5 +96,23 @@ async fn the_demo_sets_up_every_scene() -> anyhow::Result<()> {
             "nothing on {host}"
         );
     }
+    demo.stop().await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_busy_demo_adds_a_long_transcript_that_keeps_streaming() -> anyhow::Result<()> {
+    let demo = demo::Demo::start(true).await?;
+    let scenes = demo.scenes().await?;
+    let busy = scenes
+        .iter()
+        .find(|scene| scene.host == "devbox" && scene.title == "A long transcript, still streaming")
+        .expect("no busy session on devbox");
+    assert_eq!(busy.status, SessionStatus::Running);
+    let finished = busy
+        .events
+        .iter()
+        .filter(|body| matches!(body, EventBody::TurnCompleted { .. }))
+        .count();
+    assert_eq!(finished, 30);
     demo.stop().await
 }

@@ -8,7 +8,8 @@
 //! a device paired with both shares (`Client::share`), which pairs with both at once; the
 //! repository is the first's, and the first has a session waiting on an approval.
 //! `fake_daemon --demo` runs the demo fleet of the site's screenshots ([`demo`]) and prints
-//! only the link a device paired with all of it shares.
+//! only the link a device paired with all of it shares; `fake_daemon --busy` adds the load the
+//! apps are profiled under.
 //! `fake_daemon --vault` runs a vault that keeps secrets ([`vault`]) and prints only its
 //! owner's pairing link.
 
@@ -29,8 +30,8 @@ use tokio::io::AsyncReadExt;
 #[tokio::main]
 async fn main() -> Result<()> {
     let (daemons, link) = match std::env::args().nth(1).as_deref() {
-        Some("--demo") => {
-            let demo = demo::Demo::start().await?;
+        Some(flag @ ("--demo" | "--busy")) => {
+            let demo = demo::Demo::start(flag == "--busy").await?;
             println!("{}", demo.link);
             tokio::io::stdin().read_to_end(&mut Vec::new()).await?;
             return demo.stop().await;
