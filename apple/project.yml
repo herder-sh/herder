@@ -100,6 +100,20 @@ targets:
         ARCHS: arm64
     scheme:
       testTargets: [herder-macOS-Screenshots]
+  # Drives the copy of the Mac app `scripts/profile-mac.sh` builds, so it depends on no target.
+  herder-macOS-Profile:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [ProfileTests]
+    settings:
+      base:
+        PRODUCT_NAME: herder-macOS-Profile
+        PRODUCT_MODULE_NAME: HerderProfile
+        PRODUCT_BUNDLE_IDENTIFIER: sh.herder.Herder.ProfileTests
+        GENERATE_INFOPLIST_FILE: YES
+        ARCHS: arm64
+    scheme:
+      testTargets: [herder-macOS-Profile]
   herder-macOS:
     type: application
     platform: macOS
