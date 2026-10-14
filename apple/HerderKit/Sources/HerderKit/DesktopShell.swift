@@ -52,9 +52,8 @@ struct DesktopShell: View {
                     drafting({ $0.projectId == id }) {
                         ScrollView {
                             if let project {
-                                ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
-                                                archived: project.archived.filter { $0.matches(query) },
-                                                selection: $session)
+                                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived,
+                                                query: query, selection: $session)
                                     .padding(16)
                             }
                         }
@@ -69,9 +68,8 @@ struct DesktopShell: View {
                 Pane(title: "Chats", subtitle: "About no project", switcher: switcher, query: $query) {
                     drafting(\.isChat) {
                         ScrollView {
-                            ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
-                                            archived: lists.archivedChats.filter { $0.matches(query) },
-                                            selection: $session, title: "Chats")
+                            ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats,
+                                            query: query, selection: $session, title: "Chats")
                                 .padding(16)
                         }
                     }
@@ -617,19 +615,28 @@ struct IconButton: View {
     }
 }
 
-/// A project's sessions: the live ones, then the archived ones, folded away until asked for.
+/// A project's task trees a search finds, each with its agents folded under its top: the live
+/// ones, then the archived ones, folded away until asked for.
 struct ProjectSessions: View {
     let fleet: Fleet
     let live: [SessionSummary]
     let archived: [SessionSummary]
+    let query: String
     /// Where a tapped session opens beside the list; `nil` pushes it.
     var selection: Binding<SessionKey?>?
     var title = "Sessions"
     @State private var showsArchived = false
 
     var body: some View {
+        let live = TaskTree.trees(live).filter { $0.matches(query) }
+        let archived = TaskTree.trees(archived).filter { $0.matches(query) }
         VStack(alignment: .leading, spacing: 26) {
-            SessionGroup(title: title, sessions: live, fleet: fleet, selection: selection, showsProject: false)
+            if !live.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionHeading(title: title, count: live.count)
+                    TaskTreeList(trees: live, fleet: fleet, selection: selection, showsProject: false)
+                }
+            }
             if !archived.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Button { showsArchived.toggle() } label: {
@@ -644,7 +651,7 @@ struct ProjectSessions: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.secondary)
                     if showsArchived {
-                        SessionGroup(title: nil, sessions: archived, fleet: fleet, selection: selection, showsProject: false)
+                        TaskTreeList(trees: archived, fleet: fleet, selection: selection, showsProject: false)
                     }
                 }
             }

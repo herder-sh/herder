@@ -35,7 +35,7 @@ struct BoardTests {
     }
 
     /// The Board of `sessions`, all in one project on one machine.
-    private func board(_ sessions: [SessionModel]) -> [BoardTree] {
+    private func board(_ sessions: [SessionModel]) -> [TaskTree] {
         var host = machine("host-a", name: "a", sessions: sessions.map(\.key.sessionId))
         for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
         return Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) })).board
@@ -123,5 +123,29 @@ struct BoardTests {
         #expect(lists.board(matching: "CHECKOUT").map(\.lead.title) == ["Fix the deal pages"])
         #expect(lists.board(matching: "tests").map(\.lead.title) == ["Run the tests"])
         #expect(lists.board(matching: "nothing").isEmpty)
+    }
+
+    @Test func aProjectsSessionsAreTaskTreesWithTheirChildrenUnderTheTop() {
+        var lead = Script("01A")
+        var child = Script("01B")
+        var grandchild = Script("01C")
+        var other = Script("01D")
+        var host = machine("host-a", name: "a", sessions: ["01A", "01B", "01C", "01D"])
+        for index in host.sessions.indices { host.sessions[index].projectId = "github.com/acme/app" }
+        let sessions = [
+            lead.model([created(task: "Lead")]),
+            child.model([created(task: "Child", parent: "01A")]),
+            grandchild.model([created(task: "Grandchild", parent: "01B")]),
+            other.model([created(task: "Other")]),
+        ]
+        let live = Lists(machines: [host], sessions: Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) }))
+            .projects[0].live
+        let trees = TaskTree.trees(live)
+        #expect(trees.map(\.lead.title).sorted() == ["Lead", "Other"])
+        let tree = trees.first { $0.lead.title == "Lead" }
+        #expect(tree?.children.map(\.title) == ["Child", "Grandchild"])
+        #expect(tree?.agentCount == 2)
+        // A search for a grandchild keeps its whole tree, folded under its top.
+        #expect(trees.filter { $0.matches("grandchild") }.map(\.lead.title) == ["Lead"])
     }
 }

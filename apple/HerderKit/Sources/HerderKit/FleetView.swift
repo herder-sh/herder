@@ -273,34 +273,6 @@ struct EmptyFleet: View {
     }
 }
 
-/// A card of session rows, under its title when it has one.
-struct SessionGroup: View {
-    let title: String?
-    let sessions: [SessionSummary]
-    let fleet: Fleet
-    var selection: Binding<SessionKey?>?
-    var showsProject = true
-
-    var body: some View {
-        if !sessions.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                if let title { SectionHeading(title: title, count: sessions.count) }
-                VStack(spacing: 0) {
-                    ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
-                        if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
-                        SessionLink(session: session, fleet: fleet, selection: selection, showsProject: showsProject)
-                        ForEach(session.agents) { agent in
-                            NativeAgentRow(agent: agent, fleet: fleet, key: session.key, depth: session.depth)
-                        }
-                    }
-                }
-                .padding(4)
-                .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-            }
-        }
-    }
-}
-
 /// A session row that opens the session, into `selection` when given, else by pushing it,
 /// with archiving at hand: a button on hover, and in the context menu beside renaming.
 struct SessionLink: View {
@@ -445,8 +417,7 @@ struct ProjectView: View {
         let project = fleet.lists.projects.first { $0.id == id }
         ScrollView {
             if let project {
-                ProjectSessions(fleet: fleet, live: project.live.filter { $0.matches(query) },
-                                archived: project.archived.filter { $0.matches(query) })
+                ProjectSessions(fleet: fleet, live: project.live, archived: project.archived, query: query)
                     .padding(16)
             }
         }
@@ -476,8 +447,8 @@ struct ChatsView: View {
         ScrollView {
             // With no chats the overlay says so, rather than the list's "No sessions match."
             if !empty {
-                ProjectSessions(fleet: fleet, live: lists.chats.filter { $0.matches(query) },
-                                archived: lists.archivedChats.filter { $0.matches(query) }, title: "Chats")
+                ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query,
+                                title: "Chats")
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

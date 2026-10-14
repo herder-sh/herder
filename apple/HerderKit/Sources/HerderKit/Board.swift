@@ -1,14 +1,14 @@
 import Herder
 import SwiftUI
 
-/// A task tree on the Board: its top session, and under it the rest of the tree.
-struct BoardTree: Hashable, Identifiable {
+/// A task tree: its top session, and under it the rest of the tree.
+struct TaskTree: Hashable, Identifiable {
     var id: SessionKey { lead.key }
     let lead: SessionSummary
     /// The rest of the tree, in tree order.
     let children: [SessionSummary]
 
-    /// What the Board lists under the top: the live sessions in tree order, then the archived.
+    /// What is listed under the top: the live sessions in tree order, then the archived.
     var listed: [SessionSummary] { live + archived }
     var live: [SessionSummary] { children.filter { $0.state != .archived } }
     var archived: [SessionSummary] { children.filter { $0.state == .archived } }
@@ -27,26 +27,30 @@ struct BoardTree: Hashable, Identifiable {
     func matches(_ query: String) -> Bool {
         ([lead] + children).contains { $0.matches(query) }
     }
+
+    /// The trees of `sessions` listed in tree order: each top (depth 0), then the rest of its tree.
+    static func trees(_ sessions: [SessionSummary]) -> [TaskTree] {
+        var trees: [[SessionSummary]] = []
+        for session in sessions {
+            if session.depth == 0 || trees.isEmpty { trees.append([session]) } else { trees[trees.count - 1].append(session) }
+        }
+        return trees.map { TaskTree(lead: $0[0], children: Array($0.dropFirst())) }
+    }
 }
 
 extension Lists {
     /// Every task tree with a session that is neither archived nor moved, newest first. A child
     /// never stands on its own: it is listed under the top of its tree.
-    var board: [BoardTree] {
-        // A project's live sessions are whole task trees: each top (depth 0), then the rest.
-        var trees: [[SessionSummary]] = []
-        for session in projects.flatMap(\.live) {
-            if session.depth == 0 || trees.isEmpty { trees.append([session]) } else { trees[trees.count - 1].append(session) }
-        }
-        return trees
-            .filter { members in members.contains { ![.archived, .moved].contains($0.state) } }
-            .map { BoardTree(lead: $0[0], children: Array($0.dropFirst())) }
+    var board: [TaskTree] {
+        // A project's live sessions are whole task trees.
+        projects.flatMap { TaskTree.trees($0.live) }
+            .filter { tree in ([tree.lead] + tree.children).contains { ![.archived, .moved].contains($0.state) } }
             // Session ids are ULIDs, which sort by creation time.
             .sorted { ($0.lead.key.sessionId, $0.lead.key.hostId) > ($1.lead.key.sessionId, $1.lead.key.hostId) }
     }
 
     /// The Board's task trees a search finds.
-    func board(matching query: String) -> [BoardTree] {
+    func board(matching query: String) -> [TaskTree] {
         board.filter { $0.matches(query) }
     }
 }
@@ -61,8 +65,6 @@ struct BoardView: View {
     var query = ""
     /// Leads to Pull Requests, where it has no section of its own.
     var showsPullRequests = false
-    /// The trees whose agents are unfolded; every tree starts folded.
-    @State private var unfolded: Set<SessionKey> = []
 
     var body: some View {
         let lists = fleet.lists
@@ -88,16 +90,7 @@ struct BoardView: View {
                         .foregroundStyle(Theme.tertiary)
                         .padding(.top, 30)
                 }
-                if !trees.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(Array(trees.enumerated()), id: \.element.id) { index, tree in
-                            if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
-                            BoardTreeRows(tree: tree, fleet: fleet, selection: selection, unfolded: unfolding(tree))
-                        }
-                    }
-                    .padding(4)
-                    .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-                }
+                TaskTreeList(trees: trees, fleet: fleet, selection: selection)
             }
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
@@ -106,19 +99,6 @@ struct BoardView: View {
         .background(Theme.background)
         .refreshable { fleet.wake() }
         .navigationTitle("Board")
-        // An agent opened from elsewhere shows where it sits.
-        .onChange(of: selection?.wrappedValue, initial: true) { _, key in
-            guard let key, let tree = trees.first(where: { $0.children.contains { $0.key == key } }) else { return }
-            unfolded.insert(tree.id)
-        }
-    }
-
-    private func unfolding(_ tree: BoardTree) -> Binding<Bool> {
-        Binding {
-            unfolded.contains(tree.id)
-        } set: { open in
-            if open { unfolded.insert(tree.id) } else { unfolded.remove(tree.id) }
-        }
     }
 
     private var pullRequestsLink: some View {
@@ -141,16 +121,55 @@ struct BoardView: View {
     }
 }
 
-/// A task tree's rows on the Board: its top session's row, then one row that folds its agents,
-/// its provider's own and its herder children, the live ones before the archived.
-private struct BoardTreeRows: View {
-    let tree: BoardTree
+/// Task trees as one card, each tree's agents folded under its top. An agent opened from
+/// elsewhere unfolds its tree.
+struct TaskTreeList: View {
+    let trees: [TaskTree]
+    let fleet: Fleet
+    /// Where a tapped session opens beside the list; `nil` pushes it.
+    let selection: Binding<SessionKey?>?
+    var showsProject = true
+    /// The trees whose agents are unfolded; every tree starts folded.
+    @State private var unfolded: Set<SessionKey> = []
+
+    var body: some View {
+        if !trees.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(trees.enumerated()), id: \.element.id) { index, tree in
+                    if index > 0 { Divider().overlay(Theme.stroke).padding(.leading, 42) }
+                    TaskTreeRows(tree: tree, fleet: fleet, selection: selection, showsProject: showsProject,
+                                 unfolded: unfolding(tree))
+                }
+            }
+            .padding(4)
+            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+            .onChange(of: selection?.wrappedValue, initial: true) { _, key in
+                guard let key, let tree = trees.first(where: { $0.children.contains { $0.key == key } }) else { return }
+                unfolded.insert(tree.id)
+            }
+        }
+    }
+
+    private func unfolding(_ tree: TaskTree) -> Binding<Bool> {
+        Binding {
+            unfolded.contains(tree.id)
+        } set: { open in
+            if open { unfolded.insert(tree.id) } else { unfolded.remove(tree.id) }
+        }
+    }
+}
+
+/// A task tree's rows: its top session's row, then one row that folds its agents, its
+/// provider's own and its herder children, the live ones before the archived.
+private struct TaskTreeRows: View {
+    let tree: TaskTree
     let fleet: Fleet
     let selection: Binding<SessionKey?>?
+    let showsProject: Bool
     @Binding var unfolded: Bool
 
     var body: some View {
-        SessionLink(session: tree.lead, fleet: fleet, selection: selection)
+        SessionLink(session: tree.lead, fleet: fleet, selection: selection, showsProject: showsProject)
         if tree.agentCount > 0 {
             fold
             if unfolded {
@@ -158,7 +177,7 @@ private struct BoardTreeRows: View {
                     NativeAgentRow(agent: agent, fleet: fleet, key: tree.lead.key)
                 }
                 ForEach(tree.listed) { child in
-                    BoardChildRow(session: child, fleet: fleet, selection: selection)
+                    TaskChildRow(session: child, fleet: fleet, selection: selection)
                 }
             }
         }
@@ -193,10 +212,10 @@ private struct BoardTreeRows: View {
     }
 }
 
-/// A herder child under the top of its task tree on the Board, drawn as a provider's agent is
+/// A herder child under the top of its task tree, drawn as a provider's agent is
 /// (`NativeAgentRow`), badged with its state. It opens the child, into `selection` when given,
 /// else by pushing it, as `SessionLink` does.
-private struct BoardChildRow: View {
+private struct TaskChildRow: View {
     let session: SessionSummary
     let fleet: Fleet
     let selection: Binding<SessionKey?>?
