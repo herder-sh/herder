@@ -39,6 +39,9 @@ final class ScreenshotTests: XCTestCase {
             #if os(iOS)
             shoot("ios-session")
             #endif
+            // A running turn folds its tool calls, the agents among them, under Working.
+            let work = app.buttons["turn-work"].firstMatch
+            if wait(work, "working") { press(work) }
             let agent = app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH 'Open sub-agent: Review retry backoff'")).firstMatch
             if wait(agent, "subagent row") {
