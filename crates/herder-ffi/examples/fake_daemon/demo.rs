@@ -31,7 +31,9 @@ use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
 use herder_daemon::login::Logins;
 use herder_daemon::mcp;
-use herder_daemon::projects::{Discovery, OnSessionsChanged, Overrides, ProjectsConfig};
+use herder_daemon::projects::{
+    Discovery, OnSessionsChanged, Overrides, ProjectEntry, ProjectsConfig,
+};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
@@ -581,6 +583,13 @@ impl Daemon {
                     // Every machine has every project, sessions or not.
                     ProjectsConfig {
                         dir: dir.join("src"),
+                        entries: REPOS
+                            .iter()
+                            .map(|repo| ProjectEntry {
+                                paths: vec![dir.join("src").join(repo)],
+                                ..ProjectEntry::default()
+                            })
+                            .collect(),
                         ..ProjectsConfig::default()
                     },
                 )),
