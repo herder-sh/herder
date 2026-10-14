@@ -179,36 +179,6 @@ fn git_repo(path: &Path, config: &str) {
 }
 
 #[test]
-fn the_scan_finds_nested_repos_and_skips_excluded_dirs() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("Projects");
-    for found in ["top", "org/repo", "org/group/deep"] {
-        git_repo(&root.join(found), "");
-    }
-    for skipped in [
-        "org/group/sub/too-deep",
-        ".hidden/repo",
-        "app/node_modules/dep",
-        "crate/target/repo",
-        // Inside a repository: not descended into.
-        "top/vendor/inner",
-    ] {
-        git_repo(&root.join(skipped), "");
-    }
-    fs::create_dir_all(root.join("app/src")).unwrap();
-    std::os::unix::fs::symlink(&root, root.join("org/loop")).unwrap();
-
-    let mut found = scan::repos(&root);
-    assert!(scan::repos(&tmp.path().join("missing")).is_empty());
-    found.sort();
-    let expected: Vec<PathBuf> = ["org/group/deep", "org/repo", "top"]
-        .iter()
-        .map(|p| root.join(p))
-        .collect();
-    assert_eq!(found, expected);
-}
-
-#[test]
 fn origin_is_read_from_the_repo_config() {
     let tmp = tempfile::tempdir().unwrap();
     let main = tmp.path().join("main");
@@ -281,17 +251,15 @@ async fn next_projects(outbox: &crate::hub::Outbox) -> Vec<Project> {
 }
 
 #[tokio::test]
-async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
+async fn discovery_lists_declared_paths_only_and_updates_it_when_sessions_change() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("Projects");
+    // A repository in the projects dir that nobody added: no project.
     git_repo(
         &root.join("app"),
         "[remote \"origin\"]\n\turl = git@github.com:org/app.git\n",
     );
     let declared = tmp.path().join("notes");
-    // A data dir under a root: its repositories, such as the skill library, are no projects.
-    let data_dir = root.join("herder-data");
-    git_repo(&data_dir.join("skills"), "");
     let hub = Arc::new(Hub::default());
     let outbox = Arc::new(crate::hub::Outbox::default());
     hub.connect(&outbox, herder_protocol::Role::Member);
@@ -331,19 +299,12 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
             hub: Arc::clone(&hub),
             sessions,
             sessions_changed: Arc::clone(&sessions_changed),
-            data_dir: data_dir.clone(),
+            data_dir: tmp.path().join("data"),
         }
         .run(shutdown.clone()),
     );
 
-    let app = root.join("app").to_string_lossy().into_owned();
-    assert_eq!(
-        next_projects(&outbox).await,
-        [cloned(
-            project("github.com/org/app", "app", &[&app]),
-            "git@github.com:org/app.git"
-        )]
-    );
+    assert_eq!(next_projects(&outbox).await, []);
 
     // A look at the sessions also picks up declared paths that appeared since.
     fs::create_dir_all(&declared).unwrap();
@@ -351,13 +312,7 @@ async fn discovery_publishes_the_list_and_updates_it_when_sessions_change() {
     let notes = declared.to_string_lossy().into_owned();
     assert_eq!(
         next_projects(&outbox).await,
-        [
-            project(&format!("HOST:{notes}"), "Notes", &[&notes]),
-            cloned(
-                project("github.com/org/app", "app", &[&app]),
-                "git@github.com:org/app.git"
-            ),
-        ]
+        [project(&format!("HOST:{notes}"), "Notes", &[&notes])]
     );
 
     shutdown.cancel();
@@ -955,7 +910,7 @@ async fn owners_remove_projects_without_live_sessions_and_keep_their_clones() {
     let error = handle(remove("github.com/org/other")).await.unwrap_err();
     assert_eq!(error.code, herder_protocol::ErrorCode::NotFound);
 
-    // Removed, it stays out though the scan and its archived session find it.
+    // Removed, it stays out though its archived session finds it.
     assert_eq!(
         handle(remove("github.com/org/lib")).await,
         Ok(herder_protocol::CommandResult::Applied)
@@ -1035,8 +990,10 @@ async fn discovery_lists_icons_and_anyone_fetches_them_afresh() {
     fs::write(
         &file,
         format!(
-            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\npaths = [\"{}\"]\nicon = \"logo.png\"\n\n[[project]]\npaths = [\"{}\"]\n",
             root.display(),
+            app.display(),
+            lib.display(),
         ),
     )
     .unwrap();
@@ -1165,8 +1122,9 @@ async fn an_uploaded_icon_wins_until_it_is_cleared() {
     fs::write(
         &file,
         format!(
-            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\nicon = \"logo.png\"\n",
+            "[projects]\ndir = \"{}\"\n\n[[project]]\nremotes = [\"git@github.com:org/app.git\"]\npaths = [\"{}\"]\nicon = \"logo.png\"\n",
             root.display(),
+            app.display(),
         ),
     )
     .unwrap();

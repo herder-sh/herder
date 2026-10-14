@@ -3409,11 +3409,11 @@
       "type": "object",
       "properties": {
         "dir": {
-          "description": "The projects dir, absolute or starting with `~/`: scanned for repositories, and where\n`clone_project` clones them unless told otherwise.",
+          "description": "The projects dir, absolute or starting with `~/`: where `clone_project` clones\nrepositories unless told otherwise.",
           "type": "string"
         },
         "exclude": {
-          "description": "Repositories left out wherever they are found.",
+          "description": "Repositories left out though a session ran in them: the clones of removed projects.",
           "type": "array",
           "items": {
             "type": "string"

@@ -1,13 +1,14 @@
 //! Project discovery: which repositories this host holds, grouped into projects.
 //!
-//! Repositories come from three places: the repo of every session, a scan of the projects dir
-//! ([`scan`]), and the paths `[[project]]` entries declare. Each repository's project is
+//! Repositories come from two places: the paths `[[project]]` entries declare and the repo of
+//! every session. Nothing else on the host is a project: a repository is one only once an owner
+//! adds it, or a session runs in it. Each repository's project is
 //! its `origin` remote normalised by [`ProjectId::from_remote`], or a local project of this
 //! host when it has none. `[[project]]` entries then override that ([`resolve`]): they name a
 //! project, merge several remotes into one, and add or declare clones by path.
 //!
-//! [`Discovery::run`] scans at startup and every [`RESCAN_INTERVAL`], and looks at the session
-//! repos again whenever a session is created ([`OnSessionsChanged`]). Each time the resolved
+//! [`Discovery::run`] reads every remote at startup and every [`RESCAN_INTERVAL`], and looks at
+//! the session repos again whenever a session is created ([`OnSessionsChanged`]). Each time the resolved
 //! list differs from the last, it goes to every client through [`Hub::projects_changed`].
 //!
 //! Owners change the `[[project]]` entries from a client: `add_project` declares a repository,
@@ -46,7 +47,7 @@ use tracing::{debug, warn};
 use crate::hub::Hub;
 use crate::session::{EventSink, SessionManager};
 
-/// How often the projects dir is scanned again and every remote re-read.
+/// How often every remote and icon is read again.
 pub const RESCAN_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// How long a project's setup command may run in a new worktree unless configured otherwise.
@@ -55,8 +56,8 @@ pub const SETUP_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// The `[projects]` table and the `[[project]]` entries, resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectsConfig {
-    /// The projects dir: scanned for repositories, and where `clone_project` clones to unless
-    /// told otherwise. Empty only in tests, where nothing is scanned.
+    /// The projects dir, where `clone_project` clones to unless told otherwise. Empty only in
+    /// tests.
     pub dir: PathBuf,
     /// How long a setup command may run before it is killed and the setup fails.
     pub setup_timeout: Duration,
@@ -411,7 +412,7 @@ pub struct Discovery {
     /// Notified when a session is created; see [`OnSessionsChanged`].
     pub sessions_changed: Arc<Notify>,
     /// The daemon's data dir. The repositories in it, such as the skill library, are herder's
-    /// own and never a project, even when a root holds it.
+    /// own and never a project, even when a session runs in one.
     pub data_dir: PathBuf,
 }
 
@@ -420,8 +421,7 @@ impl Discovery {
     pub async fn run(self, shutdown: CancellationToken) {
         let mut rescan = tokio::time::interval(RESCAN_INTERVAL);
         rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        // Repositories found by the last scan, and every repository with its remote.
-        let mut scanned = Vec::new();
+        // Every repository with its remote.
         let mut repos: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
         let mut published = None;
         loop {
@@ -429,7 +429,7 @@ impl Discovery {
                 () = shutdown.cancelled() => return,
                 _ = rescan.tick() => true,
                 () = self.sessions_changed.notified() => false,
-                // A new dir or entries: scan everything again.
+                // New entries: read everything again.
                 () = self.config.changed() => true,
             };
             let config = self.config.config();
@@ -441,16 +441,9 @@ impl Discovery {
                 }
             };
             if full {
-                let dir = config.dir.clone();
-                scanned = tokio::task::spawn_blocking(move || scan::repos(&dir))
-                    .await
-                    .unwrap_or_else(|err| {
-                        warn!("the project scan panicked: {err}");
-                        Vec::new()
-                    });
                 repos.clear();
             }
-            let wanted = wanted(&config, &self.data_dir, &scanned, session_repos);
+            let wanted = wanted(&config, &self.data_dir, session_repos);
             repos.retain(|path, _| wanted.contains(path));
             let new: Vec<PathBuf> = wanted
                 .into_iter()
@@ -520,16 +513,15 @@ async fn with_icons(
     projects
 }
 
-/// Every repository to resolve: those `scanned`, the session repos still git repositories and
-/// the paths `config` declares that are directories, but none `config` excludes or `data_dir` holds.
+/// Every repository to resolve: the paths `config` declares that are directories and the
+/// session repos still git repositories, but none `config` excludes or `data_dir` holds.
 fn wanted(
     config: &ProjectsConfig,
     data_dir: &Path,
-    scanned: &[PathBuf],
     session_repos: Vec<PathBuf>,
 ) -> BTreeSet<PathBuf> {
     let declared = config.entries.iter().flat_map(|entry| &entry.paths);
-    let mut wanted: BTreeSet<PathBuf> = scanned.iter().cloned().collect();
+    let mut wanted: BTreeSet<PathBuf> = BTreeSet::new();
     wanted.extend(session_repos.into_iter().filter(|path| scan::is_repo(path)));
     wanted.extend(declared.filter(|path| path.is_dir()).cloned());
     wanted.retain(|path| !config.exclude.contains(path) && !path.starts_with(data_dir));
