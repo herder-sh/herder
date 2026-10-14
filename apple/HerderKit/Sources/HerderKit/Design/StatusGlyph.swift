@@ -1,4 +1,5 @@
 import Herder
+import QuartzCore
 import SwiftUI
 
 /// A session's state as one small mark: the same set everywhere, so state reads at a glance.
@@ -7,19 +8,12 @@ struct StatusGlyph: View {
     var size: CGFloat = 10
     /// Whether running pulses; the sidebar holds still, as the TUI's does.
     var pulses = true
-    @State private var pulsing = false
 
     var body: some View {
         ZStack {
             switch state {
             case .running:
-                if pulses {
-                    Circle().fill(Theme.running.opacity(0.35))
-                        .frame(width: size * 2, height: size * 2)
-                        .scaleEffect(pulsing ? 1 : 0.5)
-                        .opacity(pulsing ? 0 : 1)
-                        .animation(.easeOut(duration: 1.4).repeatForever(autoreverses: false), value: pulsing)
-                }
+                if pulses { RunningPulse(diameter: size * 2) }
                 Circle().fill(Theme.running).frame(width: size, height: size)
             case .needsYou:
                 Circle().fill(Theme.accent).frame(width: size + 4, height: size + 4)
@@ -44,8 +38,126 @@ struct StatusGlyph: View {
             }
         }
         .frame(width: size * 2, height: size * 2)
-        .onAppear { pulsing = true }
         .accessibilityLabel(state.label)
+    }
+}
+
+/// The halo of a running mark: a ring that grows from half its size and fades, over and over.
+/// Core Animation runs it on its own. An animation of SwiftUI's that repeats forever, a symbol
+/// effect too, renders the whole window again every frame, and with a long transcript open that
+/// takes most of the main thread.
+struct RunningPulse: View {
+    let diameter: CGFloat
+    var opacity = 0.35
+
+    var body: some View {
+        PulseHalo(color: Theme.running.opacity(opacity)).frame(width: diameter, height: diameter)
+    }
+}
+
+private struct PulseHalo {
+    let color: Color
+}
+
+#if os(iOS)
+extension PulseHalo: UIViewRepresentable {
+    func makeUIView(context: Context) -> PulseHaloView { PulseHaloView() }
+    func updateUIView(_ view: PulseHaloView, context: Context) {
+        view.color = color.resolve(in: context.environment).cgColor
+    }
+}
+
+private final class PulseHaloView: UIView {
+    private let halo = CAShapeLayer()
+
+    var color: CGColor? {
+        didSet { halo.fillColor = color }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        layer.addSublayer(halo)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        halo.place(in: bounds)
+    }
+
+    // Core Animation drops a layer's animations as it leaves the window.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { halo.pulse() }
+    }
+}
+#else
+extension PulseHalo: NSViewRepresentable {
+    func makeNSView(context: Context) -> PulseHaloView { PulseHaloView() }
+    func updateNSView(_ view: PulseHaloView, context: Context) {
+        view.color = color.resolve(in: context.environment).cgColor
+    }
+}
+
+private final class PulseHaloView: NSView {
+    private let halo = CAShapeLayer()
+
+    var color: CGColor? {
+        didSet { halo.fillColor = color }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.addSublayer(halo)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    /// Lets clicks fall through to the row the mark is in.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        halo.place(in: bounds)
+    }
+
+    // Core Animation drops a layer's animations as it leaves the window.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { halo.pulse() }
+    }
+}
+#endif
+
+private extension CAShapeLayer {
+    func place(in bounds: CGRect) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frame = bounds
+        path = CGPath(ellipseIn: bounds, transform: nil)
+        CATransaction.commit()
+    }
+
+    func pulse() {
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = 0.5
+        scale.toValue = 1
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        let pulse = CAAnimationGroup()
+        pulse.animations = [scale, fade]
+        pulse.duration = 1.4
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        pulse.repeatCount = .infinity
+        // Else the app going to the background ends it for good.
+        pulse.isRemovedOnCompletion = false
+        add(pulse, forKey: "pulse")
     }
 }
 
