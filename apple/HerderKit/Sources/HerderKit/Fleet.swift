@@ -603,7 +603,8 @@ public enum Profile {
         }
     }
 
-    /// Opens the app's profile in Application Support.
+    /// Opens the app's profile in Application Support: `herder`, or `herder-<name>` when the
+    /// `HERDER_PROFILE` environment names one, so profiling and tests keep off the real pairings.
     @MainActor
     public static func openDefault() -> Profile {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -614,7 +615,9 @@ public enum Profile {
         let platform = "macos"
         #endif
         return open(
-            at: support.appendingPathComponent("herder", isDirectory: true),
+            at: support.appendingPathComponent(
+                ProcessInfo.processInfo.environment["HERDER_PROFILE"].map { "herder-\($0)" } ?? "herder",
+                isDirectory: true),
             client: "herder-\(platform)/\(version ?? "dev")")
     }
 }

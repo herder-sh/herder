@@ -87,3 +87,24 @@ Device** on that one (the Mac app) and scan or paste the link it shows.
 
 The `apple` workflow runs the tests and builds both apps on every change to `apple/` or to what
 it builds on.
+
+## Profile
+
+When the Mac app feels slow, measure it under a load that repeats:
+
+```sh
+apple/scripts/profile-mac.sh            # the streaming session; `board` for the Board
+apple/scripts/profile-mac.sh board 20   # and how many seconds to record
+```
+
+It builds a release copy of the app with its own bundle id and profile, so the installed app
+keeps running with its pairings, and pairs it with `fake_daemon --busy`: the demo fleet plus a
+session with a long transcript whose turn keeps streaming. The `herder-macOS-Profile` UI test
+opens the scene and holds it while Instruments records it with the SwiftUI template. Then the
+script prints the hitches, how long the main thread was busy, the SwiftUI updates that took
+longest and herder's heaviest frames, and keeps the trace in `target/profile/` to open in
+Instruments.
+
+Read the main thread's busy time first: hitches count every late frame on the machine, so
+other apps loading the window server inflate them. Keep away from the keyboard and mouse
+until the recording starts, as the test drives them.

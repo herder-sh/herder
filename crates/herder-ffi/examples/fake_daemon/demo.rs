@@ -15,6 +15,9 @@
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
 //! machine shares, as `--share` prints.
+//!
+//! `fake_daemon --busy` adds the load the apps are profiled under (`apple/scripts/profile-mac.sh`):
+//! on `devbox`, a session with [`BUSY_TURNS`] finished turns whose next turn keeps streaming.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -73,6 +76,12 @@ const RUNBOOK: &str = "Write docs/runbooks/logs.md: how to restore logs older th
 const FLAKY: &str = "The checkout e2e test fails about one CI run in five. Find out why.";
 const SAFARI: &str = "Carry on here: fix it and run the checkout suite in WebKit until it passes \
                       20 times in a row.";
+
+/// The busy session's turns: each [`NEXT_STEP`] plays one round of work and finishes, then
+/// [`KEEP_GOING`] plays a round every second for an hour.
+const BUSY_TURNS: usize = 30;
+const NEXT_STEP: &str = "Next step.";
+const KEEP_GOING: &str = "Keep going.";
 
 /// The script each prompt plays, by account; other prompts get a short reply.
 const SCRIPTS: &[(&str, &str, &str)] = &[
@@ -160,8 +169,8 @@ pub struct Demo {
 }
 
 impl Demo {
-    /// Starts the machines and sets the demo up on them.
-    pub async fn start() -> Result<Self> {
+    /// Starts the machines and sets the demo up on them; with `busy`, the busy session too.
+    pub async fn start(busy: bool) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
         let origins = origins(&tmp.path().join("origins"))?;
         let mut daemons = Vec::new();
@@ -198,6 +207,9 @@ impl Demo {
             daemons: &daemons,
         };
         demo.set_up().await?;
+        if busy {
+            demo.busy().await?;
+        }
         let shared = client.share().await?;
         if let Some(skipped) = shared.skipped.first() {
             bail!("{} was not shared: {}", skipped.host_id, skipped.error);
@@ -381,6 +393,26 @@ impl Scenario<'_> {
             })
             .await?;
         Ok(())
+    }
+
+    /// A session with a long transcript whose last turn keeps streaming.
+    async fn busy(&self) -> Result<()> {
+        let session = self
+            .session(
+                "devbox",
+                "claude-personal",
+                "api",
+                "streaming-load",
+                "A long transcript, still streaming",
+            )
+            .await?;
+        let devbox = self.daemon("devbox")?;
+        // One at a time: prompts sent while a turn runs queue up and merge.
+        for turns in 1..=BUSY_TURNS {
+            self.prompt("devbox", &session, NEXT_STEP).await?;
+            devbox.until(&session, finished(turns)).await?;
+        }
+        self.prompt("devbox", &session, KEEP_GOING).await
     }
 
     fn daemon(&self, name: &str) -> Result<&Daemon> {
@@ -900,6 +932,11 @@ async fn run(
 /// The steps a prompt plays: its script with `$turn` replaced by the turn's id and each
 /// `$in_<n>m` by the time `n` minutes from now, else a short reply.
 fn script(dir: &Path, account: &str, text: &str, turn_id: &TurnId) -> Result<Vec<Step>> {
+    match text {
+        NEXT_STEP => return Ok(work(turn_id, 1, 0)),
+        KEEP_GOING => return Ok(work(turn_id, 3600, 1000)),
+        _ => {}
+    }
     let Some((_, _, file)) = SCRIPTS
         .iter()
         .find(|(scripted, prompt, _)| *scripted == account && *prompt == text)
@@ -956,4 +993,64 @@ fn reply(turn_id: &TurnId) -> Vec<Step> {
             usage: None,
         }),
     ]
+}
+
+/// A turn of `rounds` rounds of work, `pause_ms` apart: each a Markdown message, a command and its
+/// output, as a long session's transcript has them.
+fn work(turn_id: &TurnId, rounds: usize, pause_ms: u64) -> Vec<Step> {
+    let item = |id: String, body: ItemBody| {
+        Step::Emit(AdapterEvent::ItemCompleted {
+            item: Item {
+                agent_message: None,
+                follow_up: None,
+                parent_call_id: None,
+                id: ItemId::new(id),
+                turn_id: turn_id.clone(),
+                body,
+            },
+        })
+    };
+    let mut steps = vec![Step::Emit(AdapterEvent::TurnStarted {
+        turn_id: turn_id.clone(),
+    })];
+    for round in 1..=rounds {
+        let call = format!("{turn_id}-{round}-call");
+        steps.push(item(
+            format!("{turn_id}-{round}-message"),
+            ItemBody::AssistantMessage {
+                text: format!(
+                    "Round {round}: the retry worker reads `max_attempts` from the queue config, \
+                     so the cap holds for **every** handler.\n\n\
+                     - `src/jobs/retry.rs` backs off exponentially, with jitter\n\
+                     - `src/webhooks/stripe.rs` acknowledges before it persists\n\n\
+                     ```rust\nlet delay = base * 2u32.pow(attempt.min(8)) + jitter();\n```"
+                ),
+            },
+        ));
+        steps.push(item(
+            call.clone(),
+            ItemBody::ToolCall {
+                name: "Bash".into(),
+                input: json!({ "command": "cargo test -p webhooks retry" }),
+            },
+        ));
+        steps.push(item(
+            format!("{turn_id}-{round}-result"),
+            ItemBody::ToolResult {
+                call_id: ItemId::new(call),
+                output: "running 24 tests\n........................\n\
+                         test result: ok. 24 passed; 0 failed; finished in 1.82s"
+                    .into(),
+                is_error: false,
+            },
+        ));
+        if pause_ms > 0 {
+            steps.push(Step::SleepMs(pause_ms));
+        }
+    }
+    steps.push(Step::Emit(AdapterEvent::TurnCompleted {
+        turn_id: turn_id.clone(),
+        usage: None,
+    }));
+    steps
 }
