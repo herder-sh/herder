@@ -46,7 +46,7 @@ struct AgentMessageSource: View {
 extension Fleet {
     /// The title of the session another agent's message came from, or the end of its id.
     func senderTitle(_ message: AgentMessage, on hostId: HostId) -> String {
-        sessions[SessionKey(hostId: hostId, sessionId: message.senderSessionId)]?.title
+        session(SessionKey(hostId: hostId, sessionId: message.senderSessionId))?.title
             ?? "Session …\(message.senderSessionId.suffix(6))"
     }
 }

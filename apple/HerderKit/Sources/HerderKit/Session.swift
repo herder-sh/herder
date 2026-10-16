@@ -1,5 +1,6 @@
 import Foundation
 import Herder
+import Observation
 
 /// A session on a machine. `hostId` is the machine the app is connected to, which for a vault
 /// is the vault, not the host the session runs on.
@@ -24,6 +25,17 @@ struct Pending: Hashable {
     var note: String?
     /// When it was asked, or escalated to the user.
     var since: Date
+}
+
+/// A session's state, observed on its own: see `Fleet.session(_:)`.
+@MainActor
+@Observable
+final class SessionBox {
+    var model: SessionModel
+
+    init(_ model: SessionModel) {
+        self.model = model
+    }
 }
 
 /// A session's state, folded from its events as the TUI does (crates/herder-tui/src/session.rs):
@@ -642,16 +654,14 @@ func firstLine(_ text: String) -> String {
 }
 
 enum Timestamp {
-    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-    nonisolated(unsafe) private static let whole = ISO8601DateFormatter()
+    /// Foundation's own parsers: `ISO8601DateFormatter` goes through ICU, and folding a
+    /// session's events parsed a date per event: most of the time it took.
+    private static let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let whole = Date.ISO8601FormatStyle()
 
     /// Parses an RFC 3339 timestamp, with or without fractional seconds.
     static func date(_ text: String) -> Date? {
-        fractional.date(from: text) ?? whole.date(from: text)
+        (try? fractional.parse(text)) ?? (try? whole.parse(text))
     }
 
     /// How long ago, compactly: "now", "5m", "2h", "3d".

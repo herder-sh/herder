@@ -177,7 +177,7 @@ struct NativeAgentGroup: View {
                 HStack(spacing: 12) {
                     HStack(spacing: -8) {
                         ForEach(agents.prefix(3)) { _ in
-                            ProviderMark(provider: fleet.sessions[key]?.provider ?? "claude", size: 18)
+                            ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 18)
                                 .padding(7).background(Theme.surface, in: Circle())
                                 .overlay(Circle().strokeBorder(Theme.stroke))
                         }
@@ -216,7 +216,7 @@ struct NativeAgentCard: View {
     var body: some View {
         Button { showingChat = true } label: {
             HStack(spacing: 12) {
-                ProviderMark(provider: fleet.sessions[key]?.provider ?? "claude", size: 20)
+                ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 20)
                     .padding(8).background(Theme.surface, in: Circle())
                     .overlay(alignment: .bottomTrailing) {
                         Circle().fill(agent.outcome == .running ? Theme.running : agent.outcome == .failed ? Theme.failure : Theme.idle)
@@ -257,7 +257,7 @@ struct NativeAgentRow: View {
         Button { showingChat = true } label: {
             HStack(spacing: 8) {
                 TreeLine().frame(width: CGFloat(depth + 1) * 14)
-                ProviderMark(provider: fleet.sessions[key]?.provider ?? "claude", size: 11)
+                ProviderMark(provider: fleet.session(key)?.provider ?? "claude", size: 11)
                     .frame(width: 20, height: 20)
                     .background(Theme.raised, in: Circle())
                     .overlay(Circle().strokeBorder(Theme.stroke))
@@ -291,7 +291,7 @@ struct NativeAgentChat: View {
 
     var body: some View {
         Group {
-            if let model = fleet.sessions[key], let agent = NativeAgent.find(reference, in: model) {
+            if let model = fleet.session(key), let agent = NativeAgent.find(reference, in: model) {
                 NativeAgentDetail(agent: agent, model: model, fleet: fleet, key: key) { dismiss() }
             } else {
                 VStack(spacing: 14) {

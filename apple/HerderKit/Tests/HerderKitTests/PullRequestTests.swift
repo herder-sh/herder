@@ -38,6 +38,16 @@ struct PullRequestTests {
     }
 }
 
+private extension PRRollup {
+    /// The rollup over `sessions`, each child found by its parent.
+    init(of key: SessionKey, sessions: [SessionKey: SessionModel]) {
+        let children = Dictionary(grouping: sessions.values.compactMap { model in
+            model.parent.map { (parent: SessionKey(hostId: model.key.hostId, sessionId: $0), child: model.key) }
+        }, by: \.parent).mapValues { $0.map(\.child) }
+        self.init(of: key, session: { sessions[$0] }, children: children)
+    }
+}
+
 struct PRRollupTests {
     private func session(_ id: String, task: String, parent: SessionId? = nil, prs: [PullRequest]) -> (SessionKey, SessionModel) {
         var script = Script(id)

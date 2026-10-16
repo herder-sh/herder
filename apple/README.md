@@ -95,6 +95,7 @@ When the Mac app feels slow, measure it under a load that repeats:
 ```sh
 apple/scripts/profile-mac.sh            # the streaming session; `board` for the Board
 apple/scripts/profile-mac.sh board 20   # and how many seconds to record
+apple/scripts/profile-mac.sh switch     # back and forth between it and a finished session
 ```
 
 It builds a release copy of the app with its own bundle id and profile, so the installed app

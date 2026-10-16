@@ -11,7 +11,9 @@ import Observation
 public final class Fleet {
     public let client: Client
     public private(set) var machines: [Machine] { didSet { listsChanged() } }
-    private(set) var sessions: [SessionKey: SessionModel] = [:] { didSet { listsChanged() } }
+    /// Each followed session's state in a box of its own; the dictionary itself changes only as
+    /// sessions come and go. See `session(_:)` and `sessions`.
+    private var boxes: [SessionKey: SessionBox] = [:]
     /// Provenance returned by forks made on this device during this app run.
     var forkOrigins: [SessionKey: ForkOrigin] = [:]
     /// Sessions being handed off, to the machine they go to; see `handOff`.
@@ -68,6 +70,12 @@ public final class Fleet {
         refreshLists()
     }
 
+    /// Folds an update into a session as its subscription would, for tests.
+    func applyForTesting(_ update: SessionUpdate, to key: SessionKey) {
+        track(key)
+        change(key) { $0.apply(update) }
+    }
+
     /// Rebuilds the lists at most ten times a second. Opening the app replays every session's
     /// events, thousands at once; rebuilding on each kept the main thread busy until the
     /// system killed the app.
@@ -85,6 +93,26 @@ public final class Fleet {
         listsRefresh = nil
         let lists = Lists(machines: machines, sessions: sessions, done: done.keys, archiving: archiving)
         if lists != self.lists { self.lists = lists }
+    }
+
+    /// One session's state. A view that reads it redraws when that session changes only, not
+    /// on every token another session streams.
+    func session(_ key: SessionKey) -> SessionModel? { boxes[key]?.model }
+
+    /// Every session's state. A view that reads it redraws whenever any session changes: read
+    /// one with `session(_:)` where that is all a view needs.
+    var sessions: [SessionKey: SessionModel] { boxes.mapValues(\.model) }
+
+    /// Changes `key`'s state, when it is followed.
+    private func change(_ key: SessionKey, _ body: (inout SessionModel) -> Void) {
+        guard let box = boxes[key] else { return }
+        body(&box.model)
+        listsChanged()
+    }
+
+    /// Follows `key`'s state from now on, when it isn't yet.
+    private func track(_ key: SessionKey) {
+        if boxes[key] == nil { boxes[key] = SessionBox(SessionModel(key: key)) }
     }
 
     /// A session view shows `key`: it is seen, and stays seen while shown.
@@ -122,7 +150,7 @@ public final class Fleet {
         }
         for machine in machines {
             for head in machine.sessions where !head.queue.isEmpty {
-                sessions[SessionKey(hostId: machine.hostId, sessionId: head.sessionId)]?.settle(head.queue)
+                change(SessionKey(hostId: machine.hostId, sessionId: head.sessionId)) { $0.settle(head.queue) }
             }
         }
         // A copy another copy stands for is not followed: a vault's copy of every session would
@@ -136,7 +164,8 @@ public final class Fleet {
         for (key, task) in subscriptions where !listed.contains(key) {
             task.cancel()
             subscriptions[key] = nil
-            sessions[key] = nil
+            boxes[key] = nil
+            listsChanged()
             done.remove(key)
         }
     }
@@ -145,20 +174,20 @@ public final class Fleet {
     private func stream(_ key: SessionKey) async {
         guard let subscription = try? client.subscribeSession(hostId: key.hostId, sessionId: key.sessionId)
         else { return }
-        sessions[key] = sessions[key] ?? SessionModel(key: key)
+        track(key)
         // Releasing the subscription when this returns unsubscribes.
         while let update = await subscription.next(), !Task.isCancelled {
             // Only what `observe` needs: holding the whole session would copy its transcript
             // on every update.
-            guard let before = sessions[key].map({ (status: $0.status, loaded: $0.loaded) }) else { break }
-            sessions[key]?.apply(update)
+            guard let before = session(key).map({ (status: $0.status, loaded: $0.loaded) }) else { break }
+            change(key) { $0.apply(update) }
             observe(key, before: before.status, wasLoaded: before.loaded)
         }
     }
 
     /// Notes what an update did to `key`'s status, from its status and load before it.
     func observe(_ key: SessionKey, before: SessionStatus, wasLoaded: Bool) {
-        guard let after = sessions[key]?.status else { return }
+        guard let after = session(key)?.status else { return }
         done.observe(key, before: before, after: after, wasLoaded: wasLoaded, open: watching.contains(key))
     }
 
@@ -231,7 +260,7 @@ public final class Fleet {
         if !prompt.isEmpty || !images.isEmpty || !files.isEmpty {
             // Through the outbox, as any prompt: the machine journals the first one only once
             // its CLI is up, and till then the new session would show no turns.
-            sessions[key] = sessions[key] ?? SessionModel(key: key)
+            track(key)
             await submit(prompt, images: images, files: files, to: key)
         }
         return key
@@ -240,20 +269,24 @@ public final class Fleet {
     /// Sends what the user typed: the answer to the session's oldest question when one is
     /// pending, else a prompt, queued behind the turn when one runs, as the TUI does.
     func submit(_ text: String, images: [Herder.Image] = [], files: [PromptFile] = [], to key: SessionKey) async {
-        guard let session = sessions[key] else { return }
+        guard let session = session(key) else { return }
         if let question = session.questions.first, images.isEmpty, files.isEmpty {
             await send(.answerQuestion(sessionId: key.sessionId, questionId: question.id, answer: .text(text: text)),
                        about: key)
             return
         }
         let outgoing = Outgoing(text: text, images: images, files: files)
-        sessions[key]?.outbox.append(outgoing)
+        change(key) { $0.outbox.append(outgoing) }
         await send(.sendPrompt(sessionId: key.sessionId, text: text, images: images, files: files), about: key)
-        if let index = sessions[key]?.outbox.firstIndex(where: { $0.id == outgoing.id }) {
-            sessions[key]?.outbox[index].state = refusals[key].map(Outgoing.State.failed) ?? .delivered
+        let state = refusals[key].map(Outgoing.State.failed) ?? .delivered
+        let queue = queue(of: key)
+        change(key) { session in
+            if let index = session.outbox.firstIndex(where: { $0.id == outgoing.id }) {
+                session.outbox[index].state = state
+            }
+            // The queue may have listed it before the machine answered.
+            session.settle(queue)
         }
-        // The queue may have listed it before the machine answered.
-        sessions[key]?.settle(queue(of: key))
     }
 
     /// The prompts waiting in a session's queue on its machine, in the order they will run.
@@ -437,7 +470,7 @@ public final class Fleet {
 
     /// Drops a prompt that failed to send.
     func discard(_ outgoing: Outgoing, from key: SessionKey) {
-        sessions[key]?.outbox.removeAll { $0.id == outgoing.id }
+        change(key) { $0.outbox.removeAll { $0.id == outgoing.id } }
     }
 
     func interrupt(_ key: SessionKey) async {
@@ -452,7 +485,7 @@ public final class Fleet {
     /// same account only changes the model, another account of the same provider switches
     /// account (then model), and another provider's account switches provider.
     func switchSession(_ key: SessionKey, to account: Account, model: String) async {
-        guard let session = sessions[key] else { return }
+        guard let session = session(key) else { return }
         let model = model.trimmingCharacters(in: .whitespaces)
         if account.accountId == session.accountId {
             guard !model.isEmpty, model != session.model else {
@@ -476,7 +509,7 @@ public final class Fleet {
     /// and goes to `archiveRefusal` to show.
     func archive(_ key: SessionKey, toast text: String? = nil) async {
         guard !archiving.contains(key) else { return }
-        let title = sessions[key]?.title ?? "Session"
+        let title = session(key)?.title ?? "Session"
         archiving.insert(key)
         defer { archiving.remove(key) }
         let archived = Toast(text: text ?? "Archived “\(title)”", undo: key)

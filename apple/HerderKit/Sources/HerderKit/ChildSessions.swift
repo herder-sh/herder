@@ -38,7 +38,7 @@ struct ChildrenCard: View {
 
     private func key(_ child: ChildRef) -> SessionKey { SessionKey(hostId: hostId, sessionId: child.sessionId) }
 
-    private var progress: [ChildProgress] { children.map { fleet.sessions[key($0)]?.progress ?? .idle } }
+    private var progress: [ChildProgress] { children.map { fleet.session(key($0))?.progress ?? .idle } }
 
     var body: some View {
         let progress = progress
@@ -46,7 +46,7 @@ struct ChildrenCard: View {
             HStack(spacing: 10) {
                 HStack(spacing: -6) {
                     ForEach(children.prefix(3), id: \.sessionId) { child in
-                        ChildAvatar(session: fleet.sessions[key(child)], size: 22, showsState: false)
+                        ChildAvatar(session: fleet.session(key(child)), size: 22, showsState: false)
                     }
                 }
                 VStack(alignment: .leading, spacing: 1) {
@@ -66,9 +66,9 @@ struct ChildrenCard: View {
             VStack(spacing: 0) {
                 ForEach(children, id: \.sessionId) { child in
                     SessionButton(key: key(child), open: open) {
-                        ChildRow(child: child, session: fleet.sessions[key(child)])
+                        ChildRow(child: child, session: fleet.session(key(child)))
                     }
-                    .accessibilityLabel("Open child session: \(fleet.sessions[key(child)]?.title ?? child.task)")
+                    .accessibilityLabel("Open child session: \(fleet.session(key(child))?.title ?? child.task)")
                 }
             }
             .padding(4)
@@ -205,7 +205,7 @@ struct ChildReportCard: View {
         if superseded {
             let shown = opened.wrappedValue.contains(id)
             VStack(alignment: .leading, spacing: 8) {
-                EarlierReportLine(report: report, child: fleet.sessions[key], shown: shown) {
+                EarlierReportLine(report: report, child: fleet.session(key), shown: shown) {
                     if shown { opened.wrappedValue.remove(id) } else { opened.wrappedValue.insert(id) }
                 }
                 if shown { card }
@@ -218,7 +218,7 @@ struct ChildReportCard: View {
     private var key: SessionKey { SessionKey(hostId: hostId, sessionId: report.sessionId) }
 
     private var card: some View {
-        ReportCard(report: report, key: key, child: fleet.sessions[key], open: open)
+        ReportCard(report: report, key: key, child: fleet.session(key), open: open)
     }
 }
 
@@ -236,7 +236,7 @@ struct EarlierReports: View {
     var body: some View {
         let shown = opened.wrappedValue.contains(id)
         let children = reports.reduce(into: [SessionId]()) { if !$0.contains($1.sessionId) { $0.append($1.sessionId) } }
-        let titles = children.map { fleet.sessions[key($0)]?.title ?? "Session …\($0.suffix(6))" }.joined(separator: ", ")
+        let titles = children.map { fleet.session(key($0))?.title ?? "Session …\($0.suffix(6))" }.joined(separator: ", ")
         VStack(alignment: .leading, spacing: 16) {
             Button {
                 if shown { opened.wrappedValue.remove(id) } else { opened.wrappedValue.insert(id) }
@@ -244,7 +244,7 @@ struct EarlierReports: View {
                 HStack(spacing: 6) {
                     HStack(spacing: -6) {
                         ForEach(children.prefix(3), id: \.self) { child in
-                            ChildAvatar(session: fleet.sessions[key(child)], size: 18, showsState: false)
+                            ChildAvatar(session: fleet.session(key(child)), size: 18, showsState: false)
                         }
                     }
                     Text("\(reports.count) earlier reports").foregroundStyle(Theme.secondary).fixedSize()
@@ -518,7 +518,7 @@ struct ChildBanner: View {
     }
 
     var body: some View {
-        let name = fleet.sessions[parent]?.title ?? "Session …\(parent.sessionId.suffix(6))"
+        let name = fleet.session(parent)?.title ?? "Session …\(parent.sessionId.suffix(6))"
         HStack(spacing: 10) {
             if listed {
                 Group {

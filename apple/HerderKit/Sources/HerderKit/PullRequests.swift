@@ -54,19 +54,20 @@ struct PRRollup: Equatable {
 
     let groups: [Group]
 
-    init(of key: SessionKey, sessions: [SessionKey: SessionModel]) {
+    /// `session` looks a session up, so a view that rolls one tree up reads only that tree's
+    /// sessions; `children` holds each session's children.
+    init(of key: SessionKey, session: (SessionKey) -> SessionModel?, children: [SessionKey: [SessionKey]]) {
         var seen = Set<String>()
         var groups: [Group] = []
         func visit(_ key: SessionKey, depth: Int) {
-            guard let model = sessions[key] else { return }
+            guard let model = session(key) else { return }
             let prs = model.prs.filter { seen.insert($0.url).inserted }.sorted(by: PRRollup.order)
             if !prs.isEmpty {
                 groups.append(Group(key: key, title: model.title ?? "Session …\(key.sessionId.suffix(6))",
                                     depth: depth, prs: prs))
             }
             guard depth < 8 else { return }
-            let children = sessions.values
-                .filter { $0.key.hostId == key.hostId && $0.parent == key.sessionId }
+            let children = (children[key] ?? []).compactMap(session)
                 .sorted { ($0.title ?? "").localizedStandardCompare($1.title ?? "") == .orderedAscending }
             for child in children { visit(child.key, depth: depth + 1) }
         }
@@ -428,7 +429,7 @@ struct PRStrip: View {
             if group.depth > 0 {
                 Image(systemName: "arrow.turn.down.right").foregroundStyle(Theme.child)
             }
-            StatusGlyph(state: fleet.sessions[group.key]?.state ?? .idle, size: 6)
+            StatusGlyph(state: fleet.session(group.key)?.state ?? .idle, size: 6)
             Text(group.title).foregroundStyle(group.depth == 0 ? Theme.secondary : Theme.text).lineLimit(1)
             Text("\(group.prs.count)").foregroundStyle(Theme.tertiary)
             Spacer(minLength: 0)

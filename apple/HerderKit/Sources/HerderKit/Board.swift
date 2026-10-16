@@ -235,7 +235,7 @@ private struct TaskChildRow: View {
         let archived = session.state == .archived
         HStack(spacing: 8) {
             TreeLine().frame(width: CGFloat(max(session.depth, 1)) * 14)
-            ProviderMark(provider: fleet.sessions[session.key]?.provider ?? "claude", size: 11)
+            ProviderMark(provider: fleet.session(session.key)?.provider ?? "claude", size: 11)
                 .frame(width: 20, height: 20)
                 .background(Theme.raised, in: Circle())
                 .overlay(Circle().strokeBorder(Theme.stroke))
