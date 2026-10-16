@@ -36,6 +36,8 @@ struct SessionView: View {
     @State private var find = TranscriptFind()
     /// The folded blocks shown open, by id; outside the rows, so a row drawn again keeps them.
     @State private var expanded: Set<String> = []
+    /// How much of the transcript is drawn.
+    @State private var window = TranscriptWindow()
 
     var body: some View {
         let model = fleet.session(key)
@@ -74,7 +76,14 @@ struct SessionView: View {
                         Text("No turns yet. Send a prompt to start.").foregroundStyle(Theme.tertiary)
                             .frame(maxWidth: .infinity).padding(40)
                     }
-                    ForEach(blocks) { block in
+                    if window.hides(blocks, of: key) {
+                        Button("Show earlier") { window.extend(key) }
+                            .buttonStyle(.borderless)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.tertiary)
+                            .frame(maxWidth: .infinity)
+                    }
+                    ForEach(window.shown(blocks, of: key)) { block in
                         TranscriptBlockView(block: block, fleet: fleet, key: key, open: open)
                             .environment(\.findHighlight, find.highlight(block.id))
                     }
@@ -92,7 +101,9 @@ struct SessionView: View {
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top))
+            .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top) { id in
+                window.scrolled(to: id, in: blocks, of: key)
+            })
             .id(key)
             .onChange(of: sent) { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
             // The prompt joins the transcript only once the send is under way, after `sent`.
@@ -104,6 +115,8 @@ struct SessionView: View {
                 // Once laid out, land where it was left, else at the end.
                 await Task.yield()
                 if let top = scroll.land() {
+                    window.reveal(top, in: blocks, of: key)
+                    await Task.yield()
                     proxy.scrollTo(top, anchor: .top)
                 } else {
                     proxy.scrollTo(TranscriptScroll.end, anchor: .bottom)
@@ -114,7 +127,11 @@ struct SessionView: View {
                 guard let id = find.current else { return }
                 // A match in a turn's folded work, or in earlier reports, opens it.
                 if let block = blocks.first(where: { $0.id == id }) { expanded.formUnion(find.opens(block)) }
-                withAnimation { proxy.scrollTo(id, anchor: .center) }
+                window.reveal(id, in: blocks, of: key)
+                Task {
+                    await Task.yield()
+                    withAnimation { proxy.scrollTo(id, anchor: .center) }
+                }
             }
             .overlay(alignment: .topTrailing) {
                 if find.shown {
@@ -126,7 +143,11 @@ struct SessionView: View {
                 // Hover is how the rail reads; a phone has none, and no margin to spare.
                 if !compact && checkpoints.items.count > 1 {
                     CheckpointRail(checkpoints: checkpoints, top: top) { id in
-                        withAnimation { proxy.scrollTo(id, anchor: .top) }
+                        window.reveal(id, in: blocks, of: key)
+                        Task {
+                            await Task.yield()
+                            withAnimation { proxy.scrollTo(id, anchor: .top) }
+                        }
                     }
                 }
             }
@@ -150,6 +171,7 @@ struct SessionView: View {
             }
         }
         .onChange(of: key) { old, _ in
+            window.reset(old)
             showsTerminal = false
             find = TranscriptFind()
             expanded = []
@@ -456,6 +478,8 @@ private struct FollowsGrowth: ViewModifier {
     let key: SessionKey
     @Binding var scroll: TranscriptScroll
     let top: TranscriptTop
+    /// Told the block at the top of the view as it changes.
+    let scrolled: (String?) -> Void
 
     func body(content: Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
@@ -464,6 +488,7 @@ private struct FollowsGrowth: ViewModifier {
                 .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) {
                     scroll.saw($0.first, in: key)
                     top.id = $0.first
+                    scrolled($0.first)
                 }
                 .onScrollGeometryChange(for: Bool.self) { geometry in
                     geometry.visibleRect.maxY >= geometry.contentSize.height - 40

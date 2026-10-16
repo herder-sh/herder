@@ -427,12 +427,17 @@ struct MarkdownText: View {
         }
     }
 
+    /// Made once: making one took a tenth of drawing a transcript. A detector is immutable, so
+    /// sharing it across threads is safe.
+    nonisolated(unsafe) private static let linkDetector =
+        try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     /// Links bare `http(s)://` URLs outside code spans and links, each shown as `display(_:)` puts
     /// it; Markdown links some of them already. Scheme-less matches stay text: file names like
     /// `main.rs` would read as domains.
     static func autolink(_ string: inout AttributedString) {
         let plain = String(string.characters)
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return }
+        guard let detector = linkDetector else { return }
         // From the end, so a shortened URL leaves the ranges before it where they were.
         for match in detector.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)).reversed() {
             guard let url = match.url, let range = Range(match.range, in: plain),
