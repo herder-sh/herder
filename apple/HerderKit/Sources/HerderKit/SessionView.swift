@@ -38,7 +38,7 @@ struct SessionView: View {
     @State private var expanded: Set<String> = []
 
     var body: some View {
-        let model = fleet.sessions[key]
+        let model = fleet.session(key)
         let summary = fleet.lists.projects.lazy.flatMap(\.sessions).first { $0.key == key }
         let blocks = model.map(Transcript.collapsed) ?? []
         let matches = find.shown ? find.matches(blocks) : []
@@ -58,6 +58,10 @@ struct SessionView: View {
             if showsTerminal {
                 TerminalPane(fleet: fleet, key: key)
             } else {
+            // The transcript takes the height the header and the controls leave. Asked how tall
+            // it would be, a scroll view lays its whole content out to answer, at each size the
+            // stack tries: on every token a turn streams.
+            Color.clear.overlay {
             ScrollViewReader { proxy in
             ScrollView {
                 // Not lazy: a lazy stack places the rows it hasn't drawn by estimated heights, and
@@ -125,6 +129,7 @@ struct SessionView: View {
                         withAnimation { proxy.scrollTo(id, anchor: .top) }
                     }
                 }
+            }
             }
             }
             if let model {
@@ -308,7 +313,7 @@ struct SessionView: View {
     /// The pull requests `#123` in the transcript can name: the session tree's, then the
     /// project's, whose repository the rest are in.
     private var linkablePRs: [PullRequest] {
-        let tree = PRRollup(of: key, sessions: fleet.sessions).groups.flatMap(\.prs)
+        let tree = PRRollup(of: key, session: fleet.session, children: fleet.lists.children).groups.flatMap(\.prs)
         let project = fleet.lists.projects.first { $0.sessions.contains { $0.key == key } }?
             .sessions.flatMap(\.prs) ?? []
         return tree + project
@@ -324,7 +329,7 @@ struct SessionView: View {
     /// The session's pull requests, tinted by the most urgent, opening their list.
     @ViewBuilder
     private func prButton(labels: Bool, inToolbar: Bool) -> some View {
-        let rollup = PRRollup(of: key, sessions: fleet.sessions)
+        let rollup = PRRollup(of: key, session: fleet.session, children: fleet.lists.children)
         if !rollup.groups.isEmpty {
             Group {
                 if inToolbar {
@@ -651,7 +656,7 @@ struct SwitchSheet: View {
     @State private var model = ""
 
     var body: some View {
-        let session = fleet.sessions[key]
+        let session = fleet.session(key)
         let accounts = fleet.machines.first { $0.hostId == key.hostId }?.accounts ?? []
         let chosen = accounts.first { $0.accountId == accountId }
         SheetScaffold(title: "Switch", subtitle: "Move the session to another account, model or provider.", height: 520) {

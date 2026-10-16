@@ -101,7 +101,7 @@ struct FleetView: View {
             Text(refusal.reason)
         }
         .alert("Rename Session", isPresented: Binding(get: { fleet.renaming != nil }, set: { if !$0 { fleet.renaming = nil } })) {
-            RenameSessionField(title: fleet.renaming.flatMap { fleet.sessions[$0]?.title } ?? "") { title in
+            RenameSessionField(title: fleet.renaming.flatMap { fleet.session($0)?.title } ?? "") { title in
                 guard let key = fleet.renaming else { return }
                 Task { await fleet.rename(key, to: title) }
             }

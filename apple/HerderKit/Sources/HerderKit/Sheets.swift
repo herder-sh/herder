@@ -244,7 +244,7 @@ struct Draft: Codable, Hashable, Identifiable {
     @MainActor
     static func machine(for projectId: String, among candidates: [HostId], fleet: Fleet) -> HostId? {
         let newest = fleet.lists.projects.first { $0.projectId == projectId }?.sessions
-            .compactMap { session in fleet.sessions[session.key].map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
+            .compactMap { session in fleet.session(session.key).map { (session.key.hostId, $0.updatedAt ?? .distantPast) } }
             .max { $0.1 < $1.1 }?.0
         return machine(among: candidates, last: MachinePreference.last(for: projectId), newest: newest)
     }

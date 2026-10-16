@@ -10,7 +10,7 @@ struct SessionInspector: View {
     @AppStorage("inspectorShowAll") private var showAll = false
 
     var body: some View {
-        let model = fleet.sessions[key]
+        let model = fleet.session(key)
         VStack(spacing: 0) {
             Picker("Details", selection: $tab) {
                 Text("Events").tag(0)
@@ -224,7 +224,7 @@ private struct MomentRow: View {
     }
 
     private func childName(_ child: SessionId, _ task: String?) -> String {
-        fleet.sessions[SessionKey(hostId: key.hostId, sessionId: child)]?.title ?? task ?? String(child.suffix(6))
+        fleet.session(SessionKey(hostId: key.hostId, sessionId: child))?.title ?? task ?? String(child.suffix(6))
     }
 }
 

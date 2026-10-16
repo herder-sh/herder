@@ -65,6 +65,12 @@ struct Lists: Equatable {
     var chats: [SessionSummary] = []
     var archivedChats: [SessionSummary] = []
     var machines: [MachineSummary] = []
+    /// Each session's children: a view can walk one session's tree without reading every
+    /// session, and so redrawing on every token any of them streams.
+    var children: [SessionKey: [SessionKey]] = [:]
+    /// The models each machine's sessions run, by provider, newest session first: the ones the
+    /// model menu offers as used there.
+    var usedModels: [HostId: [Provider: [String]]] = [:]
 
     init() {}
 
@@ -94,6 +100,13 @@ struct Lists: Equatable {
         // Each session's children, found once: the lists are rebuilt as sessions stream, so
         // looking them up per session, over every session, would grow with the square of them.
         let children = Self.children(entries)
+        self.children = children.mapValues { $0.map(\.key) }
+        for entry in entries.sorted(by: { ($0.model.updatedAt ?? .distantPast) > ($1.model.updatedAt ?? .distantPast) }) {
+            guard let provider = entry.model.provider, let model = entry.model.model else { continue }
+            var used = usedModels[entry.key.hostId, default: [:]][provider, default: []]
+            if !used.contains(model) { used.append(model) }
+            usedModels[entry.key.hostId, default: [:]][provider] = used
+        }
         projects = Self.projects(entries.filter { !$0.head.chat }, machines: machines, now: now)
         (chats, archivedChats) = Self.split(entries.filter(\.head.chat), now: now)
         let flat = entries.map { $0.summary(now: now, children: children) }

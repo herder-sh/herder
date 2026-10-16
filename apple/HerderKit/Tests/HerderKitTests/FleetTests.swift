@@ -1,11 +1,38 @@
 import Foundation
 import Herder
+import Observation
 @testable import HerderKit
 import SwiftTerm
+import Synchronization
 import Testing
 
 @MainActor
 struct FleetTests {
+    /// A view showing one session redraws when that session changes, not on every token
+    /// another session streams.
+    @Test func readingOneSessionIsNotInvalidatedByAnother() throws {
+        guard case .opened(let fleet) = Profile.open(at: temporaryProfile(), client: "test") else {
+            Issue.record("cannot open a fresh profile")
+            return
+        }
+        var shown = Script("01A", host: "h")
+        var other = Script("01B", host: "h")
+        fleet.applyForTesting(SessionUpdate(events: [shown.event(created())], streaming: []), to: shown.key)
+        fleet.applyForTesting(SessionUpdate(events: [other.event(created())], streaming: []), to: other.key)
+        func streaming(_ text: String) -> SessionUpdate {
+            SessionUpdate(events: [], streaming: [
+                Item(agentMessage: nil, parentCallId: nil, id: "i", turnId: "t", body: .assistantMessage(text: text)),
+            ])
+        }
+
+        let invalidated = Mutex(false)
+        withObservationTracking { _ = fleet.session(shown.key) } onChange: { invalidated.withLock { $0 = true } }
+        fleet.applyForTesting(streaming("Hel"), to: other.key)
+        #expect(!invalidated.withLock { $0 })
+        fleet.applyForTesting(streaming("Hel"), to: shown.key)
+        #expect(invalidated.withLock { $0 })
+    }
+
     @Test func aProfileThatCannotBeOpenedSaysWhy() throws {
         let file = temporaryProfile()
         try Data().write(to: file)

@@ -429,18 +429,6 @@ struct CircleButton: View {
 }
 
 extension Fleet {
-    /// Models used on a machine with a provider, newest sessions first, for the model menu.
-    func models(on hostId: HostId, provider: Provider?) -> [String] {
-        var seen: [String] = []
-        for session in sessions.values.sorted(by: { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) })
-        where session.key.hostId == hostId && session.provider == provider {
-            if let model = session.model, !seen.contains(model) { seen.append(model) }
-        }
-        return seen
-    }
-}
-
-extension Fleet {
     /// The providers a machine has accounts for.
     func providers(on hostId: HostId) -> [Provider] {
         Array(Set(machines.first { $0.hostId == hostId }?.accounts.map(\.provider) ?? []))
@@ -452,7 +440,7 @@ extension Fleet {
     ) -> [ModelCatalog.Group] {
         ModelCatalog.groups(
             providers: providers, current: current,
-            used: Dictionary(uniqueKeysWithValues: Set(providers).map { ($0, models(on: hostId, provider: $0)) }),
+            used: Dictionary(uniqueKeysWithValues: Set(providers).map { ($0, lists.usedModels[hostId]?[$0] ?? []) }),
             offersDefault: offersDefault)
     }
 

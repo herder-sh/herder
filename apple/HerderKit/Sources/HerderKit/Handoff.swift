@@ -60,7 +60,7 @@ extension Fleet {
     /// a fork onto its own machine leaves it be.
     func handOff(_ key: SessionKey, to hostId: HostId, account accountId: AccountId?) async -> SessionKey? {
         guard handoffs[key] == nil else { return nil }
-        let midTurn = hostId != key.hostId && [.running, .needsYou].contains(sessions[key]?.status)
+        let midTurn = hostId != key.hostId && [.running, .needsYou].contains(session(key)?.status)
         let name = machines.first { $0.hostId == hostId }?.name ?? hostId
         handoffs[key] = hostId
         defer { handoffs[key] = nil }
@@ -98,7 +98,7 @@ extension Fleet {
         if midTurn {
             _ = try? await client.send(hostId: key.hostId, command: .interrupt(sessionId: key.sessionId))
             let deadline = ContinuousClock.now + .seconds(10)
-            while [.running, .needsYou].contains(sessions[key]?.status), ContinuousClock.now < deadline {
+            while [.running, .needsYou].contains(session(key)?.status), ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }

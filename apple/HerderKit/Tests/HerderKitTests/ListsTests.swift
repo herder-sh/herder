@@ -55,6 +55,20 @@ struct ListsTests {
         #expect(lists.requests.first?.more == 1)
     }
 
+    @Test func usedModelsAreEachMachinesNewestFirstAndChildrenByParent() {
+        var old = Script("01A", host: "h")
+        var new = Script("01B", host: "h")
+        // `new`'s events are stamped after `old`'s.
+        _ = new.event(.turnStarted(turnId: "x"))
+        let sessions = [
+            old.key: old.model([created(model: "sonnet")]),
+            new.key: new.model([created(parent: "01A", model: "opus")]),
+        ]
+        let lists = Lists(machines: [machine("h", name: "h", sessions: ["01A", "01B"])], sessions: sessions)
+        #expect(lists.usedModels["h"]?["claude"] == ["opus", "sonnet"])
+        #expect(lists.children[old.key] == [new.key])
+    }
+
     @Test func childrenFollowTheirParentOldestFirst() {
         var parent = Script("01A")
         var older = Script("01B")
