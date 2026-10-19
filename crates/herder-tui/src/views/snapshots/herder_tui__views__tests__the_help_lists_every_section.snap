@@ -222,7 +222,7 @@ expression: terminal.backend()
 "     │  add                  add a machine (a)                                              │       "
 "     │  reconnect            reconnect every machine now (r)                                │       "
 "     │  group                group sessions by project or by machine (v)                    │       "
-"     │  help                 keys (?)                                                       │       "
+"     │  help                 every key and command (?)                                      │       "
 "     │  quit                 leave herder (q)                                               │       "
 "     │                                                                                      │       "
 "     │  mouse                                                                               │       "
