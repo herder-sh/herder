@@ -11,7 +11,7 @@ use ratatui::crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 use crate::account_screen::AccountScreen;
 use crate::action::{self, Action};
 use crate::board::Board;
-use crate::chat::Chat;
+use crate::chat::{Chat, ChatAct};
 use crate::compose::{Act, Compose, Origin};
 use crate::fork::Fork;
 use crate::inbox::Inbox;
@@ -318,6 +318,11 @@ pub struct App {
     pub chat: Chat,
     /// The time the screen shows; `None` is the clock's. Tests fix it.
     pub clock: Option<Timestamp>,
+    /// Counts the inputs that may change what a transcript shows: all but those that only
+    /// scroll, move the item cursor or edit the prompt.
+    pub(crate) revision: u64,
+    /// The open transcript's rows, as built at a [`App::revision`].
+    pub(crate) transcript: crate::views::TranscriptCache,
 }
 
 impl Default for App {
@@ -361,6 +366,8 @@ impl Default for App {
             resizing: false,
             chat: Chat::default(),
             clock: None,
+            revision: 0,
+            transcript: crate::views::TranscriptCache::default(),
         }
     }
 }
@@ -389,6 +396,9 @@ impl App {
 
     /// Folds in one input; returns what the event loop must do.
     pub fn update(&mut self, msg: Msg) -> Vec<Effect> {
+        if !self.keeps_transcript(&msg) {
+            self.revision += 1;
+        }
         match msg {
             Msg::Key(key) => {
                 self.notice = None;
@@ -461,6 +471,42 @@ impl App {
                 self.paired(result);
                 Vec::new()
             }
+        }
+    }
+
+    /// Whether `msg` leaves every transcript as it is: time passing, the wheel, and keys
+    /// that only scroll, move the item cursor or edit the prompt. Anything else may change
+    /// a session, the machines or how items show, so the open transcript is built again.
+    fn keeps_transcript(&self, msg: &Msg) -> bool {
+        use ratatui::crossterm::event::MouseEventKind;
+        match msg {
+            Msg::Tick(_) => true,
+            Msg::Mouse(event) => matches!(
+                event.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::Moved
+            ),
+            Msg::Key(key) if self.leader.is_none() && self.bar_focus.is_none() => matches!(
+                action::for_key(*key, self),
+                Some(
+                    Action::Up
+                        | Action::Down
+                        | Action::PageUp
+                        | Action::PageDown
+                        | Action::Top
+                        | Action::Bottom
+                        | Action::Chat(ChatAct::Prev | ChatAct::Next)
+                        | Action::Compose(
+                            Act::Key(_)
+                                | Act::Newline
+                                | Act::Write
+                                | Act::Completion(_)
+                                | Act::HidePopup
+                                | Act::Recall(_)
+                                | Act::Button(_)
+                        )
+                ) | None
+            ),
+            _ => false,
         }
     }
 

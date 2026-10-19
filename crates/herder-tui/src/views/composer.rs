@@ -3,9 +3,16 @@
 //! - a pending approval or question, inline as a [`Request`] panel. An approval takes the
 //!   prompt's place; a question sits over it, and the prompt takes a typed answer;
 //! - the [`Prompt`], with its images' chips over the text (`image 1 · 340 KB`) and
-//!   `account · model · mode` under it, and the `/` and `@` [`Popup`] over the transcript;
-//! - the status row: the spinner and how long the turn has run, and the busiest usage
-//!   window of the session's account.
+//!   `provider · model · mode` under it, as the Mac app's prompt box holds its model and
+//!   permission menus; and the `/` and `@` [`Popup`] over the transcript;
+//! - the status row: the spinner and how long the turn has run, and at the right the
+//!   session's account with its busiest usage window, as the Mac app's footer names it.
+//!
+//! ```text
+//! ┃ ▌Write a prompt…
+//! ┃ claude · claude-opus-5-5 · full access
+//!   ⠋ working · 12s                                        claude-main 5h 27%
+//! ```
 //!
 //! A tap on a button or a choice answers; a tap on the prompt writes in it.
 
@@ -196,31 +203,52 @@ fn chips(app: &App, width: u16) -> Vec<Line<'static>> {
     badge::chip_rows(chips, usize::from(width.saturating_sub(3)))
 }
 
-/// The prompt's meta line: `account · model · mode`.
-fn meta(app: &App, session: &Session) -> Line<'static> {
+/// The prompt's meta line, `provider · model · mode`, `width` columns wide: the provider
+/// gives way first, then the model is cut; the mode, what the agent may do, stays whole.
+fn meta(app: &App, session: &Session, width: u16) -> Line<'static> {
     let ui = app.ui();
-    let mut parts = Vec::new();
-    if let Some(account) = account_label(app, session) {
-        parts.push(Span::styled(account, ui.text()));
+    let mode = Span::styled(mode_label(session.permission_mode), ui.text());
+    let model =
+        (!session.model.is_empty()).then(|| Span::styled(session.model.clone(), ui.muted()));
+    let provider = session
+        .provider
+        .as_ref()
+        .map(|provider| Span::styled(provider.as_str().to_owned(), ui.muted()));
+    let width = usize::from(width);
+    let full = Line::from(
+        ui.joined(
+            provider
+                .into_iter()
+                .chain(model.clone())
+                .chain([mode.clone()]),
+        ),
+    );
+    if full.width() <= width {
+        return full;
     }
-    if !session.model.is_empty() {
-        parts.push(Span::styled(session.model.clone(), ui.muted()));
+    // A model cut to less than a few columns says nothing: the mode alone then.
+    let room = width.saturating_sub(mode.width() + crate::ui::width(ui.glyphs.separator));
+    match model.filter(|_| room >= 6) {
+        Some(model) => {
+            let mut line = fit(Line::from(model), room, ui.glyphs);
+            line.spans
+                .push(Span::styled(ui.glyphs.separator, ui.muted()));
+            line.spans.push(mode);
+            line
+        }
+        None => fit(Line::from(mode), width, ui.glyphs),
     }
-    parts.push(Span::styled(
-        crate::session::mode_name(session.permission_mode),
-        ui.muted(),
-    ));
-    Line::from(ui.joined(parts))
 }
 
-/// The session's account, by its label where the machine lists it.
-fn account_label(app: &App, session: &Session) -> Option<String> {
-    let key = app.open.as_ref()?;
-    let id = session.account_id.as_ref()?;
-    Some(
-        crate::account_screen::find(&app.machines, &key.host_id, id)
-            .map_or_else(|| id.to_string(), |account| account.label.clone()),
-    )
+/// A permission mode as the prompt names it.
+fn mode_label(mode: herder_protocol::PermissionMode) -> &'static str {
+    use herder_protocol::PermissionMode;
+    match mode {
+        PermissionMode::ReadOnly => "read only",
+        PermissionMode::Ask => "ask",
+        PermissionMode::AutoEdit => "auto edit",
+        PermissionMode::FullAccess => "full access",
+    }
 }
 
 /// Rows the controls take: the request panel's, and the prompt's (0 while an approval
@@ -391,7 +419,7 @@ pub(super) fn draw(
         .focused(focused)
         .chips(chips(app, inner.width));
     if heights.meta {
-        widget = widget.meta(meta(app, session));
+        widget = widget.meta(meta(app, session, inner.width.saturating_sub(3)));
     }
     if !session.questions.is_empty() {
         widget = widget
@@ -481,37 +509,45 @@ fn status_row(frame: &mut Frame, area: Rect, app: &App, session: &Session, compa
     line.render(area, frame.buffer_mut());
 }
 
-/// `account 5h 38%`: the busiest window of the session's account.
+/// `account 5h 38%`: the session's account and its busiest usage window, either where the
+/// other is not known; on a `compact` screen, the window alone.
 fn usage(app: &App, session: &Session, compact: bool) -> Option<Line<'static>> {
     let ui = app.ui();
     let key = app.open.as_ref()?;
-    let account =
-        crate::account_screen::find(&app.machines, &key.host_id, session.account_id.as_ref()?)?;
-    let window = account
-        .usage
-        .iter()
-        .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))?;
-    let label = match window.window.as_str() {
-        "five_hour" => "5h".to_owned(),
-        "seven_day" | "weekly" => "week".to_owned(),
-        "daily" => "day".to_owned(),
-        other => crate::account_screen::window_label(other),
-    };
-    // A share from 0 to 100, as the theme's usage colours take it.
-    let percent = window.used_percent.clamp(0.0, 100.0).round() as u8;
+    let id = session.account_id.as_ref()?;
+    let account = crate::account_screen::find(&app.machines, &key.host_id, id);
+    let window = account.and_then(|account| {
+        account
+            .usage
+            .iter()
+            .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+    });
     let mut spans = Vec::new();
-    if !compact {
-        spans.push(Span::styled(account.label.clone(), ui.muted()));
-        spans.push(Span::raw(" "));
+    if !compact || window.is_none() {
+        let label = account.map_or_else(|| id.to_string(), |account| account.label.clone());
+        spans.push(Span::styled(label, ui.muted()));
     }
-    spans.extend([
-        Span::styled(label, ui.muted()),
-        Span::raw(" "),
-        Span::styled(
-            format!("{percent}%"),
-            Style::new().fg(ui.theme.usage(percent)),
-        ),
-    ]);
+    if let Some(window) = window {
+        let label = match window.window.as_str() {
+            "five_hour" => "5h".to_owned(),
+            "seven_day" | "weekly" => "week".to_owned(),
+            "daily" => "day".to_owned(),
+            other => crate::account_screen::window_label(other),
+        };
+        // A share from 0 to 100, as the theme's usage colours take it.
+        let percent = window.used_percent.clamp(0.0, 100.0).round() as u8;
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        spans.extend([
+            Span::styled(label, ui.muted()),
+            Span::raw(" "),
+            Span::styled(
+                format!("{percent}%"),
+                Style::new().fg(ui.theme.usage(percent)),
+            ),
+        ]);
+    }
     Some(Line::from(spans))
 }
 

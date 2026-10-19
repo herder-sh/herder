@@ -1,0 +1,9 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "rows.join(\"\\n\")"
+---
+                                                            
+ | |Write a prompt...                                       
+ | claude - claude-opus-5-5 - full access                   
+   | working - 1m 12s                               5h 38%  
+ > send   esc done   ^c stop   s switch   t term

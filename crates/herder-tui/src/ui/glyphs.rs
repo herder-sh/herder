@@ -84,10 +84,6 @@ pub struct GlyphSet {
     pub unfolded: &'static str,
     /// The bar left of a user message, tool block, prompt or request.
     pub bar: &'static str,
-    /// The end of the bar under a prompt.
-    pub cap_end: &'static str,
-    /// The cap under a prompt, after its end.
-    pub cap_fill: &'static str,
     /// The text cursor in place of a terminal one.
     pub cursor: &'static str,
     /// The cursor on a list's selected row.
@@ -155,8 +151,6 @@ pub const UNICODE: GlyphSet = GlyphSet {
     folded: "▸",
     unfolded: "▾",
     bar: "┃",
-    cap_end: "╹",
-    cap_fill: "▀",
     cursor: "▌",
     pointer: "▶",
     collapsed: "▶",
@@ -198,8 +192,6 @@ pub const ASCII: GlyphSet = GlyphSet {
     folded: "+",
     unfolded: "-",
     bar: "|",
-    cap_end: "`",
-    cap_fill: "-",
     cursor: "|",
     pointer: ">",
     collapsed: ">",
@@ -349,8 +341,6 @@ mod tests {
                 &set.branch,
                 &set.pointer,
                 &set.bar,
-                &set.cap_end,
-                &set.cap_fill,
                 &set.cursor,
                 &set.connected,
                 &set.approval,

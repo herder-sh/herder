@@ -1825,3 +1825,196 @@ fn the_fleet_offers_secrets_on_a_vault_and_backup_elsewhere() {
         "{screen}"
     );
 }
+
+/// `s2` of [`fake::tree`] open on `turns` turns of a prompt, a thought, a command and its
+/// output, and a Markdown answer: a long transcript.
+fn long_transcript(turns: usize) -> App {
+    let mut app = fake::tree();
+    let mut events = Vec::new();
+    for turn in 0..turns {
+        let id = |n: usize| format!("t{turn}-{n}");
+        events.extend([
+            added(
+                &id(0),
+                ItemBody::UserMessage {
+                    text: format!("Step {turn}: add a health endpoint and test it, then document it."),
+                    attachments: Vec::new(),
+                },
+            ),
+            added(
+                &id(1),
+                ItemBody::Reasoning {
+                    text: "The router lives in src/api.rs.".into(),
+                },
+            ),
+            added(
+                &id(2),
+                ItemBody::ToolCall {
+                    name: "Bash".into(),
+                    input: json!({"command": "cargo test --workspace"}),
+                },
+            ),
+            added(
+                &id(3),
+                ItemBody::ToolResult {
+                    call_id: ItemId::new(id(2)),
+                    output: "running 12 tests\ntest a ... ok\n\ntest result: ok".into(),
+                    is_error: false,
+                },
+            ),
+            added(
+                &id(4),
+                assistant(
+                    "## Plan\nI added `GET /health`; it returns 200 with the build version, \
+                     so load balancers can probe it. The route sits next to the others in \
+                     **src/api.rs**, and the test checks the body as well as the status.\n\
+                     - one route\n- one test\n- one line in the docs\n\
+                     ```rust\nfn health() -> &'static str {\n    env!(\"CARGO_PKG_VERSION\")\n}\n```",
+                ),
+            ),
+        ]);
+    }
+    let count = events.len();
+    fake::feed(&mut app, "h1", "s2", update("s2", 3, events, Vec::new()));
+    assert!(count >= turns * 5);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    app
+}
+
+/// The rows of `terminal`'s screen from `from` down, as text.
+fn screen_rows(terminal: &Terminal<TestBackend>, from: u16) -> Vec<String> {
+    let buffer = terminal.backend().buffer();
+    (from..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn the_composer_has_no_blank_rows_and_keeps_the_mode_whole() {
+    for (width, height) in [(60, 30), (100, 30), (160, 40)] {
+        let mut app = fake::chat();
+        let session = app.sessions.get_mut(&fake::key("h1", "s2")).unwrap();
+        session.model = "claude-opus-5-5".to_owned();
+        session.permission_mode = herder_protocol::PermissionMode::FullAccess;
+        let terminal = render(&mut app, width, height);
+        // The prompt, its meta line, the status row, the rule and the bar.
+        let rows = screen_rows(&terminal, height - 5);
+        insta::assert_snapshot!(format!("composer_{width}"), rows.join("\n"));
+        // The placeholder, right under it the meta line, then the status row: no blank row.
+        let prompt = rows
+            .iter()
+            .position(|row| row.contains("Write a prompt"))
+            .unwrap();
+        assert!(rows[prompt + 1].contains("full access"), "{rows:#?}");
+        assert!(rows[prompt + 2].contains("working"), "{rows:#?}");
+        if width >= super::NARROW {
+            // The account sits by its usage, not in the prompt.
+            assert!(!rows[prompt + 1].contains("claude-main"), "{rows:#?}");
+            assert!(rows[prompt + 2].contains("claude-main 5h 38%"), "{rows:#?}");
+            // The bar starts with its mode badge: hints that do not fit are left out whole.
+            assert!(rows[4].trim_start().starts_with("PROMPT"), "{rows:#?}");
+        }
+    }
+}
+
+#[test]
+fn a_long_model_gives_way_to_the_permission_mode() {
+    let mut app = fake::chat();
+    let session = app.sessions.get_mut(&fake::key("h1", "s2")).unwrap();
+    session.model = "claude-opus-5-5-20261019-extended-preview".to_owned();
+    session.permission_mode = herder_protocol::PermissionMode::FullAccess;
+    let terminal = render(&mut app, 45, 30);
+    let rows = screen_rows(&terminal, 0);
+    let prompt = rows
+        .iter()
+        .position(|row| row.contains("Write a prompt"))
+        .unwrap();
+    let meta = &rows[prompt + 1];
+    assert!(meta.contains("claude-opus-5-5-"), "{rows:#?}");
+    assert!(meta.trim_end().ends_with("... - full access"), "{rows:#?}");
+}
+
+/// Where the open transcript's rows are kept: the same while nothing rebuilds them.
+fn rows_at(app: &App) -> *const super::transcript::Row {
+    app.transcript.rows.as_ptr()
+}
+
+#[test]
+fn scrolling_a_long_transcript_draws_from_its_rows_as_built() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    let mut app = long_transcript(50);
+    let mut terminal = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let mut draw = |app: &mut App| {
+        terminal.draw(|frame| super::draw(frame, app)).unwrap();
+        terminal.backend().to_string()
+    };
+    let end = draw(&mut app);
+    let built = rows_at(&app);
+    // Keys, the wheel and the item cursor scroll over the rows already built.
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::PageUp);
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 80,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.update(Msg::Mouse(wheel));
+    press(&mut app, KeyCode::Char('['));
+    let scrolled = draw(&mut app);
+    assert_ne!(scrolled, end);
+    assert_eq!(rows_at(&app), built);
+    // So does writing in the prompt.
+    press(&mut app, KeyCode::Char('i'));
+    fake::type_text(&mut app, "hello");
+    draw(&mut app);
+    assert_eq!(rows_at(&app), built);
+    press(&mut app, KeyCode::Esc);
+    // An item expanded or a new one coming in builds them again, and shows it.
+    press(&mut app, KeyCode::Char('e'));
+    draw(&mut app);
+    assert_ne!(rows_at(&app), built);
+    let built = rows_at(&app);
+    press(&mut app, KeyCode::Char('G'));
+    let streaming = vec![item("new", assistant("The very last words"))];
+    fake::feed(
+        &mut app,
+        "h1",
+        "s2",
+        update("s2", 1000, Vec::new(), streaming),
+    );
+    let fed = draw(&mut app);
+    assert_ne!(rows_at(&app), built);
+    assert!(fed.contains("The very last words"), "{fed}");
+}
+
+/// A scroll step on a long transcript (300 turns, 1,500 items) on a wide screen costs a
+/// fraction of laying the transcript out: before the rows were kept, every step laid out
+/// every item again, Markdown and all.
+#[test]
+fn scrolling_a_long_transcript_keeps_up_with_key_repeat() {
+    let mut app = long_transcript(300);
+    let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+    terminal.draw(|frame| super::draw(frame, &mut app)).unwrap();
+    let steps = 50;
+    let start = std::time::Instant::now();
+    for _ in 0..steps {
+        press(&mut app, KeyCode::Char('k'));
+        terminal.draw(|frame| super::draw(frame, &mut app)).unwrap();
+    }
+    let step = start.elapsed() / steps;
+    let rebuilds = 5;
+    let start = std::time::Instant::now();
+    for _ in 0..rebuilds {
+        app.revision += 1;
+        terminal.draw(|frame| super::draw(frame, &mut app)).unwrap();
+    }
+    let rebuild = start.elapsed() / rebuilds;
+    eprintln!("a scroll step: {step:?}; a frame laying the transcript out: {rebuild:?}");
+    assert!(step * 4 < rebuild, "{step:?} a step, {rebuild:?} a rebuild");
+}
