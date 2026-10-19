@@ -21,6 +21,8 @@ enum AppSheet: Identifiable, Hashable {
     case secrets(vault: HostId)
     /// A new provider account: pick its machine first.
     case addAccount
+    /// Signs every owned machine in to AWS IAM Identity Center.
+    case awsSignIn
 
     var id: Self { self }
 }
@@ -37,6 +39,7 @@ extension AppSheet {
         case .machineSettings(let hostId): MachineSettingsSheet(fleet: fleet, hostId: hostId)
         case .secrets(let vault): SecretsSheet(fleet: fleet, vault: vault)
         case .addAccount: NewAccountSheet(fleet: fleet)
+        case .awsSignIn: AwsSignInSheet(fleet: fleet)
         }
     }
 }
