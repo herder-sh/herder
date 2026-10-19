@@ -569,6 +569,21 @@ async fn a_session_forks_onto_another_host_from_the_vault_and_onto_its_own() {
         vault.host_config("host-c"),
     )
     .await;
+    // Until its replicator has paired, C's own code would pair the fork's client connection
+    // and be refused for being a host's code; wait for C to replicate as itself.
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while VaultStore::open(&vault_db)
+        .unwrap()
+        .devices_of(&HostId::new("host-c"))
+        .unwrap()
+        .is_empty()
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "host C never replicated to the vault"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let refused = c
         .handle(CommandBody::ForkSession {
             session_id: session_id.clone(),
