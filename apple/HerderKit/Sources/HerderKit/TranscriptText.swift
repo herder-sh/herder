@@ -10,9 +10,10 @@ extension EnvironmentValues {
     @Entry var messageText: String?
 }
 
-/// Transcript text to select any part of and copy. On a phone it is a text view, as SwiftUI's
-/// text there only copies all of itself, with the hanging indents and paragraph spacing of
-/// `MarkdownText`'s prose; its menu also copies the whole message. On a Mac it is SwiftUI's text.
+/// Transcript text to select any part of and copy, in a text view, with the hanging indents and
+/// paragraph spacing of `MarkdownText`'s prose; its menu also copies the whole message. On a Mac,
+/// SwiftUI's selectable text hands its selection to Copy only on its next update, so a ⌘C right
+/// after selecting copied nothing; on a phone, SwiftUI's text only copies all of itself.
 struct TranscriptText: View {
     let string: AttributedString
     var style: Font.TextStyle = .body
@@ -21,18 +22,8 @@ struct TranscriptText: View {
     var color: Color = Theme.text
 
     var body: some View {
-        #if os(macOS)
-        // SwiftUI's text, which draws whatever part of it is in view: a text view drew blank in
-        // the transcript. It has no paragraph styles, so `spaced` sets the space and indents.
-        LinkText(Self.spaced(string, style: style, lineSpacing: lineSpacing))
-            .font(.system(style, design: monospaced ? .monospaced : .default))
-            .foregroundStyle(color)
-            .lineSpacing(lineSpacing)
-            .textSelection(.enabled)
-        #else
         SelectableTextView(text: Self.attributed(string, style: style, monospaced: monospaced,
                                                  lineSpacing: lineSpacing, color: PlatformColor(color)))
-        #endif
     }
 }
 
@@ -41,15 +32,13 @@ typealias PlatformFont = UIFont
 typealias PlatformColor = UIColor
 #else
 typealias PlatformFont = NSFont
+typealias PlatformColor = NSColor
 #endif
 
 extension TranscriptText {
     /// Inline code against the text around it.
     static let codeScale: CGFloat = 0.88
-}
 
-#if os(iOS)
-extension TranscriptText {
     /// `string` in the text views' attributes: its SwiftUI colours, the fonts and paragraphs
     /// `MarkdownText` gives its prose, and Markdown's bold, italic, code and strikethrough.
     /// Links keep the text's colour, underlined in a quieter one.
@@ -104,77 +93,22 @@ extension TranscriptText {
         return result
     }
 }
-#endif
 
-#if os(macOS)
-extension TranscriptText {
-    /// `string` for SwiftUI's text: the fonts `MarkdownText` gives its prose, and its paragraphs'
-    /// space above as a short blank line and their indents as tabs, which line up with the tab
-    /// after a list marker.
-    static func spaced(_ string: AttributedString, style: Font.TextStyle, lineSpacing: CGFloat) -> AttributedString {
-        let size = PlatformFont.preferredFont(forTextStyle: style.platform).pointSize
-        var result = AttributedString()
-        var startsLine = true
-        for run in string.runs {
-            let lines = String(string[run.range].characters).split(separator: "\n", omittingEmptySubsequences: false)
-            for (index, line) in lines.enumerated() {
-                if index > 0 {
-                    result += AttributedString("\n")
-                    startsLine = true
-                }
-                guard !line.isEmpty else { continue }
-                if startsLine, let paragraph = run[MarkdownText.Paragraph.self] {
-                    result += lead(paragraph, lineSpacing: lineSpacing)
-                }
-                startsLine = false
-                var piece = AttributedString(String(line), attributes: run.attributes)
-                piece[MarkdownText.Paragraph.self] = nil
-                switch run[MarkdownText.Role.self] {
-                case .heading: piece.font = .headline
-                case .label:
-                    piece.font = .system(size: PlatformFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .semibold)
-                    piece.kern = 0.6
-                case .marker: piece.font = Font.system(style).monospacedDigit()
-                case .quote: piece.font = Font.system(style).italic()
-                case nil: break
-                }
-                if run.inlinePresentationIntent?.contains(.code) == true {
-                    piece.font = .system(size: (size * codeScale).rounded(), design: .monospaced)
-                }
-                result += piece
-            }
-        }
-        return result
-    }
-
-    /// What starts a paragraph's first line: a blank line as tall as its space above, if it
-    /// has one worth a line, then a tab for each indent column left of its marker or text.
-    private static func lead(_ paragraph: MarkdownText.Paragraph, lineSpacing: CGFloat) -> AttributedString {
-        var lead = AttributedString()
-        if paragraph.spaceBefore >= MarkdownText.paragraphSpace {
-            // A line is about 1.2 times its font's size, plus the line spacing.
-            var gap = AttributedString("\n")
-            gap.font = .system(size: max(1, (paragraph.spaceBefore - lineSpacing) / 1.2))
-            lead += gap
-        }
-        let tabs = paragraph.indent - (paragraph.marker ? 1 : 0)
-        if tabs > 0 { lead += AttributedString(String(repeating: "\t", count: tabs)) }
-        return lead
-    }
-}
-#endif
-
-#if os(iOS)
-private extension UIFont {
-    func adding(bold: Bool = false, italic: Bool = false) -> UIFont {
+private extension PlatformFont {
+    func adding(bold: Bool = false, italic: Bool = false) -> PlatformFont {
         guard bold || italic else { return self }
         var traits = fontDescriptor.symbolicTraits
+        #if os(iOS)
         if bold { traits.insert(.traitBold) }
         if italic { traits.insert(.traitItalic) }
         return fontDescriptor.withSymbolicTraits(traits).map { UIFont(descriptor: $0, size: 0) } ?? self
+        #else
+        if bold { traits.insert(.bold) }
+        if italic { traits.insert(.italic) }
+        return NSFont(descriptor: fontDescriptor.withSymbolicTraits(traits), size: 0) ?? self
+        #endif
     }
 }
-#endif
 
 private extension Font.TextStyle {
     var platform: PlatformFont.TextStyle {
@@ -194,7 +128,6 @@ private extension Font.TextStyle {
     }
 }
 
-#if os(iOS)
 /// The size of `text` laid out in `proposal`'s width.
 @MainActor private func fit(_ text: NSAttributedString, in proposal: ProposedViewSize) -> CGSize {
     let width = proposal.width.map { $0.isFinite ? $0 : .greatestFiniteMagnitude } ?? .greatestFiniteMagnitude
@@ -203,6 +136,7 @@ private extension Font.TextStyle {
     return CGSize(width: min(width, ceil(fit.width)), height: ceil(fit.height))
 }
 
+#if os(iOS)
 /// A text view that only selects: sized to its text, laid out by SwiftUI, links opened by the
 /// environment's `openURL`.
 private struct SelectableTextView: UIViewRepresentable {
@@ -260,6 +194,74 @@ private struct SelectableTextView: UIViewRepresentable {
                       defaultAction: UIAction) -> UIAction? {
             guard case .link(let url) = textItem.content, let openURL else { return defaultAction }
             return UIAction { _ in openURL(url) }
+        }
+    }
+}
+#else
+/// A text view that only selects: sized to its text, laid out by SwiftUI, links opened by the
+/// environment's `openURL`, with the pointing hand over them.
+private struct SelectableTextView: NSViewRepresentable {
+    let text: NSAttributedString
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSTextView {
+        // TextKit 1, which lays out all of the text. TextKit 2 lays out only the part of it it
+        // takes to be in view, and a transcript opens at its end: a tall reply drew blank.
+        let view = NSTextView(usingTextLayoutManager: false)
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.isVerticallyResizable = false
+        view.isHorizontallyResizable = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        // The text's own attributes style its links.
+        view.linkTextAttributes = [.cursor: NSCursor.pointingHand]
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.delegate = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ view: NSTextView, context: Context) {
+        context.coordinator.openURL = context.environment.openURL
+        context.coordinator.message = context.environment.messageText
+        // Setting the same text again would drop a selection, as a streaming message redraws.
+        if context.coordinator.text != text {
+            context.coordinator.text = text
+            view.textStorage?.setAttributedString(text)
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
+        fit(text, in: proposal)
+    }
+
+    @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: NSAttributedString?
+        var message: String?
+        var openURL: OpenURLAction?
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)), let openURL else { return false }
+            openURL(url)
+            return true
+        }
+
+        func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            guard let message else { return menu }
+            let copy = NSMenuItem(title: "Copy Message", action: #selector(copyMessage), keyEquivalent: "")
+            copy.target = self
+            copy.representedObject = message
+            // Next to Copy, ahead of Look Up and the rest.
+            let after = menu.items.firstIndex { $0.action == #selector(NSText.copy(_:)) }
+            menu.insertItem(copy, at: after.map { $0 + 1 } ?? 0)
+            return menu
+        }
+
+        @objc private func copyMessage(_ item: NSMenuItem) {
+            if let message = item.representedObject as? String { Clipboard.string = message }
         }
     }
 }
