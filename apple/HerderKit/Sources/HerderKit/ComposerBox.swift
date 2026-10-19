@@ -46,6 +46,7 @@ struct ComposerBox<Footer: View>: View {
     /// Photos picked to attach, until they load.
     @State private var picked: [PhotosPickerItem] = []
     @State private var pickingPhotos = false
+    @State private var takingPhoto = false
     @State private var importing = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -142,6 +143,13 @@ struct ComposerBox<Footer: View>: View {
             picked = []
             Task { await attach(items) }
         }
+        .fullScreenCover(isPresented: $takingPhoto) {
+            CameraPicker { data in
+                takingPhoto = false
+                if let data { attach(photo: data) }
+            }
+            .ignoresSafeArea()
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): attach(urls)
@@ -185,6 +193,10 @@ struct ComposerBox<Footer: View>: View {
                 .help("Attach files and images (or paste or drop them)")
             #else
             Menu {
+                if CameraPicker.available {
+                    Button { takingPhoto = true } label: { Label("Take Photo", systemImage: "camera") }
+                        .accessibilityIdentifier("attach-camera")
+                }
                 // A `PhotosPicker` in a menu goes with the menu as it closes, before it presents.
                 Button { pickingPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
                     .accessibilityIdentifier("attach-images")
@@ -336,6 +348,16 @@ struct ComposerBox<Footer: View>: View {
             }
         }
         text += add(added)
+    }
+
+    /// Attaches a photo the camera took, its marker at the end of the text.
+    private func attach(photo data: Data) {
+        do {
+            imageError = nil
+            text += add([try ImageAttachment.make(data)])
+        } catch {
+            imageError = error.localizedDescription
+        }
     }
     #endif
 }

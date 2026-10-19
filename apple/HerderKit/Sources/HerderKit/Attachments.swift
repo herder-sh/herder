@@ -412,3 +412,38 @@ extension Attachment {
     /// Whether it is a file the agent read on the machine, rather than an image it saw.
     var isFile: Bool { name != nil }
 }
+
+#if os(iOS)
+/// The camera, to take a photo for a prompt: `taken` gets it as JPEG, or nil if cancelled.
+/// SwiftUI has no camera picker of its own.
+struct CameraPicker: UIViewControllerRepresentable {
+    let taken: (Data?) -> Void
+
+    static var available: Bool { UIImagePickerController.isSourceTypeAvailable(.camera) }
+
+    func makeCoordinator() -> Coordinator { Coordinator(taken: taken) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}
+
+    @MainActor final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let taken: (Data?) -> Void
+
+        init(taken: @escaping (Data?) -> Void) { self.taken = taken }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            // `ImageAttachment.make` scales it down and turns it upright from its orientation.
+            taken((info[.originalImage] as? UIImage)?.jpegData(compressionQuality: 0.9))
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { taken(nil) }
+    }
+}
+#endif

@@ -28,6 +28,15 @@ struct ImageAttachmentTests {
         #expect(try size(image.data) == (ImageAttachment.longEdge, 1536))
     }
 
+    /// The camera stores a portrait photo sideways with an orientation saying so; it goes upright,
+    /// as it was taken.
+    @Test func aSidewaysCameraPhotoGoesUpright() throws {
+        let photo = try picture(width: 4032, height: 3024, as: .jpeg, orientation: .right)
+        let image = try ImageAttachment.make(photo)
+        #expect(try size(image.data) == (1536, ImageAttachment.longEdge))
+        #expect(try orientation(image.data) ?? 1 == 1)
+    }
+
     /// A photo over the daemon's byte limit still goes.
     @Test func aPhotoOverTheByteLimitStillGoes() throws {
         let photo = try picture(width: 4032, height: 3024, as: .png, noise: true)
@@ -55,7 +64,8 @@ struct ImageAttachmentTests {
     }
 
     /// A picture of this size in this type: a gradient, or noise, which compresses badly.
-    private func picture(width: Int, height: Int, as type: UTType, noise: Bool = false) throws -> Data {
+    private func picture(width: Int, height: Int, as type: UTType, noise: Bool = false,
+                         orientation: CGImagePropertyOrientation = .up) throws -> Data {
         let context = try #require(CGContext(
             data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
@@ -74,9 +84,15 @@ struct ImageAttachmentTests {
         let image = try #require(context.makeImage())
         let out = NSMutableData()
         let destination = try #require(CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationAddImage(destination, image, [kCGImagePropertyOrientation: orientation.rawValue] as CFDictionary)
         #expect(CGImageDestinationFinalize(destination))
         return out as Data
+    }
+
+    private func orientation(_ data: Data) throws -> UInt32? {
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        return properties?[kCGImagePropertyOrientation] as? UInt32
     }
 
     private func size(_ data: Data) throws -> (width: Int, height: Int) {
