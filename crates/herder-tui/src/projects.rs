@@ -1,12 +1,14 @@
 //! Projects across machines: the session list grouped Project → sessions, each session
-//! labelled by its machine, and the clones a new session of a project can start from.
+//! labelled by its machine, the chats under a heading of their own, and the clones a new
+//! session of a project can start from.
 //!
-//! A session's project is the `project_id` its daemon lists it with; clones of one repository
-//! on two machines share it, so their sessions land under one project. Until the daemon has
-//! resolved it, a session counts as the local project of its repo on its machine, the id the
-//! daemon gives a repository without a remote. A project's name and clones are what the
-//! daemons list for it: the first machine's name for it, and every clone on every machine, so a
-//! clone with no session yet can start one.
+//! The grouping is the Mac app's (`apple/HerderKit/Sources/HerderKit/Lists.swift`). A
+//! session's project is the `project_id` its daemon lists it with; clones of one repository on
+//! two machines share it, so their sessions land under one project. Until the daemon has
+//! resolved it, the session waits under "no project yet". A chat, about no project, is listed
+//! under "chats". A project's name and clones are what the daemons list for it: the name an
+//! owner gave it on the lowest-id machine that has one, the same whatever order the machines
+//! paired in, and every clone on every machine, so a clone with no session yet can start one.
 
 use std::collections::BTreeMap;
 
@@ -44,18 +46,26 @@ pub fn name(id: &ProjectId) -> &str {
 }
 
 impl App {
-    /// `id` as the first machine that lists it has it.
-    fn listed(&self, id: &ProjectId) -> Option<&Project> {
-        self.machines
-            .iter()
-            .flat_map(|machine| &machine.projects)
-            .find(|project| project.project_id == *id)
-    }
-
-    /// The display name of a project: as its machines list it, else from its id ([`name`]).
+    /// The display name of a project: one an owner gave it on the lowest-id machine that has
+    /// one, else from its id ([`name`]).
     pub fn project_name(&self, id: &ProjectId) -> String {
-        self.listed(id)
-            .map_or_else(|| name(id).to_owned(), |project| project.name.clone())
+        let fallback = name(id);
+        let mut listed: Vec<(&HostId, &Project)> = self
+            .machines
+            .iter()
+            .flat_map(|machine| {
+                machine
+                    .projects
+                    .iter()
+                    .map(move |project| (&machine.host_id, project))
+            })
+            .filter(|(_, project)| project.project_id == *id && project.name != fallback)
+            .collect();
+        listed.sort_by_key(|(host_id, _)| *host_id);
+        listed
+            .first()
+            .map_or(fallback, |(_, project)| project.name.as_str())
+            .to_owned()
     }
 
     /// Index in `host_id`'s accounts of the account `project` starts sessions on there; the
@@ -104,24 +114,23 @@ impl App {
         }
     }
 
-    /// The project of `key`'s session: as its daemon lists it, else the local project of its
-    /// repo; `None` until its repo is known.
+    /// The project of `key`'s session, as its daemon lists it; `None` until the daemon has
+    /// resolved it, and for a chat.
     pub fn project_of(&self, key: &SessionKey) -> Option<ProjectId> {
-        let machine = self.machines.iter().find(|m| m.host_id == key.host_id)?;
-        let head = machine
-            .sessions
-            .iter()
-            .find(|head| head.session_id == key.session_id)?;
-        if let Some(project_id) = &head.project_id {
-            return Some(project_id.clone());
-        }
-        let session = self.sessions.get(key)?;
-        (!session.repo.is_empty()).then(|| ProjectId::local(&key.host_id, &session.repo))
+        self.head(key)?.project_id.clone()
     }
 
-    /// The session list grouped by project, by name; sessions whose project is not known yet
-    /// come last. Within a project, the sessions of every machine, newest first.
+    /// Whether `key`'s session is a chat, about no project.
+    pub(crate) fn is_chat(&self, key: &SessionKey) -> bool {
+        self.head(key).is_some_and(|head| head.chat)
+    }
+
+    /// The session list grouped as the Mac app groups it: the chats first, then each project
+    /// by name, the sessions whose project is not known yet last. Within each, the sessions of
+    /// every machine, newest first. An archived session with no project is left out, as one of
+    /// a repository gone from its machine.
     pub(crate) fn project_rows(&self, fold: bool) -> Vec<Row> {
+        let mut chats = Vec::new();
         let mut projects: BTreeMap<(bool, String, Option<ProjectId>), Vec<SessionKey>> =
             BTreeMap::new();
         let hidden = self.hidden();
@@ -134,7 +143,14 @@ impl App {
                 if self.shadowed(&key) || hidden.contains(&key) {
                     continue;
                 }
-                let project = self.project_of(&key);
+                if head.chat {
+                    chats.push(key);
+                    continue;
+                }
+                let project = head.project_id.clone();
+                if project.is_none() && self.archived(&key) {
+                    continue;
+                }
                 let order = (
                     project.is_none(),
                     project
@@ -146,11 +162,19 @@ impl App {
                 projects.entry(order).or_default().push(key);
             }
         }
+        // Session ids are ULIDs, so they sort oldest first across machines too.
+        let oldest_first = |a: &SessionKey, b: &SessionKey| {
+            (&a.session_id, &a.host_id).cmp(&(&b.session_id, &b.host_id))
+        };
         let mut rows = Vec::new();
+        if !chats.is_empty() {
+            rows.push(Row::Chats);
+            chats.sort_by(oldest_first);
+            rows.extend(self.forest(&chats, fold));
+        }
         for ((_, _, project), mut keys) in projects {
             rows.push(Row::Project(project));
-            // Session ids are ULIDs, so they sort oldest first across machines too.
-            keys.sort_by(|a, b| (&a.session_id, &a.host_id).cmp(&(&b.session_id, &b.host_id)));
+            keys.sort_by(oldest_first);
             rows.extend(self.forest(&keys, fold));
         }
         rows
@@ -165,7 +189,7 @@ impl App {
         match self.selected()? {
             Row::Project(project) => project,
             Row::Session { key, .. } => self.project_of(&key),
-            Row::Machine(_) | Row::Host { .. } => None,
+            Row::Machine(_) | Row::Host { .. } | Row::Chats => None,
         }
     }
 

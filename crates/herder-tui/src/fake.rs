@@ -135,12 +135,161 @@ pub fn update(
     }
 }
 
-/// Feeds `update` for `session` on `host` into the app.
+/// Folds `update` into `session`, and lists the session as its daemon then would: with the
+/// status, parent, task and title its events give it, and in the project of its repo when it has
+/// none yet, a local repository's as the daemon names it.
 pub fn feed(app: &mut App, host: &str, session: &str, update: SessionUpdate) {
+    let key = key(host, session);
     app.update(Msg::Session {
-        key: key(host, session),
+        key: key.clone(),
         update,
     });
+    let Some(session) = app.sessions.get(&key) else {
+        return;
+    };
+    let Some(head) = app
+        .machines
+        .iter_mut()
+        .filter(|machine| machine.host_id == key.host_id)
+        .flat_map(|machine| &mut machine.sessions)
+        .find(|head| head.session_id == key.session_id)
+    else {
+        return;
+    };
+    head.status = session.status;
+    head.parent.clone_from(&session.parent);
+    head.task.clone_from(&session.task);
+    head.title = session.title.as_ref().map(|(title, _)| title.clone());
+    if head.project_id.is_none() && !head.chat && !session.repo.is_empty() {
+        head.project_id = Some(herder_protocol::ProjectId::local(
+            &key.host_id,
+            &session.repo,
+        ));
+    }
+}
+
+/// Two machines, as the sidebar lists their sessions, every one loaded but `s9`:
+/// on `laptop` (h1) the chats `c1` (idle) and `c2` (running), and `s1` (running) and `s2`
+/// (archived) of `github.com/acme/app`; on `server` (h2) the chat `c3` (needs you), `s3`
+/// (idle) of the same project with its child `s4` (running), `s5` (archived), whose project
+/// the daemon dropped, and `s9`, listed archived but not loaded yet. The machines name the
+/// project `app` and `acme-app`.
+pub fn sidebar() -> App {
+    let app_id = Some("github.com/acme/app");
+    let mut machines = [machine("h1", "laptop", &[]), machine("h2", "server", &[])];
+    for (at, id, project, chat) in [
+        (0, "c1", None, true),
+        (0, "c2", None, true),
+        (0, "s1", app_id, false),
+        (0, "s2", app_id, false),
+        (1, "c3", None, true),
+        (1, "s3", app_id, false),
+        (1, "s4", app_id, false),
+        (1, "s5", None, false),
+        (1, "s9", app_id, false),
+    ] {
+        let mut head = head(id, project);
+        head.chat = chat;
+        machines[at].sessions.push(head);
+    }
+    let [mut laptop, mut server] = machines;
+    server.sessions[4].status = SessionStatus::Archived;
+    server.sessions[4].title = Some("Old cache experiment".to_owned());
+    for (machine, name) in [(&mut laptop, "app"), (&mut server, "acme-app")] {
+        machine.projects = vec![herder_protocol::Project {
+            project_id: herder_protocol::ProjectId::new("github.com/acme/app"),
+            name: name.to_owned(),
+            paths: Vec::new(),
+            remote: None,
+            default_permission_mode: None,
+            default_account: None,
+            setup_command: None,
+            icon: None,
+            icon_uploaded: false,
+            icon_background: None,
+            private_artifacts: false,
+        }];
+    }
+    let mut app = App {
+        clock: Some(Timestamp::UNIX_EPOCH),
+        ..App::default()
+    };
+    app.update(Msg::Machines(vec![laptop, server]));
+    // A chat runs in a scratch directory of its own, named like a session id.
+    let chat = |title: &str| {
+        let mut created = created_in("/home/ann/.herder/chats/3v0xcf8p", "", None, None);
+        if let EventBody::SessionCreated { chat, branch, .. } = &mut created {
+            *chat = true;
+            *branch = None;
+        }
+        vec![
+            created,
+            EventBody::TitleChanged {
+                title: title.to_owned(),
+                source: herder_protocol::TitleSource::Auto,
+            },
+        ]
+    };
+    let mut c1 = chat("Image attachment and trimming");
+    c1.push(status(SessionStatus::Idle));
+    let mut c2 = chat("Server cost, power and noise");
+    c2.push(status(SessionStatus::Running));
+    let mut c3 = chat("DevOps Q3 plan");
+    c3.push(status(SessionStatus::NeedsYou));
+    let work = |repo: &str, branch: &str, parent: Option<&str>, state: SessionStatus| {
+        let task = parent.map(|_| "test the cache");
+        vec![created_in(repo, branch, parent, task), status(state)]
+    };
+    for (host, id, events) in [
+        ("h1", "c1", c1),
+        ("h1", "c2", c2),
+        ("h2", "c3", c3),
+        (
+            "h1",
+            "s1",
+            work(
+                "/home/ann/src/app",
+                "herder/fix-login",
+                None,
+                SessionStatus::Running,
+            ),
+        ),
+        (
+            "h1",
+            "s2",
+            work(
+                "/home/ann/src/app",
+                "herder/old",
+                None,
+                SessionStatus::Archived,
+            ),
+        ),
+        (
+            "h2",
+            "s3",
+            work("/work/app", "herder/cache", None, SessionStatus::Idle),
+        ),
+        (
+            "h2",
+            "s4",
+            work(
+                "/work/app",
+                "herder/cache-tests",
+                Some("s3"),
+                SessionStatus::Running,
+            ),
+        ),
+        (
+            "h2",
+            "s5",
+            work("/work/gone", "herder/gone", None, SessionStatus::Archived),
+        ),
+    ] {
+        feed(&mut app, host, id, update(id, 1, events, Vec::new()));
+    }
+    // The daemon dropped `s5`'s project: no project, even with its repo known.
+    app.machines[1].sessions[3].project_id = None;
+    app
 }
 
 /// One machine with a task tree and a lone session, every session loaded:

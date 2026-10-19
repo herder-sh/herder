@@ -229,7 +229,7 @@ impl App {
             .iter()
             .filter_map(|row| match row {
                 Row::Session { key, .. } => self.sessions.get_key_value(key),
-                Row::Machine(_) | Row::Host { .. } | Row::Project(_) => None,
+                Row::Machine(_) | Row::Host { .. } | Row::Project(_) | Row::Chats => None,
             })
             .flat_map(|(key, session)| session.prs.iter().map(move |pr| (key, pr)))
             .collect()
@@ -282,7 +282,7 @@ impl App {
         match self.focus {
             Focus::Sessions => self.selected().and_then(|row| match row {
                 Row::Session { key, .. } => Some(key),
-                Row::Machine(_) | Row::Host { .. } | Row::Project(_) => None,
+                Row::Machine(_) | Row::Host { .. } | Row::Project(_) | Row::Chats => None,
             }),
             Focus::AllPrs => self.selected_pr().map(|(key, _)| key.clone()),
             _ => self.open.clone(),

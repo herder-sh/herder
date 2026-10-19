@@ -267,8 +267,29 @@ impl App {
             && self.machines.iter().any(|m| m.host_id == host.host_id)
     }
 
-    /// The sessions a sidebar row stands for: a project's, a machine's or a host's; a
-    /// session's subtree.
+    /// The machine `key`'s session runs on: for a vault's copy, the host it runs on.
+    pub fn session_machine(&self, key: &SessionKey) -> String {
+        let host_id = self
+            .head(key)
+            .and_then(|head| head.host_id.as_ref())
+            .unwrap_or(&key.host_id);
+        self.machine_name(host_id)
+    }
+
+    /// The machines a sidebar row's sessions run on, in pairing order.
+    pub fn row_machines(&self, row: &Row) -> Vec<String> {
+        let mut machines: Vec<String> = Vec::new();
+        for key in self.row_sessions(row) {
+            let machine = self.session_machine(&key);
+            if !machines.contains(&machine) {
+                machines.push(machine);
+            }
+        }
+        machines
+    }
+
+    /// The sessions a sidebar row stands for: a project's, the chats, a machine's or a
+    /// host's; a session's subtree.
     pub fn row_sessions(&self, row: &Row) -> Vec<SessionKey> {
         let listed = self.machines.iter().flat_map(|machine| {
             machine.sessions.iter().map(move |head| {
@@ -283,7 +304,13 @@ impl App {
         match row {
             Row::Session { key, .. } => self.subtree(key),
             Row::Project(project) => listed
-                .filter(|(key, _)| self.project_of(key).as_ref() == project.as_ref())
+                .filter(|(key, _)| {
+                    !self.is_chat(key) && self.project_of(key).as_ref() == project.as_ref()
+                })
+                .map(|(key, _)| key)
+                .collect(),
+            Row::Chats => listed
+                .filter(|(key, _)| self.is_chat(key))
                 .map(|(key, _)| key)
                 .collect(),
             Row::Machine(host_id) => listed
@@ -439,7 +466,7 @@ impl App {
         let depth = |row: &Row| match row {
             Row::Session { depth, .. } => depth + 2,
             Row::Host { .. } => 1,
-            Row::Machine(_) | Row::Project(_) => 0,
+            Row::Machine(_) | Row::Project(_) | Row::Chats => 0,
         };
         let own = depth(&rows[at]);
         if let Some(parent) = rows[..at].iter().rev().find(|row| depth(row) < own) {

@@ -1265,6 +1265,12 @@ fn projects_across_machines_on_narrow_and_wide_screens() {
 }
 
 #[test]
+fn chats_and_a_project_on_two_machines_in_the_sidebar_on_narrow_and_wide_screens() {
+    let mut app = fake::sidebar();
+    narrow_and_wide("sidebar_chats", &mut app);
+}
+
+#[test]
 fn each_projects_prs_on_narrow_and_wide_screens() {
     let mut app = fake::projects();
     press(&mut app, KeyCode::Char('P'));

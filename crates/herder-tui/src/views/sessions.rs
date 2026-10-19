@@ -1,15 +1,18 @@
-//! The sidebar, as Herdr's: the brand with the inbox count and `«`; *projects*, the tree of
-//! each project's sessions and their tasks (or with `v` each machine's, a vault's under each
-//! host), every row with its rolled-up state; *attention*, every session with something
+//! The sidebar, as Herdr's: the brand with the inbox count and `«`; *projects*, the chats,
+//! then the tree of each project's sessions and their tasks across machines, grouped as the
+//! Mac app groups them (or with `v` each machine's, a vault's under each host), every row
+//! with its rolled-up state; *attention*, every session with something
 //! going on, the most pressing first; and a footer with `+ new` and `≡ menu`.
 //!
 //! ```text
 //!  herder         inbox 2 «
 //!
 //!  projects      by project
-//!  ◉ app                 1
-//!    ├ ✓ fix-login
-//!    └ ◉ api             ?
+//!  ✓ chats
+//!    └ ✓ Image attachment…
+//!  ◉ app      laptop · ci 1
+//!    ├ ✓ fix-login   laptop
+//!    └ ◉ api             ci ?
 //!  ───────────────────────
 //!  attention       priority
 //!  ◉ api · app         box
@@ -228,7 +231,7 @@ fn strip(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     hits.click(spot(area.y), Click::Act(Action::ToggleSidebar));
     let mut y = area.y + 2;
     for (at, row) in app.rows().iter().enumerate() {
-        if !matches!(row, Row::Project(_) | Row::Machine(_)) || y >= area.bottom() {
+        if !matches!(row, Row::Project(_) | Row::Chats | Row::Machine(_)) || y >= area.bottom() {
             continue;
         }
         frame.render_widget(state::dot(ui, app.row_state(row)), glyph(y));
@@ -353,16 +356,24 @@ pub(super) fn switcher(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut 
 }
 
 /// A list item per tree row: its guides (`├ └ │`), state dot, name and meta; `roomy` names
-/// the machines of a project and the host offline since when, `prs` each session's first PR.
+/// the machines of a project, the machine of each of its sessions when it has sessions on
+/// more than one, and the host offline since when; `prs` each session's first PR.
 fn tree_items(app: &App, rows: &[Row], roomy: bool, prs: bool) -> Vec<Item<'static>> {
     let ui = app.ui();
     let levels = levels(rows);
     let lasts = lasts(&levels);
     // Whether each level's open branch ended, for the `│` of the levels below.
     let mut ended: Vec<bool> = Vec::new();
+    // Whether the group the rows are under has sessions on more than one machine.
+    let mut machines = false;
     rows.iter()
         .zip(levels.iter().zip(&lasts))
         .map(|(row, (level, last))| {
+            if matches!(row, Row::Project(_) | Row::Chats) {
+                machines = roomy && app.row_machines(row).len() > 1;
+            } else if !matches!(row, Row::Session { .. }) {
+                machines = false;
+            }
             ended.truncate(*level);
             let mut spans = Vec::new();
             if *level > 0 {
@@ -385,7 +396,7 @@ fn tree_items(app: &App, rows: &[Row], roomy: bool, prs: bool) -> Vec<Item<'stat
             ended[*level] = *last;
             spans.push(state::dot(ui, app.row_state(row)));
             spans.push(Span::raw(" "));
-            let (name, right) = row_text(app, row, roomy, prs);
+            let (name, right) = row_text(app, row, roomy, prs, machines);
             spans.push(name);
             Item::item(Line::from(spans)).right(right)
         })
@@ -398,7 +409,7 @@ fn levels(rows: &[Row]) -> Vec<usize> {
     let mut base = 0;
     rows.iter()
         .map(|row| match row {
-            Row::Machine(_) | Row::Project(_) => {
+            Row::Machine(_) | Row::Project(_) | Row::Chats => {
                 base = 1;
                 0
             }
@@ -425,8 +436,15 @@ fn lasts(levels: &[usize]) -> Vec<bool> {
         .collect()
 }
 
-/// A tree row's name, and the meta at its right end.
-fn row_text(app: &App, row: &Row, roomy: bool, prs: bool) -> (Span<'static>, Line<'static>) {
+/// A tree row's name, and the meta at its right end; `machine` names a top-level session's
+/// machine.
+fn row_text(
+    app: &App,
+    row: &Row,
+    roomy: bool,
+    prs: bool,
+    machine: bool,
+) -> (Span<'static>, Line<'static>) {
     let ui = app.ui();
     let needing = |row: &Row| match app.row_needing(row) {
         0 => Vec::new(),
@@ -436,25 +454,16 @@ fn row_text(app: &App, row: &Row, roomy: bool, prs: bool) -> (Span<'static>, Lin
         )],
     };
     match row {
-        Row::Project(project) => {
-            let name = project
-                .as_ref()
-                .map_or_else(|| "no project yet".to_owned(), |p| app.project_name(p));
+        Row::Project(_) | Row::Chats => {
+            let name = match row {
+                Row::Project(Some(project)) => app.project_name(project),
+                Row::Project(None) => "no project yet".to_owned(),
+                _ => "chats".to_owned(),
+            };
             let mut right = Vec::new();
-            if roomy {
-                let on: Vec<String> = app
-                    .machines
-                    .iter()
-                    .filter(|m| {
-                        app.row_sessions(row)
-                            .iter()
-                            .any(|key| key.host_id == m.host_id)
-                    })
-                    .map(|m| m.name.clone())
-                    .collect();
-                if !on.is_empty() {
-                    right.push(Span::styled(on.join(ui.glyphs.separator), ui.muted()));
-                }
+            let on = app.row_machines(row);
+            if roomy && !on.is_empty() {
+                right.push(Span::styled(on.join(ui.glyphs.separator), ui.muted()));
             }
             push_spaced(&mut right, needing(row));
             (Span::styled(name, ui.text()), Line::from(right))
@@ -502,21 +511,32 @@ fn row_text(app: &App, row: &Row, roomy: bool, prs: bool) -> (Span<'static>, Lin
                 Line::from(right),
             )
         }
-        Row::Session { key, .. } => session_text(app, key, prs),
+        Row::Session { key, depth } => session_text(app, key, prs, machine && *depth == 0),
     }
 }
 
-/// A session row's name and meta: where it moved, how many tasks a fold hides, with `prs` its
-/// first PR, how many of its tasks need the user, and what it waits on (`?` a question, `!`
-/// an approval).
-fn session_text(app: &App, key: &SessionKey, prs: bool) -> (Span<'static>, Line<'static>) {
+/// A session row's name and meta: with `machine` its machine, where it moved, how many tasks
+/// a fold hides, with `prs` its first PR, how many of its tasks need the user, and what it
+/// waits on (`?` a question, `!` an approval).
+fn session_text(
+    app: &App,
+    key: &SessionKey,
+    prs: bool,
+    machine: bool,
+) -> (Span<'static>, Line<'static>) {
     let ui = app.ui();
     let Some(session) = app.sessions.get(key) else {
         return (Span::raw(""), Line::default());
     };
-    let name = match app.grouping {
-        Grouping::Projects => super::projects::session_name(session, true),
-        Grouping::Machines => session.short_title(),
+    // The listing's title stands in until the session's own events have loaded.
+    let listed = app
+        .head(key)
+        .filter(|_| !session.loaded)
+        .and_then(|head| head.title.clone().or_else(|| head.task.clone()));
+    let name = match (listed, app.grouping) {
+        (Some(title), _) => title,
+        (None, Grouping::Projects) => super::projects::session_name(session, true),
+        (None, Grouping::Machines) => session.short_title(),
     };
     let mut style = ui.text();
     if app.open.as_ref() == Some(key) {
@@ -526,9 +546,12 @@ fn session_text(app: &App, key: &SessionKey, prs: bool) -> (Span<'static>, Line<
         style = ui.muted();
     }
     let mut right = Vec::new();
+    if machine {
+        right.push(Span::styled(app.session_machine(key), ui.muted()));
+    }
     // A vault's read-only copy, standing in for a host paired here but not reachable.
     if app.vault_copy(key) {
-        right.push(Span::styled("vault", ui.muted()));
+        push_spaced(&mut right, vec![Span::styled("vault", ui.muted())]);
     }
     if let Some(to) = app.moved_to(key) {
         right.push(Span::styled(
