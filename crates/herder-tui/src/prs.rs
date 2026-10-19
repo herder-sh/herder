@@ -78,11 +78,9 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<PrAction> {
             _ => None,
         };
     }
+    // `P`, `p` and `L` are NAVIGATE's (`crate::keys`).
     let list = matches!(app.focus, Focus::Prs | Focus::AllPrs);
     let action = match key.code {
-        KeyCode::Char('P') => PrAction::ToggleAll,
-        KeyCode::Char('p') => PrAction::FocusStrip,
-        KeyCode::Char('L') => PrAction::StartLink,
         KeyCode::Char('k') | KeyCode::Up if list => PrAction::Move(-1),
         KeyCode::Char('j') | KeyCode::Down if list => PrAction::Move(1),
         KeyCode::PageUp if list => PrAction::Move(-10),

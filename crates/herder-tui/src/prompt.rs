@@ -68,7 +68,7 @@ pub const COMMANDS: &[Command] = &[
     command("add", "", "add a machine"),
     command("reconnect", "", "reconnect every machine now"),
     command("group", "", "group sessions by project or by machine"),
-    command("help", "", "keys"),
+    command("help", "", "every key and command"),
     command("quit", "", "leave herder"),
 ];
 

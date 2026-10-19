@@ -501,9 +501,9 @@ fn the_help_scrolls_by_wheel_and_closes_on_a_tap() {
     for size in SIZES {
         let mut app = fake::tree();
         press(&mut app, KeyCode::Char('?'));
-        wheel(&mut app, size, "keys", 1);
+        wheel(&mut app, size, "help", 1);
         assert!(app.help_scroll > 0, "{size:?}");
-        tap(&mut app, size, "keys");
+        tap(&mut app, size, "help");
         assert!(!app.help, "{size:?}");
     }
 }

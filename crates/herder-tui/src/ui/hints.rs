@@ -2,7 +2,8 @@
 //!
 //! - [`ModeBar`], on a desktop: a lead (the mode badge, a notice), the hints as `key label`,
 //!   and a right side (each machine's connection). Hints that do not fit are left out whole,
-//!   the last first: a hint is never cut.
+//!   from the second-to-last back: a hint is never cut, and the last (help, or the way out)
+//!   stays.
 //! - [`ButtonBar`], on a phone: the same hints as buttons a finger or Tab reaches. Tab's focus
 //!   is drawn solid, and the bar scrolls so it stays in view.
 //!
@@ -95,9 +96,22 @@ impl<'a> ModeBar<'a> {
             limit = right_x.saturating_sub(gap);
         }
         let mut placed = Vec::new();
+        // The last hint, help or the way out, is never left out: room is kept for it.
+        let last = self.hints.len().saturating_sub(1);
+        let kept = self.hints.last().map_or(0, |hint| hint.width() + gap);
+        let mut full = false;
         for (at, hint) in self.hints.iter().enumerate() {
             let hint_width = hint.width();
-            if x + hint_width > limit {
+            let room = if at < last {
+                limit.saturating_sub(kept)
+            } else {
+                limit
+            };
+            full |= x + hint_width > room;
+            if full && at < last {
+                continue;
+            }
+            if x + hint_width > room {
                 break;
             }
             Line::from(vec![

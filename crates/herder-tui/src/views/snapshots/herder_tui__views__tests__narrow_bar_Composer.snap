@@ -1,0 +1,5 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: bar
+---
+"  PROMPT   enter send  alt+enter newline  ctrl+x ? help          ● box  "

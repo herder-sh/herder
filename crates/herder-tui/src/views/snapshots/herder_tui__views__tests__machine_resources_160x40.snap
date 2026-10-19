@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                                                                      "
 " + new            ≡ menu │                                                                                                                                      "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── "
-" j/k move  a add machine  n add account  e rename  b backup  d forget  r reconnect  esc back                                                             ● box  "
+" j/k move  a add machine  n add account  e rename  b backup  d forget  r reconnect  esc back  ? help                                                     ● box  "

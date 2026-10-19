@@ -1,0 +1,5 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: bar
+---
+"  NAVIGATE   j/k move  enter open  n new  v group  ? help        ● box  "

@@ -31,4 +31,4 @@ expression: terminal.backend()
 " ─────────────────────── │  ╹                                                                       "
 " + new            ≡ menu │    ✗ model opus-9 is not available on claude-main   claude-main 5h 31%   "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  ctrl+c stop      ● box  "
+"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  ? help           ● box  "

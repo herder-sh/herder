@@ -1107,16 +1107,59 @@ fn the_help_scrolls_on_a_small_screen() {
     press(&mut app, KeyCode::Char('?'));
     let top = render(&mut app, 45, 30).backend().to_string();
     assert!(top.contains("j/k scroll"), "{top}");
-    for _ in 0..100 {
+    assert!(top.contains("everywhere"), "{top}");
+    for _ in 0..1000 {
         press(&mut app, KeyCode::Char('j'));
     }
     let end = render(&mut app, 45, 30).backend().to_string();
     assert!(app.help);
-    assert!(end.contains("show or hide"), "{end}");
-    assert!(!end.contains("open the selected session"), "{end}");
-    // Any other key closes it.
+    assert!(end.contains("this help"), "{end}");
+    assert!(!end.contains("everywhere"), "{end}");
+    // Other keys do nothing; esc closes it.
     press(&mut app, KeyCode::Char('x'));
+    assert!(app.help);
+    press(&mut app, KeyCode::Esc);
     assert!(!app.help);
+}
+
+#[test]
+fn the_help_lists_every_section() {
+    let mut app = fake::tree();
+    press(&mut app, KeyCode::Char('?'));
+    let terminal = render(&mut app, 100, 240);
+    let screen = terminal.backend().to_string();
+    for section in crate::keys::sections() {
+        assert!(
+            screen.contains(section.title),
+            "no {:?}:\n{screen}",
+            section.title
+        );
+    }
+    // Everything fits: no scroll hint.
+    assert!(!screen.contains("j/k scroll"), "{screen}");
+    insta::assert_snapshot!(terminal.backend());
+}
+
+#[test]
+fn the_bar_keeps_help_on_a_narrow_screen() {
+    let mut app = mid_turn();
+    for (width, focus) in [(72, Focus::Transcript), (72, Focus::Sessions)] {
+        app.focus = focus;
+        let terminal = render(&mut app, width, 24);
+        let bar = terminal.backend().to_string();
+        let bar = bar.lines().last().unwrap().to_owned();
+        assert!(bar.contains("? help"), "{focus:?}: {bar}");
+        insta::assert_snapshot!(format!("narrow_bar_{focus:?}"), bar);
+    }
+    // In the composer `?` types; the leader's opens the help.
+    app.focus = Focus::Transcript;
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.focus, Focus::Composer);
+    let terminal = render(&mut app, 72, 24);
+    let bar = terminal.backend().to_string();
+    let bar = bar.lines().last().unwrap().to_owned();
+    assert!(bar.contains("ctrl+x ? help"), "{bar}");
+    insta::assert_snapshot!("narrow_bar_Composer", bar);
 }
 
 /// The screen `app` draws on a fresh `width` by `height` terminal.
@@ -1745,7 +1788,7 @@ fn the_secrets_screen_at_three_widths() {
     at_three_widths("secrets", &mut app);
     let screen = render(&mut app, 100, 30).backend().to_string();
     assert!(
-        screen.contains("j/k move  n new set  e replace  a add secret  s hosts  d delete"),
+        screen.contains("j/k move  n new set  e replace  a add secret  s hosts  ? help"),
         "{screen}"
     );
     press(&mut app, KeyCode::Char('s'));

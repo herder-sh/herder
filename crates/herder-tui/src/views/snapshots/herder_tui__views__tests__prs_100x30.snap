@@ -31,4 +31,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                          "
 " + new            ≡ menu │                                                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-"  NAVIGATE   j/k move  enter browser  l session  x unlink  esc back                          ● box  "
+"  NAVIGATE   j/k move  enter browser  l session  x unlink  esc back  ? help                  ● box  "
