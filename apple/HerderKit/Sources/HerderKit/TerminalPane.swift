@@ -21,20 +21,28 @@ final class TerminalConnection {
     let relogin: AccountId?
     /// The provider whose CLI this terminal installs or updates.
     let install: Provider?
+    /// The AWS profile this terminal signs in to IAM Identity Center.
+    let awsProfile: String?
     private(set) var terminalId: TerminalId?
     private(set) var state: State = .connecting
+    /// Why the machine refused to open the terminal, when it did.
+    private(set) var refusal: ErrorCode?
     @ObservationIgnored private var stream: TerminalStream?
     @ObservationIgnored private var pump: Task<Void, Never>?
     /// The emulator, made once and kept with the connection, so leaving the pane and coming
     /// back shows the same screen.
     @ObservationIgnored private var emulator: SwiftTerm.TerminalView?
     @ObservationIgnored private var delegate: EmulatorDelegate?
+    /// Output that came before the emulator was made, for it to show first: a sign-in runs
+    /// before anyone opens its terminal.
+    @ObservationIgnored private var backlog: [UInt8] = []
 
     init(hostId: HostId, terminalId: TerminalId?, account: NewAccount? = nil, relogin: AccountId? = nil,
-         install: Provider? = nil) {
+         install: Provider? = nil, awsProfile: String? = nil) {
         self.account = account
         self.relogin = relogin
         self.install = install
+        self.awsProfile = awsProfile
         self.hostId = hostId
         self.terminalId = terminalId
     }
@@ -44,7 +52,7 @@ final class TerminalConnection {
         guard pump == nil else { return }
         pump = Task {
             do {
-                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account, relogin, install] in
+                let stream = try await withTimeout(seconds: 10) { [hostId, terminalId, account, relogin, install, awsProfile] in
                     if let terminalId {
                         try await client.attachTerminal(hostId: hostId, terminalId: terminalId)
                     } else if let account {
@@ -56,6 +64,9 @@ final class TerminalConnection {
                     } else if let install {
                         try await client.installProvider(
                             hostId: hostId, provider: install, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
+                    } else if let awsProfile {
+                        try await client.awsSsoLogin(
+                            hostId: hostId, profile: awsProfile, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
                     } else if let sessionId {
                         try await client.openTerminal(
                             hostId: hostId, sessionId: sessionId, cols: UInt16(clamping: cols), rows: UInt16(clamping: rows))
@@ -70,7 +81,9 @@ final class TerminalConnection {
                 while let event = await stream.next(), !Task.isCancelled {
                     switch event {
                     case .output(let data): feed(Array(data))
-                    case .reattached: emulator?.getTerminal().resetToInitialState()
+                    case .reattached:
+                        backlog = []
+                        emulator?.getTerminal().resetToInitialState()
                     case .closed(let code):
                         state = .exited(code)
                         return
@@ -78,6 +91,7 @@ final class TerminalConnection {
                 }
                 if state == .attached { state = .failed("The connection to the machine stopped.") }
             } catch let error as HerderError {
+                if case .Rejected(let info) = error { refusal = info.code }
                 if case .Rejected(let info) = error, info.code == .forbidden {
                     state = .failed("Terminals are owner-only.")
                 } else {
@@ -112,11 +126,19 @@ final class TerminalConnection {
         #endif
         emulator = view
         self.delegate = delegate
+        if !backlog.isEmpty {
+            view.feed(byteArray: backlog[...])
+            backlog = []
+        }
         return view
     }
 
     private func feed(_ bytes: [UInt8]) {
-        emulator?.feed(byteArray: bytes[...])
+        guard let emulator else {
+            backlog += bytes
+            return
+        }
+        emulator.feed(byteArray: bytes[...])
     }
 }
 
@@ -246,6 +268,8 @@ struct TerminalSurface: View {
             .padding(6)
             .overlay {
                 switch connection.state {
+                case .exited where connection.awsProfile != nil:
+                    EmptyView()
                 case .connecting:
                     ProgressView().tint(Theme.secondary)
                 case .attached:

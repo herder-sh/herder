@@ -111,6 +111,9 @@ struct DesktopShell: View {
             Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
+                if !AwsSignIn.machines(fleet.machines).isEmpty {
+                    PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
+                }
                 IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
                 PaneButton(title: "Add Machine", symbol: "plus") { sheet = .pair }
             }
