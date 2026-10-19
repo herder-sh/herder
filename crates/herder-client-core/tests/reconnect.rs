@@ -553,6 +553,101 @@ async fn a_renamed_machine_keeps_its_name_and_a_forgotten_one_is_gone() {
     assert!(client.machines().is_empty());
 }
 
+/// Waits until `client` holds machines that satisfy `wanted`.
+async fn wait_machines(client: &Client, wanted: impl Fn(&[herder_client_core::Machine]) -> bool) {
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while !wanted(&client.machines()) {
+            assert!(changes.next().await);
+        }
+    })
+    .await
+    .expect("the machines never got there");
+}
+
+/// Two clients on one config dir, as the Mac app and the TUI on one Mac: what either changes
+/// shows up in the other without a restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clients_sharing_a_profile_see_each_others_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client").display().to_string();
+    let daemon = Daemon::start(
+        &tmp.path().join("daemon"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let app = Client::open(config.clone(), "herder-app/0".into()).unwrap();
+    let tui = Client::open(config.clone(), "herder-tui/0".into()).unwrap();
+
+    let host = pair_one(&app, daemon.pairing_link()).await.unwrap().host_id;
+    wait_machines(&tui, |m| m.len() == 1 && m[0].host_id == host).await;
+    wait_connection(&tui, connected).await;
+
+    tui.rename(host.clone(), "build box".into()).unwrap();
+    wait_machines(&app, |m| m[0].name == "build box").await;
+
+    let addresses = vec![daemon.addr.to_string(), "127.0.0.1:1".to_owned()];
+    app.set_addresses(host.clone(), addresses.clone()).unwrap();
+    wait_machines(&tui, |m| m[0].addresses == addresses).await;
+    assert_eq!(tui.machines()[0].name, "build box");
+
+    // Pairing again with a new key replaces the other client's connection too.
+    pair_one(&tui, daemon.pairing_link()).await.unwrap();
+    wait_connection(&app, connected).await;
+
+    app.forget(host.clone()).unwrap();
+    wait_machines(&tui, <[_]>::is_empty).await;
+    assert_eq!(
+        tui.rename(host.clone(), "x".into()),
+        Err(Error::UnknownMachine { host_id: host })
+    );
+}
+
+/// Two clients pairing at once on one config dir: neither overwrites the other's machine.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clients_sharing_a_profile_lose_no_pairing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("client").display().to_string();
+    let one = Daemon::start_as(
+        "host-1",
+        &tmp.path().join("one"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let two = Daemon::start_as(
+        "host-2",
+        &tmp.path().join("two"),
+        0,
+        "mid_turn.jsonl",
+        Arc::default(),
+    )
+    .await;
+    let app = Client::open(config.clone(), "herder-app/0".into()).unwrap();
+    let tui = Client::open(config.clone(), "herder-tui/0".into()).unwrap();
+
+    let (paired_one, paired_two) = tokio::join!(
+        pair_one(&app, one.pairing_link()),
+        pair_one(&tui, two.pairing_link())
+    );
+    paired_one.unwrap();
+    paired_two.unwrap();
+    let both = |m: &[herder_client_core::Machine]| {
+        let mut ids: Vec<&str> = m.iter().map(|m| m.host_id.as_str()).collect();
+        ids.sort_unstable();
+        ids == ["host-1", "host-2"]
+    };
+    wait_machines(&app, both).await;
+    wait_machines(&tui, both).await;
+    drop((app, tui));
+
+    let reopened = Client::open(config, "herder-tui/0".into()).unwrap();
+    assert!(both(&reopened.machines()));
+}
+
 /// A dead address before a live one costs a head start, not a connect timeout; the order the
 /// user sets holds, persists, and moves a connection that is up to an address that comes first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
