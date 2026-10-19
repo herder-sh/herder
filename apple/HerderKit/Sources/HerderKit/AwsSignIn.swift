@@ -1,6 +1,49 @@
 import Herder
 import SwiftUI
 
+/// Why a machine gave no AWS profiles to pick from.
+enum AwsListProblem: Error, Equatable {
+    /// The machine runs a herder older than AWS sign-in, which cannot read the request.
+    case outdated
+    case offline
+    /// The machine answered, with no profile in its `~/.aws/config`.
+    case noProfiles
+    case failed(String)
+
+    /// Why listing a machine's profiles threw `error`. A daemon refuses a command it cannot
+    /// read as a bad request, and listing profiles carries nothing else it could find bad.
+    init(error: any Error) {
+        if case .Rejected(let info) = error as? HerderError, info.code == .badRequest {
+            self = .outdated
+        } else {
+            self = .failed(describe(error))
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .outdated: "needs herder 0.8 or newer — run herder update"
+        case .offline: "offline"
+        case .noProfiles: "no ~/.aws/config profiles"
+        case .failed(let message): message
+        }
+    }
+
+    /// Why there is no profile to pick, given why each owned machine listed none.
+    static func nothingToPick(_ problems: [AwsListProblem]) -> String {
+        let only = { (problem: AwsListProblem) in !problems.isEmpty && problems.allSatisfy { $0 == problem } }
+        return if only(.outdated) {
+            "Your machines run a herder older than 0.8, which cannot sign in to AWS. Run herder update on them."
+        } else if only(.offline) {
+            "None of the machines you own is connected."
+        } else if only(.noProfiles) {
+            "None of the machines you own has a profile in ~/.aws/config."
+        } else {
+            "No connected machine you own listed an AWS profile."
+        }
+    }
+}
+
 /// Where one machine's AWS sign-in is, as the sign-in sheet shows it.
 enum AwsSignInStatus: Equatable {
     case starting
@@ -12,6 +55,8 @@ enum AwsSignInStatus: Equatable {
     /// The machine would not start the sign-in, for this reason.
     case refused(String)
     case noSuchProfile
+    /// The machine listed no profiles, for this reason.
+    case unlisted(AwsListProblem)
     case notInstalled
     case offline
 
@@ -52,6 +97,7 @@ enum AwsSignInStatus: Equatable {
         case .failed(let code): code.map { "Failed (exit \($0))" } ?? "Failed"
         case .refused(let reason): "Failed: \(reason)"
         case .noSuchProfile: "No such profile"
+        case .unlisted(let problem): problem.label.prefix(1).uppercased() + problem.label.dropFirst()
         case .notInstalled: "aws not installed"
         case .offline: "Offline"
         }
@@ -95,14 +141,15 @@ final class AwsSignIn {
     }
 
     /// Starts the sign-in on `machines`, or on every owned machine, given the profiles each
-    /// connected machine listed.
-    func start(fleet: Fleet, profiles: [HostId: [AwsProfile]], only hosts: Set<HostId>? = nil) {
+    /// connected machine listed and why the others listed none.
+    func start(fleet: Fleet, profiles: [HostId: [AwsProfile]], problems: [HostId: AwsListProblem],
+               only hosts: Set<HostId>? = nil) {
         for machine in Self.machines(fleet.machines) where hosts?.contains(machine.hostId) ?? true {
             var row = Row(hostId: machine.hostId, name: machine.name)
             if machine.connection != .connected {
                 row.skipped = .offline
             } else if profiles[machine.hostId]?.contains(where: { $0.name == profile }) != true {
-                row.skipped = .noSuchProfile
+                row.skipped = problems[machine.hostId].map(AwsSignInStatus.unlisted) ?? .noSuchProfile
             } else {
                 let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, awsProfile: profile)
                 connection.connect(client: fleet.client, sessionId: nil, cols: 100, rows: 30)
@@ -133,6 +180,8 @@ struct AwsSignInSheet: View {
     @AppStorage("awsProfile") private var picked = ""
     /// The profiles each connected owned machine listed; `nil` until they answered.
     @State private var profiles: [HostId: [AwsProfile]]?
+    /// Why each owned machine listed no profiles, when it did not.
+    @State private var problems: [HostId: AwsListProblem] = [:]
     @State private var expanded: Set<HostId> = []
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
@@ -211,8 +260,9 @@ struct AwsSignInSheet: View {
             } else if choices.isEmpty {
                 Text(AwsSignIn.machines(fleet.machines).isEmpty
                      ? "You own no machine here; signing in to AWS is the owner’s."
-                     : "No connected machine you own has an AWS profile.")
+                     : AwsListProblem.nothingToPick(Array(problems.values)))
                     .foregroundStyle(Theme.secondary)
+                problemList
             } else {
                 Picker("Profile", selection: $picked) {
                     ForEach(choices, id: \.name) { profile in
@@ -222,7 +272,26 @@ struct AwsSignInSheet: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                problemList
             }
+        }
+    }
+
+    /// Each owned machine that listed no profiles, and why.
+    @ViewBuilder private var problemList: some View {
+        let unlisted = AwsSignIn.machines(fleet.machines).compactMap { machine in
+            problems[machine.hostId].map { (hostId: machine.hostId, name: machine.name, problem: $0) }
+        }
+        if !unlisted.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(unlisted, id: \.hostId) { item in
+                    Text("\(item.name): \(item.problem.label)")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(Theme.tertiary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -266,7 +335,7 @@ struct AwsSignInSheet: View {
             switch status {
             case .starting, .waiting: ProgressView().controlSize(.mini)
             case .signedIn: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
-            case .offline, .noSuchProfile: Image(systemName: "minus.circle").foregroundStyle(Theme.tertiary)
+            case .offline, .noSuchProfile, .unlisted: Image(systemName: "minus.circle").foregroundStyle(Theme.tertiary)
             default: Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.failure)
             }
             Text(status.label).foregroundStyle(status == .signedIn ? Theme.text : Theme.secondary).lineLimit(1)
@@ -278,18 +347,37 @@ struct AwsSignInSheet: View {
         if let url = URL(string: device.verificationUrl) { openURL(url) }
     }
 
-    /// Asks every connected machine the user owns for its profiles.
+    /// Asks every connected machine the user owns for its profiles, keeping why each machine
+    /// that listed none did not.
     private func load() async {
         let client = fleet.client
-        let hosts = AwsSignIn.machines(fleet.machines).filter { $0.connection == .connected }.map(\.hostId)
-        let listed = await withTaskGroup(of: (HostId, [AwsProfile]).self) { group in
+        let machines = AwsSignIn.machines(fleet.machines)
+        let hosts = machines.filter { $0.connection == .connected }.map(\.hostId)
+        let answers = await withTaskGroup(of: (HostId, Result<[AwsProfile], AwsListProblem>).self) { group in
             for hostId in hosts {
-                group.addTask { (hostId, (try? await client.listAwsProfiles(hostId: hostId)) ?? []) }
+                group.addTask {
+                    do {
+                        let profiles = try await client.listAwsProfiles(hostId: hostId)
+                        return (hostId, profiles.isEmpty ? .failure(.noProfiles) : .success(profiles))
+                    } catch {
+                        return (hostId, .failure(AwsListProblem(error: error)))
+                    }
+                }
             }
-            var listed: [HostId: [AwsProfile]] = [:]
-            for await (hostId, profiles) in group { listed[hostId] = profiles }
-            return listed
+            var answers: [HostId: Result<[AwsProfile], AwsListProblem>] = [:]
+            for await (hostId, answer) in group { answers[hostId] = answer }
+            return answers
         }
+        var listed: [HostId: [AwsProfile]] = [:]
+        var problems: [HostId: AwsListProblem] = [:]
+        for machine in machines {
+            switch answers[machine.hostId] {
+            case .success(let profiles): listed[machine.hostId] = profiles
+            case .failure(let problem): problems[machine.hostId] = problem
+            case nil: problems[machine.hostId] = .offline
+            }
+        }
+        self.problems = problems
         profiles = listed
         if !choices.contains(where: { $0.name == picked }), let first = choices.first { picked = first.name }
     }
@@ -297,7 +385,7 @@ struct AwsSignInSheet: View {
     private func start() {
         guard let profiles, choices.contains(where: { $0.name == picked }) else { return }
         let run = AwsSignIn(profile: picked)
-        run.start(fleet: fleet, profiles: profiles)
+        run.start(fleet: fleet, profiles: profiles, problems: problems)
         fleet.awsSignIn = run
         expanded = []
     }
@@ -307,6 +395,6 @@ struct AwsSignInSheet: View {
         guard let run else { return }
         let hosts = failed
         await load()
-        run.start(fleet: fleet, profiles: profiles ?? [:], only: hosts)
+        run.start(fleet: fleet, profiles: profiles ?? [:], problems: problems, only: hosts)
     }
 }
