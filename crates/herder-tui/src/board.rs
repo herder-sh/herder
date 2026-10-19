@@ -135,10 +135,12 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<BoardAction> {
     if app.prs.prompt.is_some() {
         return None;
     }
-    let board = app.focus == Focus::Board;
+    // Outside the board, its key is NAVIGATE's (`crate::keys`).
+    if app.focus != Focus::Board {
+        return None;
+    }
     let action = match key.code {
         KeyCode::Char('B') => BoardAction::Toggle,
-        _ if !board => return None,
         KeyCode::Char('k') | KeyCode::Up => BoardAction::Move(-1),
         KeyCode::Char('j') | KeyCode::Down => BoardAction::Move(1),
         KeyCode::PageUp => BoardAction::Move(-10),

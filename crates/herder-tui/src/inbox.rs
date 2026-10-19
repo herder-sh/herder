@@ -132,10 +132,12 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<InboxAction> {
             _ => InboxAction::Key(key),
         });
     }
+    // Outside the inbox, its keys are NAVIGATE's (`crate::keys`).
+    if !inbox {
+        return None;
+    }
     let action = match key.code {
-        KeyCode::Char('I') => InboxAction::Toggle,
-        KeyCode::Char('i') if inbox || app.focus == Focus::Sessions => InboxAction::Toggle,
-        _ if !inbox => return None,
+        KeyCode::Char('I' | 'i') => InboxAction::Toggle,
         KeyCode::Char('k') | KeyCode::Up => InboxAction::Move(-1),
         KeyCode::Char('j') | KeyCode::Down => InboxAction::Move(1),
         KeyCode::PageUp => InboxAction::Move(-10),

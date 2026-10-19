@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │  ╹                                                                                        │                                          "
 " + new            ≡ menu │                                                                                           │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
-"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+x leader                                                             ● box  "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+x leader  ctrl+x ? help                                              ● box  "

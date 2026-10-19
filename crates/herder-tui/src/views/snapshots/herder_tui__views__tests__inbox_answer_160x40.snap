@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │ ┃ answer · write the tests                                                                                                           "
 " + new            ≡ menu │ ╹                                                                                                                                    "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── "
-"  NAVIGATE   enter send  esc cancel                                                                                                                      ● box  "
+"  NAVIGATE   enter send  esc cancel  ctrl+x ? help                                                                                                       ● box  "

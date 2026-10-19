@@ -21,4 +21,4 @@ expression: terminal.backend()
 " ─────────────────────── │  ┃                                                                       "
 " + new            ≡ menu │    ⠋ working · 0s                                                        "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-"  APPROVAL   ◉ 2 waiting  y allow  n deny  esc navigate  ctrl+x leader                       ● box  "
+"  APPROVAL   ◉ 2 waiting  y allow  n deny  esc navigate  ctrl+x leader  ? help               ● box  "

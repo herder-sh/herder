@@ -2,7 +2,8 @@
 //!
 //! Every key goes through [`for_key`] to become an [`Action`], and only actions change the app
 //! ([`crate::app::App::act`]). A new view adds its actions here and its keys to [`for_key`],
-//! usually behind a check of what has focus.
+//! usually behind a check of what has focus. NAVIGATE's keys and the leader's are tables in
+//! [`crate::keys`], which the help is drawn from too.
 //!
 //! Every action has a key a phone's on-screen keyboard has: a letter, a digit, Enter or
 //! Backspace. Esc, Tab, arrows and Ctrl chords are alternatives, never the only way.
@@ -13,13 +14,12 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use herder_protocol::ApprovalDecision;
-
 use crate::app::{App, Focus};
 use crate::board::{self, BoardAction};
 use crate::chat::ChatAct;
 use crate::compose::{self, Act};
 use crate::inbox::{self, InboxAction};
+use crate::keys;
 use crate::nav::Tab;
 use crate::prs::{self, PrAction};
 
@@ -129,17 +129,8 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         return Some(Action::Leader);
     }
     if app.help {
-        // Any key but scrolling closes the help.
-        let action = match key.code {
-            KeyCode::Char('k') | KeyCode::Up => Action::Up,
-            KeyCode::Char('j') | KeyCode::Down => Action::Down,
-            KeyCode::Char(' ') | KeyCode::PageDown => Action::PageDown,
-            KeyCode::PageUp => Action::PageUp,
-            KeyCode::Home => Action::Top,
-            KeyCode::End => Action::Bottom,
-            _ => Action::ToggleHelp,
-        };
-        return Some(action);
+        // Keys but the help's own do nothing.
+        return keys::lookup(keys::HELP, key, app.focus);
     }
     if let Some(panel) = &app.machine_panel {
         return crate::machines::for_key(key, panel);
@@ -154,16 +145,7 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         return crate::fork::for_key(key);
     }
     if app.terminals.is_some() {
-        let action = match key.code {
-            KeyCode::Char('k') | KeyCode::Up => Action::Up,
-            KeyCode::Char('j') | KeyCode::Down => Action::Down,
-            KeyCode::Char('g') | KeyCode::Home | KeyCode::PageUp => Action::Top,
-            KeyCode::Char('G') | KeyCode::End | KeyCode::PageDown => Action::Bottom,
-            KeyCode::Enter => Action::Open,
-            KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('q' | 't') => Action::Back,
-            _ => return None,
-        };
-        return Some(action);
+        return keys::lookup(keys::TERMINALS, key, app.focus);
     }
     let dialog = app.compose.palette.is_some() || app.compose.dialog.is_some();
     if ctrl && key.code == KeyCode::Char('p') && !dialog {
@@ -186,88 +168,31 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
         return None;
     }
     let in_transcript = app.focus == Focus::Transcript;
-    let action = match key.code {
-        KeyCode::Char('[') if in_transcript => Action::Chat(ChatAct::Prev),
-        KeyCode::Char(']') if in_transcript => Action::Chat(ChatAct::Next),
-        KeyCode::Char('e') if in_transcript => Action::Chat(ChatAct::Toggle),
-        KeyCode::Char('c') if in_transcript => Action::Chat(ChatAct::Copy),
-        KeyCode::Char('x') if in_transcript => Action::Chat(ChatAct::Stop),
-        KeyCode::Char('o') if in_transcript => Action::Chat(ChatAct::OpenImages),
-        KeyCode::Char('w') if in_transcript => Action::Chat(ChatAct::SaveImages),
+    match key.code {
         // On an item, Enter expands it, as `e` does.
         KeyCode::Enter if in_transcript && app.chat.cursor.is_some() => {
-            Action::Chat(ChatAct::Toggle)
-        }
-        KeyCode::Char('i') | KeyCode::Enter if in_transcript => Action::Compose(Act::Write),
-        KeyCode::Char('y') if in_transcript => {
-            Action::Compose(Act::Approve(ApprovalDecision::Allow))
-        }
-        KeyCode::Char('n') if in_transcript => {
-            Action::Compose(Act::Approve(ApprovalDecision::Deny))
+            return Some(Action::Chat(ChatAct::Toggle));
         }
         KeyCode::Char(digit @ '1'..='9') if in_transcript => {
-            Action::Compose(Act::Choose(u32::from(digit) - u32::from('1')))
-        }
-        KeyCode::Char(':') => Action::Compose(Act::Palette),
-        KeyCode::Char('/') => Action::GoTo,
-        KeyCode::Char('n') => Action::Compose(Act::NewSession),
-        KeyCode::Char('q') => Action::Quit,
-        KeyCode::Char('?') => Action::ToggleHelp,
-        KeyCode::Char('k') | KeyCode::Up => Action::Up,
-        KeyCode::Char('j') | KeyCode::Down => Action::Down,
-        KeyCode::Char('u') if ctrl => Action::PageUp,
-        KeyCode::Char('d') if ctrl => Action::PageDown,
-        KeyCode::PageUp | KeyCode::Char('b') => Action::PageUp,
-        KeyCode::PageDown | KeyCode::Char(' ') => Action::PageDown,
-        KeyCode::Char('g') | KeyCode::Home => Action::Top,
-        KeyCode::Char('G') | KeyCode::End => Action::Bottom,
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right
-            if matches!(app.focus, Focus::Sessions | Focus::Tasks) =>
-        {
-            Action::Open
-        }
-        KeyCode::Tab | KeyCode::BackTab => Action::SwitchPane,
-        KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left
-            if matches!(app.focus, Focus::Transcript | Focus::Tasks) =>
-        {
-            Action::Back
+            return Some(Action::Compose(Act::Choose(
+                u32::from(digit) - u32::from('1'),
+            )));
         }
         // In the sidebar, Esc returns to the open session; on a phone, so does ⌫, which
         // closes the switcher.
-        KeyCode::Esc if app.focus == Focus::Sessions && app.open.is_some() => Action::Resume,
+        KeyCode::Esc if app.focus == Focus::Sessions && app.open.is_some() => {
+            return Some(Action::Resume);
+        }
         KeyCode::Backspace
             if app.focus == Focus::Sessions
                 && app.open.is_some()
                 && app.width < crate::views::NARROW =>
         {
-            Action::Resume
+            return Some(Action::Resume);
         }
-        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left if app.focus == Focus::Sessions => {
-            Action::Parent
-        }
-        KeyCode::Char('r') => Action::Reconnect,
-        KeyCode::Char('m') => Action::OpenMachines,
-        KeyCode::Char('a') => Action::AddMachine,
-        KeyCode::Char('t') => Action::Terminals,
-        KeyCode::Char('z') if app.focus == Focus::Sessions => Action::Fold,
-        KeyCode::Char('A') => Action::OpenAccounts,
-        KeyCode::Char('s') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
-            Action::OpenSwitch
-        }
-        KeyCode::Char('v') => Action::Group,
-        KeyCode::Char('H') => Action::ToggleArchived,
-        KeyCode::Char('F') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
-            Action::OpenFork
-        }
-        KeyCode::Char('E') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
-            Action::Rename
-        }
-        KeyCode::Char('R') if matches!(app.focus, Focus::Sessions | Focus::Transcript) => {
-            Action::Retitle
-        }
-        _ => return None,
-    };
-    Some(action)
+        _ => {}
+    }
+    keys::lookup(keys::NAVIGATE, key, app.focus)
 }
 
 /// The action `ctrl+x` then `key` asks for: what `key` does in NAVIGATE, plus `b` and `d`
@@ -276,124 +201,10 @@ pub fn for_leader(key: KeyEvent) -> Option<Action> {
     if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
         return None;
     }
-    let action = match key.code {
-        KeyCode::Char('b') => Action::ToggleSidebar,
-        KeyCode::Char('d') => Action::ToggleDetails,
-        KeyCode::Char(digit @ '1'..='9') => {
-            Action::Attention(usize::from(u8::try_from(digit).ok()? - b'1'))
-        }
-        KeyCode::Char('/') => Action::GoTo,
-        KeyCode::Char('?') => Action::ToggleHelp,
-        KeyCode::Char(':') => Action::Compose(Act::Palette),
-        KeyCode::Char('n') => Action::Compose(Act::NewSession),
-        KeyCode::Char('s') => Action::OpenSwitch,
-        KeyCode::Char('t') => Action::Terminals,
-        KeyCode::Char('F') => Action::OpenFork,
-        KeyCode::Char('E') => Action::Rename,
-        KeyCode::Char('R') => Action::Retitle,
-        KeyCode::Char('I') => Action::Inbox(InboxAction::Toggle),
-        KeyCode::Char('B') => Action::Board(BoardAction::Toggle),
-        KeyCode::Char('P') => Action::Pr(PrAction::ToggleAll),
-        KeyCode::Char('p') => Action::Pr(PrAction::FocusStrip),
-        KeyCode::Char('L') => Action::Pr(PrAction::StartLink),
-        KeyCode::Char('A') => Action::OpenAccounts,
-        KeyCode::Char('m') => Action::OpenMachines,
-        KeyCode::Char('a') => Action::AddMachine,
-        KeyCode::Char('v') => Action::Group,
-        KeyCode::Char('H') => Action::ToggleArchived,
-        KeyCode::Char('z') => Action::Fold,
-        KeyCode::Char('r') => Action::Reconnect,
-        KeyCode::Char('q') => Action::Quit,
-        _ => return None,
-    };
-    Some(action)
+    if let KeyCode::Char(digit @ '1'..='9') = key.code {
+        return Some(Action::Attention(usize::from(
+            u8::try_from(digit).ok()? - b'1',
+        )));
+    }
+    keys::lookup(keys::LEADER, key, Focus::Sessions)
 }
-
-/// The keys [`for_key`] knows, for the help screen: key, then what it does.
-pub const HELP: &[(&str, &str)] = &[
-    ("ctrl+x <key>", "the key's NAVIGATE action, from any mode"),
-    ("ctrl+x b / d", "collapse the sidebar / show the details"),
-    ("ctrl+x 1-9", "open that row of the attention list"),
-    ("/", "go to a session: the sidebar, or the switcher"),
-    ("h, ⌫, ←", "in the sidebar: up a level"),
-    ("Esc", "in the sidebar: back to the open session"),
-    ("j / k, ↓ / ↑", "move, or scroll the transcript"),
-    ("Enter, l", "open the selected session"),
-    ("Tab", "switch between sessions and transcript"),
-    (
-        "Tab, Enter",
-        "narrow screen: move along the button bar, press",
-    ),
-    ("h, ⌫, Esc", "back to the sessions"),
-    ("b / Space", "scroll a page (also PgUp / PgDn)"),
-    ("g / G", "first / last; G follows the transcript"),
-    ("i, Enter", "write in the open session"),
-    ("Enter / Alt-Enter", "send / new line, in the composer"),
-    (
-        "/ , @",
-        "in the composer: commands; a task child, or a file",
-    ),
-    (
-        "Ctrl-v, @file.png",
-        "in the composer: attach the clipboard's image, a file",
-    ),
-    ("↑ / ↓", "in the composer: earlier prompts"),
-    ("[ / ]", "previous / next item of the transcript"),
-    ("e, Enter", "expand the item: tool output, diff, reasoning"),
-    ("c", "copy the item"),
-    (
-        "o / w",
-        "open / save the item's images, else the last prompt's",
-    ),
-    ("x", "stop the running turn"),
-    ("Esc, ⌫ on empty", "leave the composer or close a dialog"),
-    ("y / n", "allow / deny the pending approval"),
-    ("1-9", "pick an answer to the pending question"),
-    (
-        "←/→, h/l, Enter",
-        "choose an answer to the pending request, give it",
-    ),
-    ("f", "the pending request full screen"),
-    ("Ctrl-c, :interrupt", "interrupt the running turn"),
-    (
-        ": / Ctrl-p",
-        "the command palette: type to filter, Enter runs",
-    ),
-    ("/ in the prompt", "commands; // sends a literal /"),
-    ("n", "new session"),
-    ("p", "focus the session's pull requests"),
-    ("P", "every session's pull requests"),
-    ("Enter, o", "open the selected pull request in the browser"),
-    ("L", "link a pull request by number or URL"),
-    ("x", "unlink the selected pull request"),
-    ("r", "reconnect now"),
-    ("m", "machines: connections and fingerprints"),
-    ("a", "add a machine (or paste its link)"),
-    ("t", "terminals of the selected session (owners)"),
-    ("s", "switch the session's account, provider or model"),
-    ("A", "accounts: usage and limits; n adds one"),
-    ("z", "fold or unfold the selected task's children"),
-    ("v", "group sessions by project or by machine"),
-    ("H", "show or hide archived sessions"),
-    ("F", "fork a session onto a host"),
-    ("E / R", "rename the session / ask AI to title it again"),
-    ("i / I", "inbox, from the sessions / from anywhere"),
-    (
-        "Enter / l",
-        "in the inbox: type an answer / open its session",
-    ),
-    ("B", "board: every session's work state, attention first"),
-    ("Ctrl-] d", "detach from an attached terminal"),
-    ("tap, swipe", "open, press the buttons, scroll"),
-    (
-        ":mouse off / on",
-        "give the mouse to the terminal, or take it",
-    ),
-    ("Shift-drag", "select text while herder has the mouse"),
-    (
-        ":glyphs ascii",
-        "plain marks, for phone SSH apps and mosh; unicode for symbols",
-    ),
-    ("?", "show or hide this help"),
-    ("q, Ctrl-c twice", "quit"),
-];

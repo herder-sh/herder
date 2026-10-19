@@ -31,4 +31,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                          "
 " + new            ≡ menu │                                                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-"  NAVIGATE   j/k move  1-9 pick  y/n allow/deny  enter answer  l open  esc back              ● box  "
+"  NAVIGATE   j/k move  1-9 pick  y/n allow/deny  enter answer  l open  esc back  ? help      ● box  "
