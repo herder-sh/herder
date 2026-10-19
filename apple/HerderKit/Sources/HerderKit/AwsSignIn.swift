@@ -286,7 +286,9 @@ struct AwsSignInSheet: View {
             for hostId in hosts {
                 group.addTask { (hostId, (try? await client.listAwsProfiles(hostId: hostId)) ?? []) }
             }
-            return await group.reduce(into: [HostId: [AwsProfile]]()) { $0[$1.0] = $1.1 }
+            var listed: [HostId: [AwsProfile]] = [:]
+            for await (hostId, profiles) in group { listed[hostId] = profiles }
+            return listed
         }
         profiles = listed
         if !choices.contains(where: { $0.name == picked }), let first = choices.first { picked = first.name }
