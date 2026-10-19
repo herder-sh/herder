@@ -681,6 +681,42 @@
       "description": "Identifies an image a prompt carried, within its session; a ULID string, opaque.",
       "type": "string"
     },
+    "AwsDeviceCode": {
+      "description": "The device code an `aws sso login --use-device-code` prints for the owner to approve in a\nbrowser; a public, short-lived prompt, never a token.",
+      "type": "object",
+      "properties": {
+        "user_code": {
+          "description": "The code to approve.",
+          "type": "string"
+        },
+        "verification_url": {
+          "description": "The page that approves the code, with the code already in it when the CLI prints such\na link, else the verification page itself.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verification_url",
+        "user_code"
+      ]
+    },
+    "AwsProfile": {
+      "description": "A profile of a host's `~/.aws/config`.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The profile's name, `default` included.",
+          "type": "string"
+        },
+        "sso": {
+          "description": "Whether it signs in through IAM Identity Center, having an `sso_session` or\n`sso_start_url`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "sso"
+      ]
+    },
     "BackupSettings": {
       "description": "The values of the `[vault]` table: a host's say what it backs up while linked to a vault,\na vault's what it keeps. A value that does not apply to the daemon cannot change.",
       "type": "object",
@@ -777,7 +813,7 @@
           ]
         },
         {
-          "description": "A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this\nconnection attached to it.",
+          "description": "A terminal was opened, by `open_terminal`, `add_account`, `install_provider`,\n`log_in_account` or `aws_sso_login`, and this connection attached to it.",
           "type": "object",
           "properties": {
             "terminal_id": {
@@ -841,6 +877,27 @@
             "type",
             "path",
             "entries"
+          ]
+        },
+        {
+          "description": "The AWS profiles of this host, answering `list_aws_profiles`.",
+          "type": "object",
+          "properties": {
+            "profiles": {
+              "description": "The profiles, in the order the config file has them.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AwsProfile"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "aws_profiles"
+            }
+          },
+          "required": [
+            "type",
+            "profiles"
           ]
         },
         {
@@ -3927,6 +3984,35 @@
           "required": [
             "type",
             "provider"
+          ]
+        },
+        {
+          "description": "The AWS CLI's own IAM Identity Center sign-in for a profile, run for the owner.",
+          "type": "object",
+          "properties": {
+            "device": {
+              "description": "The device code to approve, once the CLI has printed it; the terminal list is sent\nagain when it becomes known.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AwsDeviceCode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "profile": {
+              "description": "The profile being signed in.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "aws_login"
+            }
+          },
+          "required": [
+            "type",
+            "profile"
           ]
         }
       ]
