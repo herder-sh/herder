@@ -55,6 +55,8 @@ mod tools;
 mod touch;
 mod transcript;
 
+pub(crate) use transcript::Cache as TranscriptCache;
+
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};

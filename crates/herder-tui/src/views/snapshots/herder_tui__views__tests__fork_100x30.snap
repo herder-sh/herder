@@ -29,6 +29,6 @@ expression: terminal.backend()
 "                         │                                                                          "
 "                         │                                                                          "
 " ─────────────────────── │  laptop is offline · F fork                                              "
-" + new            ≡ menu │                                                                          "
+" + new            ≡ menu │                                                            claude-main   "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 " esc close                                                                                 ● vault  "

@@ -1,17 +1,15 @@
 //! Input editors, over [`ratatui_textarea::TextArea`]: the editing stays the text area's, the
 //! look is the theme's.
 //!
-//! - [`Prompt`]: OpenCode's prompt. A bar down the left in the accent while it has focus,
-//!   the attachments' chips over the text, the text on the panel background, a meta line
-//!   under it (`account · model · mode`) and a row of padding; the panel is solid to its
-//!   edges.
+//! - [`Prompt`]: a bar down the left in the accent while it has focus, the attachments'
+//!   chips over the text, the text on the panel background, and right under it the meta line
+//!   (`provider · model · mode`), as the Mac app's prompt box carries its model and
+//!   permission menus inside its bottom edge. No blank rows: every row says something.
 //! - [`Field`]: a one-line field with a label, for dialog searches and forms.
 //!
 //! ```text
 //! ┃ write the docs page too▌
-//! ┃
-//! ┃ claude-main · opus · ask
-//! ┃
+//! ┃ claude · opus · ask
 //! ```
 
 use ratatui::buffer::Buffer;
@@ -81,7 +79,7 @@ impl<'a, 'b> Prompt<'a, 'b> {
         self
     }
 
-    /// The line under the text: `account · model · mode`.
+    /// The line under the text: `provider · model · mode`.
     pub fn meta(mut self, meta: impl Into<Line<'a>>) -> Self {
         self.meta = Some(meta.into());
         self
@@ -105,14 +103,14 @@ impl<'a, 'b> Prompt<'a, 'b> {
         let room = usize::from(width.saturating_sub(3)).max(1);
         let lines = Wrapped::new(editor, room).rows.len();
         let lines = u16::try_from(lines).unwrap_or(u16::MAX);
-        lines.clamp(1, max_lines.max(1)) + if meta { 3 } else { 1 }
+        lines.clamp(1, max_lines.max(1)) + u16::from(meta)
     }
 
     pub fn render(self, area: Rect, buf: &mut Buffer) {
         let ui = self.ui;
         let theme = ui.theme;
         let area = area.intersection(buf.area);
-        if area.height < 2 || area.width < 4 {
+        if area.height == 0 || area.width < 4 {
             return;
         }
         let bar_color = match (self.focused, self.accent) {
@@ -120,32 +118,27 @@ impl<'a, 'b> Prompt<'a, 'b> {
             (true, None) => theme.primary,
             (false, _) => theme.border,
         };
-        let panel = Rect {
-            height: area.height - 1,
-            ..area
-        };
-        fill(buf, panel, ui.panel());
-        for y in panel.top()..panel.bottom() {
-            buf[(panel.x, y)]
-                .set_symbol(ui.glyphs.bar)
-                .set_fg(bar_color);
+        fill(buf, area, ui.panel());
+        for y in area.top()..area.bottom() {
+            buf[(area.x, y)].set_symbol(ui.glyphs.bar).set_fg(bar_color);
         }
-        let meta_rows = if self.meta.is_some() { 2 } else { 0 };
+        // The meta line, where there is a row for it beside the text's.
+        let meta_rows = u16::from(self.meta.is_some() && area.height > 1);
         // The chips and the blank row under them leave the text a row at least.
         let chip_rows = match self.chips.len() {
             0 => 0,
             rows => u16::try_from(rows + 1).unwrap_or(u16::MAX),
         }
-        .min(panel.height.saturating_sub(meta_rows + 1));
-        for (y, row) in (panel.y..panel.y + chip_rows.saturating_sub(1)).zip(self.chips) {
-            let row_area = Rect::new(panel.x + 2, y, panel.width - 3, 1);
+        .min(area.height.saturating_sub(meta_rows + 1));
+        for (y, row) in (area.y..area.y + chip_rows.saturating_sub(1)).zip(self.chips) {
+            let row_area = Rect::new(area.x + 2, y, area.width - 3, 1);
             fit(row, usize::from(row_area.width), ui.glyphs).render(row_area, buf);
         }
         let text = Rect {
-            x: panel.x + 2,
-            y: panel.y + chip_rows,
-            width: panel.width - 3,
-            height: panel.height.saturating_sub(meta_rows + chip_rows).max(1),
+            x: area.x + 2,
+            y: area.y + chip_rows,
+            width: area.width - 3,
+            height: area.height.saturating_sub(meta_rows + chip_rows).max(1),
         };
         if self.editor.is_empty() {
             // The placeholder starts where the text will; with focus, after the cursor.
@@ -156,11 +149,17 @@ impl<'a, 'b> Prompt<'a, 'b> {
             let rest = Rect {
                 x: text.x + after,
                 width: text.width.saturating_sub(after),
+                height: 1,
                 ..text
             };
             // Its ellipsis as the glyph set draws one: `...` in ASCII.
             let placeholder = placeholder.replace('…', ui.glyphs.ellipsis);
-            Line::styled(placeholder, ui.muted()).render(rest, buf);
+            fit(
+                Line::styled(placeholder, ui.muted()),
+                usize::from(rest.width),
+                ui.glyphs,
+            )
+            .render(rest, buf);
             if self.focused {
                 cursor(ui, buf, text.x, text.y);
             }
@@ -173,30 +172,10 @@ impl<'a, 'b> Prompt<'a, 'b> {
             );
         }
         if let Some(meta) = self.meta
-            && panel.height > meta_rows
+            && meta_rows > 0
         {
-            let row = Rect::new(text.x, panel.bottom() - 1, text.width, 1);
+            let row = Rect::new(text.x, area.bottom() - 1, text.width, 1);
             fit(meta, usize::from(row.width), ui.glyphs).render(row, buf);
-        }
-        // The bottom row: solid panel to the edge, the bar running on. On the terminal's own
-        // background (`ansi`) there is no panel to show it, so the bar ends in a cap.
-        let cap = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-        if theme.background_panel == Color::Reset {
-            buf[(cap.x, cap.y)]
-                .set_symbol(ui.glyphs.cap_end)
-                .set_style(Style::new().fg(bar_color));
-            if ui.glyphs.cap_fill != "▀" {
-                for x in cap.x + 1..cap.right() {
-                    buf[(x, cap.y)]
-                        .set_symbol(ui.glyphs.cap_fill)
-                        .set_style(Style::new().fg(theme.border));
-                }
-            }
-        } else {
-            fill(buf, cap, ui.panel());
-            buf[(cap.x, cap.y)]
-                .set_symbol(ui.glyphs.bar)
-                .set_fg(bar_color);
         }
     }
 }
@@ -504,7 +483,7 @@ mod tests {
                 snapshot::render(variant, width, 11, |ui, area, buf| {
                     let focused = editor("write the docs page too, and link it from @README.md");
                     let height = Prompt::height(&focused, width, 6, true);
-                    assert_eq!(height, if width < 50 { 5 } else { 4 });
+                    assert_eq!(height, if width < 50 { 3 } else { 2 });
                     Prompt::new(ui, &focused)
                         .meta(meta(ui))
                         .focused(true)
@@ -557,7 +536,7 @@ mod tests {
         let wrapped = Wrapped::new(&editor, 4);
         assert_eq!(wrapped.rows.len(), 2);
         assert_eq!(wrapped.cursor, (1, 0));
-        assert_eq!(Prompt::height(&editor, 7, 6, false), 3);
+        assert_eq!(Prompt::height(&editor, 7, 6, false), 2);
     }
 
     #[test]

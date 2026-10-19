@@ -29,8 +29,9 @@ use crate::action::Action;
 use crate::app::{App, Focus};
 use crate::chat::{Chat, ChatAct};
 use crate::mouse::{Click, Hits, Wheel};
-use crate::session::{Entry, Session, Tone, first_line};
+use crate::session::{Entry, Session, SessionKey, Tone, first_line};
 use crate::ui::glyphs::Glyphs;
+use crate::ui::theme::Theme;
 use crate::ui::{Ui, badge, fill, fit, spread};
 
 /// Columns the agent's text and one-line items start in.
@@ -88,6 +89,11 @@ pub(super) struct Builder<'a> {
     pub worktree: &'a str,
     /// Each tool call's result: its output, and whether it failed.
     pub results: HashMap<&'a ItemId, (&'a str, bool)>,
+    /// Each tool call's first result in the transcript, by its id.
+    pub result_ids: HashMap<&'a ItemId, &'a ItemId>,
+    /// The items of the transcript, by id, with the item before each: built once, so
+    /// nothing looks one up by scanning the transcript.
+    pub previous: HashMap<&'a ItemId, Option<&'a ItemId>>,
     /// The session's listed children.
     pub children: HashMap<&'a SessionId, &'a Session>,
     /// `account` and `model`, for a reply's footer.
@@ -399,12 +405,7 @@ impl<'a> Builder<'a> {
             } => {
                 // Shown with its call; a result whose call is not in the transcript shows
                 // on its own.
-                if !self
-                    .session
-                    .entries
-                    .iter()
-                    .any(|entry| matches!(entry, Entry::Item(call) if call.id == *call_id))
-                {
+                if !self.previous.contains_key(call_id) {
                     tools::orphan(self, item, output, *is_error);
                 }
             }
@@ -464,16 +465,7 @@ impl<'a> Builder<'a> {
     /// Seconds from what came before the item `id` in its turn to the item.
     fn took(&self, id: &ItemId) -> Option<i64> {
         let at = self.session.times.get(id)?;
-        let mut before = None;
-        for entry in &self.session.entries {
-            if let Entry::Item(item) = entry {
-                if item.id == *id {
-                    break;
-                }
-                before = self.session.times.get(&item.id);
-            }
-        }
-        let before = before?;
+        let before = self.session.times.get(self.previous.get(id).copied()??)?;
         Some(at.as_second() - before.as_second()).filter(|took| *took > 0)
     }
 }
@@ -520,6 +512,18 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
             _ => None,
         })
         .collect();
+    let mut result_ids = HashMap::new();
+    let mut previous = HashMap::new();
+    let mut last = None;
+    for entry in &session.entries {
+        if let Entry::Item(item) = entry {
+            if let ItemBody::ToolResult { call_id, .. } = &item.body {
+                result_ids.entry(call_id).or_insert(&item.id);
+            }
+            previous.insert(&item.id, last);
+            last = Some(&item.id);
+        }
+    }
     let children = key
         .map(|key| {
             app.children(key)
@@ -556,6 +560,8 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
         session,
         worktree: &session.worktree,
         results,
+        result_ids,
+        previous,
         children,
         footer: (account, session.model.clone()),
         rows: Vec::new(),
@@ -575,11 +581,98 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
     (builder.rows, builder.items)
 }
 
+/// The open transcript's rows as last built, and what they were built from. Laying out a
+/// long transcript (Markdown, wrapping, diffs) costs far more than drawing a screenful of it,
+/// so a frame that only scrolls, moves the item cursor or edits the prompt draws from here.
+#[derive(Default)]
+pub(crate) struct Cache {
+    built: Option<Built>,
+    pub(super) rows: Vec<Row>,
+}
+
+impl std::fmt::Debug for Cache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cache")
+            .field("built", &self.built.is_some())
+            .field("rows", &self.rows.len())
+            .finish()
+    }
+}
+
+/// Everything the rows depend on: the session and the machines through
+/// [`App::revision`], and what keys change without one.
+#[derive(PartialEq)]
+struct Built {
+    session: SessionKey,
+    revision: u64,
+    width: u16,
+    split: bool,
+    glyphs: Glyphs,
+    theme: Theme,
+    expanded: HashSet<ItemId>,
+    thinking: bool,
+    details: bool,
+}
+
+impl Built {
+    fn of(app: &App, session: SessionKey, width: u16) -> Self {
+        Self {
+            session,
+            revision: app.revision,
+            width,
+            split: app.width >= SPLIT,
+            glyphs: Glyphs::for_width(app.glyphs, app.width),
+            theme: app.theme.clone(),
+            expanded: app.chat.expanded.clone(),
+            thinking: app.chat.thinking,
+            details: app.chat.details,
+        }
+    }
+
+    /// Whether rows built from `self` are those `app` draws now.
+    fn current(&self, app: &App, session: &SessionKey, width: u16) -> bool {
+        self.session == *session
+            && self.revision == app.revision
+            && self.width == width
+            && self.split == (app.width >= SPLIT)
+            && self.glyphs == Glyphs::for_width(app.glyphs, app.width)
+            && self.thinking == app.chat.thinking
+            && self.details == app.chat.details
+            && self.expanded == app.chat.expanded
+            && self.theme == app.theme
+    }
+}
+
+/// Builds the open transcript's rows `width` wide into `app`'s cache, unless they are there.
+fn cached(app: &mut App, key: SessionKey, width: u16) {
+    if app
+        .transcript
+        .built
+        .as_ref()
+        .is_some_and(|built| built.current(app, &key, width))
+    {
+        return;
+    }
+    let Some(session) = app.sessions.get(&key) else {
+        return;
+    };
+    let (rows, items) = rows(app, session, width);
+    app.transcript = Cache {
+        built: Some(Built::of(app, key, width)),
+        rows,
+    };
+    app.chat.items = items;
+}
+
 /// Draws the open session's transcript in `area`, keeping a column of margin each side.
 pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits) {
     let theme = app.theme.clone();
     let ui = Ui::new(&theme, Glyphs::for_width(app.glyphs, app.width));
-    let Some(session) = app.open_session() else {
+    let Some((key, loaded)) = app
+        .open
+        .clone()
+        .and_then(|key| Some((key.clone(), app.sessions.get(&key)?.loaded)))
+    else {
         let hint = Line::styled("Select a session and press Enter.", ui.muted());
         frame.render_widget(hint.centered(), super::centered(area, area.width, 1));
         return;
@@ -592,19 +685,20 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
         width: area.width - 2,
         ..area
     };
-    let (rows, items) = if session.loaded {
-        rows(app, session, inner.width)
+    let loading;
+    let rows = if loaded {
+        cached(app, key, inner.width);
+        &app.transcript.rows[..]
     } else {
-        (
-            vec![Row::new(Line::styled("loading…", ui.muted()))],
-            Vec::new(),
-        )
+        app.chat.items.clear();
+        loading = [Row::new(Line::styled("loading…", ui.muted()))];
+        &loading[..]
     };
     let cursor = app
         .chat
         .cursor
         .as_ref()
-        .and_then(|id| items.iter().position(|item| item == id));
+        .and_then(|id| app.chat.items.iter().position(|item| item == id));
     app.scroll.total = rows.len();
     app.scroll.height = usize::from(inner.height);
     // Bring the item under a cursor that just moved into view.
@@ -618,7 +712,6 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
             app.scroll.by(0);
         }
     }
-    app.chat.items = items;
     hits.click(area, Click::Open);
     let first = app.scroll.first_line();
     let marked = app.focus == Focus::Transcript;
@@ -634,7 +727,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
             };
             fill(buf, Rect::new(x, y, right - x, 1), style);
         }
-        row.line.clone().render(line_area, buf);
+        (&row.line).render(line_area, buf);
         if let Some(item) = row.item {
             if marked && Some(item) == cursor {
                 buf[(area.x, y)]

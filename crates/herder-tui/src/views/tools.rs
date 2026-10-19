@@ -611,14 +611,7 @@ fn todo_lines(b: &mut Builder, input: &Value) {
 fn took(b: &Builder, id: &herder_protocol::ItemId) -> Option<i64> {
     let session = b.session;
     let called = session.times.get(id)?;
-    let result = session.entries.iter().find_map(|entry| match entry {
-        Entry::Item(Item {
-            id: result,
-            body: ItemBody::ToolResult { call_id, .. },
-            ..
-        }) if call_id == id => session.times.get(result),
-        _ => None,
-    })?;
+    let result = session.times.get(*b.result_ids.get(id)?)?;
     // Under a second says nothing worth the room.
     Some(result.as_second() - called.as_second()).filter(|took| *took > 0)
 }
