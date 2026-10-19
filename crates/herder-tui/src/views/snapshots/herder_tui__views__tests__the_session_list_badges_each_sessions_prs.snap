@@ -11,4 +11,4 @@ expression: terminal.backend()
 " ─────────────────────────────── │  ctrl+x  leader: every view, from anywhere   "
 " + new                    ≡ menu │       ?  every key                           "
 "─────────────────────────────────┴───────────────────────────────────────────── "
-"  NAVIGATE   j/k move  enter open  n new  v group  z fold  : commands    ● box  "
+"  NAVIGATE   j/k move  enter open  n new  v group  z fold  ? help        ● box  "

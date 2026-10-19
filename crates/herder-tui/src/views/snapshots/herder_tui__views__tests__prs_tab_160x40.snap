@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                           │                                          "
 " + new            ≡ menu │                                                                                           │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
-"  NAVIGATE   j/k move  enter browser  x unlink  L link  esc chat                                                                                         ● box  "
+"  NAVIGATE   j/k move  enter browser  x unlink  L link  esc chat  ? help                                                                                 ● box  "

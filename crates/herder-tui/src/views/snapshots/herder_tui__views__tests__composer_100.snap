@@ -6,4 +6,4 @@ expression: "rows.join(\"\\n\")"
  ─────────────────────── │  ┃ claude · claude-opus-5-5 · full access                                
  + new            ≡ menu │    ⠋ working · 1m 12s                               claude-main 5h 38%   
 ─────────────────────────┴───────────────────────────────────────────────────────────────────────── 
-  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+c stop   ● box
+  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box

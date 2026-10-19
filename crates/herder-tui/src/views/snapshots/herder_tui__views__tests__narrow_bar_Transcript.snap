@@ -1,0 +1,5 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: bar
+---
+"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  ? help    ● box  "

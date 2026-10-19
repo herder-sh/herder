@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │  ┃ claude · claude-opus · ask                     │                                          "
 " + new            ≡ menu │                          Main Weekly · Fable 93%  │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
-"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+x leader           ● box  ✗ laptop  "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+x ? help           ● box  ✗ laptop  "

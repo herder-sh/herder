@@ -99,28 +99,6 @@ impl Default for Layout {
     }
 }
 
-/// The NAVIGATE key `ctrl+x <key>` stands for, and what the leader popup calls it.
-pub const LEADER_KEYS: &[(char, &str)] = &[
-    ('/', "go to"),
-    ('n', "new session"),
-    ('s', "switch"),
-    ('I', "inbox"),
-    ('B', "board"),
-    ('P', "all PRs"),
-    ('p', "session PRs"),
-    ('A', "accounts"),
-    ('m', "fleet"),
-    ('t', "terminals"),
-    ('v', "group by"),
-    ('z', "fold tasks"),
-    ('b', "sidebar"),
-    ('d', "details"),
-    ('r', "reconnect"),
-    (':', "commands"),
-    ('?', "help"),
-    ('q', "quit"),
-];
-
 impl App {
     /// The mode the badge shows; `None` while a dialog or the help has the keys.
     pub fn mode(&self) -> Option<Mode> {
