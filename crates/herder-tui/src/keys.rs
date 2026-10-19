@@ -833,13 +833,13 @@ mod tests {
             .collect();
         assert!(!rows.is_empty(), "no section among {titles:?}");
         for key in every_key() {
-            let Some(action) = dispatch(key, app).filter(|action| !types(*action)) else {
+            if !dispatch(key, app).is_some_and(|action| !types(action)) {
                 continue;
-            };
+            }
             assert!(
                 rows.iter()
                     .any(|row| row.keys.iter().any(|bound| bound.matches(key))),
-                "{key:?} ({action:?}) is not in the help under {titles:?}",
+                "{key:?} is not in the help under {titles:?}",
             );
         }
     }
