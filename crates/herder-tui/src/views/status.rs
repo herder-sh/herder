@@ -18,9 +18,10 @@ use ratatui::widgets::{Clear, Paragraph};
 use crate::action::Action;
 use crate::app::{App, Focus};
 use crate::compose::Act;
+use crate::keys::{self, LEADER};
 use crate::machines::PanelEdit;
 use crate::mouse::{self, Click, Hits};
-use crate::nav::{LEADER_KEYS, Mode};
+use crate::nav::Mode;
 use crate::secrets::Pick;
 use crate::ui::badge;
 use crate::ui::hints::{Hint, ModeBar};
@@ -95,7 +96,10 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
     };
     let char = |c: char| KeyCode::Char(c);
     let leader = act("ctrl+x", "leader", Action::Leader);
+    // Help is every bar's last hint, which the bar never leaves out; where `?` types, the
+    // leader's `?` opens it.
     let help = tap("?", "help", char('?'));
+    let typing_help = act("ctrl+x ?", "help", Action::ToggleHelp);
     let running = app.open_session().is_some_and(|s| s.turn.is_some());
     let stop = act("ctrl+c", "stop", Action::Compose(Act::CtrlC));
     let secrets = app
@@ -120,6 +124,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
         hints.extend([
             tap("r", "reload", char('r')),
             tap("esc", "back", KeyCode::Esc),
+            help,
         ]);
         return hints;
     }
@@ -158,6 +163,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                     tap("d", "forget", char('d')),
                     tap("r", "reconnect", char('r')),
                     tap("esc", "back", KeyCode::Esc),
+                    help,
                 ],
             }
         }
@@ -173,12 +179,13 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             hints.extend([
                 tap("r", "reconnect", char('r')),
                 tap("esc", "back", KeyCode::Esc),
+                help,
             ]);
             hints
         }
         // A dialog shows its own keys; this is its tap to close.
         None => vec![tap("esc", "close", KeyCode::Esc)],
-        Some(Mode::Leader) => vec![tap("esc", "cancel", KeyCode::Esc)],
+        Some(Mode::Leader) => vec![tap("esc", "cancel", KeyCode::Esc), help],
         // An approval takes the prompt's place, and its keys.
         Some(Mode::Prompt) if app.open_session().is_some_and(|s| !s.approvals.is_empty()) => {
             let mut hints = vec![
@@ -200,6 +207,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             if running {
                 hints.push(stop);
             }
+            hints.push(typing_help);
             hints
         }
         Some(Mode::Prompt) => {
@@ -216,7 +224,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             if running {
                 hints.push(stop);
             }
-            hints.push(leader);
+            hints.extend([leader, typing_help]);
             hints
         }
         Some(Mode::Approval) => {
@@ -237,14 +245,13 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
             } else {
                 vec![hint("1-9", "pick"), tap("i", "type an answer", char('i'))]
             };
-            hints.push(tap("esc", "navigate", KeyCode::Esc));
-            hints.push(leader);
+            hints.extend([tap("esc", "navigate", KeyCode::Esc), leader, help]);
             hints
         }
         Some(Mode::Navigate) if app.machines.is_empty() => vec![
             tap("a", "pair a machine", char('a')),
-            help,
             tap("q", "quit", char('q')),
+            help,
         ],
         Some(Mode::Navigate) => match app.focus {
             Focus::Sessions => vec![
@@ -288,6 +295,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 tap("enter", "open", KeyCode::Enter),
                 tap("esc", "chat", KeyCode::Esc),
                 leader,
+                help,
             ],
             Focus::Prs => vec![
                 hint("j/k", "move"),
@@ -295,6 +303,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 tap("x", "unlink", char('x')),
                 tap("L", "link", char('L')),
                 tap("esc", "chat", KeyCode::Esc),
+                help,
             ],
             Focus::AllPrs => vec![
                 hint("j/k", "move"),
@@ -302,15 +311,18 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 tap("l", "session", char('l')),
                 tap("x", "unlink", char('x')),
                 tap("esc", "back", KeyCode::Esc),
+                help,
             ],
             Focus::Inbox if app.inbox.answer.is_some() => vec![
                 tap("enter", "send", KeyCode::Enter),
                 tap("esc", "cancel", KeyCode::Esc),
+                typing_help,
             ],
             Focus::Board => vec![
                 hint("j/k", "move"),
                 tap("enter", "open", KeyCode::Enter),
                 tap("esc", "back", KeyCode::Esc),
+                help,
             ],
             Focus::Inbox => vec![
                 hint("j/k", "move"),
@@ -319,6 +331,7 @@ fn hints(app: &App) -> Vec<(Hint, Option<Click>)> {
                 tap("enter", "answer", KeyCode::Enter),
                 tap("l", "open", char('l')),
                 tap("esc", "back", KeyCode::Esc),
+                help,
             ],
         },
     }
@@ -331,9 +344,9 @@ pub(super) fn leader_popup(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let ui = app.ui();
-    let mut entries: Vec<(String, &str)> = LEADER_KEYS
+    let mut entries: Vec<(String, &str)> = LEADER
         .iter()
-        .map(|(key, label)| (key.to_string(), *label))
+        .map(|bind| (keys::names(bind.keys), bind.does))
         .collect();
     entries.push(("1-9".to_owned(), "attention row"));
     let cell = entries

@@ -21,4 +21,4 @@ expression: terminal.backend()
 " ─────────────────────── │  ┃ claude · claude-opus · ask                                            "
 " + new            ≡ menu │    ⠋ working · 0s                                          claude-main   "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
-"  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+c stop   ● box  "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

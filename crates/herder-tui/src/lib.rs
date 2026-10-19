@@ -28,6 +28,7 @@ mod fake;
 mod fork;
 mod fuzzy;
 mod inbox;
+mod keys;
 mod machines;
 mod mouse;
 mod nav;

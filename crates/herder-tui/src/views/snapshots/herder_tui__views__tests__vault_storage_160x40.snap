@@ -41,4 +41,4 @@ expression: terminal.backend()
 " ─────────────────────── │                                                                                                                                      "
 " + new            ≡ menu │                                                                                                                                      "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── "
-" j/k move  a add machine  n add account  e rename  s secrets  d forget  r reconnect  esc back                                      ● devbox  ● laptop  ● vault  "
+" j/k move  a add machine  n add account  e rename  s secrets  d forget  r reconnect  esc back  ? help                              ● devbox  ● laptop  ● vault  "

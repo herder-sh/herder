@@ -13,4 +13,4 @@ expression: terminal.backend()
 " ─────────────────────── │           ?  every key                               "
 " + new            ≡ menu │                                                      "
 "─────────────────────────┴───────────────────────────────────────────────────── "
-"  NAVIGATE   j/k move  enter open  n new  v group  z fold  : commands    ● box  "
+"  NAVIGATE   j/k move  enter open  n new  v group  z fold  ? help        ● box  "
