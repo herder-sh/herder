@@ -825,6 +825,8 @@ impl SessionManager {
             | CommandBody::AddAccount { .. }
             | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
+            | CommandBody::ListAwsProfiles
+            | CommandBody::AwsSsoLogin { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
