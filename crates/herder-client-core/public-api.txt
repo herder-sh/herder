@@ -210,6 +210,23 @@ impl Client {
 }
 
 impl Client {
+    pub async fn list_aws_profiles(
+        &self,
+        host_id: HostId,
+    ) -> Result<Vec<AwsProfile>, Error> {}
+}
+
+impl Client {
+    pub async fn aws_sso_login(
+        &self,
+        host_id: HostId,
+        profile: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {}
+}
+
+impl Client {
     pub async fn attach_terminal(
         &self,
         host_id: HostId,

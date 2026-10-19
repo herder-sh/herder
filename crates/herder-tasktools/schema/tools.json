@@ -1132,6 +1132,8 @@
                   "add_account",
                   "install_provider",
                   "log_in_account",
+                  "list_aws_profiles",
+                  "aws_sso_login",
                   "set_account_settings",
                   "set_resource_limits",
                   "get_settings",

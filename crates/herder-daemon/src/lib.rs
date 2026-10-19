@@ -2,6 +2,7 @@
 
 pub mod accounts;
 pub mod auth;
+pub mod aws;
 mod browse;
 pub mod config;
 pub mod data_dir;
@@ -304,6 +305,7 @@ pub async fn serve(
         host,
     );
     server.manage_providers(providers)?;
+    server.manage_aws(aws::Aws::from_env(|key| std::env::var_os(key)))?;
     server.link_vault(link)?;
     server.manage_settings(settings)?;
     sessions.serve_control(server.control())?;

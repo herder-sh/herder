@@ -2,7 +2,8 @@
 //!
 //! A shell terminal runs the user's login shell (`$SHELL -l`, or `/bin/sh -l`) in a session's
 //! worktree; a login terminal runs a provider's own login for an account being added
-//! ([`crate::login`]). Both get `TERM=xterm-256color`. A terminal outlives the clients that use it: detaching, or disconnecting,
+//! ([`crate::login`]), an install terminal a provider's installer, and an AWS sign-in terminal
+//! `aws sso login` ([`crate::aws`]). All get `TERM=xterm-256color`. A terminal outlives the clients that use it: detaching, or disconnecting,
 //! leaves the shell running. Everything it writes is kept in a scrollback ring of the last
 //! [`SCROLLBACK`] bytes; attaching replays the scrollback as one `terminal_output` message,
 //! then streams live output. The bytes are ephemeral: never journaled, and gone once the
@@ -31,6 +32,7 @@ use herder_protocol::{
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tracing::{debug, info, warn};
 
+use crate::aws::DeviceWatch;
 use crate::hub::{Hub, Outbox};
 use crate::session::EventSink;
 
@@ -50,6 +52,17 @@ pub fn login_shell() -> PathBuf {
 /// Runs once a login terminal's program exits, with its exit code; returns a last line of
 /// output for the terminal.
 pub(crate) type OnExit = Box<dyn FnOnce(Option<i32>) -> String + Send>;
+
+/// Reads a terminal's output as it comes; returns a new purpose for the terminal once the
+/// output tells more about what it runs.
+pub(crate) type Watch = Box<dyn FnMut(&[u8]) -> Option<TerminalPurpose> + Send>;
+
+/// What runs alongside a terminal's program besides relaying it.
+#[derive(Default)]
+struct Hooks {
+    on_exit: Option<OnExit>,
+    watch: Option<Watch>,
+}
 
 /// What a login terminal does besides relaying the login.
 pub(crate) struct LoginHooks {
@@ -78,7 +91,8 @@ struct Inner {
 
 /// One open terminal.
 struct Term {
-    purpose: TerminalPurpose,
+    /// What it runs; a watched terminal's may change as it runs.
+    purpose: Mutex<TerminalPurpose>,
     /// The pty's controlling side, for resizing.
     master: Mutex<Box<dyn MasterPty + Send>>,
     /// The shell's input.
@@ -126,7 +140,7 @@ impl Terminals {
         command.arg("-l");
         command.cwd(cwd);
         let purpose = TerminalPurpose::Shell { session_id };
-        self.spawn(purpose, command, cols, rows, outbox, None)
+        self.spawn(purpose, command, cols, rows, outbox, Hooks::default())
     }
 
     /// Opens a terminal of `cols` by `rows` running `command`, the login of `account_id`, and
@@ -144,7 +158,11 @@ impl Terminals {
     ) -> Result<TerminalId, ErrorInfo> {
         let LoginHooks { done, on_exit } = hooks;
         let purpose = TerminalPurpose::Login { account_id };
-        let terminal_id = self.spawn(purpose, command, cols, rows, outbox, Some(on_exit))?;
+        let hooks = Hooks {
+            on_exit: Some(on_exit),
+            watch: None,
+        };
+        let terminal_id = self.spawn(purpose, command, cols, rows, outbox, hooks)?;
         let inner = Arc::clone(&self.inner);
         let id = terminal_id.clone();
         let watching = std::thread::Builder::new()
@@ -178,14 +196,42 @@ impl Terminals {
         outbox: &Arc<Outbox>,
         on_exit: OnExit,
     ) -> Result<TerminalId, ErrorInfo> {
-        self.spawn(
-            TerminalPurpose::Install { provider },
-            command,
-            cols,
-            rows,
-            outbox,
-            Some(on_exit),
-        )
+        let hooks = Hooks {
+            on_exit: Some(on_exit),
+            watch: None,
+        };
+        let purpose = TerminalPurpose::Install { provider };
+        self.spawn(purpose, command, cols, rows, outbox, hooks)
+    }
+
+    /// Opens a terminal of `cols` by `rows` running `command`, the AWS CLI's sign-in of
+    /// `profile`. Its purpose gets the device code, and the owners the terminal list again,
+    /// once the CLI prints it.
+    pub(crate) fn open_aws_login(
+        &self,
+        profile: String,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+        outbox: &Arc<Outbox>,
+    ) -> Result<TerminalId, ErrorInfo> {
+        let mut device = DeviceWatch::default();
+        let watched = profile.clone();
+        let watch: Watch = Box::new(move |data| {
+            device.feed(data).map(|device| TerminalPurpose::AwsLogin {
+                profile: watched.clone(),
+                device: Some(device),
+            })
+        });
+        let hooks = Hooks {
+            on_exit: None,
+            watch: Some(watch),
+        };
+        let purpose = TerminalPurpose::AwsLogin {
+            profile,
+            device: None,
+        };
+        self.spawn(purpose, command, cols, rows, outbox, hooks)
     }
 
     fn spawn(
@@ -195,7 +241,7 @@ impl Terminals {
         cols: u16,
         rows: u16,
         outbox: &Arc<Outbox>,
-        on_exit: Option<OnExit>,
+        hooks: Hooks,
     ) -> Result<TerminalId, ErrorInfo> {
         let size = size(cols, rows)?;
         let pair = native_pty_system()
@@ -218,7 +264,7 @@ impl Terminals {
             .map_err(|err| internal("cannot write to the pseudo-terminal", &err))?;
         let terminal_id = TerminalId::new(ulid::Ulid::generate().to_string());
         let term = Arc::new(Term {
-            purpose: purpose.clone(),
+            purpose: Mutex::new(purpose.clone()),
             master: Mutex::new(pair.master),
             writer: Arc::new(Mutex::new(writer)),
             killer: Mutex::new(child.clone_killer()),
@@ -235,7 +281,7 @@ impl Terminals {
         let id = terminal_id.clone();
         let spawned = std::thread::Builder::new()
             .name(format!("terminal-{terminal_id}"))
-            .spawn(move || terminals.pump(&id, &term, reader, child, on_exit));
+            .spawn(move || terminals.pump(&id, &term, reader, child, hooks));
         if let Err(err) = spawned {
             if let Some(term) = self.inner.remove(&terminal_id) {
                 term.hang_up();
@@ -326,7 +372,7 @@ impl Terminals {
     /// Hangs up every terminal of `session_id`; each closes once its shell exits.
     pub fn close_session(&self, session_id: &SessionId) {
         for (terminal_id, term) in self.inner.lock().iter() {
-            if matches!(&term.purpose, TerminalPurpose::Shell { session_id: id } if id == session_id)
+            if matches!(&*lock(&term.purpose), TerminalPurpose::Shell { session_id: id } if id == session_id)
             {
                 info!(%terminal_id, %session_id, "closing the terminal of an archived session");
                 term.hang_up();
@@ -349,13 +395,19 @@ impl Terminals {
         term: &Term,
         mut reader: Box<dyn Read + Send>,
         mut child: Box<dyn portable_pty::Child + Send + Sync>,
-        on_exit: Option<OnExit>,
+        hooks: Hooks,
     ) {
+        let Hooks { on_exit, mut watch } = hooks;
         let mut buf = vec![0; READ_CHUNK];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(n) => term.publish(terminal_id, &buf[..n]),
+                Ok(n) => {
+                    term.publish(terminal_id, &buf[..n]);
+                    if let Some(purpose) = watch.as_mut().and_then(|watch| watch(&buf[..n])) {
+                        self.inner.repurpose(terminal_id, term, purpose);
+                    }
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
                 // Linux reports EIO once the last process holding the shell's side exits.
                 Err(err) => {
@@ -368,7 +420,7 @@ impl Terminals {
             Ok(status) => {
                 info!(
                     %terminal_id,
-                    purpose = ?term.purpose,
+                    purpose = ?*lock(&term.purpose),
                     exit_code = status.exit_code(),
                     signal = status.signal(),
                     "terminal closed"
@@ -419,6 +471,16 @@ impl Terminals {
 }
 
 impl Inner {
+    /// Gives an open terminal its new `purpose`, and announces the new list.
+    fn repurpose(&self, terminal_id: &TerminalId, term: &Term, purpose: TerminalPurpose) {
+        let open = self.lock();
+        if open.contains_key(terminal_id) {
+            info!(%terminal_id, ?purpose, "terminal repurposed");
+            *lock(&term.purpose) = purpose;
+            self.hub.terminals_changed(&list(&open));
+        }
+    }
+
     /// Forgets a terminal whose shell exited, and announces it with the new list.
     fn close(&self, terminal_id: &TerminalId, exit_code: Option<i32>) {
         let mut open = self.lock();
@@ -518,7 +580,7 @@ fn list(open: &BTreeMap<TerminalId, Arc<Term>>) -> Vec<Terminal> {
     open.iter()
         .map(|(terminal_id, term)| Terminal {
             terminal_id: terminal_id.clone(),
-            purpose: term.purpose.clone(),
+            purpose: lock(&term.purpose).clone(),
         })
         .collect()
 }
