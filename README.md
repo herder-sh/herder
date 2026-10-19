@@ -13,15 +13,18 @@ Rust client core.
 
 ## Install
 
-On Linux (x86_64 or arm64):
+On Linux (x86_64 or arm64) or an Apple silicon Mac:
 
 ```sh
 curl -fsSL https://herder.sh/install | sh
-herder service install   # run the daemon now and at every boot (systemd user service)
+herder service install   # run the daemon now and at every boot or login
 herder update            # replace herder with the latest release
 ```
 
-The script installs a static binary to `~/.local/bin/herder` after checking its sha256.
+The script installs the binary to `~/.local/bin/herder` after checking its sha256. On Linux
+the service is a systemd user service; on macOS it is a launchd LaunchAgent
+(`~/Library/LaunchAgents/sh.herder.daemon.plist`) that starts at login and logs to
+`~/Library/Logs/herder/daemon.log`.
 Set `HERDER_VERSION=1.2.3` to install a specific release.
 
 ### Check the machine

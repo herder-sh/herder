@@ -24,7 +24,7 @@ pub struct Args {
 
 pub fn run(args: Args) -> Result<()> {
     let current = Version::parse(env!("CARGO_PKG_VERSION")).context("parsing own version")?;
-    let target = target(std::env::consts::ARCH)?;
+    let target = target(std::env::consts::OS, std::env::consts::ARCH)?;
     let base = std::env::var("HERDER_DOWNLOAD_BASE")
         .ok()
         .filter(|base| !base.is_empty())
@@ -63,12 +63,14 @@ pub fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// The release target for this machine's CPU. Releases are static musl builds.
-fn target(arch: &str) -> Result<&'static str> {
-    match arch {
-        "x86_64" => Ok("x86_64-unknown-linux-musl"),
-        "aarch64" => Ok("aarch64-unknown-linux-musl"),
-        other => bail!("herder has no release build for {other}"),
+/// The release target for this machine. Linux releases are static musl builds; macOS ones
+/// are for Apple silicon only.
+fn target(os: &str, arch: &str) -> Result<&'static str> {
+    match (os, arch) {
+        ("linux", "x86_64") => Ok("x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => Ok("aarch64-unknown-linux-musl"),
+        ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
+        (os, arch) => bail!("herder has no release build for {arch} {os}"),
     }
 }
 
@@ -216,10 +218,18 @@ mod tests {
     }
 
     #[test]
-    fn targets_are_static_musl_builds() {
-        assert_eq!(target("x86_64").unwrap(), "x86_64-unknown-linux-musl");
-        assert_eq!(target("aarch64").unwrap(), "aarch64-unknown-linux-musl");
-        assert!(target("riscv64").is_err());
+    fn targets_are_static_musl_builds_and_apple_silicon() {
+        assert_eq!(
+            target("linux", "x86_64").unwrap(),
+            "x86_64-unknown-linux-musl"
+        );
+        assert_eq!(
+            target("linux", "aarch64").unwrap(),
+            "aarch64-unknown-linux-musl"
+        );
+        assert_eq!(target("macos", "aarch64").unwrap(), "aarch64-apple-darwin");
+        assert!(target("linux", "riscv64").is_err());
+        assert!(target("macos", "x86_64").is_err());
     }
 
     #[test]
@@ -254,6 +264,10 @@ mod tests {
         assert_eq!(
             asset_name(&v("0.3.1"), "aarch64-unknown-linux-musl"),
             "herder-0.3.1-aarch64-unknown-linux-musl.tar.gz"
+        );
+        assert_eq!(
+            asset_name(&v("0.3.1"), "aarch64-apple-darwin"),
+            "herder-0.3.1-aarch64-apple-darwin.tar.gz"
         );
     }
 

@@ -19,6 +19,7 @@ herder-client-core.workspace = true
 herder-daemon.workspace = true
 herder-protocol.workspace = true
 herder-tui.workspace = true
+nix = { workspace = true, features = ["user"] }
 qrcode.workspace = true
 semver.workspace = true
 serde.workspace = true
@@ -32,7 +33,6 @@ ureq.workspace = true
 [dev-dependencies]
 futures-util.workspace = true
 herder-store.workspace = true
-nix.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true

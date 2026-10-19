@@ -385,8 +385,9 @@ fn tool_checks(tools: &Tools) -> Vec<Check> {
     vec![git, gh]
 }
 
-/// The systemd user service is installed, enabled and running. Without systemd it only warns:
-/// the daemon then runs under whatever this machine starts it with.
+/// The herder service (systemd on Linux, launchd on macOS) is installed, enabled and running.
+/// On Linux without systemd it only warns: the daemon then runs under whatever this machine
+/// starts it with.
 fn service_check(state: Option<service::State>) -> Check {
     const SUBJECT: &str = "service";
     let Some(state) = state else {

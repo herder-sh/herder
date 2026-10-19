@@ -30,3 +30,16 @@ jobs:
       - run: cargo test --workspace
       - name: Lint install.sh
         run: shellcheck --shell=sh install.sh
+
+  macos:
+    # herder runs on Apple silicon Macs too: keep the binary building there, and run its unit
+    # tests (binary replacement, the launchd service) on macOS itself.
+    name: macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked -p herder -- -D warnings
+      - run: cargo test --locked -p herder --bin herder

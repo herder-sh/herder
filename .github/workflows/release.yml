@@ -1,6 +1,6 @@
 name: release
 
-# A `v*` tag builds static musl binaries and the macOS app, and publishes them as a GitHub
+# A `v*` tag builds static musl binaries, an Apple silicon macOS binary and the macOS app, and publishes them as a GitHub
 # Release; it also uploads the iOS app to TestFlight. workflow_dispatch runs the same, without
 # publishing the GitHub Release. PRs that change this file or the app's release script run the
 # builds only, without the TestFlight upload, which needs the App Store Connect secrets.
@@ -34,15 +34,22 @@ jobs:
             runner: ubuntu-24.04
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
     runs-on: ${{ matrix.runner }}
     env:
       TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install musl and the toolchain from rust-toolchain.toml
+      - name: Install musl
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q musl-tools
+          # ring compiles C for the target; musl-gcc builds it against musl instead of glibc.
+          echo "TARGET_CC=musl-gcc" >> "$GITHUB_ENV"
+      - name: Install the toolchain from rust-toolchain.toml
+        run: |
           rustup show active-toolchain || rustup toolchain install
           rustup target add "$TARGET"
       - uses: Swatinem/rust-cache@v2
@@ -59,17 +66,16 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Build
-        # ring compiles C for the target; musl-gcc builds it against musl instead of glibc.
-        env:
-          TARGET_CC: musl-gcc
         run: cargo build --release --locked --target "$TARGET" -p herder
-      - name: Check the binary is static and runs
+      - name: Check the binary is static (Linux) and runs
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           bin="target/$TARGET/release/herder"
           file "$bin"
-          file "$bin" | grep -Eq 'statically linked|static-pie linked'
+          if [ "$RUNNER_OS" = Linux ]; then
+            file "$bin" | grep -Eq 'statically linked|static-pie linked'
+          fi
           test "$("$bin" --version)" = "herder $VERSION"
       - name: Package
         env:
@@ -80,7 +86,7 @@ jobs:
           cp "target/$TARGET/release/herder" LICENSE README.md "dist/$name/"
           cd dist
           tar -czf "$name.tar.gz" "$name"
-          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           rm -r "$name"
           cat "$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v7
