@@ -28,24 +28,29 @@ struct TranscriptTextTests {
         #expect(try Self.litPixels(host) > 1_000, "the end of the text is drawn")
     }
 
-    /// SwiftUI's text has no paragraph styles, so a gap above a paragraph is a short blank line
-    /// and a nested item is indented by tabs, which line up with the tab after a marker.
-    @Test func paragraphsKeepTheirSpaceAndIndentsInSwiftUIText() {
-        let prose = MarkdownText(text: "")
-        let lines = MarkdownText.proseLines(MarkdownText.parse("Intro\n\n- one\n  - nested"))
-        let spaced = TranscriptText.spaced(prose.prose(lines, last: true), style: .body, lineSpacing: 3)
-        #expect(String(spaced.characters) == "Intro\n\n•\tone\n\t•\tnested")
+    /// The selection is the text view's own, so Copy right after selecting copies it: SwiftUI's
+    /// selectable text handed its selection over only on its next update, and a quick ⌘C
+    /// copied nothing.
+    @Test func copyRightAfterSelectingCopiesTheSelection() throws {
+        let host = NSHostingView(rootView: TranscriptText(string: AttributedString("Done. The change is on its branch.")))
+        host.frame = CGRect(x: 0, y: 0, width: 400, height: 100)
+        host.layoutSubtreeIfNeeded()
+        let view = try #require(Self.first(NSTextView.self, in: host))
+        view.setSelectedRange(NSRange(location: 6, length: 10))
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        #expect(view.writeSelection(to: board, types: view.writablePasteboardTypes))
+        #expect(board.string(forType: .string) == "The change")
     }
 
-    /// SwiftUI's text paints a run's ground over its selection, so inline code has none on a
-    /// Mac: a selection across it showed dark boxes where the code was.
-    @Test func inlineCodeHasNoGroundToHideTheSelection() {
+    /// A list item's wrapped lines hang under its text, past the marker.
+    @Test func aListItemHangsItsWrappedLines() throws {
         let prose = MarkdownText(text: "")
-        let lines = MarkdownText.proseLines(MarkdownText.parse("Built in `Handoff.swift` as a toast"))
-        let spaced = TranscriptText.spaced(prose.prose(lines, last: true), style: .body, lineSpacing: 3)
-        let code = spaced.runs.filter { $0.inlinePresentationIntent?.contains(.code) == true }
-        #expect(!code.isEmpty)
-        #expect(code.allSatisfy { $0.backgroundColor == nil })
+        let lines = MarkdownText.proseLines(MarkdownText.parse("- one"))
+        let text = TranscriptText.attributed(prose.prose(lines, last: true), style: .body, monospaced: false,
+                                             lineSpacing: 3, color: .white)
+        let paragraph = try #require(text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(paragraph.headIndent > paragraph.firstLineHeadIndent)
     }
 
     /// A table wider than the transcript scrolls in its own box: the message, its prose and the

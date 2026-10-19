@@ -175,15 +175,12 @@ extension MarkdownText {
         }
     }
 
-    /// `text`'s inline Markdown, its code spans set on a raised ground on a phone. On a Mac,
-    /// SwiftUI's text paints that ground over its selection, so code there is only monospaced.
+    /// `text`'s inline Markdown, its code spans set on a raised ground.
     private func inline(_ text: String) -> AttributedString {
         var string = Self.markdown(text)
-        #if os(iOS)
         for run in string.runs where run.inlinePresentationIntent?.contains(.code) == true {
             string[run.range].backgroundColor = Theme.raised
         }
-        #endif
         return Self.decorated(string, prs: prLinks, find: find)
     }
 }
