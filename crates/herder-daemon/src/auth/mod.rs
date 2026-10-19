@@ -516,7 +516,7 @@ impl Auth {
 }
 
 /// Refuses commands `role` does not allow: terminals, and so adding accounts or
-/// logging them in again, bringing down containers, browsing folders, changing projects,
+/// logging them in again and signing the host in to AWS, bringing down containers, browsing folders, changing projects,
 /// reading or changing the daemon's settings, restarting it, backing up to a vault, forking
 /// sessions onto the host, and changing the skill library or which of its skills are enabled are for owners only.
 pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
@@ -526,6 +526,8 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::AddAccount { .. }
             | CommandBody::InstallProvider { .. }
             | CommandBody::LogInAccount { .. }
+            | CommandBody::ListAwsProfiles
+            | CommandBody::AwsSsoLogin { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
             | CommandBody::ResizeTerminal { .. }

@@ -2223,6 +2223,7 @@ pub fn changes_nothing(command: &CommandBody) -> bool {
             | CommandBody::GetProjectIcon { .. }
             | CommandBody::GetVaultLink
             | CommandBody::GetUsageSummary { .. }
+            | CommandBody::ListAwsProfiles
     )
 }
 
