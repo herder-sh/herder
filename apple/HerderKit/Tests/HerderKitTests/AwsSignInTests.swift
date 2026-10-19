@@ -36,6 +36,26 @@ struct AwsSignInTests {
         #expect(status(.failed("timed out")) == .refused("timed out"))
     }
 
+    @Test func aMachineThatCannotReadTheRequestNeedsANewerHerder() {
+        let old = HerderError.Rejected(info: ErrorInfo(
+            code: .badRequest, message: "invalid message: unknown variant `list_aws_profiles`"))
+        #expect(AwsListProblem(error: old) == .outdated)
+        #expect(AwsListProblem(error: old).label == "needs herder 0.8 or newer — run herder update")
+        let forbidden = HerderError.Rejected(info: ErrorInfo(code: .forbidden, message: "owners only"))
+        #expect(AwsListProblem(error: forbidden) == .failed("owners only"))
+        #expect(AwsListProblem(error: HerderError.Closed) == .failed("herder stopped."))
+        #expect(AwsSignInStatus.unlisted(.outdated).label == "Needs herder 0.8 or newer — run herder update")
+        #expect(AwsSignInStatus.unlisted(.noProfiles).label == "No ~/.aws/config profiles")
+    }
+
+    @Test func nothingToPickSaysWhyWhenEveryMachineFailedAlike() {
+        #expect(AwsListProblem.nothingToPick([.outdated, .outdated]).contains("herder update"))
+        #expect(AwsListProblem.nothingToPick([.offline]) == "None of the machines you own is connected.")
+        #expect(AwsListProblem.nothingToPick([.noProfiles]).contains("~/.aws/config"))
+        #expect(AwsListProblem.nothingToPick([.outdated, .offline])
+            == "No connected machine you own listed an AWS profile.")
+    }
+
     @Test func choicesJoinEveryMachinesProfilesIdentityCenterFirst() {
         let choices = AwsSignIn.choices([
             "a": [AwsProfile(name: "default", sso: false), AwsProfile(name: "trip1-prod", sso: true)],
