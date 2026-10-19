@@ -625,21 +625,24 @@ public enum Profile {
     case opened(Fleet)
     case failed(String)
 
-    /// Opens the profile in `directory`, creating it if needed.
+    /// Opens the profile in `directory`, creating it if needed. The done sessions are kept in
+    /// `doneFile`, by default in the profile's cache.
     @MainActor
-    public static func open(at directory: URL, client name: String) -> Profile {
+    public static func open(at directory: URL, client name: String, doneFile: URL? = nil) -> Profile {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             return .opened(Fleet(
                 client: try Client.open(configDir: directory.path, client: name),
-                doneFile: directory.appendingPathComponent("cache/done.json")))
+                doneFile: doneFile ?? directory.appendingPathComponent("cache/done.json")))
         } catch {
             return .failed(describe(error))
         }
     }
 
-    /// Opens the app's profile in Application Support: `herder`, or `herder-<name>` when the
-    /// `HERDER_PROFILE` environment names one, so profiling and tests keep off the real pairings.
+    /// Opens the app's profile. On the Mac it is the TUI's, `~/.config/herder`, so both show
+    /// the same machines; on iOS, `herder` in Application Support. `HERDER_PROFILE` names a
+    /// profile of its own, `herder-<name>` in Application Support, so profiling and tests keep
+    /// off the real pairings. The done sessions stay in Application Support: they are the app's.
     @MainActor
     public static func openDefault() -> Profile {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -649,12 +652,28 @@ public enum Profile {
         #else
         let platform = "macos"
         #endif
+        let own = ProcessInfo.processInfo.environment["HERDER_PROFILE"].map { "herder-\($0)" }
+        let app = support.appendingPathComponent(own ?? "herder", isDirectory: true)
+        var directory = app
+        #if os(macOS)
+        if own == nil, let home = realHome() {
+            directory = home.appendingPathComponent(".config/herder", isDirectory: true)
+        }
+        #endif
         return open(
-            at: support.appendingPathComponent(
-                ProcessInfo.processInfo.environment["HERDER_PROFILE"].map { "herder-\($0)" } ?? "herder",
-                isDirectory: true),
-            client: "herder-\(platform)/\(version ?? "dev")")
+            at: directory,
+            client: "herder-\(platform)/\(version ?? "dev")",
+            doneFile: app.appendingPathComponent("cache/done.json"))
     }
+
+    #if os(macOS)
+    /// The user's home directory. In the sandbox `NSHomeDirectory()` is the app's container;
+    /// the entitlements let the app into `~/.config/herder` of the real one.
+    private static func realHome() -> URL? {
+        guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else { return nil }
+        return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+    }
+    #endif
 }
 
 /// A machine's connection changing state.

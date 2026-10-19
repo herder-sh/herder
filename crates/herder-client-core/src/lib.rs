@@ -19,6 +19,11 @@
 //! changes the name it is shown by on this device, [`Client::set_addresses`] the addresses it
 //! is reached at, [`Client::reconnect`] connects again now, and [`Client::forget`] removes it.
 //!
+//! Clients may share a config dir at once, as the Mac app and the TUI on one Mac do: each
+//! change merges into the profile as the file holds it, under a lock, and each client re-reads
+//! the file within a second of a change and starts, updates or stops machines to match.
+//! The offline cache is shared too; whichever client saves last wins, as it is only a cache.
+//!
 //! [`Client::share`] makes one link that pairs another device with every connected machine:
 //! each daemon mints a one-time code for this device's user and role there, so the new device
 //! gets its own key and is revocable on its own, and never more than this device may do.
@@ -127,7 +132,7 @@ mod terminal;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use futures_util::future::join_all;
@@ -139,6 +144,7 @@ use herder_protocol::{
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use auth::DeviceKey;
 pub use catalog::{
@@ -385,7 +391,8 @@ impl Client {
     /// saved machine. Returns without waiting for the offline cache; see the crate docs, Offline cache.
     ///
     /// `client` names this client in daemon logs, e.g. `herder-tui/0.1.0`. Call within a tokio
-    /// runtime, which runs the supervisors. One client per config dir at a time.
+    /// runtime, which runs the supervisors. Other clients may share the config dir; see the
+    /// crate docs, Machines.
     pub fn open(config_dir: String, client: String) -> Result<Self, Error> {
         if tokio::runtime::Handle::try_current().is_err() {
             return Err(Error::Local {
@@ -416,16 +423,19 @@ impl Client {
             changed.subscribe(),
             stop.child_token(),
         ));
-        Ok(Self {
-            inner: Arc::new(Inner {
-                config_dir,
-                client,
-                machines,
-                library,
-                changed,
-                stop,
-            }),
-        })
+        let inner = Arc::new(Inner {
+            config_dir,
+            client,
+            machines,
+            library,
+            changed,
+            stop,
+        });
+        tokio::spawn(follow_profile(
+            Arc::downgrade(&inner),
+            inner.stop.child_token(),
+        ));
+        Ok(Self { inner })
     }
 
     /// Every paired machine, in pairing order.
@@ -490,34 +500,21 @@ impl Client {
     /// supervisor.
     fn add(&self, mut saved: SavedMachine) -> Result<Machine, (Vec<String>, String)> {
         let addresses = saved.addresses.clone();
-        let failed = |err: Error| (addresses.clone(), err.to_string());
-        let mut machines = self.lock();
-        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
-        let index = all.iter().position(|m| m.host_id == saved.host_id);
-        // A machine paired again keeps the name it was given.
-        if let Some(index) = index {
-            saved.name.clone_from(&all[index].name);
-        }
-        match index {
-            Some(index) => all[index] = saved.clone(),
-            None => all.push(saved.clone()),
-        }
-        profile::save(&self.inner.config_dir, &all).map_err(failed)?;
-        let supervisor = Supervisor::start(
-            saved,
-            self.inner.config_dir.clone(),
-            self.inner.client.clone(),
-            Arc::clone(&self.inner.changed),
-            self.inner.stop.child_token(),
-        )
-        .map_err(failed)?;
-        match index {
-            Some(index) => std::mem::replace(&mut machines[index], Arc::clone(&supervisor)).stop(),
-            None => machines.push(Arc::clone(&supervisor)),
-        }
-        drop(machines);
-        self.inner.changed.send_modify(|version| *version += 1);
-        Ok(supervisor.view())
+        let host_id = saved.host_id.clone();
+        self.update(|all| {
+            match all.iter_mut().find(|m| m.host_id == saved.host_id) {
+                // A machine paired again keeps the name it was given.
+                Some(old) => {
+                    saved.name.clone_from(&old.name);
+                    *old = saved;
+                }
+                None => all.push(saved),
+            }
+            Ok(())
+        })
+        .and_then(|()| self.machine(&host_id))
+        .map(|supervisor| supervisor.view())
+        .map_err(|err| (addresses, err.to_string()))
     }
 
     /// Makes a link that pairs another device with every connected machine, as this
@@ -591,17 +588,11 @@ impl Client {
 
     /// Shows a machine as `name` on this device from now on, and saves that.
     pub fn rename(&self, host_id: HostId, name: String) -> Result<(), Error> {
-        let machines = self.lock();
-        let machine = find(&machines, &host_id)?;
-        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
-        for saved in &mut all {
-            if saved.host_id == host_id {
-                saved.name.clone_from(&name);
-            }
-        }
-        profile::save(&self.inner.config_dir, &all)?;
-        machine.rename(name);
-        Ok(())
+        self.machine(&host_id)?;
+        self.update(|all| {
+            saved_mut(all, &host_id)?.name = name;
+            Ok(())
+        })
     }
 
     /// Connects to a machine at `addresses`, in this order of preference, from now on, and
@@ -621,17 +612,11 @@ impl Client {
                 message: "a machine needs at least one address".to_owned(),
             });
         }
-        let machines = self.lock();
-        let machine = find(&machines, &host_id)?;
-        let mut all: Vec<SavedMachine> = machines.iter().map(|m| m.saved()).collect();
-        for saved in &mut all {
-            if saved.host_id == host_id {
-                saved.addresses.clone_from(&normalized);
-            }
-        }
-        profile::save(&self.inner.config_dir, &all)?;
-        machine.set_addresses(normalized);
-        Ok(())
+        self.machine(&host_id)?;
+        self.update(|all| {
+            saved_mut(all, &host_id)?.addresses = normalized;
+            Ok(())
+        })
     }
 
     /// Drops a machine's connection, if up, and connects again at once, racing its addresses
@@ -647,19 +632,11 @@ impl Client {
     /// for it, deletes its offline cache, and stops its connection; its subscriptions end. The daemon still lists the
     /// device until its owner revokes it.
     pub fn forget(&self, host_id: HostId) -> Result<(), Error> {
-        let mut machines = self.lock();
-        let machine = find(&machines, &host_id)?;
-        let all: Vec<SavedMachine> = machines
-            .iter()
-            .filter(|m| m.saved.host_id != host_id)
-            .map(|m| m.saved())
-            .collect();
-        profile::save(&self.inner.config_dir, &all)?;
-        machines.retain(|m| m.saved.host_id != host_id);
-        drop(machines);
-        machine.forget();
-        self.inner.changed.send_modify(|version| *version += 1);
-        Ok(())
+        self.machine(&host_id)?;
+        self.update(|all| {
+            all.retain(|m| m.host_id != host_id);
+            Ok(())
+        })
     }
 
     /// Waits until a machine is connected and its daemon sent everything it owes for what
@@ -914,13 +891,119 @@ impl Client {
         find(&self.lock(), host_id)
     }
 
-    fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
-        // Every update is a single push, replace or removal, so a poisoned list is consistent.
-        self.inner
-            .machines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    /// Changes the profile as the file holds it now, then matches the machines to the result.
+    fn update(
+        &self,
+        change: impl FnOnce(&mut Vec<SavedMachine>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let mut machines = self.lock();
+        let (saved, ()) = profile::update(&self.inner.config_dir, change)?;
+        self.inner.reconcile(&mut machines, saved);
+        Ok(())
     }
+
+    fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
+        self.inner.lock()
+    }
+}
+
+/// How often a client checks whether another client sharing its config dir changed the profile.
+const PROFILE_POLL: Duration = Duration::from_secs(1);
+
+impl Inner {
+    fn lock(&self) -> MutexGuard<'_, Vec<Arc<Supervisor>>> {
+        // Every update leaves the list whole, so a poisoned list is consistent.
+        self.machines.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Matches `machines` to `saved`, the profile as the file holds it, keeping its order:
+    /// starts a supervisor for each machine new to this client or paired again with a new key,
+    /// renames and readdresses the others in place, and forgets the ones no longer saved.
+    fn reconcile(&self, machines: &mut Vec<Arc<Supervisor>>, saved: Vec<SavedMachine>) {
+        let mut old = std::mem::take(machines);
+        let mut changed = false;
+        for saved in saved {
+            let held = old.iter().position(|m| m.saved.host_id == saved.host_id);
+            if let Some(index) = held
+                && old[index].saved.device_key == saved.device_key
+                && old[index].saved.fingerprint == saved.fingerprint
+            {
+                let machine = old.remove(index);
+                let current = machine.saved();
+                if current.name != saved.name {
+                    machine.rename(saved.name);
+                }
+                if current.addresses != saved.addresses {
+                    machine.set_addresses(saved.addresses);
+                }
+                changed |= index != 0;
+                machines.push(machine);
+                continue;
+            }
+            if let Some(index) = held {
+                old.remove(index).stop();
+            }
+            changed = true;
+            let name = saved.name.clone();
+            match Supervisor::start(
+                saved,
+                self.config_dir.clone(),
+                self.client.clone(),
+                Arc::clone(&self.changed),
+                self.stop.child_token(),
+            ) {
+                Ok(machine) => machines.push(machine),
+                Err(err) => warn!(machine = %name, "skipping a saved machine: {err}"),
+            }
+        }
+        for machine in old {
+            changed = true;
+            machine.forget();
+        }
+        if changed {
+            self.changed.send_modify(|version| *version += 1);
+        }
+    }
+}
+
+/// Re-reads the profile whenever the file changes, as when another client sharing the config
+/// dir paired, renamed, readdressed or forgot a machine, until the client stops.
+async fn follow_profile(inner: Weak<Inner>, stop: CancellationToken) {
+    let mut seen = None;
+    let mut poll = tokio::time::interval(PROFILE_POLL);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            () = stop.cancelled() => return,
+            _ = poll.tick() => {}
+        }
+        let Some(inner) = inner.upgrade() else { return };
+        let mut machines = inner.lock();
+        // Read under the list's lock so a change of this client's own is never half seen.
+        let stamp = profile::stamp(&inner.config_dir);
+        if stamp == seen {
+            continue;
+        }
+        match profile::load(&inner.config_dir) {
+            Ok(saved) => {
+                inner.reconcile(&mut machines, saved);
+                seen = stamp;
+            }
+            Err(err) => warn!("re-reading the profile: {err}"),
+        }
+    }
+}
+
+/// The saved machine `host_id` among `all`.
+fn saved_mut<'a>(
+    all: &'a mut [SavedMachine],
+    host_id: &HostId,
+) -> Result<&'a mut SavedMachine, Error> {
+    all.iter_mut()
+        .find(|m| m.host_id == *host_id)
+        .ok_or_else(|| Error::UnknownMachine {
+            host_id: host_id.clone(),
+        })
 }
 
 /// The supervisor of `host_id` among `machines`.
