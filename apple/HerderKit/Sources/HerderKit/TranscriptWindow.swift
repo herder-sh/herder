@@ -24,15 +24,13 @@ struct TranscriptWindow {
         counts[key] = (counts[key] ?? Self.page) + Self.page
     }
 
-    /// Draws a page more when `top`, the block at the top of the view, is near the top of what
-    /// is drawn; returns whether it did.
-    @discardableResult
-    mutating func scrolled(to top: String?, in blocks: [TranscriptBlock], of key: SessionKey) -> Bool {
+    /// Whether a page more is due: `top`, the block at the top of the view, is near the top of
+    /// what is drawn. Asked on every scroll without changing the window, which is the view's
+    /// state: each change to it draws the session again.
+    func needsMore(at top: String?, in blocks: [TranscriptBlock], of key: SessionKey) -> Bool {
         guard hides(blocks, of: key), let top,
               let index = shown(blocks, of: key).firstIndex(where: { $0.id == top }) else { return false }
-        guard index - (blocks.count - (counts[key] ?? Self.page)) < Self.margin else { return false }
-        extend(key)
-        return true
+        return index - (blocks.count - (counts[key] ?? Self.page)) < Self.margin
     }
 
     /// Draws `key`'s transcript from block `id` on, at least, so it can be scrolled to.
