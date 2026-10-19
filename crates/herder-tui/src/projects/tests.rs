@@ -278,3 +278,86 @@ fn listed_projects_name_themselves_offer_every_clone_and_their_default_account()
     let dialog = app.compose.dialog.as_ref().unwrap();
     assert_eq!((&dialog.host_id, dialog.account), (&HostId::new("h1"), 0));
 }
+
+#[test]
+fn chats_are_listed_under_their_own_heading_not_each_as_a_project() {
+    let app = fake::sidebar();
+    let rows = app.rows();
+    assert_eq!(
+        rows[..4],
+        [
+            Row::Chats,
+            session("h2", "c3", 0),
+            session("h1", "c2", 0),
+            session("h1", "c1", 0),
+        ]
+    );
+    assert!(!rows[4..].contains(&Row::Chats));
+    assert_eq!(app.project_of(&key("h1", "c1")), None);
+    assert_eq!(
+        app.row_sessions(&Row::Chats),
+        [key("h1", "c1"), key("h1", "c2"), key("h2", "c3")]
+    );
+    assert_eq!(app.row_machines(&Row::Chats), ["laptop", "server"]);
+}
+
+#[test]
+fn a_project_on_two_machines_is_one_group_named_alike_whatever_order_they_paired_in() {
+    let mut app = fake::sidebar();
+    assert_eq!(
+        app.rows()[4..],
+        [
+            project("github.com/acme/app"),
+            session("h2", "s3", 0),
+            session("h2", "s4", 1),
+            session("h1", "s1", 0),
+        ]
+    );
+    let id = ProjectId::new("github.com/acme/app");
+    // As the Mac app names it: the name an owner gave it on the lowest-id machine that has
+    // one, `laptop`'s `app` being only its id's last segment.
+    assert_eq!(app.project_name(&id), "acme-app");
+    app.machines.reverse();
+    assert_eq!(app.project_name(&id), "acme-app");
+    assert_eq!(
+        app.row_machines(&Row::Project(Some(id))),
+        ["server", "laptop"]
+    );
+}
+
+#[test]
+fn a_session_its_daemon_has_not_resolved_waits_for_its_project_rather_than_heading_its_own() {
+    let mut app = fake::projects();
+    let mut machines = app.machines.clone();
+    machines[1].sessions[0] = fake::head("s4", None);
+    machines[1].sessions[2].project_id = None;
+    app.update(Msg::Machines(machines));
+    // Not a project of its own named after its repo, beside the one its clone is in.
+    assert_eq!(app.project_of(&key("h2", "s4")), None);
+    let rows = app.rows();
+    assert_eq!(
+        rows[rows.len() - 3..],
+        [
+            Row::Project(None),
+            session("h2", "s4", 0),
+            session("h2", "s6", 1),
+        ]
+    );
+}
+
+#[test]
+fn an_archived_session_of_no_project_stays_out_even_with_archived_sessions_shown() {
+    let mut app = fake::sidebar();
+    app.show_archived = true;
+    assert_eq!(
+        app.rows()[4..],
+        [
+            project("github.com/acme/app"),
+            session("h2", "s9", 0),
+            session("h2", "s3", 0),
+            session("h2", "s4", 1),
+            session("h1", "s2", 0),
+            session("h1", "s1", 0),
+        ]
+    );
+}

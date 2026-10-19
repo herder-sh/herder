@@ -5,7 +5,9 @@
 use std::collections::{HashMap, HashSet};
 
 use herder_client_core::{Machine, SessionUpdate};
-use herder_protocol::{CommandBody, CommandResult, HostId, ProjectId, SessionStatus, Timestamp};
+use herder_protocol::{
+    CommandBody, CommandResult, HostId, ProjectId, SessionHead, SessionId, SessionStatus, Timestamp,
+};
 use ratatui::crossterm::event::{KeyEvent, KeyEventKind, MouseEvent};
 
 use crate::account_screen::AccountScreen;
@@ -181,6 +183,8 @@ pub enum Row {
     },
     /// A project's heading; `None` heads the sessions whose project is not known yet.
     Project(Option<ProjectId>),
+    /// The heading of the chats, the sessions about no project, of every machine.
+    Chats,
     /// A session, `depth` levels into its task tree (0 for a top-level session).
     Session {
         /// The session.
@@ -193,7 +197,7 @@ pub enum Row {
 impl Row {
     pub(crate) fn session(&self) -> Option<&SessionKey> {
         match self {
-            Row::Machine(_) | Row::Host { .. } | Row::Project(_) => None,
+            Row::Machine(_) | Row::Host { .. } | Row::Project(_) | Row::Chats => None,
             Row::Session { key, .. } => Some(key),
         }
     }
@@ -203,6 +207,7 @@ impl Row {
             (Row::Machine(a), Row::Machine(b)) => a == b,
             (Row::Host { vault: a, host: x }, Row::Host { vault: b, host: y }) => a == b && x == y,
             (Row::Project(a), Row::Project(b)) => a == b,
+            (Row::Chats, Row::Chats) => true,
             (Row::Session { key: a, .. }, Row::Session { key: b, .. }) => a == b,
             _ => false,
         }
@@ -773,22 +778,32 @@ impl App {
             .collect()
     }
 
-    /// Whether `key`'s session is archived, by its events or, until they load, its listing.
-    fn archived(&self, key: &SessionKey) -> bool {
-        match self.sessions.get(key).filter(|session| session.loaded) {
-            Some(session) => session.status == SessionStatus::Archived,
-            None => self
-                .machines
-                .iter()
-                .find(|machine| machine.host_id == key.host_id)
-                .and_then(|machine| {
-                    machine
-                        .sessions
-                        .iter()
-                        .find(|head| head.session_id == key.session_id)
-                })
-                .is_some_and(|head| head.status == SessionStatus::Archived),
-        }
+    /// How `key`'s machine lists its session.
+    pub(crate) fn head(&self, key: &SessionKey) -> Option<&SessionHead> {
+        self.machines
+            .iter()
+            .find(|machine| machine.host_id == key.host_id)?
+            .sessions
+            .iter()
+            .find(|head| head.session_id == key.session_id)
+    }
+
+    /// Whether `key`'s session is archived, by its listing. Not by its events: they replay a
+    /// page at a time, and until the page with the archive lands the session would count as
+    /// live, so the list would grow and reshuffle while archived sessions load. The machine
+    /// lists every change of status as it lands.
+    pub(crate) fn archived(&self, key: &SessionKey) -> bool {
+        self.head(key)
+            .is_some_and(|head| head.status == SessionStatus::Archived)
+    }
+
+    /// The id of `key`'s session's parent: as its events have it, else, until they load, as
+    /// its listing does, so a task's tree holds while they replay.
+    fn parent_id(&self, key: &SessionKey) -> Option<&SessionId> {
+        self.sessions
+            .get(key)
+            .and_then(|session| session.parent.as_ref())
+            .or_else(|| self.head(key)?.parent.as_ref())
     }
 
     /// How many listed sessions are archived, shown or not.
@@ -807,7 +822,7 @@ impl App {
         let parent = |key: &SessionKey| {
             let parent = SessionKey {
                 host_id: key.host_id.clone(),
-                session_id: self.sessions.get(key)?.parent.clone()?,
+                session_id: self.parent_id(key)?.clone(),
             };
             (listed.contains(&parent) && parent != *key).then_some(parent)
         };
@@ -844,19 +859,18 @@ impl App {
     /// The listed children of `key`'s session, in no order.
     pub fn children(&self, key: &SessionKey) -> Vec<&SessionKey> {
         self.sessions
-            .iter()
-            .filter(|(child, session)| {
+            .keys()
+            .filter(|child| {
                 child.host_id == key.host_id
                     && *child != key
-                    && session.parent.as_ref() == Some(&key.session_id)
+                    && self.parent_id(child) == Some(&key.session_id)
             })
-            .map(|(child, _)| child)
             .collect()
     }
 
     /// The listed primary session of `key`'s session, for a child.
     pub fn primary(&self, key: &SessionKey) -> Option<(SessionKey, &Session)> {
-        let parent = self.sessions.get(key)?.parent.clone()?;
+        let parent = self.parent_id(key)?.clone();
         let primary = SessionKey {
             host_id: key.host_id.clone(),
             session_id: parent,
@@ -1118,6 +1132,51 @@ mod tests {
                 session("h1", "s3", 1),
                 session("h1", "s4", 1),
                 session("h1", "s1", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn archived_sessions_stay_put_while_their_events_replay_a_page_at_a_time() {
+        let mut app = fake::sidebar();
+        press(&mut app, KeyCode::Char('j'));
+        let rows = app.rows();
+        let selected = app.selected();
+        assert_eq!(app.archived_count(), 3);
+        // The first page of `s9`'s events: it ran before it was archived. Its listing still
+        // says archived, so it neither joins the list nor leaves the count.
+        app.update(Msg::Session {
+            key: key("h2", "s9"),
+            update: fake::update(
+                "s9",
+                1,
+                vec![
+                    fake::created_in("/work/app", "herder/later", None, None),
+                    fake::status(SessionStatus::Running),
+                ],
+                vec![],
+            ),
+        });
+        assert_eq!(app.archived_count(), 3);
+        assert_eq!(app.rows(), rows);
+        assert_eq!(app.selected(), selected);
+    }
+
+    #[test]
+    fn a_child_is_listed_under_its_parent_before_its_events_load() {
+        let mut machine = machine("h1", "box", &["s1", "s2"]);
+        machine.sessions[1].parent = Some(SessionId::new("s1"));
+        let mut app = App {
+            grouping: Grouping::Machines,
+            ..App::default()
+        };
+        app.update(Msg::Machines(vec![machine]));
+        assert_eq!(
+            app.rows(),
+            [
+                Row::Machine(HostId::new("h1")),
+                session("h1", "s1", 0),
+                session("h1", "s2", 1),
             ]
         );
     }
