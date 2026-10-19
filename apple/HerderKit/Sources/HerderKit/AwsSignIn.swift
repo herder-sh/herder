@@ -140,16 +140,32 @@ final class AwsSignIn {
             .sorted { ($0.sso ? 0 : 1, $0.name) < ($1.sso ? 0 : 1, $1.name) }
     }
 
+    /// Why `profile` cannot be signed in on `machine`, given the profiles each connected machine
+    /// listed and why the others listed none; `nil` when it can.
+    static func blocker(_ machine: Machine, profile: String, profiles: [HostId: [AwsProfile]],
+                        problems: [HostId: AwsListProblem]) -> AwsSignInStatus? {
+        if machine.connection != .connected { return .offline }
+        if profiles[machine.hostId]?.contains(where: { $0.name == profile }) == true { return nil }
+        return problems[machine.hostId].map(AwsSignInStatus.unlisted) ?? .noSuchProfile
+    }
+
+    /// The owned machines a sign-in to `profile` starts on: every one it can, less those the
+    /// owner left out.
+    static func selected(_ machines: [Machine], profile: String, profiles: [HostId: [AwsProfile]],
+                         problems: [HostId: AwsListProblem], leftOut: Set<HostId>) -> Set<HostId> {
+        Set(Self.machines(machines).filter {
+            !leftOut.contains($0.hostId) && blocker($0, profile: profile, profiles: profiles, problems: problems) == nil
+        }.map(\.hostId))
+    }
+
     /// Starts the sign-in on `machines`, or on every owned machine, given the profiles each
     /// connected machine listed and why the others listed none.
     func start(fleet: Fleet, profiles: [HostId: [AwsProfile]], problems: [HostId: AwsListProblem],
                only hosts: Set<HostId>? = nil) {
         for machine in Self.machines(fleet.machines) where hosts?.contains(machine.hostId) ?? true {
             var row = Row(hostId: machine.hostId, name: machine.name)
-            if machine.connection != .connected {
-                row.skipped = .offline
-            } else if profiles[machine.hostId]?.contains(where: { $0.name == profile }) != true {
-                row.skipped = problems[machine.hostId].map(AwsSignInStatus.unlisted) ?? .noSuchProfile
+            if let blocker = Self.blocker(machine, profile: profile, profiles: profiles, problems: problems) {
+                row.skipped = blocker
             } else {
                 let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, awsProfile: profile)
                 connection.connect(client: fleet.client, sessionId: nil, cols: 100, rows: 30)
@@ -172,12 +188,14 @@ final class AwsSignIn {
     }
 }
 
-/// Signs every machine the user owns in to AWS IAM Identity Center at once: the owner picks a
-/// profile, herder runs the AWS CLI's own device-code sign-in on each machine that has it, and
-/// the owner approves each code in the browser.
+/// Signs the machines the user owns in to AWS IAM Identity Center at once: the owner picks a
+/// profile and the machines to sign in, herder runs the AWS CLI's own device-code sign-in on
+/// each, and the owner approves each code in the browser.
 struct AwsSignInSheet: View {
     let fleet: Fleet
     @AppStorage("awsProfile") private var picked = ""
+    /// The machines the owner left out of each profile's sign-in, as JSON: profile to host ids.
+    @AppStorage("awsLeftOut") private var leftOutJSON = ""
     /// The profiles each connected owned machine listed; `nil` until they answered.
     @State private var profiles: [HostId: [AwsProfile]]?
     /// Why each owned machine listed no profiles, when it did not.
@@ -207,7 +225,7 @@ struct AwsSignInSheet: View {
     }
 
     var body: some View {
-        SheetScaffold(title: "AWS Sign-in", subtitle: "IAM Identity Center on every machine you own", height: 700) {
+        SheetScaffold(title: "AWS Sign-in", subtitle: "IAM Identity Center on the machines you own", height: 700) {
             if run == nil || finished { picker }
             if let run {
                 Field(label: run.profile) {
@@ -242,8 +260,9 @@ struct AwsSignInSheet: View {
             }
             Spacer()
             if run == nil || finished {
-                ActionButton(title: "Sign in on all machines", style: .primary) { start() }
-                    .frame(maxWidth: 220).disabled(!choices.contains { $0.name == picked })
+                let count = selected.count
+                ActionButton(title: "Sign in on \(count) machine\(count == 1 ? "" : "s")", style: .primary) { start() }
+                    .frame(maxWidth: 220).disabled(!choices.contains { $0.name == picked } || count == 0)
             } else {
                 ActionButton(title: "Done", style: .primary) { dismiss() }.frame(maxWidth: 180)
             }
@@ -272,8 +291,57 @@ struct AwsSignInSheet: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                problemList
             }
+        }
+        if !choices.isEmpty { machineList }
+    }
+
+    private var leftOut: [String: Set<HostId>] {
+        (try? JSONDecoder().decode([String: Set<HostId>].self, from: Data(leftOutJSON.utf8))) ?? [:]
+    }
+
+    private var selected: Set<HostId> {
+        AwsSignIn.selected(fleet.machines, profile: picked, profiles: profiles ?? [:], problems: problems,
+                           leftOut: leftOut[picked] ?? [])
+    }
+
+    /// Leaves `hostId` out of the picked profile's sign-ins, or takes it back in.
+    private func leave(_ hostId: HostId, out: Bool) {
+        var all = leftOut
+        if out { all[picked, default: []].insert(hostId) } else { all[picked]?.remove(hostId) }
+        all = all.filter { !$0.value.isEmpty }
+        leftOutJSON = (try? JSONEncoder().encode(all)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+    }
+
+    /// Every owned machine, on when the picked profile signs in there, and why not when it cannot.
+    private var machineList: some View {
+        Field(label: "Machines",
+              hint: "A sign-in lands in the machine’s ~/.aws/sso/cache, where every session on it can use it.") {
+            VStack(spacing: 0) {
+                ForEach(Array(AwsSignIn.machines(fleet.machines).enumerated()), id: \.element.hostId) { index, machine in
+                    if index > 0 { RowDivider() }
+                    let blocker = AwsSignIn.blocker(machine, profile: picked, profiles: profiles ?? [:], problems: problems)
+                    Toggle(isOn: Binding(get: { selected.contains(machine.hostId) },
+                                         set: { leave(machine.hostId, out: !$0) })) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary)
+                            Text(machine.name).foregroundStyle(Theme.text)
+                            Spacer(minLength: 8)
+                            if let blocker {
+                                Text(blocker.label).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
+                            }
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .disabled(blocker != nil)
+                    .font(.subheadline)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .frame(minHeight: 44)
+                }
+            }
+            .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
         }
     }
 
@@ -384,8 +452,10 @@ struct AwsSignInSheet: View {
 
     private func start() {
         guard let profiles, choices.contains(where: { $0.name == picked }) else { return }
+        let hosts = selected
+        guard !hosts.isEmpty else { return }
         let run = AwsSignIn(profile: picked)
-        run.start(fleet: fleet, profiles: profiles, problems: problems)
+        run.start(fleet: fleet, profiles: profiles, problems: problems, only: hosts)
         fleet.awsSignIn = run
         expanded = []
     }
