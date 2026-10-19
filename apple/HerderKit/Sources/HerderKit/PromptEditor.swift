@@ -64,7 +64,7 @@ struct PromptEditor: NSViewRepresentable {
         coordinator.parent = self
         guard let view = coordinator.view else { return }
         coordinator.refresh(view)
-        if focused, view.window?.firstResponder !== view {
+        if false, focused, view.window?.firstResponder !== view {
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
         }
     }

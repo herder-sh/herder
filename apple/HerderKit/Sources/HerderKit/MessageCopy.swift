@@ -34,7 +34,6 @@ private struct MessageCopy: ViewModifier {
             }
             .opacity(hovering ? 1 : 0)
         }
-        .onHover { hovering = $0 }
         .contextMenu {
             Button("Copy", systemImage: "doc.on.doc") { Clipboard.string = text }
             Button("Select Text", systemImage: "text.cursor") { selecting = true }

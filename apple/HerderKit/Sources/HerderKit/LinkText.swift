@@ -21,6 +21,7 @@ struct LinkText: View {
                 }
             }
             .onContinuousHover { phase in
+                return
                 if case .active(let point) = phase {
                     overLink = links.contains { $0.contains(point) }
                 } else {
