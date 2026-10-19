@@ -65,4 +65,33 @@ struct AwsSignInTests {
         #expect(choices.map(\.name) == ["admin", "trip1-prod", "default"])
         #expect(choices.map(\.sso) == [true, true, false])
     }
+
+    @Test func machinesAreSelectedWhenConnectedWithTheProfileAndNotLeftOut() {
+        let machines = [
+            machine("home", name: "home", sessions: []),
+            machine("shared", name: "shared", sessions: []),
+            machine("away", name: "away", sessions: [], connection: .disconnected(error: "gone")),
+            machine("bare", name: "bare", sessions: []),
+            machine("old", name: "old", sessions: []),
+            machine("theirs", name: "theirs", sessions: [], role: .member),
+        ]
+        let prod = [AwsProfile(name: "trip1-prod", sso: true)]
+        let profiles: [HostId: [AwsProfile]] = ["home": prod, "shared": prod, "bare": [AwsProfile(name: "dev", sso: true)],
+                                                "theirs": prod]
+        let problems: [HostId: AwsListProblem] = ["away": .offline, "old": .outdated]
+        let selected = { (leftOut: Set<HostId>) in
+            AwsSignIn.selected(machines, profile: "trip1-prod", profiles: profiles, problems: problems, leftOut: leftOut)
+        }
+        #expect(selected([]) == ["home", "shared"])
+        #expect(selected(["shared"]) == ["home"])
+        #expect(selected(["home", "shared"]).isEmpty)
+        let blocker = { (hostId: HostId) in
+            AwsSignIn.blocker(machines.first { $0.hostId == hostId }!, profile: "trip1-prod", profiles: profiles,
+                              problems: problems)
+        }
+        #expect(blocker("home") == nil)
+        #expect(blocker("away") == .offline)
+        #expect(blocker("bare") == .noSuchProfile)
+        #expect(blocker("old") == .unlisted(.outdated))
+    }
 }
