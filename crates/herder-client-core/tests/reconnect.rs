@@ -1,6 +1,6 @@
 //! The client against a real daemon, with the fake adapter, over TLS on localhost: pairing, a
 //! turn, a daemon killed and restarted mid-turn, a terminal across a cut connection, an
-//! account login, resource figures, the sync barrier, renaming and forgetting a machine, a
+//! account login, an AWS sign-in, resource figures, the sync barrier, renaming and forgetting a machine, a
 //! reconnect through a chosen address, and the app lifecycle: suspension, wake probes and the offline cache.
 
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ use herder_client_core::{
     SessionSubscription, SessionUpdate, TerminalEvent, TerminalStream,
 };
 use herder_daemon::auth::{Auth, PAIRING_TTL};
+use herder_daemon::aws::Aws;
 use herder_daemon::login::{LoginProgram, LoginStatus, Logins};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, SessionManager, Setup};
 use herder_daemon::terminal::Terminals;
@@ -24,9 +25,10 @@ use herder_daemon::worktree::Worktrees;
 use herder_daemon::ws::{Host, Server, Tls};
 use herder_daemon::{Hub, session};
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, Constraint, Container, ContainerState, ErrorCode, Event,
-    EventBody, FailoverSettings, HostId, HostResources, ItemBody, PermissionMode, Provider, Role,
-    SessionId, SessionStatus, SessionUsage, TerminalPurpose, TurnId,
+    AccountId, AwsDeviceCode, AwsProfile, CommandBody, CommandResult, Constraint, Container,
+    ContainerState, ErrorCode, Event, EventBody, FailoverSettings, HostId, HostResources, ItemBody,
+    PermissionMode, Provider, Role, SessionId, SessionStatus, SessionUsage, TerminalPurpose,
+    TurnId,
 };
 use herder_store::Store;
 use tokio::net::{TcpListener, TcpStream};
@@ -166,6 +168,14 @@ impl Daemon {
                 logins,
                 host,
             );
+            // The AWS CLI and its config, both absent until a test writes them.
+            let aws = dir.join("aws");
+            let env = move |key: &str| match key {
+                "PATH" => Some(aws.join("bin").into_os_string()),
+                "AWS_CONFIG_FILE" => Some(aws.join("config").into_os_string()),
+                _ => None,
+            };
+            server.manage_aws(Aws::from_env(env)).unwrap();
             started.send((addr, fingerprint, auth, hub)).ok().unwrap();
             server.run(vec![listener], shutdown).await;
         });
@@ -1748,4 +1758,83 @@ async fn wait_host(client: &Client, host: &str, up: bool) {
     })
     .await
     .expect("the machine did not get there in time");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_aws_sign_in_relays_its_device_code_and_exit() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let daemon_dir = tmp.path().join("daemon");
+    let daemon = Daemon::start(&daemon_dir, 0, "mid_turn.jsonl", Arc::default()).await;
+    let bin = daemon_dir.join("aws/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        daemon_dir.join("aws/config"),
+        "[default]\nregion = eu-west-1\n[profile prod]\nsso_session = corp\n",
+    )
+    .unwrap();
+    // A fake `aws sso login`: the device-code prompt, then an exit once the code is "approved".
+    std::fs::write(
+        bin.join("aws"),
+        "#!/bin/sh\n\
+         printf 'Please visit the following URL:\\n\\nhttps://device.sso.eu-west-1.amazonaws.com/\\n'\n\
+         printf '\\nThen enter the code:\\n\\nQRST-UVWX\\n'\n\
+         read approved\n\
+         exit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("aws"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "herder-test/0".into(),
+    )
+    .unwrap();
+    let host = pair_one(&client, daemon.pairing_link())
+        .await
+        .unwrap()
+        .host_id;
+    assert_eq!(
+        client.list_aws_profiles(host.clone()).await.unwrap(),
+        [
+            AwsProfile {
+                name: "default".into(),
+                sso: false,
+            },
+            AwsProfile {
+                name: "prod".into(),
+                sso: true,
+            },
+        ]
+    );
+
+    let stream = client
+        .aws_sso_login(host.clone(), "prod".into(), 80, 24)
+        .await
+        .unwrap();
+    let device = AwsDeviceCode {
+        verification_url: "https://device.sso.eu-west-1.amazonaws.com/?user_code=QRST-UVWX".into(),
+        user_code: "QRST-UVWX".into(),
+    };
+    let listed = |client: &Client| {
+        client.machines()[0].terminals.iter().any(|terminal| {
+            terminal.terminal_id == stream.terminal_id()
+                && terminal.purpose
+                    == TerminalPurpose::AwsLogin {
+                        profile: "prod".into(),
+                        device: Some(device.clone()),
+                    }
+        })
+    };
+    let changes = client.changes();
+    tokio::time::timeout(TIMEOUT, async {
+        while !listed(&client) {
+            changes.next().await;
+        }
+    })
+    .await
+    .expect("the device code was never listed");
+    stream.input(b"\n".to_vec());
+    let mut screen = Screen::default();
+    assert_eq!(login_exit(&stream, &mut screen).await, Some(0));
+    daemon.kill().await;
 }
