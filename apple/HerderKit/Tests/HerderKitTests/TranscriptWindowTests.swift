@@ -18,10 +18,11 @@ struct TranscriptWindowTests {
     @Test func scrollingNearTheTopOfWhatIsDrawnDrawsAPageMore() {
         var window = TranscriptWindow()
         // The view's top is well inside what is drawn: nothing more.
-        let inside = window.scrolled(to: "b95", in: blocks, of: key)
-        #expect(!inside)
-        let nearTop = window.scrolled(to: "b89", in: blocks, of: key)
-        #expect(nearTop)
+        #expect(!window.needsMore(at: "b95", in: blocks, of: key))
+        #expect(window.needsMore(at: "b89", in: blocks, of: key))
+        // Asking draws nothing: the window is the view's state, and changing it draws again.
+        #expect(window.shown(blocks, of: key).first?.id == "b88")
+        window.extend(key)
         #expect(window.shown(blocks, of: key).first?.id == "b76")
         // Each session keeps its own.
         #expect(window.shown(blocks, of: other).first?.id == "b88")
