@@ -28,7 +28,7 @@ use herder_client_core::{
     TerminalEvent,
 };
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId,
+    AccountId, AwsProfile, CommandBody, CommandResult, ErrorInfo, HostId, SessionId, TerminalId,
 };
 use tokio::runtime::{Handle, Runtime};
 use tokio_util::task::AbortOnDropHandle;
@@ -417,6 +417,31 @@ impl Client {
         let client = self.inner.clone();
         let stream = call(&self.handle, async move {
             client.log_in_account(host_id, account_id, cols, rows).await
+        })
+        .await?;
+        Ok(self.terminal(stream))
+    }
+
+    /// The AWS profiles of a machine's `~/.aws/config`; owners only.
+    pub async fn list_aws_profiles(&self, host_id: HostId) -> Result<Vec<AwsProfile>, HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.list_aws_profiles(host_id).await
+        })
+        .await
+    }
+
+    /// Signs a machine in to AWS IAM Identity Center in a terminal; owners only.
+    pub async fn aws_sso_login(
+        &self,
+        host_id: HostId,
+        profile: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<TerminalStream>, HerderError> {
+        let client = self.inner.clone();
+        let stream = call(&self.handle, async move {
+            client.aws_sso_login(host_id, profile, cols, rows).await
         })
         .await?;
         Ok(self.terminal(stream))

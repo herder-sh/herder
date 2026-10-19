@@ -33,6 +33,7 @@ pub(crate) type Ws =
 
 use crate::auth::control::addresses;
 use crate::auth::{self, Auth, PAIRING_TTL};
+use crate::aws::Aws;
 use crate::hub::Hub;
 use crate::hub::Outbox;
 use crate::listen;
@@ -167,6 +168,8 @@ struct Shared<B> {
     settings: OnceLock<Arc<Settings>>,
     /// The host's provider CLIs, which answer install and the providers list, once set.
     providers: OnceLock<Arc<Providers>>,
+    /// The host's AWS CLI, which answers the AWS sign-in commands, once set.
+    aws: OnceLock<Aws>,
 }
 
 impl<B: Backend> Shared<B> {
@@ -240,6 +243,15 @@ impl<B: Backend> Shared<B> {
                 });
                 return open_install(terminals, provider, command, cols, rows, outbox, on_exit);
             }
+            CommandBody::AwsSsoLogin {
+                profile,
+                cols,
+                rows,
+            } => {
+                let command = self.aws()?.sso_login(&profile)?;
+                let terminal_id = terminals.open_aws_login(profile, command, cols, rows, outbox)?;
+                return Ok(CommandResult::TerminalOpened { terminal_id });
+            }
             CommandBody::AttachTerminal { terminal_id } => {
                 terminals.attach(&terminal_id, outbox)?
             }
@@ -280,6 +292,9 @@ impl<B: Backend> Shared<B> {
                     .await?;
                 Ok(CommandResult::Applied)
             }
+            CommandBody::ListAwsProfiles => Ok(CommandResult::AwsProfiles {
+                profiles: self.aws()?.profiles()?,
+            }),
             command @ (CommandBody::GetVaultLink
             | CommandBody::LinkVault { .. }
             | CommandBody::UnlinkVault)
@@ -299,6 +314,14 @@ impl<B: Backend> Shared<B> {
             },
             command => self.backend.command(user_id, command_id, command).await,
         }
+    }
+
+    /// The host's AWS CLI, unless this daemon signs nothing in to AWS.
+    fn aws(&self) -> Result<&Aws, ErrorInfo> {
+        self.aws.get().ok_or_else(|| ErrorInfo {
+            code: ErrorCode::Unsupported,
+            message: "this daemon does not sign in to AWS".to_owned(),
+        })
     }
 
     /// A one-time code that pairs another device as `identity`'s user, with this daemon's
@@ -416,6 +439,8 @@ impl<B: Backend> Control for AgentControl<B> {
                     | CommandBody::AddAccount { .. }
                     | CommandBody::LogInAccount { .. }
                     | CommandBody::InstallProvider { .. }
+                    | CommandBody::ListAwsProfiles
+                    | CommandBody::AwsSsoLogin { .. }
             );
             let pairing = matches!(
                 command,
@@ -470,6 +495,7 @@ impl<B: Backend> Server<B> {
                 listen: OnceLock::new(),
                 settings: OnceLock::new(),
                 providers: OnceLock::new(),
+                aws: OnceLock::new(),
             }),
         }
     }
@@ -485,6 +511,14 @@ impl<B: Backend> Server<B> {
             .providers
             .set(Arc::new(providers))
             .map_err(|_| anyhow::anyhow!("the providers are managed already"))
+    }
+
+    /// Answers the AWS sign-in commands with `aws`; once per server.
+    pub fn manage_aws(&self, aws: Aws) -> anyhow::Result<()> {
+        self.shared
+            .aws
+            .set(aws)
+            .map_err(|_| anyhow::anyhow!("the AWS CLI is managed already"))
     }
 
     /// Answers the settings commands with `settings`; once per server.

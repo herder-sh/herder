@@ -132,10 +132,10 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use herder_protocol::{
-    Account, AccountId, ClientHello, Command, CommandBody, CommandId, CommandResult, ErrorInfo,
-    Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION, Project,
-    Provider, Role, SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus, Terminal,
-    TerminalId, Timestamp, VaultStatus,
+    Account, AccountId, AwsProfile, ClientHello, Command, CommandBody, CommandId, CommandResult,
+    ErrorInfo, Event, FailoverSettings, FleetHost, HostId, HostResources, Item, PROTOCOL_VERSION,
+    Project, Provider, Role, SessionHead, SessionId, SessionSkill, SessionUsage, SkillsStatus,
+    Terminal, TerminalId, Timestamp, VaultStatus,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -861,6 +861,38 @@ impl Client {
         self.machine(&host_id)?
             .open_terminal(CommandBody::LogInAccount {
                 account_id,
+                cols,
+                rows,
+            })
+            .await
+    }
+
+    /// The AWS profiles of a machine's `~/.aws/config`, in the file's order; owners only.
+    /// Empty when the machine has no AWS config.
+    pub async fn list_aws_profiles(&self, host_id: HostId) -> Result<Vec<AwsProfile>, Error> {
+        match self.send(host_id, CommandBody::ListAwsProfiles).await? {
+            CommandResult::AwsProfiles { profiles } => Ok(profiles),
+            _ => Err(Error::Local {
+                message: "the daemon sent an unexpected answer".to_owned(),
+            }),
+        }
+    }
+
+    /// Signs a machine in to AWS IAM Identity Center as `profile`: runs `aws sso login` with a
+    /// device code in a terminal of `cols` by `rows` and streams it, however long it takes to
+    /// connect; owners only. The terminal's purpose carries the device code to approve once
+    /// the CLI prints it, and its exit code 0 says the sign-in succeeded. Refused when the
+    /// machine has no AWS CLI or no such profile.
+    pub async fn aws_sso_login(
+        &self,
+        host_id: HostId,
+        profile: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<TerminalStream, Error> {
+        self.machine(&host_id)?
+            .open_terminal(CommandBody::AwsSsoLogin {
+                profile,
                 cols,
                 rows,
             })

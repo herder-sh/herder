@@ -10,10 +10,11 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use herder_client_core::auth::{DeviceKey, client_config};
 use herder_protocol::{
-    Account, AccountId, ClientHello, ClientMessage, Command, CommandBody, CommandId, CommandResult,
-    Cursor, DaemonSettings, ErrorCode, ErrorInfo, Event, EventBody, HostId, Item, ItemBody, ItemId,
-    PROTOCOL_VERSION, PermissionMode, Provider, Role, Seq, ServerHello, ServerMessage, SessionHead,
-    SessionId, Terminal, TerminalPurpose, TurnId, UserId,
+    Account, AccountId, AwsDeviceCode, AwsProfile, ClientHello, ClientMessage, Command,
+    CommandBody, CommandId, CommandResult, Cursor, DaemonSettings, ErrorCode, ErrorInfo, Event,
+    EventBody, HostId, Item, ItemBody, ItemId, PROTOCOL_VERSION, PermissionMode, Provider, Role,
+    Seq, ServerHello, ServerMessage, SessionHead, SessionId, Terminal, TerminalPurpose, TurnId,
+    UserId,
 };
 use herder_store::{NewEvent, Store};
 use rustls::pki_types::ServerName;
@@ -28,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{Backend, Host, Server, Tls};
 use crate::auth::{Auth, PAIRING_TTL};
+use crate::aws::Aws;
 use crate::hub::{self, DELTA_BACKLOG, Hub};
 use crate::login::Logins;
 use crate::mcp::Control;
@@ -164,6 +166,9 @@ struct Daemon {
     config: PathBuf,
     /// The commands the server runs for agents.
     control: Arc<dyn Control>,
+    /// The host's AWS CLI setup: `bin`, its whole `PATH`, and `config`, its config file;
+    /// both absent until a test writes them.
+    aws: PathBuf,
     _tmp: tempfile::TempDir,
 }
 
@@ -220,6 +225,18 @@ impl Daemon {
             shutdown.clone(),
         );
         server.manage_settings(Arc::new(settings)).unwrap();
+        let aws = tmp.path().join("aws");
+        let vars = [
+            ("PATH", aws.join("bin")),
+            ("HOME", tmp.path().to_owned()),
+            ("AWS_CONFIG_FILE", aws.join("config")),
+        ];
+        let env = move |key: &str| {
+            vars.iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.clone().into_os_string())
+        };
+        server.manage_aws(Aws::from_env(env)).unwrap();
         let control = server.control();
         tokio::spawn(server.run(vec![listener, other_listener], shutdown.clone()));
         Arc::new(Self {
@@ -234,6 +251,7 @@ impl Daemon {
             shutdown,
             config,
             control,
+            aws,
             _tmp: tmp,
         })
     }
@@ -1562,6 +1580,12 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             cols: 80,
             rows: 24,
         },
+        CommandBody::ListAwsProfiles,
+        CommandBody::AwsSsoLogin {
+            profile: "prod".into(),
+            cols: 80,
+            rows: 24,
+        },
         CommandBody::PairDevice,
         CommandBody::PairVaultHost {
             host_name: "devbox".into(),
@@ -1587,4 +1611,183 @@ async fn agents_run_commands_as_their_user_within_its_role() {
             .collect::<Vec<_>>(),
         ["claude-main"]
     );
+}
+
+/// A fake `aws` that prints the device-code prompt of `aws sso login --no-browser`, waits a
+/// little and exits 0 for profile `prod`, else 1; and a config with `prod` and `broken`.
+fn fake_aws(dir: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        dir.join("config"),
+        "[default]\nregion = eu-west-1\n\n[profile prod]\nsso_session = corp\n\n\
+         [profile broken]\nsso_start_url = https://corp.awsapps.com/start\n\n\
+         [sso-session corp]\nsso_start_url = https://corp.awsapps.com/start\n",
+    )
+    .unwrap();
+    let script = bin.join("aws");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+[ "$1 $2 $3 $5 $6" = "sso login --profile --use-device-code --no-browser" ] || exit 64
+printf 'Browser will not be automatically opened.\nPlease visit the following URL:\n\n'
+printf 'https://device.sso.eu-west-1.amazonaws.com/\n\nThen enter the code:\n\nABCD-EFGH\n\n'
+printf 'Alternatively, you may visit the following URL which will autofill the code upon loading:\n'
+printf 'https://device.sso.eu-west-1.amazonaws.com/?user_code=ABCD-EFGH\n'
+sleep 1
+[ "$4" = prod ] || exit 1
+echo "Successfully logged into Start URL: https://corp.awsapps.com/start"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Signs `profile` in through `client`, and returns the terminal lists it saw and the exit
+/// code the terminal closed with.
+async fn aws_sso_login(
+    client: &mut Client,
+    id: &str,
+    profile: &str,
+) -> (Vec<Vec<Terminal>>, Option<i32>) {
+    let login = CommandBody::AwsSsoLogin {
+        profile: profile.into(),
+        cols: 80,
+        rows: 24,
+    };
+    client
+        .send(&ClientMessage::Command(Command {
+            id: CommandId::new(id),
+            body: login,
+        }))
+        .await;
+    let (mut lists, mut opened, mut closed) = (Vec::new(), None, None);
+    loop {
+        match client.recv().await {
+            ServerMessage::Terminals { terminals } => {
+                let empty = terminals.is_empty();
+                lists.push(terminals);
+                if empty && closed.is_some() {
+                    break;
+                }
+            }
+            ServerMessage::CommandAccepted {
+                result: CommandResult::TerminalOpened { terminal_id },
+                ..
+            } => opened = Some(terminal_id),
+            ServerMessage::TerminalClosed {
+                terminal_id,
+                exit_code,
+            } => {
+                assert_eq!(Some(&terminal_id), opened.as_ref());
+                closed = Some(exit_code);
+            }
+            ServerMessage::TerminalOutput { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    (lists, closed.flatten())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owner_signs_the_host_in_to_aws() {
+    let daemon = Daemon::start().await;
+    let mut owner = daemon.client().await;
+    owner.hello(Vec::new()).await;
+
+    // Without the AWS CLI there is nothing to sign in with, and no config, no profiles.
+    let login = |profile: &str| CommandBody::AwsSsoLogin {
+        profile: profile.into(),
+        cols: 80,
+        rows: 24,
+    };
+    assert!(matches!(
+        owner.command("a1", login("prod")).await,
+        ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::Unsupported
+    ));
+    assert_eq!(
+        owner.command("a2", CommandBody::ListAwsProfiles).await,
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("a2"),
+            result: CommandResult::AwsProfiles {
+                profiles: Vec::new()
+            },
+        }
+    );
+
+    fake_aws(&daemon.aws);
+    let sso = |name: &str, sso: bool| AwsProfile {
+        name: name.into(),
+        sso,
+    };
+    assert_eq!(
+        owner.command("a3", CommandBody::ListAwsProfiles).await,
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("a3"),
+            result: CommandResult::AwsProfiles {
+                profiles: vec![
+                    sso("default", false),
+                    sso("prod", true),
+                    sso("broken", true)
+                ],
+            },
+        }
+    );
+    assert!(matches!(
+        owner.command("a4", login("nope")).await,
+        ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::BadRequest
+    ));
+
+    // A member sees neither the profiles nor a sign-in.
+    let code = daemon.auth.mint("bob", None, PAIRING_TTL).unwrap().code;
+    let device = DeviceKey::generate().unwrap();
+    let mut member = daemon.client_on(&device, Some(&code)).await;
+    member.hello(Vec::new()).await;
+    for (id, body) in [("m1", CommandBody::ListAwsProfiles), ("m2", login("prod"))] {
+        assert!(matches!(
+            member.command(id, body).await,
+            ServerMessage::CommandRejected { error, .. } if error.code == ErrorCode::Forbidden
+        ));
+    }
+
+    // The sign-in's terminal gets the device code once the CLI prints it, and closes with
+    // the CLI's exit code.
+    let device = AwsDeviceCode {
+        verification_url: "https://device.sso.eu-west-1.amazonaws.com/?user_code=ABCD-EFGH".into(),
+        user_code: "ABCD-EFGH".into(),
+    };
+    let (lists, exit_code) = aws_sso_login(&mut owner, "a5", "prod").await;
+    assert_eq!(exit_code, Some(0));
+    let purposes: Vec<_> = lists
+        .iter()
+        .flatten()
+        .map(|terminal| terminal.purpose.clone())
+        .collect();
+    assert_eq!(
+        purposes,
+        [
+            TerminalPurpose::AwsLogin {
+                profile: "prod".into(),
+                device: None,
+            },
+            TerminalPurpose::AwsLogin {
+                profile: "prod".into(),
+                device: Some(device.clone()),
+            },
+        ]
+    );
+    let (lists, exit_code) = aws_sso_login(&mut owner, "a6", "broken").await;
+    assert_eq!(exit_code, Some(1));
+    assert!(lists.iter().flatten().any(|terminal| terminal.purpose
+        == TerminalPurpose::AwsLogin {
+            profile: "broken".into(),
+            device: Some(device.clone()),
+        }));
+
+    // The member heard of none of it.
+    member
+        .send(&ClientMessage::Sync { token: "t".into() })
+        .await;
+    assert!(matches!(member.recv().await, ServerMessage::Synced { .. }));
 }
