@@ -1,43 +1,21 @@
-//! `herder service`: run the daemon as a systemd user service that starts at boot.
+//! The herder service on Linux: a systemd user service that starts at boot.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use anyhow::{Context, Result, bail};
-use clap::Subcommand;
+
+use super::State;
 
 const UNIT: &str = "herder.service";
 
-#[derive(Subcommand)]
-pub enum Action {
-    /// Install, enable and start the systemd user service for this herder binary.
-    Install,
-    /// Stop, disable and remove the systemd user service.
-    Uninstall,
-    /// Show the service status.
-    Status,
-    /// Restart the service.
-    Restart,
-}
-
-pub fn run(action: Action) -> Result<ExitCode> {
-    match action {
-        Action::Install => install()?,
-        Action::Uninstall => uninstall()?,
-        Action::Status => {
-            // systemctl's exit code is the answer (0 = running, 3 = stopped), so pass it on.
-            let status = Command::new("systemctl")
-                .args(["--user", "status", UNIT])
-                .status()
-                .context("running systemctl")?;
-            return Ok(ExitCode::from(
-                u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
-            ));
-        }
-        Action::Restart => restart()?,
-    }
-    Ok(ExitCode::SUCCESS)
+/// `systemctl --user status`, whose exit code is the answer (0 = running, 3 = stopped).
+pub fn status() -> Result<ExitStatus> {
+    Command::new("systemctl")
+        .args(["--user", "status", UNIT])
+        .status()
+        .context("running systemctl")
 }
 
 /// The systemd user unit that runs `exe daemon` with `path` as its `PATH`.
@@ -46,7 +24,7 @@ pub fn run(action: Action) -> Result<ExitCode> {
 /// where agent CLIs are usually installed (`~/.local/bin`, version manager shims), so every
 /// session would fail to start its CLI. The installing shell's `PATH` is the one the user's
 /// CLIs are found on.
-pub fn unit_file(exe: &Path, path: &str) -> Result<String> {
+fn unit_file(exe: &Path, path: &str) -> Result<String> {
     let exe = exe
         .to_str()
         .with_context(|| format!("{} is not valid UTF-8", exe.display()))?;
@@ -123,7 +101,7 @@ fn unit_path(xdg_config_home: Option<&OsStr>, home: Option<&OsStr>) -> Result<Pa
     Ok(config.join("systemd/user").join(UNIT))
 }
 
-fn install() -> Result<()> {
+pub fn install() -> Result<()> {
     let exe = std::env::current_exe().context("finding the herder binary")?;
     let search_path = std::env::var("PATH").context("reading PATH")?;
     let path = unit_path(
@@ -145,7 +123,7 @@ fn install() -> Result<()> {
     Ok(())
 }
 
-fn uninstall() -> Result<()> {
+pub fn uninstall() -> Result<()> {
     let path = unit_path(
         std::env::var_os("XDG_CONFIG_HOME").as_deref(),
         std::env::var_os("HOME").as_deref(),
@@ -176,17 +154,6 @@ pub fn is_active() -> bool {
         .args(["--user", "is-active", "--quiet", UNIT])
         .status()
         .is_ok_and(|status| status.success())
-}
-
-/// What systemd says of the herder service.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct State {
-    /// The unit file `herder service install` writes exists.
-    pub installed: bool,
-    /// The unit starts at boot.
-    pub enabled: bool,
-    /// The service is running right now.
-    pub active: bool,
 }
 
 /// The herder service's state; `None` on a machine without systemd to ask.

@@ -25,18 +25,29 @@ need() {
 main() {
 	need curl
 	need tar
-	need sha256sum
 	need mktemp
 	need uname
 
-	os=$(uname -s)
-	[ "$os" = Linux ] || fail "herder runs on Linux only, not $os"
-	case $(uname -m) in
-	x86_64 | amd64) arch=x86_64 ;;
-	aarch64 | arm64) arch=aarch64 ;;
-	*) fail "herder has no release build for $(uname -m)" ;;
+	case $(uname -s) in
+	Linux)
+		need sha256sum
+		case $(uname -m) in
+		x86_64 | amd64) target=x86_64-unknown-linux-musl ;;
+		aarch64 | arm64) target=aarch64-unknown-linux-musl ;;
+		*) fail "herder has no release build for $(uname -m) Linux" ;;
+		esac
+		;;
+	Darwin)
+		need shasum
+		# A shell running under Rosetta reports x86_64 on Apple silicon too.
+		if [ "$(uname -m)" = arm64 ] || [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+			target=aarch64-apple-darwin
+		else
+			fail "herder runs on Apple silicon Macs only, not on Intel Macs"
+		fi
+		;;
+	*) fail "herder runs on Linux and macOS only, not $(uname -s)" ;;
 	esac
-	target="$arch-unknown-linux-musl"
 
 	base=${HERDER_DOWNLOAD_BASE:-https://github.com/herder-sh/herder/releases}
 	base=${base%/}
@@ -61,7 +72,11 @@ main() {
 		fail "cannot download $base/download/v$version/$name.tar.gz.sha256"
 
 	expected=$(cut -d ' ' -f 1 <"$tmp/$name.tar.gz.sha256")
-	actual=$(sha256sum "$tmp/$name.tar.gz" | cut -d ' ' -f 1)
+	if command -v sha256sum >/dev/null 2>&1; then
+		actual=$(sha256sum "$tmp/$name.tar.gz" | cut -d ' ' -f 1)
+	else
+		actual=$(shasum -a 256 "$tmp/$name.tar.gz" | cut -d ' ' -f 1)
+	fi
 	[ "$expected" = "$actual" ] ||
 		fail "checksum mismatch for $name.tar.gz: expected $expected, got $actual"
 	tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
@@ -82,7 +97,7 @@ main() {
 		printf '  export PATH="$HOME/.local/bin:$PATH"\n'
 		;;
 	esac
-	say "to run the daemon at boot: herder service install"
+	say "to run the daemon at boot or login: herder service install"
 }
 
 main "$@"

@@ -60,7 +60,7 @@ enum Command {
         #[command(subcommand)]
         command: vault::Command,
     },
-    /// Manage the systemd user service that runs the daemon at boot.
+    /// Manage the service that runs the daemon at boot: systemd on Linux, launchd on macOS.
     Service {
         #[command(subcommand)]
         action: service::Action,
