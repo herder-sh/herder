@@ -333,7 +333,9 @@ fn logging_in(terminals: &Terminals) -> Vec<AccountId> {
         .into_iter()
         .filter_map(|terminal| match terminal.purpose {
             TerminalPurpose::Login { account_id } => Some(account_id),
-            TerminalPurpose::Shell { .. } | TerminalPurpose::Install { .. } => None,
+            TerminalPurpose::Shell { .. }
+            | TerminalPurpose::Install { .. }
+            | TerminalPurpose::AwsLogin { .. } => None,
         })
         .collect()
 }

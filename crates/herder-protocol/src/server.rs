@@ -429,6 +429,36 @@ pub enum TerminalPurpose {
         /// The provider being installed or updated.
         provider: Provider,
     },
+    /// The AWS CLI's own IAM Identity Center sign-in for a profile, run for the owner.
+    AwsLogin {
+        /// The profile being signed in.
+        profile: String,
+        /// The device code to approve, once the CLI has printed it; the terminal list is sent
+        /// again when it becomes known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<AwsDeviceCode>,
+    },
+}
+
+/// The device code an `aws sso login --use-device-code` prints for the owner to approve in a
+/// browser; a public, short-lived prompt, never a token.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AwsDeviceCode {
+    /// The page that approves the code, with the code already in it when the CLI prints such
+    /// a link, else the verification page itself.
+    pub verification_url: String,
+    /// The code to approve.
+    pub user_code: String,
+}
+
+/// A profile of a host's `~/.aws/config`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AwsProfile {
+    /// The profile's name, `default` included.
+    pub name: String,
+    /// Whether it signs in through IAM Identity Center, having an `sso_session` or
+    /// `sso_start_url`.
+    pub sso: bool,
 }
 
 /// What an accepted command produced.
@@ -442,8 +472,8 @@ pub enum CommandResult {
         /// The new session.
         session_id: SessionId,
     },
-    /// A terminal was opened, by `open_terminal`, `add_account` or `log_in_account`, and this
-    /// connection attached to it.
+    /// A terminal was opened, by `open_terminal`, `add_account`, `install_provider`,
+    /// `log_in_account` or `aws_sso_login`, and this connection attached to it.
     TerminalOpened {
         /// The new terminal.
         terminal_id: TerminalId,
@@ -461,6 +491,11 @@ pub enum CommandResult {
         path: String,
         /// Its entries, ordered by name.
         entries: Vec<DirectoryEntry>,
+    },
+    /// The AWS profiles of this host, answering `list_aws_profiles`.
+    AwsProfiles {
+        /// The profiles, in the order the config file has them.
+        profiles: Vec<AwsProfile>,
     },
     /// A session was forked onto this daemon's host, answering `fork_session`; the fork is in
     /// the session list.

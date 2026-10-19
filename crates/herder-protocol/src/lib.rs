@@ -53,9 +53,10 @@ pub use secrets::{
     SecretSet, SecretValue, is_valid_secret_name, is_valid_secret_set_name,
 };
 pub use server::{
-    Account, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo, FailoverSettings, FleetHost,
-    HostReplication, HostUsage, LinkedVault, ProviderStatus, QueuedPrompt, Role, ServerHello,
-    ServerMessage, SessionHead, Terminal, TerminalPurpose, UsageWindow, VaultStatus, VaultVolume,
+    Account, AwsDeviceCode, AwsProfile, CommandResult, DirectoryEntry, ErrorCode, ErrorInfo,
+    FailoverSettings, FleetHost, HostReplication, HostUsage, LinkedVault, ProviderStatus,
+    QueuedPrompt, Role, ServerHello, ServerMessage, SessionHead, Terminal, TerminalPurpose,
+    UsageWindow, VaultStatus, VaultVolume,
 };
 pub use settings::{
     BackupSettings, DaemonSettings, FollowUpSettings, LogFormat, LogSettings, ProjectDiscovery,
