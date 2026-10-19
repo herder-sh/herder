@@ -101,8 +101,8 @@ struct SessionView: View {
             .defaultScrollAnchor(.bottom)
             .scrollDismissesKeyboard(.interactively)
             .accessibilityIdentifier("transcript")
-            .modifier(FollowsGrowth(key: key, scroll: $scroll, top: top) { id in
-                window.scrolled(to: id, in: blocks, of: key)
+            .modifier(FollowsGrowth(key: key, scroll: scroll, top: top) { id in
+                if window.needsMore(at: id, in: blocks, of: key) { window.extend(key) }
             })
             .id(key)
             .onChange(of: sent) { proxy.scrollTo(TranscriptScroll.end, anchor: .bottom) }
@@ -476,7 +476,7 @@ struct SessionView: View {
 /// supports it.
 private struct FollowsGrowth: ViewModifier {
     let key: SessionKey
-    @Binding var scroll: TranscriptScroll
+    let scroll: TranscriptScroll
     let top: TranscriptTop
     /// Told the block at the top of the view as it changes.
     let scrolled: (String?) -> Void
@@ -504,7 +504,9 @@ private struct FollowsGrowth: ViewModifier {
 /// Where each session's transcript was scrolled, so coming back to one lands where it was left.
 /// It is scrolled there once, not bound as the scroll position, so the view still follows
 /// new output and sends: a bound position pins its block in place as the transcript grows.
-struct TranscriptScroll {
+/// A class, not observed: it is told where the view is on every scroll, and nothing drawn reads
+/// that; as a value in the view's state, each time it was told drew the whole session again.
+final class TranscriptScroll {
     /// The id of the transcript's end, where a send scrolls.
     static let end = "transcript-end"
 
@@ -514,20 +516,20 @@ struct TranscriptScroll {
     /// Where the session being shown again lands, until its transcript appears.
     private var landing: String?
 
-    mutating func saw(_ top: String?, in key: SessionKey) { tops[key] = top }
+    func saw(_ top: String?, in key: SessionKey) { tops[key] = top }
 
-    mutating func scrolled(_ key: SessionKey, atEnd: Bool) {
+    func scrolled(_ key: SessionKey, atEnd: Bool) {
         if atEnd { scrolledUp.remove(key) } else { scrolledUp.insert(key) }
     }
 
     /// Shows a session again: back where it was left scrolled up, else at its end, following
     /// what comes. Decided now, as its new transcript reports itself at the end first.
-    mutating func show(_ key: SessionKey) {
+    func show(_ key: SessionKey) {
         landing = scrolledUp.contains(key) ? tops[key] : nil
     }
 
     /// The block to scroll to the top as the transcript appears, once.
-    mutating func land() -> String? {
+    func land() -> String? {
         defer { landing = nil }
         return landing
     }

@@ -8,7 +8,7 @@ struct TranscriptScrollTests {
     let child = SessionKey(hostId: "h", sessionId: "01C")
 
     @Test func aSessionLeftScrolledUpLandsWhereItWasOnce() {
-        var scroll = TranscriptScroll()
+        let scroll = TranscriptScroll()
         scroll.saw("b30", in: parent)
         scroll.scrolled(parent, atEnd: false)
         scroll.saw("c1", in: child)
@@ -22,7 +22,7 @@ struct TranscriptScrollTests {
     }
 
     @Test func aSessionLeftAtItsEndOpensAtItsEndAndFollows() {
-        var scroll = TranscriptScroll()
+        let scroll = TranscriptScroll()
         scroll.saw("b30", in: parent)
         scroll.scrolled(parent, atEnd: false)
         scroll.saw("b52", in: parent)
@@ -34,7 +34,7 @@ struct TranscriptScrollTests {
     }
 
     @Test func eachSessionKeepsItsOwnPlace() {
-        var scroll = TranscriptScroll()
+        let scroll = TranscriptScroll()
         scroll.saw("b30", in: parent)
         scroll.scrolled(parent, atEnd: false)
         scroll.saw("c4", in: child)
