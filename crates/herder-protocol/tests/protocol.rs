@@ -374,6 +374,12 @@ fn client_fixtures() -> Vec<ClientMessage> {
             cols: 120,
             rows: 40,
         }),
+        command(CommandBody::ListAwsProfiles),
+        command(CommandBody::AwsSsoLogin {
+            profile: "prod-admin".into(),
+            cols: 120,
+            rows: 40,
+        }),
         command(CommandBody::SetAccountSettings {
             account_id: AccountId::new("01J9ACCOUNT"),
             label: "Personal".into(),
@@ -617,6 +623,21 @@ fn server_fixtures() -> Vec<ServerMessage> {
             command_id: CommandId::new("01J9COMMAND"),
             result: CommandResult::TerminalOpened {
                 terminal_id: terminal_id(),
+            },
+        },
+        ServerMessage::CommandAccepted {
+            command_id: CommandId::new("01J9COMMAND"),
+            result: CommandResult::AwsProfiles {
+                profiles: vec![
+                    AwsProfile {
+                        name: "default".into(),
+                        sso: false,
+                    },
+                    AwsProfile {
+                        name: "prod-admin".into(),
+                        sso: true,
+                    },
+                ],
             },
         },
         ServerMessage::CommandAccepted {
@@ -1078,6 +1099,25 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     terminal_id: TerminalId::new("01J9TERMINAL3"),
                     purpose: TerminalPurpose::Install {
                         provider: Provider::Cursor,
+                    },
+                },
+                Terminal {
+                    terminal_id: TerminalId::new("01J9TERMINAL4"),
+                    purpose: TerminalPurpose::AwsLogin {
+                        profile: "prod-admin".into(),
+                        device: None,
+                    },
+                },
+                Terminal {
+                    terminal_id: TerminalId::new("01J9TERMINAL5"),
+                    purpose: TerminalPurpose::AwsLogin {
+                        profile: "prod-admin".into(),
+                        device: Some(AwsDeviceCode {
+                            verification_url:
+                                "https://device.sso.eu-west-1.amazonaws.com/?user_code=ABCD-EFGH"
+                                    .into(),
+                            user_code: "ABCD-EFGH".into(),
+                        }),
                     },
                 },
             ],
@@ -3530,5 +3570,46 @@ fn secret_fetches_have_their_wire_form() {
                 "secret": "prod/DB_URL",
             },
         })
+    );
+}
+
+#[test]
+fn aws_sign_in_wire_shape() {
+    let command = CommandBody::AwsSsoLogin {
+        profile: "prod-admin".into(),
+        cols: 120,
+        rows: 40,
+    };
+    assert_eq!(
+        serde_json::to_value(&command).unwrap(),
+        json!({"type": "aws_sso_login", "profile": "prod-admin", "cols": 120, "rows": 40})
+    );
+    let purpose = TerminalPurpose::AwsLogin {
+        profile: "prod-admin".into(),
+        device: Some(AwsDeviceCode {
+            verification_url: "https://device.sso.eu-west-1.amazonaws.com/?user_code=ABCD-EFGH"
+                .into(),
+            user_code: "ABCD-EFGH".into(),
+        }),
+    };
+    assert_eq!(
+        serde_json::to_value(&purpose).unwrap(),
+        json!({
+            "type": "aws_login",
+            "profile": "prod-admin",
+            "device": {
+                "verification_url": "https://device.sso.eu-west-1.amazonaws.com/?user_code=ABCD-EFGH",
+                "user_code": "ABCD-EFGH",
+            },
+        })
+    );
+    let waiting: TerminalPurpose =
+        serde_json::from_value(json!({"type": "aws_login", "profile": "prod-admin"})).unwrap();
+    assert_eq!(
+        waiting,
+        TerminalPurpose::AwsLogin {
+            profile: "prod-admin".into(),
+            device: None,
+        }
     );
 }

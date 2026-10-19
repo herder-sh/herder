@@ -1181,6 +1181,53 @@
           ]
         },
         {
+          "description": "List the AWS profiles of this host's `~/.aws/config`, to pick one to sign in to;\nowners only. Answered with `aws_profiles`, an empty list when the file is absent. It\nchanges nothing, so a resend is answered afresh.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "list_aws_profiles"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Sign this host in to AWS IAM Identity Center: run the unmodified `aws sso login\n--profile <profile> --use-device-code --no-browser` in a terminal this connection is\nattached to; owners only. herder never reads the tokens it caches; the terminal's\npurpose carries the device code once the CLI prints it, and the terminal's\n`terminal_closed` exit code tells whether the sign-in succeeded. Answered with\n`terminal_opened`. Refused with `unsupported` when `aws` is not installed, and\n`bad_request` for a profile the config does not have.",
+          "type": "object",
+          "properties": {
+            "cols": {
+              "description": "Width in columns.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "profile": {
+              "description": "Profile to sign in, as `list_aws_profiles` names it.",
+              "type": "string"
+            },
+            "rows": {
+              "description": "Height in rows.",
+              "type": "integer",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "aws_sso_login"
+            }
+          },
+          "required": [
+            "type",
+            "profile",
+            "cols",
+            "rows"
+          ]
+        },
+        {
           "description": "Update an existing account's label, config directory and role in rotation; owners\nonly. The id and provider stay fixed. Directory changes require all sessions on this\ndaemon archived. Omit config_dir to use the provider's default login. Answered with\napplied and accounts.",
           "type": "object",
           "properties": {

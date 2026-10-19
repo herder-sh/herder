@@ -10,19 +10,19 @@ use herder_client_core::{
 };
 use herder_protocol::{
     Account, AccountId, AccountSkills, AgentMessage, Answer, Answerer, ApprovalDecision,
-    ApprovalId, ApprovalOutcome, Attachment, AttachmentId, BackupSettings, Bytes, CiStatus,
-    CommandBody, CommandResult, Constraint, Container, ContainerState, DaemonSettings,
-    DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, Event, EventBody,
-    FailoverSettings, FailoverTotal, FleetHost, FollowUp, FollowUpReason, FollowUpSettings,
-    HistoryPart, HostId, HostReplication, HostResources, HostUsage, Image, Item, ItemBody, ItemId,
-    LibrarySkill, LinkedVault, LogFormat, LogSettings, Mergeable, PermissionMode, PrState,
-    Pressure, Project, ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary,
-    ProviderReload, ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings,
-    ReviewStatus, Role, Route, SecretAccess, SecretInfo, SecretSet, SecretValue, SessionHead,
-    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
-    SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
-    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
-    VaultVolume,
+    ApprovalId, ApprovalOutcome, Attachment, AttachmentId, AwsDeviceCode, AwsProfile,
+    BackupSettings, Bytes, CiStatus, CommandBody, CommandResult, Constraint, Container,
+    ContainerState, DaemonSettings, DirectoryEntry, ErrorClass, ErrorCode, ErrorInfo,
+    EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
+    FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
+    HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings,
+    Mergeable, PermissionMode, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile,
+    PromptId, Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
+    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
+    SecretSet, SecretValue, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage,
+    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
+    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
+    UsageWindow, UserId, VaultStatus, VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -772,6 +772,12 @@ pub enum CommandBody {
         cols: u16,
         rows: u16,
     },
+    ListAwsProfiles,
+    AwsSsoLogin {
+        profile: String,
+        cols: u16,
+        rows: u16,
+    },
     AttachTerminal {
         terminal_id: TerminalId,
     },
@@ -838,6 +844,9 @@ pub enum CommandResult {
     Directory {
         path: String,
         entries: Vec<DirectoryEntry>,
+    },
+    AwsProfiles {
+        profiles: Vec<AwsProfile>,
     },
     ProjectAdded {
         project_id: ProjectId,
@@ -1242,9 +1251,31 @@ pub struct Terminal {
 
 #[uniffi::remote(Enum)]
 pub enum TerminalPurpose {
-    Shell { session_id: SessionId },
-    Login { account_id: AccountId },
-    Install { provider: Provider },
+    Shell {
+        session_id: SessionId,
+    },
+    Login {
+        account_id: AccountId,
+    },
+    Install {
+        provider: Provider,
+    },
+    AwsLogin {
+        profile: String,
+        device: Option<AwsDeviceCode>,
+    },
+}
+
+#[uniffi::remote(Record)]
+pub struct AwsDeviceCode {
+    pub verification_url: String,
+    pub user_code: String,
+}
+
+#[uniffi::remote(Record)]
+pub struct AwsProfile {
+    pub name: String,
+    pub sso: bool,
 }
 
 #[uniffi::remote(Record)]

@@ -403,6 +403,25 @@ pub enum CommandBody {
         /// Height in rows.
         rows: u16,
     },
+    /// List the AWS profiles of this host's `~/.aws/config`, to pick one to sign in to;
+    /// owners only. Answered with `aws_profiles`, an empty list when the file is absent. It
+    /// changes nothing, so a resend is answered afresh.
+    ListAwsProfiles,
+    /// Sign this host in to AWS IAM Identity Center: run the unmodified `aws sso login
+    /// --profile <profile> --use-device-code --no-browser` in a terminal this connection is
+    /// attached to; owners only. herder never reads the tokens it caches; the terminal's
+    /// purpose carries the device code once the CLI prints it, and the terminal's
+    /// `terminal_closed` exit code tells whether the sign-in succeeded. Answered with
+    /// `terminal_opened`. Refused with `unsupported` when `aws` is not installed, and
+    /// `bad_request` for a profile the config does not have.
+    AwsSsoLogin {
+        /// Profile to sign in, as `list_aws_profiles` names it.
+        profile: String,
+        /// Width in columns.
+        cols: u16,
+        /// Height in rows.
+        rows: u16,
+    },
     /// Update an existing account's label, config directory and role in rotation; owners
     /// only. The id and provider stay fixed. Directory changes require all sessions on this
     /// daemon archived. Omit config_dir to use the provider's default login. Answered with
