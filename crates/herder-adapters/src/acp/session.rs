@@ -136,8 +136,14 @@ pub(super) async fn start(
         }
         let takes_images = init.agent_capabilities.prompt_capabilities.image;
         images.store(takes_images, Ordering::Relaxed);
-        let new: NewSessionResponse =
-            call(&mut rpc, "session/new", schema::new_session(&request.cwd)).await?;
+        let mcp = &init.agent_capabilities.mcp_capabilities;
+        let new_session = schema::new_session(
+            &request.cwd,
+            request.mcp.as_ref(),
+            &request.mcp_servers,
+            mcp,
+        );
+        let new: NewSessionResponse = call(&mut rpc, "session/new", new_session).await?;
         let mut option = model_option(&new.config_options);
         let mut model = option.as_ref().map(|(_, current)| current.clone());
         if let Some(wanted) = &request.model {

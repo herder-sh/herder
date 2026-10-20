@@ -54,6 +54,8 @@ says what exists, why, and how it maps to foreign languages.
   Publishing artifacts added, compatibly, `EventBody::ArtifactPublished`, whose attachment
   `get_attachment` fetches like a prompt's file, `EventBody::attachments`, and
   `Project.private_artifacts` with the `private_artifacts` of `SetProjectSettings`.
+  MCP servers added, compatibly, `DaemonSettings.mcp_servers` (`McpServerSettings`,
+  `McpTransport`, `SecretRef`).
 
 ## Shape, and how it maps to UniFFI
 
@@ -480,6 +482,18 @@ place, and answers the same way; a value the daemon cannot run with is refused w
 reconnect as after any restart. Accounts, projects and the vault link keep their own commands.
 Only owners may do any of this. The wire change is additive (protocol 4) and this API is
 unchanged.
+
+`DaemonSettings.mcp_servers` is the user's MCP servers, which every session's agent gets next
+to herder's own, whatever its provider and account: each a `McpServerSettings` with a `name`
+(ASCII letters, digits, `-` and `_`, unique, never `herder`), `enabled`, an optional `project`
+whose sessions alone get it, and a `transport`: `McpTransport::Stdio { command, args, env,
+secrets }`, a program the agent runs, whose `secrets` (`SecretRef`, `NAME` or `set/NAME`) come
+from the host's vault as variables of their names; or `Http { url, headers }` and
+`Sse { url, headers }`, a server at a URL. A client lists them from `Settings`, and adds,
+changes, removes or toggles them by sending `SetSettings` with the list changed; an invalid
+server, or a name used twice, is refused with `bad_request`. A change applies without a
+restart, to each session's agent from its next start, so it does not set `restart_required`.
+`env` and `headers` are kept in the daemon's config file as given, and sent back to owners.
 
 ### Turn usage (client API 10)
 

@@ -27,6 +27,10 @@
 //! The process runs with exactly [`StartRequest::env`] plus `CODEX_HOME` set to the account's
 //! config dir, when it has one. The adapter never looks inside that dir.
 //!
+//! herder's MCP server and the user's ([`StartRequest::mcp_servers`]) go in `thread/start`'s
+//! (or `thread/resume`'s) `config` as `mcp_servers.<name>` overrides, next to the servers of
+//! the account's `config.toml`; Codex reaches no SSE server, so those are left out.
+//!
 //! # Permission modes
 //!
 //! Each [`PermissionMode`] is a Codex approval policy plus sandbox:
@@ -65,11 +69,12 @@ mod wire;
 
 use std::path::PathBuf;
 
-use herder_protocol::{ErrorClass, PermissionMode, TurnError};
+use herder_protocol::{ErrorClass, HERDER_MCP_SERVER, PermissionMode, TurnError};
+use serde_json::{Map, Value, json};
 use tokio::process::Command;
 
 use crate::transport::Transport;
-use crate::{AccountUsage, Adapter, StartFuture, StartRequest};
+use crate::{AccountUsage, Adapter, McpTransport, StartFuture, StartRequest};
 
 use wire::{AskForApproval, CodexTurnError, SandboxMode, SandboxPolicy};
 
@@ -154,6 +159,39 @@ pub fn command(program: &std::path::Path, request: &StartRequest) -> Command {
         command.env("CODEX_HOME", dir);
     }
     command
+}
+
+/// Codex's limit on one herder tool call, in seconds: `wait_for` blocks up to 600 s, plus a
+/// minute of slack; Codex's default is 60 s.
+const MCP_TOOL_TIMEOUT_SECS: u64 = 660;
+
+/// The thread config that registers herder's MCP server as `herder` and the user's under their
+/// names, as dotted `mcp_servers.<name>` keys, so the servers in the account's own
+/// `config.toml` stay. Codex reaches no SSE server, so those are left out. It goes to Codex
+/// in `thread/start` on stdin, keeping variables and headers off the command line.
+fn mcp_config(request: &StartRequest) -> Map<String, Value> {
+    let herder = request.mcp.iter().map(|mcp| {
+        let server = json!({
+            "command": mcp.command.to_string_lossy(),
+            "args": mcp.args,
+            "tool_timeout_sec": MCP_TOOL_TIMEOUT_SECS,
+        });
+        (HERDER_MCP_SERVER.to_owned(), server)
+    });
+    let user = request.mcp_servers.iter().filter_map(|server| {
+        let config = match &server.transport {
+            McpTransport::Stdio { command, args, env } => {
+                json!({"command": command, "args": args, "env": env})
+            }
+            McpTransport::Http { url, headers } => json!({"url": url, "http_headers": headers}),
+            McpTransport::Sse { .. } => return None,
+        };
+        Some((server.name.clone(), config))
+    });
+    herder
+        .chain(user)
+        .map(|(name, server)| (format!("mcp_servers.{name}"), server))
+        .collect()
 }
 
 /// The Codex approval policy and sandbox for `mode`; see the module docs for the table.
@@ -317,6 +355,7 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
@@ -353,6 +392,7 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
@@ -372,6 +412,7 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };

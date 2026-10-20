@@ -1,9 +1,11 @@
 //! The daemon's own settings, as clients read and change them.
 
+use std::collections::HashMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{AccountId, FailoverSettings, Provider};
+use crate::{AccountId, FailoverSettings, ProjectId, Provider, SecretRef};
 
 /// Every daemon-wide setting of the daemon's config file, as values in effect when the file
 /// is loaded: a key the file leaves out shows its default. Accounts, projects and the vault
@@ -30,6 +32,10 @@ pub struct DaemonSettings {
     /// When the daemon prompts an idle agent on its own; the defaults from daemons before it.
     #[serde(default)]
     pub follow_ups: FollowUpSettings,
+    /// The user's MCP servers, which every session's CLI gets next to herder's own, in this
+    /// order; none from daemons before them.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerSettings>,
 }
 
 /// The `[log]` table.
@@ -145,6 +151,93 @@ impl Default for FollowUpSettings {
             pr_events: true,
             stall_after_secs: 0,
             max_stall_nudges: 2,
+        }
+    }
+}
+
+/// The name herder's own MCP server is registered under; no user server may take it.
+pub const HERDER_MCP_SERVER: &str = "herder";
+
+/// Whether `name` may name a user's MCP server: 1 to 64 ASCII letters, digits, `-` and `_`,
+/// which every provider takes in a tool name, and not [`HERDER_MCP_SERVER`].
+pub fn is_valid_mcp_server_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        && name != HERDER_MCP_SERVER
+}
+
+/// One `[[mcp_servers]]` entry: an MCP server of the user's that sessions' CLIs connect to,
+/// whatever their provider and account. It is passed to each CLI as it starts, so a change
+/// reaches a running session when its CLI next starts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct McpServerSettings {
+    /// What the CLI registers it as, unique among the servers; see
+    /// [`is_valid_mcp_server_name`].
+    pub name: String,
+    /// Whether sessions get it; a disabled server stays configured.
+    pub enabled: bool,
+    /// The project whose sessions get it; every session, chats too, when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectId>,
+    /// How the CLI reaches it.
+    pub transport: McpTransport,
+}
+
+/// How a CLI reaches an MCP server.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpTransport {
+    /// A program the CLI runs, speaking MCP on its stdin and stdout.
+    Stdio {
+        /// The program, a name looked up on `PATH`, an absolute path, or one starting with
+        /// `~/`.
+        command: String,
+        /// Its arguments.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Variables added to its environment, kept in the daemon's config file as given.
+        #[serde(default)]
+        env: HashMap<String, String>,
+        /// Secrets from the host's vault, each added to its environment as the variable of
+        /// its name: the program runs through `herder secret run`, so a value is never in
+        /// the config file, on a command line or before an agent.
+        #[serde(default)]
+        secrets: Vec<SecretRef>,
+    },
+    /// A server at a URL, over MCP's streamable HTTP transport.
+    Http {
+        /// Its `http` or `https` URL.
+        url: String,
+        /// Headers sent with every request, such as `Authorization`, kept in the daemon's
+        /// config file as given.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    /// A server at a URL, over MCP's older HTTP with server-sent events transport. Codex
+    /// cannot reach one, so its sessions go without it.
+    Sse {
+        /// Its `http` or `https` URL.
+        url: String,
+        /// Headers sent with every request, kept in the daemon's config file as given.
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_names_are_tool_name_safe_and_never_herder() {
+        for name in ["github", "my_server-2", "A"] {
+            assert!(is_valid_mcp_server_name(name), "{name}");
+        }
+        let long = "x".repeat(65);
+        for name in ["", "herder", "a.b", "a b", "ä", long.as_str()] {
+            assert!(!is_valid_mcp_server_name(name), "{name}");
         }
     }
 }

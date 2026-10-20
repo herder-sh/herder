@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use herder_adapters::acp::{AcpAdapter, AgentProfile};
 use herder_adapters::{
-    Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest,
+    Adapter, AdapterCommand, AdapterEvent, AdapterSession, Capabilities, McpServer, McpTransport,
+    StartRequest, UserMcpServer,
 };
 use herder_protocol::{
     ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
@@ -40,6 +41,7 @@ fn request(mode: PermissionMode) -> StartRequest {
         seed: Vec::new(),
         resume: None,
         mcp: None,
+        mcp_servers: Vec::new(),
         launcher: Vec::new(),
         skills: None,
     }
@@ -134,6 +136,46 @@ fn message(id: &str, text: &str) -> Item {
 
 fn model(name: &str) -> AdapterEvent {
     AdapterEvent::ModelChanged { model: name.into() }
+}
+
+#[tokio::test]
+async fn session_new_carries_herders_and_the_users_mcp_servers() {
+    let request = StartRequest {
+        mcp: Some(McpServer {
+            command: PathBuf::from("/usr/bin/herder"),
+            args: ["mcp", "--data-dir", "/data", "--session", "s1"]
+                .map(String::from)
+                .to_vec(),
+        }),
+        mcp_servers: vec![
+            UserMcpServer {
+                name: "github".into(),
+                transport: McpTransport::Stdio {
+                    command: "github-mcp-server".into(),
+                    args: vec!["stdio".into()],
+                    env: [("GITHUB_HOST".to_owned(), "github.com".to_owned())].into(),
+                },
+            },
+            UserMcpServer {
+                name: "linear".into(),
+                transport: McpTransport::Http {
+                    url: "https://mcp.linear.app/mcp".into(),
+                    headers: [("Authorization".to_owned(), "Bearer token".to_owned())].into(),
+                },
+            },
+            UserMcpServer {
+                name: "legacy".into(),
+                transport: McpTransport::Sse {
+                    url: "http://127.0.0.1:9000/sse".into(),
+                    headers: BTreeMap::new(),
+                },
+            },
+        ],
+        ..request(PermissionMode::Ask)
+    };
+    // The replay checks that `session/new` names every server.
+    let session = start("opencode/mcp_servers.jsonl", request).await;
+    shutdown(session).await;
 }
 
 #[tokio::test]

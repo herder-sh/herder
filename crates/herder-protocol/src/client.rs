@@ -452,9 +452,11 @@ pub enum CommandBody {
     GetSettings,
     /// Change the daemon's settings to `settings`; owners only. Only the values that differ
     /// from the config file's are written, in place, keeping the rest of the file as it is.
-    /// Answered with `settings`: a change to `resources.max_turns` applies at once, the rest
-    /// once the daemon restarts. Refused with `bad_request`, changing nothing, when a value is
-    /// out of range, names an unknown account, or `listen` is not an address of this machine.
+    /// Answered with `settings`: a change to `resources.max_turns` applies at once, one to
+    /// `mcp_servers` to each session's CLI from its next start, the rest once the daemon
+    /// restarts. Refused with `bad_request`, changing nothing, when a value is out of range,
+    /// names an unknown account, `listen` is not an address of this machine, or an MCP server
+    /// is invalid or named twice.
     SetSettings {
         /// Every setting, as it is to be.
         settings: Box<DaemonSettings>,

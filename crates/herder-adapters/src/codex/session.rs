@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use super::wire::{self, Incoming, RpcError, ThreadItem, ToolStatus};
-use super::{classify, policy, sandbox_policy};
+use super::{classify, mcp_config, policy, sandbox_policy};
 use crate::price;
 use crate::transport::{Exit, Transport};
 use crate::{
@@ -225,6 +225,7 @@ impl Session {
         let (approval_policy, sandbox) = policy(self.mode);
         let cwd = request.cwd.to_string_lossy();
         let model = self.model.clone();
+        let config = mcp_config(request);
         let thread = match &request.resume {
             Some(thread_id) => self
                 .call(
@@ -238,6 +239,7 @@ impl Session {
                         approval_policy,
                         sandbox,
                         exclude_turns: true,
+                        config: &config,
                     },
                 )
                 .await?
@@ -252,6 +254,7 @@ impl Session {
                         cwd: &cwd,
                         approval_policy,
                         sandbox,
+                        config: &config,
                     },
                 )
                 .await?

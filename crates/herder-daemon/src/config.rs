@@ -70,6 +70,36 @@
 //! max_stall_nudges = 2  # most prompts a stalled agent gets before it is left to a user
 //! ```
 //!
+//! # MCP servers
+//!
+//! Each `[[mcp_servers]]` entry is an MCP server every session's CLI gets next to herder's own,
+//! whatever its provider and account; see [`crate::mcp::servers`]:
+//!
+//! ```toml
+//! [[mcp_servers]]
+//! name = "github"                  # what the CLI calls it: letters, digits, - and _; never
+//!                                  # "herder"
+//! command = "github-mcp-server"    # a program the CLI runs, over stdio: a name on `PATH`, an
+//! args = ["stdio"]                 # absolute path or one starting with ~/
+//! env = { GITHUB_HOST = "github.com" }
+//! secrets = ["GITHUB_PERSONAL_ACCESS_TOKEN"] # from the host's vault, each as the variable
+//!                                  # of its name, through `herder secret run`
+//!
+//! [[mcp_servers]]
+//! name = "linear"
+//! url = "https://mcp.linear.app/mcp" # a server at a URL, over streamable HTTP
+//! headers = { Authorization = "Bearer ..." }
+//! transport = "sse"                # the older HTTP with server-sent events instead
+//! project = "github.com/herder-sh/herder" # only this project's sessions get it; every
+//!                                  # session by default
+//! enabled = false                  # kept, but no session gets it; true by default
+//! ```
+//!
+//! `env` and `headers` are kept in this file as given, so a secret is better in `secrets`,
+//! which only a stdio server takes. Owners list, add, change, remove and turn servers on and
+//! off from a client, as part of the settings; a change reaches each session when its CLI next
+//! starts.
+//!
 //! # Resources
 //!
 //! The `[resources]` table sets the limits every session's CLI runs under and the budget turns
@@ -170,8 +200,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use herder_protocol::{
-    AccountId, BackupSettings, DaemonSettings, FollowUpSettings, LogSettings, PermissionMode,
-    ProjectDiscovery, ProjectId, Provider, ProviderBinary, ResourceSettings, TitleSettings,
+    AccountId, BackupSettings, DaemonSettings, FollowUpSettings, LogSettings, McpServerSettings,
+    McpTransport, PermissionMode, ProjectDiscovery, ProjectId, Provider, ProviderBinary,
+    ResourceSettings, SecretRef, TitleSettings, is_valid_mcp_server_name,
 };
 use serde::Deserialize;
 
@@ -214,6 +245,8 @@ pub struct Config {
     pub vault: Option<VaultConfig>,
     /// What a vault keeps, and for how long; read in vault mode only.
     pub retention: Retention,
+    /// The user's MCP servers, in file order, as written.
+    pub mcp_servers: Vec<McpServerSettings>,
 }
 
 /// The projects dir unless the `[projects]` table names another.
@@ -366,6 +399,7 @@ struct ConfigFile {
     project: Vec<ProjectFile>,
     mode: Mode,
     vault: Option<VaultFile>,
+    mcp_servers: Vec<McpServerFile>,
 }
 
 impl Default for ConfigFile {
@@ -387,6 +421,7 @@ impl Default for ConfigFile {
             project: Vec::new(),
             mode: Mode::default(),
             vault: None,
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -474,6 +509,42 @@ struct AccountFile {
     config_dir: Option<PathBuf>,
     #[serde(default)]
     fallback: bool,
+}
+
+/// One `[[mcp_servers]]` entry as written: `command` for a stdio server, `url` for one over
+/// HTTP.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpServerFile {
+    name: String,
+    #[serde(default = "enabled")]
+    enabled: bool,
+    project: Option<ProjectId>,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default)]
+    secrets: Vec<SecretRef>,
+    url: Option<String>,
+    transport: Option<McpTransportFile>,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+}
+
+/// An MCP server is on unless its entry says otherwise.
+fn enabled() -> bool {
+    true
+}
+
+/// `transport` of an `[[mcp_servers]]` entry; implied by `command` or `url` when absent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum McpTransportFile {
+    Stdio,
+    Http,
+    Sse,
 }
 
 /// One `[providers.<name>]` table as written.
@@ -576,6 +647,7 @@ impl Config {
                     .map_or(DEFAULT_ATTACHMENTS_CAP, |vault| vault.attachments_cap),
                 archive_retention_days: self.retention.archive_days,
             },
+            mcp_servers: self.mcp_servers.clone(),
         }
     }
 }
@@ -596,6 +668,7 @@ fn resolve(
     let projects = resolve_projects(file.projects, file.project, &accounts, env)?;
     let titles = resolve_titles(file.titles, &accounts)?;
     let (vault, retention) = resolve_vault(file.mode, file.vault)?;
+    let mcp_servers = resolve_mcp_servers(file.mcp_servers, env)?;
     Ok(Config {
         path,
         listen,
@@ -611,7 +684,121 @@ fn resolve(
         mode: file.mode,
         vault,
         retention,
+        mcp_servers,
     })
+}
+
+/// Validates the `[[mcp_servers]]` entries.
+fn resolve_mcp_servers(
+    entries: Vec<McpServerFile>,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Vec<McpServerSettings>> {
+    let mut names = HashSet::new();
+    entries
+        .into_iter()
+        .map(|entry| {
+            let name = entry.name.clone();
+            let server = resolve_mcp_server(entry, env)
+                .with_context(|| format!("mcp_servers entry {name:?}"))?;
+            ensure!(
+                names.insert(server.name.clone()),
+                "two mcp_servers entries are named {name:?}"
+            );
+            Ok(server)
+        })
+        .collect()
+}
+
+/// Validates one `[[mcp_servers]]` entry.
+fn resolve_mcp_server(
+    entry: McpServerFile,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<McpServerSettings> {
+    ensure!(
+        is_valid_mcp_server_name(&entry.name),
+        "name must be 1 to 64 letters, digits, '-' or '_', and not {:?}",
+        herder_protocol::HERDER_MCP_SERVER
+    );
+    let kind = match (entry.transport, &entry.command, &entry.url) {
+        (Some(kind), _, _) => kind,
+        (None, Some(_), None) => McpTransportFile::Stdio,
+        (None, None, Some(_)) => McpTransportFile::Http,
+        _ => bail!("give it a `command` or a `url`"),
+    };
+    let transport = match kind {
+        McpTransportFile::Stdio => {
+            ensure!(
+                entry.url.is_none() && entry.headers.is_empty(),
+                "a stdio server takes no `url` or `headers`"
+            );
+            let command = entry.command.context("a stdio server needs a `command`")?;
+            mcp_command(&command, env)?;
+            for name in entry.env.keys() {
+                ensure!(
+                    !name.is_empty() && !name.contains(['=', '\0']),
+                    "env: {name:?} is not a variable name"
+                );
+            }
+            McpTransport::Stdio {
+                command,
+                args: entry.args,
+                env: entry.env,
+                secrets: entry.secrets,
+            }
+        }
+        McpTransportFile::Http | McpTransportFile::Sse => {
+            ensure!(
+                entry.command.is_none()
+                    && entry.args.is_empty()
+                    && entry.env.is_empty()
+                    && entry.secrets.is_empty(),
+                "a server at a URL takes no `command`, `args`, `env` or `secrets`"
+            );
+            let url = entry.url.context("a server over HTTP needs a `url`")?;
+            let parsed = url::Url::parse(&url).with_context(|| format!("url {url:?}"))?;
+            ensure!(
+                matches!(parsed.scheme(), "http" | "https"),
+                "url {url:?} is not http or https"
+            );
+            for name in entry.headers.keys() {
+                ensure!(
+                    !name.is_empty()
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_graphic() && byte != b':'),
+                    "headers: {name:?} is not a header name"
+                );
+            }
+            let headers = entry.headers;
+            match kind {
+                McpTransportFile::Sse => McpTransport::Sse { url, headers },
+                _ => McpTransport::Http { url, headers },
+            }
+        }
+    };
+    if let Some(project) = &entry.project {
+        ensure!(!project.as_str().is_empty(), "project is empty");
+    }
+    Ok(McpServerSettings {
+        name: entry.name,
+        enabled: entry.enabled,
+        project: entry.project,
+        transport,
+    })
+}
+
+/// The program a stdio MCP server's `command` names: a bare name, looked up on `PATH`, as it
+/// is; otherwise a path, with `~/` expanded, that must be absolute.
+pub(crate) fn mcp_command(
+    command: &str,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<PathBuf> {
+    let path = Path::new(command);
+    ensure!(!command.is_empty(), "command is empty");
+    if path.components().count() == 1 && !command.starts_with('~') {
+        return Ok(path.to_owned());
+    }
+    resolve_path(path, env).context("command")
 }
 
 /// Validates the `[vault]` table: a host's says where it replicates to, a vault's what it
@@ -1298,8 +1485,102 @@ pub fn set_settings(path: &Path, old: &DaemonSettings, new: &DaemonSettings) -> 
             let days = int(is.archive_retention_days)?;
             edit.set(&["vault"], "archive_retention_days", Some(days))?;
         }
+        if old.mcp_servers != new.mcp_servers {
+            set_mcp_servers(edit.doc, &old.mcp_servers, &new.mcp_servers, path)?;
+        }
         Ok(())
     })
+}
+
+/// Replaces the `[[mcp_servers]]` entries of `doc`, which resolve to `old`, with `new`. An
+/// entry `new` keeps unchanged stays as written, comments and all.
+fn set_mcp_servers(
+    doc: &mut toml_edit::DocumentMut,
+    old: &[McpServerSettings],
+    new: &[McpServerSettings],
+    path: &Path,
+) -> Result<()> {
+    let written = match doc.get("mcp_servers") {
+        Some(item) => item
+            .as_array_of_tables()
+            .with_context(|| {
+                format!(
+                    "mcp_servers in {} is not an array of tables",
+                    path.display()
+                )
+            })?
+            .iter()
+            .cloned()
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut entries = toml_edit::ArrayOfTables::new();
+    for server in new {
+        let kept = old
+            .iter()
+            .position(|was| was == server)
+            .and_then(|index| written.get(index).cloned());
+        entries.push(kept.unwrap_or_else(|| mcp_server_table(server)));
+    }
+    if entries.is_empty() {
+        doc.remove("mcp_servers");
+    } else {
+        doc.insert("mcp_servers", toml_edit::Item::ArrayOfTables(entries));
+    }
+    Ok(())
+}
+
+/// `server` as an `[[mcp_servers]]` entry, leaving out what is at its default.
+fn mcp_server_table(server: &McpServerSettings) -> toml_edit::Table {
+    fn map(map: &HashMap<String, String>) -> toml_edit::InlineTable {
+        let mut sorted: Vec<_> = map.iter().collect();
+        sorted.sort();
+        sorted
+            .into_iter()
+            .map(|(key, value)| (key.as_str(), toml_edit::Value::from(value.as_str())))
+            .collect()
+    }
+    let mut table = toml_edit::Table::new();
+    table.insert("name", toml_edit::value(server.name.as_str()));
+    if !server.enabled {
+        table.insert("enabled", toml_edit::value(false));
+    }
+    if let Some(project) = &server.project {
+        table.insert("project", toml_edit::value(project.as_str()));
+    }
+    match &server.transport {
+        McpTransport::Stdio {
+            command,
+            args,
+            env,
+            secrets,
+        } => {
+            table.insert("command", toml_edit::value(command.as_str()));
+            if !args.is_empty() {
+                table.insert("args", toml_edit::value(toml_edit::Array::from_iter(args)));
+            }
+            if !env.is_empty() {
+                table.insert("env", toml_edit::value(map(env)));
+            }
+            if !secrets.is_empty() {
+                let secrets = secrets.iter().map(ToString::to_string);
+                table.insert(
+                    "secrets",
+                    toml_edit::value(toml_edit::Array::from_iter(secrets)),
+                );
+            }
+        }
+        McpTransport::Http { url, headers } | McpTransport::Sse { url, headers } => {
+            table.insert("url", toml_edit::value(url.as_str()));
+            if matches!(server.transport, McpTransport::Sse { .. }) {
+                table.insert("transport", toml_edit::value("sse"));
+            }
+            if !headers.is_empty() {
+                table.insert("headers", toml_edit::value(map(headers)));
+            }
+        }
+    }
+    table
 }
 
 /// `value` as a TOML integer.
@@ -1829,6 +2110,7 @@ mod tests {
                 mode: Mode::Host,
                 vault: None,
                 retention: Retention::default(),
+                mcp_servers: Vec::new(),
             }
         );
     }
@@ -2260,6 +2542,190 @@ mod tests {
                 account: Some(AccountId::new("codex-main")),
             }
         );
+    }
+
+    #[test]
+    fn mcp_servers_are_loaded_in_order_with_their_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write(
+            tmp.path(),
+            "[[mcp_servers]]\nname = \"github\"\ncommand = \"~/bin/github-mcp\"\n\
+             args = [\"stdio\"]\nenv = { GITHUB_HOST = \"github.com\" }\n\
+             secrets = [\"GITHUB_TOKEN\", \"work/JIRA_TOKEN\"]\n\n\
+             [[mcp_servers]]\nname = \"linear\"\nurl = \"https://mcp.linear.app/mcp\"\n\
+             headers = { Authorization = \"Bearer t\" }\nenabled = false\n\
+             project = \"github.com/herder-sh/herder\"\n\n\
+             [[mcp_servers]]\nname = \"legacy\"\nurl = \"http://127.0.0.1:9000/sse\"\n\
+             transport = \"sse\"\n",
+        );
+        let config = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap();
+        assert_eq!(
+            config.settings().mcp_servers,
+            [
+                McpServerSettings {
+                    name: "github".into(),
+                    enabled: true,
+                    project: None,
+                    transport: McpTransport::Stdio {
+                        command: "~/bin/github-mcp".into(),
+                        args: vec!["stdio".into()],
+                        env: HashMap::from([("GITHUB_HOST".into(), "github.com".into())]),
+                        secrets: vec![
+                            "GITHUB_TOKEN".parse().unwrap(),
+                            "work/JIRA_TOKEN".parse().unwrap(),
+                        ],
+                    },
+                },
+                McpServerSettings {
+                    name: "linear".into(),
+                    enabled: false,
+                    project: Some(ProjectId::new("github.com/herder-sh/herder")),
+                    transport: McpTransport::Http {
+                        url: "https://mcp.linear.app/mcp".into(),
+                        headers: HashMap::from([("Authorization".into(), "Bearer t".into())]),
+                    },
+                },
+                McpServerSettings {
+                    name: "legacy".into(),
+                    enabled: true,
+                    project: None,
+                    transport: McpTransport::Sse {
+                        url: "http://127.0.0.1:9000/sse".into(),
+                        headers: HashMap::new(),
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_mcp_servers_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (entry, expected) in [
+            ("name = \"herder\"\ncommand = \"x\"", "not \"herder\""),
+            ("name = \"a.b\"\ncommand = \"x\"", "name must be"),
+            ("name = \"x\"", "give it a `command` or a `url`"),
+            (
+                "name = \"x\"\ncommand = \"x\"\nurl = \"https://e.com\"",
+                "give it a `command` or a `url`",
+            ),
+            (
+                "name = \"x\"\ncommand = \"x\"\nheaders = { A = \"b\" }",
+                "a stdio server takes no `url` or `headers`",
+            ),
+            (
+                "name = \"x\"\nurl = \"https://e.com\"\nsecrets = [\"TOKEN\"]",
+                "takes no `command`, `args`, `env` or `secrets`",
+            ),
+            (
+                "name = \"x\"\nurl = \"ftp://e.com\"",
+                "is not http or https",
+            ),
+            ("name = \"x\"\nurl = \"not a url\"", "url \"not a url\""),
+            ("name = \"x\"\ntransport = \"sse\"", "needs a `url`"),
+            ("name = \"x\"\ncommand = \"bin/x\"", "must be absolute"),
+            (
+                "name = \"x\"\ncommand = \"x\"\nsecrets = [\"lower\"]",
+                "is not a secret name",
+            ),
+            (
+                "name = \"x\"\nurl = \"https://e.com\"\nheaders = { \"A B\" = \"c\" }",
+                "is not a header name",
+            ),
+            (
+                "name = \"x\"\ncommand = \"x\"\ntimeout = 5",
+                "unknown field",
+            ),
+        ] {
+            let path = write(tmp.path(), &format!("[[mcp_servers]]\n{entry}\n"));
+            let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+            assert!(format!("{err:#}").contains(expected), "{entry}: {err:#}");
+        }
+        let twice = "[[mcp_servers]]\nname = \"x\"\ncommand = \"x\"\n\
+                     [[mcp_servers]]\nname = \"x\"\nurl = \"https://e.com\"\n";
+        let path = write(tmp.path(), twice);
+        let err = Config::load_with_env(Some(&path), env(&[("HOME", "/h")])).unwrap_err();
+        assert!(format!("{err:#}").contains("named \"x\""), "{err:#}");
+    }
+
+    #[test]
+    fn mcp_servers_are_added_changed_toggled_and_removed_from_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        let kept = "[[mcp_servers]]\nname = \"docs\" # the team's docs\n\
+                    url = \"https://docs.example.com/mcp\"\n\n\
+                    [[mcp_servers]]\nname = \"old\"\ncommand = \"old-server\"\n";
+        std::fs::write(&path, kept).unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+
+        let mut new = old.clone();
+        new.mcp_servers.retain(|server| server.name != "old");
+        new.mcp_servers.push(McpServerSettings {
+            name: "github".into(),
+            enabled: false,
+            project: Some(ProjectId::new("github.com/herder-sh/herder")),
+            transport: McpTransport::Stdio {
+                command: "github-mcp-server".into(),
+                args: vec!["stdio".into()],
+                env: HashMap::from([("B".into(), "2".into()), ("A".into(), "1".into())]),
+                secrets: vec!["GITHUB_TOKEN".parse().unwrap()],
+            },
+        });
+        new.mcp_servers.push(McpServerSettings {
+            name: "events".into(),
+            enabled: true,
+            project: None,
+            transport: McpTransport::Sse {
+                url: "https://events.example.com/sse".into(),
+                headers: HashMap::from([("Authorization".into(), "Bearer t".into())]),
+            },
+        });
+        let config = set_settings(&path, &old, &new).unwrap();
+        assert_eq!(config.settings(), new);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[[mcp_servers]]\nname = \"docs\" # the team's docs\n\
+             url = \"https://docs.example.com/mcp\"\n\n\
+             [[mcp_servers]]\nname = \"github\"\nenabled = false\n\
+             project = \"github.com/herder-sh/herder\"\ncommand = \"github-mcp-server\"\n\
+             args = [\"stdio\"]\nenv = { A = \"1\", B = \"2\" }\nsecrets = [\"GITHUB_TOKEN\"]\n\n\
+             [[mcp_servers]]\nname = \"events\"\nurl = \"https://events.example.com/sse\"\n\
+             transport = \"sse\"\nheaders = { Authorization = \"Bearer t\" }\n"
+        );
+
+        // Turned on, and the rest removed.
+        let mut on = new.clone();
+        on.mcp_servers.retain(|server| server.name == "github");
+        on.mcp_servers[0].enabled = true;
+        let config = set_settings(&path, &new, &on).unwrap();
+        assert_eq!(config.settings(), on);
+        let mut none = on.clone();
+        none.mcp_servers.clear();
+        set_settings(&path, &on, &none).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    #[test]
+    fn an_invalid_mcp_server_from_a_client_changes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "# mine\n").unwrap();
+        let old = Config::load_file(&path).unwrap().settings();
+        let server = |name: &str| McpServerSettings {
+            name: name.into(),
+            enabled: true,
+            project: None,
+            transport: McpTransport::Http {
+                url: "https://e.com/mcp".into(),
+                headers: HashMap::new(),
+            },
+        };
+        for servers in [vec![server("herder")], vec![server("x"), server("x")]] {
+            let mut new = old.clone();
+            new.mcp_servers = servers;
+            assert!(set_settings(&path, &old, &new).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "# mine\n");
+        }
     }
 
     #[test]

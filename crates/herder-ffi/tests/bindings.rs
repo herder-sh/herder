@@ -17,8 +17,9 @@ use herder_ffi::{
     pairing_uri_to_string, parse_pairing_link, parse_pairing_uri,
 };
 use herder_protocol::{
-    AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, PermissionMode,
-    Provider, Role, SessionSkill, SessionStatus, SkillSource, UsagePeriod, UsageTotal,
+    AccountId, CommandBody, CommandResult, DirectoryEntry, EventBody, ItemBody, McpServerSettings,
+    McpTransport, PermissionMode, Provider, Role, SessionSkill, SessionStatus, SkillSource,
+    UsagePeriod, UsageTotal,
 };
 use support::{ACCOUNT, DEMO_SKILLS, FakeDaemon, IMPORTED_SKILL, PROJECT_SKILL};
 
@@ -266,6 +267,39 @@ fn a_client_pairs_and_streams_a_session_without_a_runtime_of_its_callers() {
     }) {
         assert!(block_on(changes.next()));
     }
+
+    // An owner reads the MCP servers and adds one, which applies without a restart.
+    let read = |client: &Client| match block_on(client.send(host.clone(), CommandBody::GetSettings))
+        .unwrap()
+    {
+        CommandResult::Settings {
+            settings,
+            restart_required,
+            ..
+        } => (*settings, restart_required),
+        other => panic!("expected settings, got {other:?}"),
+    };
+    let (mut settings, _) = read(&client);
+    assert!(settings.mcp_servers.is_empty());
+    settings.mcp_servers.push(McpServerSettings {
+        name: "docs".into(),
+        enabled: true,
+        project: None,
+        transport: McpTransport::Stdio {
+            command: "docs-mcp".into(),
+            args: vec!["--stdio".into()],
+            env: [("DOCS_HOST".to_owned(), "docs.example.com".to_owned())].into(),
+            secrets: vec!["DOCS_TOKEN".parse().unwrap()],
+        },
+    });
+    block_on(client.send(
+        host.clone(),
+        CommandBody::SetSettings {
+            settings: Box::new(settings.clone()),
+        },
+    ))
+    .unwrap();
+    assert_eq!(read(&client), (settings, false));
 
     // Backgrounded and back, the client syncs again.
     client.suspend();

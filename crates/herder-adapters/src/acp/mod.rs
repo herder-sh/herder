@@ -10,6 +10,9 @@
 //!
 //! - `initialize`, then `session/new` in the session's worktree, run in
 //!   [`Adapter::start`]. A JSON-RPC error there fails the start, classified like a turn error.
+//!   `session/new` carries herder's MCP server as `herder` and the user's
+//!   ([`StartRequest::mcp_servers`]), each over a transport the agent's `mcpCapabilities`
+//!   take: stdio always, HTTP and SSE when it says so.
 //! - [`AdapterCommand::SendPrompt`] is `session/prompt`: an `image` block per image, then the
 //!   text. Its `session/update` notifications
 //!   become items: agent message and thought chunks stream as `assistant_message` and

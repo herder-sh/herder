@@ -175,6 +175,7 @@ impl FakeDaemon {
             Some(Arc::clone(&admission)),
             shutdown.clone(),
         ));
+        sessions.use_mcp_servers(settings.mcp_servers())?;
         tokio::spawn({
             let (hub, shutdown) = (Arc::clone(&hub), shutdown.clone());
             async move { admission.run(&hub, shutdown).await }

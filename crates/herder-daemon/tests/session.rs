@@ -1938,6 +1938,49 @@ async fn a_session_runs_on_its_accounts_provider_adapter_and_config_dir() {
 }
 
 #[tokio::test]
+async fn a_start_gets_the_users_enabled_mcp_servers() {
+    use herder_adapters::{McpTransport as Launch, UserMcpServer};
+    use herder_daemon::mcp::servers::UserServers;
+    use herder_protocol::{McpServerSettings, McpTransport};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "first.jsonl", Default::default()).await;
+    let server = |name: &str, enabled: bool| McpServerSettings {
+        name: name.into(),
+        enabled,
+        project: None,
+        transport: McpTransport::Http {
+            url: format!("https://{name}.example.com/mcp"),
+            headers: Default::default(),
+        },
+    };
+    let servers = Arc::new(UserServers::new(vec![
+        server("docs", true),
+        server("off", false),
+    ]));
+    daemon
+        .manager
+        .use_mcp_servers(Arc::clone(&servers))
+        .unwrap();
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "First.").await;
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let starts = daemon.starts.lock().unwrap().clone();
+    assert_eq!(
+        starts[0].mcp_servers,
+        [UserMcpServer {
+            name: "docs".into(),
+            transport: Launch::Http {
+                url: "https://docs.example.com/mcp".into(),
+                headers: Default::default(),
+            },
+        }]
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn each_start_registers_herders_mcp_server_with_a_token_for_that_session() {
     use herder_daemon::mcp;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

@@ -1,8 +1,9 @@
 //! The daemon's settings as owners read and change them from a client: every daemon-wide key
 //! of its config file ([`crate::config::set_settings`]).
 //!
-//! A change is written to the file at once. The turn limit applies at once too; everything
-//! else applies when the daemon next starts, which `restart_daemon` does without anyone at
+//! A change is written to the file at once. The turn limit applies at once too, and so do the
+//! MCP servers, to each session's CLI from its next start; everything else applies when the
+//! daemon next starts, which `restart_daemon` does without anyone at
 //! the machine. The answer says whether the file holds settings not in effect yet, whoever
 //! wrote them.
 
@@ -19,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::config::{self, Config, Mode};
+use crate::mcp::servers::UserServers;
 use crate::resources::{self, Admission};
 
 /// Set once an owner asked the daemon to restart; [`crate::run`] reports it when it returns.
@@ -42,6 +44,8 @@ pub struct Settings {
     running: Mutex<DaemonSettings>,
     /// What admits turns on a host, which a new turn limit applies to.
     admission: Option<Arc<Admission>>,
+    /// The user's MCP servers sessions' CLIs get, which new ones replace.
+    mcp_servers: Arc<UserServers>,
     /// Stops the daemon, for a restart.
     shutdown: CancellationToken,
 }
@@ -60,8 +64,14 @@ impl Settings {
             is_vault: config.mode == Mode::Vault,
             running: Mutex::new(config.settings()),
             admission,
+            mcp_servers: Arc::new(UserServers::new(config.mcp_servers.clone())),
             shutdown,
         }
+    }
+
+    /// The user's MCP servers as the settings have them now, for sessions' CLIs.
+    pub fn mcp_servers(&self) -> Arc<UserServers> {
+        Arc::clone(&self.mcp_servers)
     }
 
     /// Answers `get_settings`, `set_settings`, `set_resource_limits` and `restart_daemon`.
@@ -154,6 +164,14 @@ impl Settings {
             running.resources.max_turns = settings.resources.max_turns;
             info!(max_turns, "the turn limit changed");
         }
+        if settings.mcp_servers != running.mcp_servers {
+            self.mcp_servers.set(config.mcp_servers.clone());
+            running.mcp_servers = settings.mcp_servers.clone();
+            info!(
+                servers = settings.mcp_servers.len(),
+                "the MCP servers changed; each session's CLI gets them from its next start"
+            );
+        }
         info!("an owner changed the daemon's settings");
         Ok(self.answer(settings, &running))
     }
@@ -219,5 +237,42 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "listen = \"203.0.113.9:7447\"\n\n[failover]\npin = true\n"
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_servers_apply_from_the_next_cli_start_without_a_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "").unwrap();
+        let config = Config::load_file(&path).unwrap();
+        let settings = Settings::new(&config, None, CancellationToken::new());
+        let servers = settings.mcp_servers();
+        assert!(servers.for_session(None, None).is_empty());
+        let mut new = config.settings();
+        new.mcp_servers.push(herder_protocol::McpServerSettings {
+            name: "docs".into(),
+            enabled: true,
+            project: None,
+            transport: herder_protocol::McpTransport::Http {
+                url: "https://docs.example.com/mcp".into(),
+                headers: Default::default(),
+            },
+        });
+        let set = CommandBody::SetSettings {
+            settings: Box::new(new),
+        };
+        let CommandResult::Settings {
+            restart_required, ..
+        } = settings.command(set).await.unwrap()
+        else {
+            panic!("not settings");
+        };
+        assert!(!restart_required);
+        let names: Vec<_> = servers
+            .for_session(None, None)
+            .into_iter()
+            .map(|server| server.name)
+            .collect();
+        assert_eq!(names, ["docs"]);
     }
 }
