@@ -327,6 +327,7 @@ mod tests {
             mode: crate::config::Mode::Vault,
             vault: None,
             retention: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

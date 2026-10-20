@@ -12,7 +12,8 @@ use herder_adapters::codex;
 use herder_adapters::fixture::{Fixture, Record};
 use herder_adapters::transport::Transport;
 use herder_adapters::{
-    AccountUsage, Adapter, AdapterCommand, AdapterEvent, AdapterSession, StartRequest,
+    AccountUsage, Adapter, AdapterCommand, AdapterEvent, AdapterSession, McpServer, McpTransport,
+    StartRequest, UserMcpServer,
 };
 use herder_protocol::{
     ApprovalDecision, ApprovalId, Bytes, ErrorClass, Image, Item, ItemBody, ItemId, PermissionMode,
@@ -26,7 +27,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// The worktree the fixtures were recorded in; replay never touches it.
 const CWD: &str = "/tmp/herder-codex-fixture";
 
-const FIXTURES: [&str; 7] = [
+const FIXTURES: [&str; 8] = [
     "turn",
     "image",
     "approval",
@@ -34,6 +35,7 @@ const FIXTURES: [&str; 7] = [
     "limit_reached",
     "seed",
     "resume",
+    "mcp_servers",
 ];
 
 /// The thread `turn.jsonl` opened, which `resume.jsonl` reopens.
@@ -42,7 +44,7 @@ const TURN_THREAD: &str = "01a0fc7b-3cda-7031-a6b4-7a11c1f09469";
 /// The thread each recording opened.
 fn thread(name: &str) -> &'static str {
     match name {
-        "turn" | "image" | "limit_reached" | "resume" => TURN_THREAD,
+        "turn" | "image" | "limit_reached" | "resume" | "mcp_servers" => TURN_THREAD,
         "approval" => "01a0fc7b-51c2-7923-9f3f-644d234f31d0",
         "interrupt" => "01a0fc7b-74b0-7e30-a500-81aa38638e40",
         "seed" => "01a0fc7b-85e5-7f82-a515-5e0075532352",
@@ -70,6 +72,7 @@ fn request(seed: Vec<Item>) -> StartRequest {
         seed,
         resume: None,
         mcp: None,
+        mcp_servers: Vec::new(),
         launcher: Vec::new(),
         skills: None,
     }
@@ -285,6 +288,51 @@ async fn a_prompts_images_go_ahead_of_its_text_as_data_urls() {
             usage: tokens(7391, 5, 12032)
         })
     );
+    shutdown(session).await;
+}
+
+/// The user's MCP servers the `mcp_servers` fixtures were built for, one per transport.
+fn user_servers() -> Vec<UserMcpServer> {
+    vec![
+        UserMcpServer {
+            name: "github".into(),
+            transport: McpTransport::Stdio {
+                command: "github-mcp-server".into(),
+                args: vec!["stdio".into()],
+                env: [("GITHUB_HOST".to_owned(), "github.com".to_owned())].into(),
+            },
+        },
+        UserMcpServer {
+            name: "linear".into(),
+            transport: McpTransport::Http {
+                url: "https://mcp.linear.app/mcp".into(),
+                headers: [("Authorization".to_owned(), "Bearer token".to_owned())].into(),
+            },
+        },
+        UserMcpServer {
+            name: "legacy".into(),
+            transport: McpTransport::Sse {
+                url: "http://127.0.0.1:9000/sse".into(),
+                headers: BTreeMap::new(),
+            },
+        },
+    ]
+}
+
+#[tokio::test]
+async fn the_thread_gets_herders_and_the_users_mcp_servers() {
+    let request = StartRequest {
+        mcp: Some(McpServer {
+            command: PathBuf::from("/usr/bin/herder"),
+            args: ["mcp", "--data-dir", "/data", "--session", "s1"]
+                .map(String::from)
+                .to_vec(),
+        }),
+        mcp_servers: user_servers(),
+        ..request(Vec::new())
+    };
+    // The replay checks that `thread/start` carries every server Codex reaches.
+    let session = start_on("mcp_servers", request).await;
     shutdown(session).await;
 }
 

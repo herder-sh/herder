@@ -1344,6 +1344,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "ureq",
+ "url",
  "uuid",
 ]
 

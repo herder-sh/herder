@@ -3284,6 +3284,33 @@ fn an_account_without_fallback_rotates() {
 }
 
 #[test]
+fn settings_without_mcp_servers_decode_with_none() {
+    let mut json = serde_json::to_value(settings()).unwrap();
+    json.as_object_mut().unwrap().remove("mcp_servers");
+    let decoded: DaemonSettings = serde_json::from_value(json).unwrap();
+    assert!(decoded.mcp_servers.is_empty());
+}
+
+#[test]
+fn mcp_transports_are_tagged_by_type() {
+    let json = serde_json::to_value(&settings().mcp_servers[0]).unwrap();
+    assert_eq!(json["transport"]["type"], "stdio");
+    assert_eq!(
+        json["transport"]["secrets"],
+        json!(["GITHUB_PERSONAL_ACCESS_TOKEN"])
+    );
+    let http: McpTransport =
+        serde_json::from_value(json!({"type": "http", "url": "https://x.example/mcp"})).unwrap();
+    assert_eq!(
+        http,
+        McpTransport::Http {
+            url: "https://x.example/mcp".into(),
+            headers: Default::default(),
+        }
+    );
+}
+
+#[test]
 fn settings_without_follow_ups_decode_with_their_defaults() {
     let mut json = serde_json::to_value(settings()).unwrap();
     json.as_object_mut().unwrap().remove("follow_ups");
@@ -3423,6 +3450,37 @@ fn settings() -> DaemonSettings {
             stall_after_secs: 1800,
             max_stall_nudges: 3,
         },
+        mcp_servers: vec![
+            McpServerSettings {
+                name: "github".into(),
+                enabled: true,
+                project: None,
+                transport: McpTransport::Stdio {
+                    command: "github-mcp-server".into(),
+                    args: vec!["stdio".into()],
+                    env: [("GITHUB_HOST".to_owned(), "github.com".to_owned())].into(),
+                    secrets: vec!["GITHUB_PERSONAL_ACCESS_TOKEN".parse().unwrap()],
+                },
+            },
+            McpServerSettings {
+                name: "linear".into(),
+                enabled: false,
+                project: Some(ProjectId::new("github.com/herder-sh/herder")),
+                transport: McpTransport::Http {
+                    url: "https://mcp.linear.app/mcp".into(),
+                    headers: [("Authorization".to_owned(), "Bearer token".to_owned())].into(),
+                },
+            },
+            McpServerSettings {
+                name: "legacy".into(),
+                enabled: true,
+                project: None,
+                transport: McpTransport::Sse {
+                    url: "http://127.0.0.1:9000/sse".into(),
+                    headers: Default::default(),
+                },
+            },
+        ],
     }
 }
 

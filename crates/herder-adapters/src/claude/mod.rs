@@ -21,6 +21,9 @@
 //!   listed, as it does not tell skills apart from the CLI's own commands.
 //! - Interrupt is the `interrupt` control request; the turn's `result` then ends it.
 //! - Model and permission mode switch natively, with `set_model` and `set_permission_mode`.
+//! - herder's MCP server is passed as `--mcp-config` JSON, the user's
+//!   ([`StartRequest::mcp_servers`]) as a second `--mcp-config` naming a file only this user
+//!   can read, removed when the CLI is gone, so no variable or header is on the command line.
 //! - The CLI's session id comes on the `system` `init` line of the first turn and is reported
 //!   as [`AdapterEvent::SessionIdentified`]. [`StartRequest::resume`] is passed as
 //!   `--resume <id>`: the CLI loads that session's transcript from
@@ -197,15 +200,19 @@ mod session;
 mod usage;
 mod wire;
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use herder_protocol::{ErrorClass, PermissionMode, TurnError};
+use tempfile::TempPath;
 use tokio::process::Command;
 
 pub use hooks::{PRE_TOOL_USE_ARGS, pre_tool_use};
 
 use crate::transport::Transport;
-use crate::{AccountUsage, Adapter, McpServer, StartFuture, StartRequest};
+use crate::{
+    AccountUsage, Adapter, McpServer, McpTransport, StartFuture, StartRequest, UserMcpServer,
+};
 
 /// The Claude Code version the wire format and fixtures were taken from.
 pub const CLAUDE_VERSION: &str = "2.1.286";
@@ -231,13 +238,18 @@ impl Adapter for ClaudeAdapter {
     }
 
     fn start(&self, request: StartRequest) -> StartFuture {
-        let command = command(&self.program, &request);
+        let program = self.program.clone();
         Box::pin(async move {
-            let transport = Transport::spawn(command).map_err(|err| TurnError {
+            let fatal = |message: String| TurnError {
                 class: ErrorClass::Fatal,
-                message: format!("starting claude: {err}"),
-            })?;
-            start(transport, request).await
+                message,
+            };
+            let mcp_config = user_mcp_file(&request.mcp_servers)
+                .map_err(|err| fatal(format!("passing claude the MCP servers: {err}")))?;
+            let command = command(&program, &request, mcp_config.as_deref());
+            let transport = Transport::spawn(command)
+                .map_err(|err| fatal(format!("starting claude: {err}")))?;
+            session::start(transport, request, mcp_config).await
         })
     }
 }
@@ -249,7 +261,7 @@ impl ClaudeAdapter {
         &self,
         request: StartRequest,
     ) -> impl Future<Output = Result<AccountUsage, TurnError>> + Send + 'static {
-        let mut command = command(&self.program, &request);
+        let mut command = command(&self.program, &request, None);
         // Nothing the user customized is needed to answer, and their hooks must not run.
         command.arg("--safe-mode");
         async move {
@@ -271,13 +283,14 @@ pub async fn read_usage(transport: Transport) -> Result<AccountUsage, TurnError>
 /// Runs a session over `transport`, which must carry a `claude` started by [`command`], or a
 /// recording of one from [`Transport::replay`].
 pub fn start(transport: Transport, request: StartRequest) -> StartFuture {
-    Box::pin(session::start(transport, request))
+    Box::pin(session::start(transport, request, None))
 }
 
 /// The `claude` command for `request`: its environment is exactly the request's plus
 /// `CLAUDE_CONFIG_DIR` when the account has a config dir, in the session's worktree, with
-/// herder's MCP server registered and herder's skill library added.
-pub fn command(program: &Path, request: &StartRequest) -> Command {
+/// herder's MCP server registered, the user's from the file `user_mcp` (see [`user_mcp_file`]), and
+/// herder's skill library added.
+pub fn command(program: &Path, request: &StartRequest, user_mcp: Option<&Path>) -> Command {
     let mut command = request.command(program);
     command
         .args([
@@ -319,7 +332,55 @@ pub fn command(program: &Path, request: &StartRequest) -> Command {
             .arg("--settings")
             .arg(hooks::settings(mcp).to_string());
     }
+    if let Some(path) = user_mcp {
+        command.arg("--mcp-config").arg(path);
+    }
     command
+}
+
+/// A file only this user can read holding the `--mcp-config` JSON of the user's MCP servers,
+/// removed when the returned path drops; `None` when there are none. A file, not an argument,
+/// keeps their variables and headers off the command line, where an agent could read them.
+pub fn user_mcp_file(servers: &[UserMcpServer]) -> std::io::Result<Option<TempPath>> {
+    if servers.is_empty() {
+        return Ok(None);
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("herder-mcp-")
+        .suffix(".json")
+        .tempfile()?;
+    file.write_all(user_mcp_config(servers).to_string().as_bytes())?;
+    file.flush()?;
+    Ok(Some(file.into_temp_path()))
+}
+
+/// The `--mcp-config` JSON that registers the user's `servers` under their names.
+fn user_mcp_config(servers: &[UserMcpServer]) -> serde_json::Value {
+    let servers: serde_json::Map<String, serde_json::Value> = servers
+        .iter()
+        .map(|server| {
+            let config = match &server.transport {
+                McpTransport::Stdio { command, args, env } => serde_json::json!({
+                    "type": "stdio",
+                    "command": command,
+                    "args": args,
+                    "env": env,
+                }),
+                McpTransport::Http { url, headers } => serde_json::json!({
+                    "type": "http",
+                    "url": url,
+                    "headers": headers,
+                }),
+                McpTransport::Sse { url, headers } => serde_json::json!({
+                    "type": "sse",
+                    "url": url,
+                    "headers": headers,
+                }),
+            };
+            (server.name.clone(), config)
+        })
+        .collect();
+    serde_json::json!({ "mcpServers": servers })
 }
 
 /// Claude's limit on one herder tool call, in milliseconds: `wait_for` blocks up to 600 s, plus
@@ -532,10 +593,11 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
-        let command = command(Path::new("claude"), &request);
+        let command = command(Path::new("claude"), &request, None);
         let command = command.as_std();
         assert_eq!(command.get_program(), "claude");
         assert_eq!(
@@ -585,10 +647,11 @@ mod tests {
             seed: Vec::new(),
             resume: Some("499f57af-e4af-4c6c-b348-d47c9b704e70".into()),
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
-        let command = command(Path::new("claude"), &request);
+        let command = command(Path::new("claude"), &request, None);
         let args: Vec<_> = command.as_std().get_args().collect();
         let at = args.iter().position(|arg| *arg == "--resume").unwrap();
         assert_eq!(args[at + 1], "499f57af-e4af-4c6c-b348-d47c9b704e70");
@@ -596,7 +659,7 @@ mod tests {
             resume: None,
             ..request
         };
-        let command = super::command(Path::new("claude"), &without);
+        let command = super::command(Path::new("claude"), &without, None);
         assert!(!command.as_std().get_args().any(|arg| arg == "--resume"));
     }
 
@@ -611,10 +674,11 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
-        let command = command(Path::new("claude"), &request);
+        let command = command(Path::new("claude"), &request, None);
         let envs: Vec<_> = command.as_std().get_envs().collect();
         assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new("/usr/bin")))]);
         // Without herder's server there is no spawn to steer to, so no hook either.
@@ -635,10 +699,11 @@ mod tests {
                 command: PathBuf::from("/usr/bin/herder"),
                 args: vec!["mcp".into(), "--session".into(), "s1".into()],
             }),
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
-        let command = command(Path::new("claude"), &request);
+        let command = command(Path::new("claude"), &request, None);
         let args: Vec<_> = command
             .as_std()
             .get_args()
@@ -682,6 +747,93 @@ mod tests {
     }
 
     #[test]
+    fn the_users_mcp_servers_go_in_a_private_file_not_on_the_command_line() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let servers = vec![
+            UserMcpServer {
+                name: "github".into(),
+                transport: McpTransport::Stdio {
+                    command: "github-mcp-server".into(),
+                    args: vec!["stdio".into()],
+                    env: [("GITHUB_TOKEN".to_owned(), "ghp_secret".to_owned())].into(),
+                },
+            },
+            UserMcpServer {
+                name: "linear".into(),
+                transport: McpTransport::Http {
+                    url: "https://mcp.linear.app/mcp".into(),
+                    headers: [("Authorization".to_owned(), "Bearer secret".to_owned())].into(),
+                },
+            },
+            UserMcpServer {
+                name: "legacy".into(),
+                transport: McpTransport::Sse {
+                    url: "http://127.0.0.1:9000/sse".into(),
+                    headers: BTreeMap::new(),
+                },
+            },
+        ];
+        assert!(user_mcp_file(&[]).unwrap().is_none());
+        let file = user_mcp_file(&servers).unwrap().unwrap();
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            config,
+            serde_json::json!({
+                "mcpServers": {
+                    "github": {
+                        "type": "stdio",
+                        "command": "github-mcp-server",
+                        "args": ["stdio"],
+                        "env": {"GITHUB_TOKEN": "ghp_secret"},
+                    },
+                    "linear": {
+                        "type": "http",
+                        "url": "https://mcp.linear.app/mcp",
+                        "headers": {"Authorization": "Bearer secret"},
+                    },
+                    "legacy": {
+                        "type": "sse",
+                        "url": "http://127.0.0.1:9000/sse",
+                        "headers": {},
+                    },
+                }
+            })
+        );
+
+        let request = StartRequest {
+            config_dir: None,
+            env: BTreeMap::new(),
+            cwd: PathBuf::from("/worktrees/s1"),
+            model: None,
+            permission_mode: PermissionMode::Ask,
+            seed: Vec::new(),
+            resume: None,
+            mcp: None,
+            mcp_servers: servers,
+            launcher: Vec::new(),
+            skills: None,
+        };
+        let command = command(Path::new("claude"), &request, Some(&file));
+        let args: Vec<_> = command.as_std().get_args().collect();
+        assert_eq!(
+            &args[args.len() - 2..],
+            [OsStr::new("--mcp-config"), file.as_os_str()]
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().contains("secret"))
+        );
+        let path = file.to_path_buf();
+        drop(file);
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn command_adds_the_skill_library_dir() {
         let request = StartRequest {
             config_dir: None,
@@ -692,10 +844,11 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: Some(PathBuf::from("/data/skill-links/claude")),
         };
-        let command = command(Path::new("claude"), &request);
+        let command = command(Path::new("claude"), &request, None);
         let args: Vec<_> = command.as_std().get_args().collect();
         let at = args.iter().position(|arg| *arg == "--add-dir").unwrap();
         assert_eq!(args[at + 1], "/data/skill-links/claude");
@@ -703,7 +856,7 @@ mod tests {
             skills: None,
             ..request
         };
-        let command = super::command(Path::new("claude"), &without);
+        let command = super::command(Path::new("claude"), &without, None);
         assert!(!command.as_std().get_args().any(|arg| arg == "--add-dir"));
     }
 
@@ -718,6 +871,7 @@ mod tests {
             seed: Vec::new(),
             resume: None,
             mcp: None,
+            mcp_servers: Vec::new(),
             launcher: Vec::new(),
             skills: None,
         };
@@ -726,8 +880,8 @@ mod tests {
             ..direct.clone()
         };
         let program = Path::new("/usr/bin/claude");
-        let direct = command(program, &direct);
+        let direct = command(program, &direct, None);
         assert_eq!(direct.as_std().get_program(), program);
-        crate::testing::assert_behind_launcher(&direct, &command(program, &launched));
+        crate::testing::assert_behind_launcher(&direct, &command(program, &launched, None));
     }
 }
