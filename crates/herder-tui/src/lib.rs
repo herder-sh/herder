@@ -39,6 +39,7 @@ mod projects;
 mod prompt;
 mod prs;
 mod secrets;
+mod selection;
 mod session;
 mod settings;
 mod switch;

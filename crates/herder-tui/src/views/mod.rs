@@ -57,6 +57,7 @@ mod touch;
 mod transcript;
 
 pub(crate) use transcript::Cache as TranscriptCache;
+pub(crate) use transcript::{Join, Row as TranscriptRow};
 
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;

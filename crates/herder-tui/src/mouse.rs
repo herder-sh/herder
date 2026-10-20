@@ -4,8 +4,9 @@
 //! Every draw records where the tappable and scrollable things of the frame are, as [`Hits`].
 //! A click or a wheel event is matched against the last frame's hits, topmost first, and does
 //! what the matching key would: a button names its key or action, a row selects itself, and a
-//! tap on the selected row opens it. With `:mouse off` the TUI stops asking, so the terminal
-//! selects text again; Shift-drag (Option-drag on macOS) selects text either way.
+//! tap on the selected row opens it. A drag over the transcript selects its text and copies it
+//! ([`crate::selection`]). With `:mouse off` the TUI stops asking, so the terminal selects
+//! text again; Shift-drag (Option-drag in some macOS terminals) selects text either way.
 //!
 //! mosh 1.4 passes this through: mosh-client turns on the same reporting (1000, SGR 1006) in
 //! the terminal it runs in, and the reports reach the TUI. mosh has no alternate screen,
@@ -19,6 +20,7 @@ use ratatui::layout::{Position, Rect};
 use crate::action::{self, Action};
 use crate::app::{App, Effect, Focus};
 use crate::board::BoardAction;
+use crate::chat::ChatAct;
 use crate::inbox::InboxAction;
 use crate::nav::Tab;
 use crate::prs::PrAction;
@@ -93,6 +95,8 @@ pub enum Wheel {
 pub struct Hits {
     clicks: Vec<(Rect, Click)>,
     wheels: Vec<(Rect, Wheel)>,
+    /// Where the open transcript's text is drawn, for selecting it ([`crate::selection`]).
+    pub text: Option<Rect>,
 }
 
 impl Hits {
@@ -117,6 +121,7 @@ impl Hits {
     pub fn append(&mut self, mut top: Hits) {
         self.clicks.append(&mut top.clicks);
         self.wheels.append(&mut top.wheels);
+        self.text = top.text.or(self.text);
     }
 
     /// What a tap at `x`, `y` does: the topmost spot there.
@@ -181,6 +186,16 @@ impl App {
                 self.pressed = self.hits.click_at(x, y).cloned();
                 self.resizing = self.pressed == Some(Click::Resize);
                 self.dragged = Some((x, y, y));
+                self.selection = None;
+                // A press on the transcript's text, not on a dialog over it, may select.
+                let on_text = matches!(
+                    self.pressed,
+                    Some(Click::Open | Click::Act(Action::Chat(ChatAct::ToggleAt(_))))
+                );
+                if on_text && let Some(at) = self.text_at(x, y) {
+                    self.dragged = None;
+                    self.select_press(at);
+                }
                 Vec::new()
             }
             // A drag on the sidebar's edge moves it.
@@ -194,6 +209,14 @@ impl App {
                 self.dragged = None;
                 self.resize_sidebar(x);
                 vec![Effect::Save]
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.selection.is_some() => {
+                self.select_drag(x, y);
+                Vec::new()
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.selection.is_some_and(|s| s.grown) => {
+                self.pressed = None;
+                self.select_release()
             }
             // A finger dragged up or down scrolls what it pressed on, a step a row, as the
             // wheel would; the press is then no tap.
@@ -215,6 +238,7 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragged = None;
+                self.selection = None;
                 let pressed = self.pressed.take();
                 match self.hits.click_at(x, y).cloned() {
                     Some(click) if pressed.as_ref() == Some(&click) => {

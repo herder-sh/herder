@@ -208,7 +208,7 @@ pub const NAVIGATE: &[Bind] = &[
         &[ch('c')],
         Transcript,
         Action::Chat(ChatAct::Copy),
-        "copy the item",
+        "copy the item; with none chosen, the last reply",
     ),
     bind(
         &[ch('x')],
@@ -772,8 +772,16 @@ pub fn sections() -> Vec<Section> {
                 "open, press the buttons, scroll".to_owned(),
             )
             .text(
+                "drag".to_owned(),
+                "select transcript text; letting go copies it".to_owned(),
+            )
+            .text(
+                "double/triple click".to_owned(),
+                "copy a word, a line".to_owned(),
+            )
+            .text(
                 "shift+drag".to_owned(),
-                "select text while herder has the mouse".to_owned(),
+                "the terminal's own selection; or :mouse off".to_owned(),
             ),
         Section::new("this help").binds(HELP, |_| true),
     ]
