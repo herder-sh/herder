@@ -85,10 +85,8 @@ struct MachinesView: View {
                     Image(systemName: "person.2").foregroundStyle(Theme.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Providers").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        let missing = ProviderAccounts(machines: fleet.machines).groups
-                            .flatMap(\.logins).filter { !$0.missing.isEmpty }.count
-                        Text(missing == 0 ? "Accounts, plan limits and usage"
-                             : missing == 1 ? "1 login missing on a machine" : "\(missing) logins missing on a machine")
+                        let gaps = SetUpGaps(ProviderAccounts(machines: fleet.machines))
+                        Text(gaps.isEmpty ? "Accounts, plan limits, usage and CLIs" : gaps.title)
                             .font(.caption).foregroundStyle(Theme.secondary)
                     }
                     Spacer()

@@ -27,6 +27,84 @@ struct AccountSettingsTests {
         #expect(AccountDraft.nextId(provider: "cursor", taken: ["cursor", "cursor-2"]) == "cursor-3")
     }
 
+    @Test func suggestionsSkipAccountsAndLoginsStillRunning() {
+        var box = machine("box", name: "box", sessions: [], accounts: [
+            Account(accountId: "claude", provider: "claude", label: "claude", configDir: nil, email: nil, usage: []),
+        ])
+        box.terminals = [Terminal(terminalId: "t1", purpose: .login(accountId: "claude-2"))]
+        let taken = AccountDraft.taken(on: box, pending: ["claude-3"])
+        #expect(taken == ["claude", "claude-2", "claude-3"])
+        var draft = AccountDraft(provider: "claude")
+        draft.suggest(taken: taken)
+        #expect(draft.id == "claude-4")
+        #expect(draft.suggestedLabel == "Claude 4")
+        #expect(draft.submitted.label == "Claude 4")
+        draft.label = "Work"
+        #expect(draft.submitted.label == "Work")
+        // Switching provider moves the id along, until the user types one.
+        draft.provider = "codex"
+        draft.suggest(taken: taken)
+        #expect(draft.id == "codex")
+        #expect(draft.suggestedLabel == "Codex")
+        draft.id = "codex-work"
+        draft.idEdited = true
+        draft.suggest(taken: ["codex-work"])
+        #expect(draft.id == "codex-work")
+        #expect(draft.problem(existing: ["codex-work"]) != nil)
+    }
+
+    @Test func aKnownEmailNamesTheSuggestion() {
+        #expect(AccountDraft.nextId(provider: "claude", taken: ["claude"], email: "Sam.Lee@example.com") == "claude-sam.lee")
+        #expect(AccountDraft.nextId(provider: "codex", taken: ["codex-sam"], email: "sam@example.com") == "codex-sam-2")
+        #expect(AccountDraft.nextId(provider: "codex", taken: [], email: "@example.com") == "codex")
+    }
+
+    @MainActor
+    @Test func loginsOnOneMachineEachKeepTheirOwnTerminal() {
+        var terminals = ProviderTerminals()
+        let claude = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "box")
+        let codex = terminals.add(NewAccount(accountId: "codex", provider: "codex", label: nil, configDir: nil), on: "box")
+        let elsewhere = terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: nil, configDir: nil), on: "laptop")
+        let install = terminals.install("cursor", on: "box")
+        let relogin = terminals.relogin("claude", on: "box")
+        #expect(Set([claude, codex, elsewhere, install, relogin]).count == 5)
+        #expect(terminals.adds(on: "box") == [claude, codex])
+        #expect(terminals.pendingIds(on: "box") == ["claude-2", "codex"])
+        #expect(terminals.installs == [install])
+        #expect(terminals[claude] !== terminals[codex])
+        // The same login again while it runs is the one already running.
+        let first = terminals[claude]
+        terminals.add(NewAccount(accountId: "claude-2", provider: "claude", label: "Again", configDir: nil), on: "box")
+        #expect(terminals[claude] === first)
+        // Done forgets it, and only it.
+        terminals.clear(claude)
+        #expect(terminals[claude] == nil)
+        #expect(terminals.adds(on: "box") == [codex])
+        #expect(terminals.pendingIds(on: "box") == ["codex"])
+        #expect(terminals[install] != nil && terminals[relogin] != nil)
+    }
+
+    @Test func theSheetListsRunningLoginsUntilAskedForAnother() {
+        let one = ProviderJobKey(hostId: "box", job: .add("claude"))
+        let two = ProviderJobKey(hostId: "box", job: .add("codex"))
+        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [], addingAnother: false) == .form)
+        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [one, two], addingAnother: false) == .logins)
+        #expect(AddAccountPage.resolve(shown: nil, exists: false, adds: [one, two], addingAnother: true) == .form)
+        #expect(AddAccountPage.resolve(shown: two, exists: true, adds: [one, two], addingAnother: true) == .job(two))
+        // A login cleared while shown falls back to the others.
+        #expect(AddAccountPage.resolve(shown: two, exists: false, adds: [one], addingAnother: false) == .logins)
+    }
+
+    @Test func progressReadsTheTerminalAndTheAccountList() {
+        #expect(JobProgress(.connecting, added: false) == .starting)
+        #expect(JobProgress(.attached, added: false) == .running)
+        #expect(JobProgress(.attached, added: true) == .added)
+        #expect(JobProgress(.exited(0), added: true) == .added)
+        #expect(JobProgress(.exited(0), added: false) == .ended)
+        #expect(JobProgress(.failed("no"), added: false) == .failed("no"))
+        #expect(!JobProgress.running.finished && JobProgress.ended.finished)
+    }
+
     @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
     func unsupportedLoginShowsAnErrorAndKeepsTheTerminal() async throws {
@@ -38,15 +116,17 @@ struct AccountSettingsTests {
         let machine = try await fleet.pair(daemon)
         try await fleet.client.synced(hostId: machine.hostId)
         let account = NewAccount(accountId: "work", provider: "claude", label: nil, configDir: nil)
-        let connection = TerminalConnection(hostId: machine.hostId, terminalId: nil, account: account)
-        fleet.accountLogins[machine.hostId] = connection
+        let key = fleet.providerTerminals.add(account, on: machine.hostId)
+        let connection = try #require(fleet.providerTerminals[key])
         let screen = connection.view(client: fleet.client, sessionId: nil)
         connection.connect(client: fleet.client, sessionId: nil, cols: 80, rows: 24)
         #expect(await eventually {
             if case .failed = connection.state { return true }
             return false
         })
-        #expect(fleet.accountLogins[machine.hostId] === connection)
+        #expect(fleet.providerTerminals[key] === connection)
+        // Ended, it no longer holds its id, so the form may suggest it again.
+        #expect(fleet.providerTerminals.pendingIds(on: machine.hostId).isEmpty)
         #expect(connection.view(client: fleet.client, sessionId: nil) === screen)
     }
     @MainActor

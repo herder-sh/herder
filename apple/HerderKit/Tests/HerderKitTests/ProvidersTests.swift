@@ -105,7 +105,7 @@ struct ProvidersTests {
         #expect(hostId == machine.hostId)
         var draft = AccountDraft()
         draft.provider = "codex"
-        draft.fillId(taken: fleet.machines.first { $0.hostId == hostId }?.accounts.map(\.accountId) ?? [])
+        draft.suggest(taken: fleet.machines.first { $0.hostId == hostId }?.accounts.map(\.accountId) ?? [])
         #expect(draft.problem(existing: []) == nil)
         // The fake daemon cannot log its fake provider in, and says so: the login reached it.
         let connection = TerminalConnection(hostId: hostId, terminalId: nil, account: draft.account)
