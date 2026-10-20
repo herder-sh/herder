@@ -19,7 +19,7 @@ use crate::action::Action;
 use crate::app::{App, Effect, Focus};
 use crate::attach::{self, Source};
 use crate::prompt::Recall;
-use crate::session::{MODES, SessionKey, mode_name};
+use crate::session::{Delivery, MODES, Outgoing, SessionKey, mode_name};
 
 /// A user action of this module; see [`Action::Compose`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub enum Act {
 pub enum Origin {
     /// A command on a session; a failure shows in its view.
     Session(SessionKey),
-    /// A prompt; a failure also takes it off the queued list.
+    /// A prompt; the answer settles its echo in the transcript.
     Prompt(SessionKey, String),
     /// The new-session dialog's create.
     NewSession(HostId),
@@ -484,14 +484,19 @@ impl App {
                 Err(error) => self.session_result(key, Some(error)),
             },
             Origin::Session(key) => self.session_result(key, result.err()),
+            // Its echo shows a refusal; the daemon's item for it replaces it otherwise.
             Origin::Prompt(key, text) => {
-                if result.is_err()
-                    && let Some(session) = self.sessions.get_mut(&key)
-                    && let Some(at) = session.queued.iter().position(|q| *q == text)
+                if let Some(session) = self.sessions.get_mut(&key)
+                    && let Some(sent) = session
+                        .outbox
+                        .iter_mut()
+                        .find(|sent| sent.text == text && sent.state == Delivery::Sending)
                 {
-                    session.queued.remove(at);
+                    sent.state = match result {
+                        Ok(_) => Delivery::Delivered,
+                        Err(error) => Delivery::Failed(error),
+                    };
                 }
-                self.session_result(key, result.err());
             }
             Origin::Backup(sent) => return self.backup_sent(sent, result),
             Origin::Secrets(sent) => return self.secrets_sent(sent, result),
@@ -626,9 +631,16 @@ impl App {
             };
             return vec![send(&key, command, Origin::Session(key.clone()))];
         }
-        if session.turn.is_some() {
-            session.queued.push(prompt.clone());
-        }
+        // It shows at the transcript's end at once, where the daemon's item for it will; a
+        // refused one before it has been seen, and goes now.
+        session
+            .outbox
+            .retain(|sent| !matches!(sent.state, Delivery::Failed(_)));
+        session.outbox.push(Outgoing {
+            text: prompt.clone(),
+            state: Delivery::Sending,
+        });
+        self.compose.errors.remove(&key);
         self.compose.history.push((key.clone(), prompt.clone()));
         let command = CommandBody::SendPrompt {
             session_id,
@@ -784,6 +796,7 @@ mod tests {
     use super::*;
     use crate::app::Msg;
     use crate::fake::{self, added, approval, key, question, started, type_text, update};
+    use crate::session::Entry;
 
     fn press(app: &mut App, code: KeyCode) -> Vec<Effect> {
         app.update(Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)))
@@ -1148,7 +1161,13 @@ mod tests {
         );
         assert!(app.compose.editor.is_empty());
         let session = &app.sessions[&key("h1", "s2")];
-        assert_eq!(session.queued, std::slice::from_ref(&prompt));
+        assert_eq!(
+            session.outbox,
+            [Outgoing {
+                text: prompt.clone(),
+                state: Delivery::Sending,
+            }]
+        );
 
         // It leaves the queue once its turn starts with it.
         let message = added(
@@ -1159,7 +1178,7 @@ mod tests {
             },
         );
         fake::feed(&mut app, "h1", "s2", update("s2", 4, vec![message], vec![]));
-        assert!(app.sessions[&key("h1", "s2")].queued.is_empty());
+        assert!(app.sessions[&key("h1", "s2")].outbox.is_empty());
 
         // An empty composer sends nothing; Esc leaves it.
         assert_eq!(press(&mut app, KeyCode::Enter), []);
@@ -1203,34 +1222,111 @@ mod tests {
         assert!(app.compose.dialog.is_none());
     }
 
-    #[test]
-    fn a_prompt_to_an_idle_session_is_not_queued_and_a_refused_one_shows_why() {
+    /// `s2` open and idle, with "hello" just sent from its composer.
+    fn sent_hello() -> App {
         let mut app = open_s2(vec![]);
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.focus, Focus::Composer);
         type_text(&mut app, "hello");
-        let effects = press(&mut app, KeyCode::Enter);
-        assert_eq!(effects.len(), 1);
-        assert!(app.sessions[&key("h1", "s2")].queued.is_empty());
+        assert_eq!(press(&mut app, KeyCode::Enter).len(), 1);
+        app
+    }
 
-        let origin = Origin::Prompt(key("h1", "s2"), "hello".into());
-        app.update(Msg::Sent {
-            origin: origin.clone(),
-            result: Err("the session is archived and read-only".into()),
-        });
-        assert_eq!(
-            app.compose.errors[&key("h1", "s2")],
-            "the session is archived and read-only"
-        );
-        app.update(Msg::Sent {
-            origin,
-            result: Ok(CommandResult::Applied),
-        });
-        assert!(app.compose.errors.is_empty());
+    fn outbox(app: &App) -> &[Outgoing] {
+        &app.sessions[&key("h1", "s2")].outbox
+    }
+
+    fn sent(state: Delivery) -> Outgoing {
+        Outgoing {
+            text: "hello".into(),
+            state,
+        }
+    }
+
+    fn hello_sent(result: Result<CommandResult, String>) -> Msg {
+        Msg::Sent {
+            origin: Origin::Prompt(key("h1", "s2"), "hello".into()),
+            result,
+        }
+    }
+
+    fn hello_item(id: &str) -> EventBody {
+        let body = ItemBody::UserMessage {
+            text: "hello".into(),
+            attachments: Vec::new(),
+        };
+        added(id, body)
     }
 
     #[test]
-    fn a_refused_queued_prompt_leaves_the_queue() {
+    fn a_sent_prompt_echoes_at_once_until_its_item_takes_its_place() {
+        let mut app = sent_hello();
+        // Before the daemon answered: the echo is there already.
+        assert_eq!(outbox(&app), [sent(Delivery::Sending)]);
+        app.update(hello_sent(Ok(CommandResult::Applied)));
+        assert_eq!(outbox(&app), [sent(Delivery::Delivered)]);
+
+        // The daemon journals it once the CLI is up: its item replaces the echo.
+        let events = vec![started("turn-1"), hello_item("i9")];
+        fake::feed(&mut app, "h1", "s2", update("s2", 3, events, vec![]));
+        assert!(outbox(&app).is_empty());
+        let prompts = app.sessions[&key("h1", "s2")]
+            .entries
+            .iter()
+            .filter(|entry| {
+                matches!(entry, Entry::Item(item) if matches!(item.body, ItemBody::UserMessage { .. }))
+            })
+            .count();
+        assert_eq!(prompts, 1);
+    }
+
+    #[test]
+    fn an_item_before_the_answer_still_replaces_the_echo() {
+        let mut app = sent_hello();
+        fake::feed(
+            &mut app,
+            "h1",
+            "s2",
+            update("s2", 3, vec![hello_item("i9")], vec![]),
+        );
+        assert!(outbox(&app).is_empty());
+        app.update(hello_sent(Ok(CommandResult::Applied)));
+        assert!(outbox(&app).is_empty());
+    }
+
+    #[test]
+    fn a_refused_prompt_stays_as_failed_until_the_next_one_is_sent() {
+        let mut app = sent_hello();
+        app.update(hello_sent(Err(
+            "the session is archived and read-only".into()
+        )));
+        let failed = Delivery::Failed("the session is archived and read-only".into());
+        assert_eq!(outbox(&app), [sent(failed)]);
+        // The echo says why, not the composer.
+        assert!(app.compose.errors.is_empty());
+        // An item with the same text is another prompt: the failed one stays.
+        fake::feed(
+            &mut app,
+            "h1",
+            "s2",
+            update("s2", 3, vec![hello_item("i9")], vec![]),
+        );
+        assert_eq!(outbox(&app).len(), 1);
+
+        type_text(&mut app, "again");
+        press(&mut app, KeyCode::Enter);
+        let state = Delivery::Sending;
+        assert_eq!(
+            outbox(&app),
+            [Outgoing {
+                text: "again".into(),
+                state
+            }]
+        );
+    }
+
+    #[test]
+    fn a_refused_queued_prompt_shows_failed() {
         let mut app = open_s2(vec![started("turn-1")]);
         press(&mut app, KeyCode::Char('i'));
         type_text(&mut app, "next");
@@ -1239,7 +1335,8 @@ mod tests {
             origin: Origin::Prompt(key("h1", "s2"), "next".into()),
             result: Err("gone".into()),
         });
-        assert!(app.sessions[&key("h1", "s2")].queued.is_empty());
+        let session = &app.sessions[&key("h1", "s2")];
+        assert_eq!(session.outbox[0].state, Delivery::Failed("gone".into()));
     }
 
     #[test]

@@ -1,0 +1,18 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+expression: "render(&mut app, 100, 14).backend()"
+---
+" herder        inbox 0 « │  ┃                                                                       "
+"                         │  ┃ ship the echo                                            not sent     "
+" machines     by machine │  ┃ ✗ the machine is not connected                                        "
+"  ◉ box                1 │  ┃                                                                       "
+"▶   ├ ◉ app · api        │                                                                          "
+"    │ ├ ● write the tes… │                                                                          "
+" ─────────────────────── │                                                                          "
+" attention      priority │                                                                          "
+"  ◉ api · app · box      │                                                                          "
+"  ✗ document it · app    │                                                                          "
+" ─────────────────────── │  ┃ ▌Write a prompt…                                                      "
+" + new            ≡ menu │                                                            claude-main   "
+"─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

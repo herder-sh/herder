@@ -670,9 +670,57 @@ fn a_prompt_sent_during_a_turn_shows_queued() {
     insta::assert_snapshot!(render(&mut app, 100, 20).backend());
 }
 
+/// The text of `terminal`'s screen, row by row.
+fn screen(terminal: &Terminal<TestBackend>) -> String {
+    let buffer = terminal.backend().buffer();
+    let width = usize::from(buffer.area.width);
+    buffer
+        .content
+        .chunks(width)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>() + "\n")
+        .collect()
+}
+
+#[test]
+fn a_sent_prompt_shows_on_the_next_frame_and_its_item_replaces_it() {
+    let mut app = open_s2(vec![]);
+    fake::type_text(&mut app, "ship the echo");
+    press(&mut app, KeyCode::Enter);
+    // The very next frame, before the daemon answered.
+    insta::assert_snapshot!(render(&mut app, 100, 14).backend());
+
+    app.update(Msg::Sent {
+        origin: crate::compose::Origin::Prompt(fake::key("h1", "s2"), "ship the echo".into()),
+        result: Ok(herder_protocol::CommandResult::Applied),
+    });
+    let message = ItemBody::UserMessage {
+        text: "ship the echo".into(),
+        attachments: Vec::new(),
+    };
+    let events = vec![fake::started("turn-1"), added("i9", message)];
+    fake::feed(&mut app, "h1", "s2", update("s2", 3, events, Vec::new()));
+    let shown = screen(&render(&mut app, 100, 14));
+    assert_eq!(shown.matches("ship the echo").count(), 1, "{shown}");
+    assert!(!shown.contains("sending"), "{shown}");
+}
+
+#[test]
+fn a_refused_prompt_shows_not_sent_and_why() {
+    let mut app = open_s2(vec![]);
+    fake::type_text(&mut app, "ship the echo");
+    press(&mut app, KeyCode::Enter);
+    app.update(Msg::Sent {
+        origin: crate::compose::Origin::Prompt(fake::key("h1", "s2"), "ship the echo".into()),
+        result: Err("the machine is not connected".into()),
+    });
+    insta::assert_snapshot!(render(&mut app, 100, 14).backend());
+}
+
 #[test]
 fn the_palette_shows_why_a_command_failed() {
     let mut app = open_s2(vec![]);
+    // The palette opens from the transcript; in the composer `:` is text.
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char(':'));
     fake::type_text(&mut app, "mode yolo");
     press(&mut app, KeyCode::Enter);

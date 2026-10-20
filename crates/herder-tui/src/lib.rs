@@ -163,10 +163,10 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         let mut quit = false;
         let mut attach = None;
         let mut full = false;
-        let mut input = false;
+        let mut urgent = false;
         let mut next = Some(msg);
         while let Some(msg) = next {
-            input |= !matches!(msg, Msg::Machines(_) | Msg::Session { .. });
+            urgent |= pace::urgent(&msg);
             for effect in app.update(msg) {
                 match effect {
                     Effect::Quit => quit = true,
@@ -230,7 +230,7 @@ async fn run_in(config_dir: PathBuf) -> Result<()> {
         draw = if full {
             Some(views::Paint::Full)
         } else {
-            pace.after(input, std::time::Instant::now())
+            pace.after(urgent, std::time::Instant::now())
         };
         subscriptions.sync(&client, &app, &tx);
     };

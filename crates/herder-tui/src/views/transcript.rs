@@ -29,7 +29,7 @@ use crate::action::Action;
 use crate::app::{App, Focus};
 use crate::chat::{Chat, ChatAct};
 use crate::mouse::{Click, Hits, Wheel};
-use crate::session::{Entry, Session, SessionKey, Tone, first_line};
+use crate::session::{Delivery, Entry, Session, SessionKey, Tone, first_line};
 use crate::ui::glyphs::Glyphs;
 use crate::ui::theme::Theme;
 use crate::ui::{Ui, badge, fill, fit, spread};
@@ -417,9 +417,10 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// A prompt: a bar in the accent, the text on the panel; badged while the daemon holds it
-    /// behind a running turn, or as from herder, with a muted bar, when herder sent it.
-    fn user(&mut self, id: Option<&ItemId>, text: &str, images: &[Attachment], from: From) {
+    /// A prompt: a bar in the accent, the text on the panel; badged while it is on its way or
+    /// the daemon holds it behind a running turn, or as from herder, with a muted bar, when
+    /// herder sent it. A refused one has a bar in the error colour and says why under it.
+    fn user(&mut self, id: Option<&ItemId>, text: &str, images: &[Attachment], from: From<'_>) {
         let ui = self.ui;
         self.start(true);
         if let Some(id) = id {
@@ -427,7 +428,8 @@ impl<'a> Builder<'a> {
         }
         let bar = match from {
             From::Herder => ui.theme.border,
-            From::User | From::Queued => ui.theme.primary,
+            From::Failed(_) => ui.theme.error,
+            From::User | From::Sending | From::Queued => ui.theme.primary,
         };
         let room = self.width.saturating_sub(3).max(1);
         if self.padded {
@@ -439,6 +441,8 @@ impl<'a> Builder<'a> {
             .collect();
         let badge = match from {
             From::Queued => Some(badge::subtle(ui, "queued", ui.theme.warning)),
+            From::Sending => Some(badge::subtle(ui, "sending", ui.theme.secondary)),
+            From::Failed(_) => Some(badge::subtle(ui, "not sent", ui.theme.error)),
             From::Herder => Some(badge::subtle(ui, "herder", ui.theme.secondary)),
             From::User => None,
         };
@@ -449,6 +453,12 @@ impl<'a> Builder<'a> {
         }
         for line in lines {
             self.push(Row::panel(ui, bar, line.spans));
+        }
+        if let From::Failed(error) = from {
+            let error = format!("{} {error}", ui.glyphs.check_fail);
+            for line in wrap(&[(error, ui.muted())], room, &[], &[]) {
+                self.push(Row::panel(ui, bar, line.spans));
+            }
         }
         if !images.is_empty() && !text.is_empty() {
             self.push(Row::panel(ui, bar, vec![]));
@@ -472,11 +482,15 @@ impl<'a> Builder<'a> {
 
 /// Who a prompt in the transcript is from.
 #[derive(Clone, Copy)]
-enum From {
+enum From<'a> {
     /// A user, or an agent.
     User,
-    /// A user, waiting behind the running turn.
+    /// This TUI, on its way to the daemon.
+    Sending,
+    /// This TUI, waiting behind the running turn.
     Queued,
+    /// This TUI, refused: why.
+    Failed(&'a str),
     /// herder, following up on its own.
     Herder,
 }
@@ -575,8 +589,15 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
     for item in &session.streaming {
         builder.item(item, true);
     }
-    for prompt in &session.queued {
-        builder.user(None, prompt, &[], From::Queued);
+    // What this TUI sent, until the daemon's item for it takes its place.
+    for sent in &session.outbox {
+        let from = match &sent.state {
+            Delivery::Failed(error) => From::Failed(error),
+            _ if session.turn.is_some() => From::Queued,
+            Delivery::Sending => From::Sending,
+            Delivery::Delivered => From::User,
+        };
+        builder.user(None, &sent.text, &[], from);
     }
     (builder.rows, builder.items)
 }

@@ -29,7 +29,7 @@ use crate::action::Action;
 use crate::app::{App, Focus};
 use crate::compose::Act;
 use crate::mouse::{Click, Hits};
-use crate::session::Session;
+use crate::session::{Delivery, Session};
 use crate::ui::input::Prompt;
 use crate::ui::popup::Popup;
 use crate::ui::request::{self, Request};
@@ -488,12 +488,17 @@ fn status_row(frame: &mut Frame, area: Rect, app: &App, session: &Session, compa
             ));
         }
     }
-    if !session.queued.is_empty() && error.is_none() {
+    let queued = session
+        .outbox
+        .iter()
+        .filter(|sent| !matches!(sent.state, Delivery::Failed(_)))
+        .count();
+    if session.turn.is_some() && queued > 0 && error.is_none() {
         if !left.is_empty() {
             left.push(Span::raw("  "));
         }
         left.push(Span::styled(
-            format!("{} queued", session.queued.len()),
+            format!("{queued} queued"),
             Style::new().fg(theme.warning),
         ));
     }

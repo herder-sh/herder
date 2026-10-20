@@ -67,13 +67,34 @@ pub struct Session {
     pub approvals: Vec<PendingApproval>,
     /// Questions nobody answered yet, oldest first.
     pub questions: Vec<PendingQuestion>,
-    /// Prompts this TUI sent while a turn ran, not yet started; the daemon queues them.
-    pub queued: Vec<String>,
+    /// Prompts this TUI sent that the transcript does not hold yet, oldest first: each shows
+    /// at its end from the moment it is sent until the daemon's item for it arrives.
+    pub outbox: Vec<Outgoing>,
     /// Pull requests linked to the session now, in the order they were linked.
     pub prs: Vec<PullRequest>,
     /// Images its prompts carried that its machine does not have, as fetching them told:
     /// the vault never got them, so a session recovered from it lacks them.
     pub not_backed_up: HashSet<AttachmentId>,
+}
+
+/// A prompt sent from this TUI, shown until the daemon journals it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outgoing {
+    /// What was sent.
+    pub text: String,
+    /// Where it is.
+    pub state: Delivery,
+}
+
+/// Where a sent prompt is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// On its way to the daemon.
+    Sending,
+    /// The daemon has it: it starts once the session is free and its CLI is up.
+    Delivered,
+    /// The daemon refused it, or it never got there; why.
+    Failed(String),
 }
 
 /// An approval request waiting for an answer.
@@ -221,7 +242,7 @@ impl Session {
             tool_approvals: HashMap::new(),
             approvals: Vec::new(),
             questions: Vec::new(),
-            queued: Vec::new(),
+            outbox: Vec::new(),
             prs: Vec::new(),
             not_backed_up: HashSet::new(),
         }
@@ -335,10 +356,16 @@ impl Session {
                 Some(notice(text, Tone::Info))
             }
             EventBody::ItemAdded { item } => {
+                // The prompt's own item takes the place of its echo.
                 if let ItemBody::UserMessage { text, .. } = &item.body
-                    && let Some(at) = self.queued.iter().position(|queued| queued == text)
+                    && item.parent_call_id.is_none()
+                    && item.agent_message.is_none()
+                    && item.follow_up.is_none()
+                    && let Some(at) = self.outbox.iter().position(|sent| {
+                        sent.text == *text && !matches!(sent.state, Delivery::Failed(_))
+                    })
                 {
-                    self.queued.remove(at);
+                    self.outbox.remove(at);
                 }
                 self.times.insert(item.id.clone(), at);
                 Some(Entry::Item(item))
