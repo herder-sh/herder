@@ -270,7 +270,8 @@ struct Modes {
 /// Turns off line wrap, so a symbol a terminal draws wider than counted cannot push the end
 /// of a row onto the next; turns on bracketed paste, so a pasted prompt is one edit and not a
 /// key per character; focus reports, so the screen is repainted when a phone app comes back to the front; where
-/// the terminal supports it, disambiguated keys, so Shift-Enter is not Enter; and with
+/// the terminal supports it, disambiguated keys, so Shift-Enter is not Enter and a Cmd-V the
+/// terminal passes on arrives as Cmd-V; and with
 /// `mouse`, mouse reporting, so a phone's taps and swipes reach the TUI.
 fn enable_input_modes(mouse: bool) -> Modes {
     use ratatui::crossterm::event::{

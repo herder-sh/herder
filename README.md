@@ -83,6 +83,21 @@ So approving a tool call is Tab, Enter. The letter shortcuts (`?` lists them) st
 so a tap opens a row or presses a button and a swipe scrolls. `:mouse off` hands the mouse
 back to the app, to select text.
 
+## Pasting images
+
+In the composer, Ctrl+V attaches the clipboard's image, in any terminal with a local
+clipboard. Cmd+V does too where the terminal passes it on when it has no text to paste;
+text still pastes as text:
+
+| Terminal (macOS)  | Cmd+V with only an image on the clipboard                                    |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Ghostty 1.3.1+    | attaches it, with no config: the default `keybind = performable:super+v=paste_from_clipboard` passes Cmd+V on |
+| Ghostty ≤ 1.3.0   | sends nothing; update Ghostty, or use Ctrl+V                                 |
+| iTerm2 3.7+       | asks; "Save to Temp File and Paste Path" attaches it                         |
+| kitty, WezTerm    | sends nothing; use Ctrl+V                                                    |
+
+Over SSH there is no clipboard to read: attach a file with `@path`.
+
 ## Build and test
 
 Requires Rust (the toolchain is pinned in `rust-toolchain.toml`).
