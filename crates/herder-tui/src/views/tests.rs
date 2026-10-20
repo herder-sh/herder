@@ -5,7 +5,7 @@ use herder_protocol::{ItemBody, ItemId};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use serde_json::json;
 
 use crate::app::Focus;
@@ -1616,14 +1616,6 @@ fn the_details_panel_wraps_rather_than_cuts_and_bars_take_one_row() {
     assert!(screen.contains("mem    45%"), "{screen}");
 }
 
-#[test]
-fn the_empty_prompts_cursor_sits_before_its_placeholder() {
-    let mut app = fake::live();
-    app.compose.errors.clear();
-    let screen = render(&mut app, 100, 30).backend().to_string();
-    assert!(screen.contains("▌Write a prompt"), "{screen}");
-}
-
 /// Where `text` starts in `buffer`.
 fn find(buffer: &ratatui::buffer::Buffer, text: &str) -> (u16, u16) {
     let wanted: Vec<String> = text.chars().map(String::from).collect();
@@ -1992,29 +1984,30 @@ fn screen_rows(terminal: &Terminal<TestBackend>, from: u16) -> Vec<String> {
 }
 
 #[test]
-fn the_composer_has_no_blank_rows_and_keeps_the_mode_whole() {
+fn the_composer_keeps_the_mode_whole_in_its_border() {
     for (width, height) in [(60, 30), (100, 30), (160, 40)] {
         let mut app = fake::chat();
         let session = app.sessions.get_mut(&fake::key("h1", "s2")).unwrap();
         session.model = "claude-opus-5-5".to_owned();
         session.permission_mode = herder_protocol::PermissionMode::FullAccess;
         let terminal = render(&mut app, width, height);
-        // The prompt, its meta line, the status row, the rule and the bar.
-        let rows = screen_rows(&terminal, height - 5);
+        // The prompt box, the status row, the rule and the bar.
+        let rows = screen_rows(&terminal, height - 7);
         insta::assert_snapshot!(format!("composer_{width}"), rows.join("\n"));
-        // The placeholder, right under it the meta line, then the status row: no blank row.
+        // The placeholder, a blank text row, the bottom border with the meta, then the
+        // status row.
         let prompt = rows
             .iter()
             .position(|row| row.contains("Write a prompt"))
             .unwrap();
-        assert!(rows[prompt + 1].contains("full access"), "{rows:#?}");
-        assert!(rows[prompt + 2].contains("working"), "{rows:#?}");
+        assert!(rows[prompt + 2].contains("full access"), "{rows:#?}");
+        assert!(rows[prompt + 3].contains("working"), "{rows:#?}");
         if width >= super::NARROW {
             // The account sits by its usage, not in the prompt.
-            assert!(!rows[prompt + 1].contains("claude-main"), "{rows:#?}");
-            assert!(rows[prompt + 2].contains("claude-main 5h 38%"), "{rows:#?}");
+            assert!(!rows[prompt + 2].contains("claude-main"), "{rows:#?}");
+            assert!(rows[prompt + 3].contains("claude-main 5h 38%"), "{rows:#?}");
             // The bar starts with its mode badge: hints that do not fit are left out whole.
-            assert!(rows[4].trim_start().starts_with("PROMPT"), "{rows:#?}");
+            assert!(rows[6].trim_start().starts_with("PROMPT"), "{rows:#?}");
         }
     }
 }
@@ -2031,9 +2024,12 @@ fn a_long_model_gives_way_to_the_permission_mode() {
         .iter()
         .position(|row| row.contains("Write a prompt"))
         .unwrap();
-    let meta = &rows[prompt + 1];
+    let meta = &rows[prompt + 2];
     assert!(meta.contains("claude-opus-5-5-"), "{rows:#?}");
-    assert!(meta.trim_end().ends_with("... - full access"), "{rows:#?}");
+    assert!(
+        meta.trim_end().ends_with("... - full access -+"),
+        "{rows:#?}"
+    );
 }
 
 /// Where the open transcript's rows are kept: the same while nothing rebuilds them.
@@ -2200,4 +2196,82 @@ fn a_streaming_table_draws_its_rows_so_far() {
     // A row cut off mid-cell.
     let mut app = answered("| | P2S | X2D |\n|---|---|---|\n| Nozzles | 1 | **2", true);
     insta::assert_snapshot!("table_streaming_row", render(&mut app, 100, 12).backend());
+}
+
+/// The prompt at the bottom of a session is a box, unfocused and focused, idle and mid-turn,
+/// at 60, 100 and 160 columns: a blank row over it, a rounded border in the accent with
+/// focus, the cursor and the placeholder apart, `provider · model · mode` in the bottom
+/// border, and the status row under the box.
+#[test]
+fn the_prompt_box_reads_as_an_input() {
+    use herder_protocol::{EventBody, TurnId};
+    for running in [false, true] {
+        for focused in [false, true] {
+            for width in [60, 100, 160] {
+                let mut app = fake::chat();
+                if !running {
+                    let done = EventBody::TurnCompleted {
+                        turn_id: TurnId::new("turn-2"),
+                        usage: None,
+                    };
+                    fake::feed(
+                        &mut app,
+                        "h1",
+                        "s2",
+                        update("s2", 300, vec![done], Vec::new()),
+                    );
+                }
+                if !focused {
+                    app.focus = Focus::Transcript;
+                }
+                let theme = app.ui().theme.clone();
+                let terminal = render(&mut app, width, 24);
+                let buffer = terminal.backend().buffer();
+                assert_last_column_blank(buffer);
+                let name = format!(
+                    "prompt_box_{}_{}_{width}",
+                    if running { "running" } else { "idle" },
+                    if focused { "focused" } else { "unfocused" },
+                );
+                insta::assert_snapshot!(name, terminal.backend());
+                let rows = screen_rows(&terminal, 0);
+                let screen = rows.join("\n");
+                let text = rows
+                    .iter()
+                    .position(|row| row.contains("Write a prompt"))
+                    .unwrap_or_else(|| panic!("{screen}"));
+                let at = rows[text].find("Write a prompt").unwrap();
+                let x = u16::try_from(rows[text][..at].chars().count()).unwrap();
+                let y = u16::try_from(text).unwrap();
+                // The cursor, a space, then the placeholder; unfocused, no cursor.
+                let left = if focused { x - 4 } else { x - 2 };
+                if focused {
+                    let cursor = &buffer[(x - 2, y)];
+                    assert!(cursor.modifier.contains(Modifier::REVERSED), "{screen}");
+                    assert_eq!(buffer[(x - 1, y)].symbol(), " ", "{screen}");
+                }
+                // A border down the left, a column of padding inside it.
+                assert!(matches!(buffer[(left, y)].symbol(), "│" | "|"), "{screen}");
+                assert_eq!(buffer[(left + 1, y)].symbol(), " ", "{screen}");
+                let border = if focused { theme.primary } else { theme.border };
+                assert_eq!(buffer[(left, y)].fg, border, "{screen}");
+                // A rounded top over the text, a blank row over that.
+                assert!(
+                    matches!(buffer[(left, y - 1)].symbol(), "╭" | "+"),
+                    "{screen}"
+                );
+                let blank = (left..left + 20).all(|x| buffer[(x, y - 2)].symbol() == " ");
+                assert!(blank, "{screen}");
+                // Two text rows at least, then the bottom border with the meta at its right.
+                let bottom = &rows[text + 2];
+                assert!(bottom.contains('╰') || bottom.contains('+'), "{screen}");
+                assert!(bottom.contains("claude-opus"), "{screen}");
+                assert!(!rows[text + 1].contains("claude-opus"), "{screen}");
+                // The status row under the box, not in it.
+                let status = &rows[text + 3];
+                assert_eq!(status.contains("working"), running, "{screen}");
+                assert!(status.contains("38%"), "{screen}");
+            }
+        }
+    }
 }

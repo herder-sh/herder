@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 453
 expression: "render(&mut app, width, height).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks   prs   term                        │ ○ docs                             idle  "
@@ -23,6 +24,6 @@ expression: "render(&mut app, width, height).backend()"
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
 " ─────────────────────── │  laptop is offline · F fork                       │                                          "
-" + new            ≡ menu │                                      claude-main  │                                          "
+" + new            ≡ menu │                                    claude-main    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  s switch  p prs  ? help            ● vault  "

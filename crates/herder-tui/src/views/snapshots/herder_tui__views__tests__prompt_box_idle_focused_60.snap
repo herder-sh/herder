@@ -1,0 +1,29 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+assertion_line: 2097
+expression: terminal.backend()
+---
+" ! api - app - box                            1/4  | switch "
+" ! 1 need you  x 1 error  * 1 running              |    !   "
+"                                                            "
+"    + Task write tests > herder/api-tests                   "
+"      ` $ cargo test -p api health                          "
+"                                                            "
+"    I added GET /health; it returns 200 with the build      "
+"    version so load balancers can probe it.                 "
+"                                                            "
+"    - one route in src/api.rs                               "
+"    - one test, in a child session                          "
+"                                                            "
+"    = claude-main - claude-opus - 1m 12s                    "
+"                                                            "
+" | Good. Now remove the old target directory.               "
+"                                                            "
+"    = claude-main - claude-opus - 0s                        "
+"                                                            "
+" +-------------------------------------------------------+  "
+" |   Write a prompt...                                   |  "
+" |                                                       |  "
+" +-------------------------- claude - claude-opus - ask -+  "
+"                                                  5h 38%    "
+" > send   esc done   s switch   t term                      "

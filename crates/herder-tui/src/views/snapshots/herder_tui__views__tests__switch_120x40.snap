@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 973
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◉ api                         needs you  "
@@ -35,10 +36,10 @@ expression: terminal.backend()
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
-"                         │                                                   │                                          "
-"                         │                                                   │                                          "
-"                         │  ┃ s                                              │                                          "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                     │                                          "
-" + new            ≡ menu │                          Main Weekly · Fable 93%  │                                          "
+"                         │  ╭─────────────────────────────────────────────╮  │                                          "
+"                         │  │ s                                           │  │                                          "
+"                         │  │                                             │  │                                          "
+" ─────────────────────── │  ╰──────────────── claude · claude-opus · ask ─╯  │                                          "
+" + new            ≡ menu │                        Main Weekly · Fable 93%    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+x ? help           ● box  ✗ laptop  "

@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 689
 expression: "render(&mut app, 100, 12).backend()"
 ---
 " herder        inbox 0 « │                                                                          "
@@ -8,9 +9,9 @@ expression: "render(&mut app, 100, 12).backend()"
 "  ◉ box                1 │                                                                          "
 "▶   ├ ◉ app · api        │                                                                          "
 " ─────────────────────── │                                                                          "
-" attention      priority │                                                                          "
-"  ◉ api · app · box      │                                                                          "
-" ─────────────────────── │  ┃ ▌Write a prompt…                                                      "
-" + new            ≡ menu │    ✗ claude cannot switch models mid-session               claude-main   "
+" attention      priority │  ╭───────────────────────────────────────────────────────────────────╮   "
+"  ◉ api · app · box      │  │   Write a prompt…                                                 │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │    ✗ claude cannot switch models mid-session             claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

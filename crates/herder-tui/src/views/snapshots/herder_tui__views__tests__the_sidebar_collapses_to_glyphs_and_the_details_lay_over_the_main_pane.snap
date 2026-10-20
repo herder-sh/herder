@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 341
 expression: "render(&mut app, 100, 30).backend()"
 ---
 " » │  chat   tasks 2   prs 1   term                      │ ● api                           running  "
@@ -25,10 +26,10 @@ expression: "render(&mut app, 100, 30).backend()"
 "   │                                                     │ cpu 12% · mem 768 MiB · 3 processes      "
 "   │                                                     │ ● app-db-1  running                      "
 "   │                                                     │ ○ app-web-1  exited                      "
-"   │                                                     │ :down brings app down                    "
-"   │                                                     │                                          "
-"   │  ┃ Write a prompt…                                  │                                          "
-"   │  ┃ claude · claude-opus · ask                       │                                          "
+"   │  ╭──────────────────────────────────────────────────│ :down brings app down                    "
+"   │  │ Write a prompt…                                  │                                          "
+"   │  │                                                  │                                          "
+"   │  ╰──────────────────────────────────────────────────│                                          "
 "   │    ⠋ working · 0s                                   │                                          "
 "───┴─────────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  NAVIGATE   ◉ 1 waiting  j/k move  enter open  n new  v group  z fold  ? help         ● box  ● m2  "

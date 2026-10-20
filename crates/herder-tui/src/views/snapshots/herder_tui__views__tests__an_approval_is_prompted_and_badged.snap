@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 549
 expression: terminal.backend()
 ---
 " herder        inbox 2 « │  ┃                                                                       "
@@ -19,6 +20,6 @@ expression: terminal.backend()
 "                         │  ┃                                                                       "
 "                         │  ┃  allow    deny               y allow · n deny · ←/→ enter · f full    "
 " ─────────────────────── │  ┃                                                                       "
-" + new            ≡ menu │    ⠋ working · 0s                                          claude-main   "
+" + new            ≡ menu │    ⠋ working · 0s                                        claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  APPROVAL   ◉ 2 waiting  y allow  n deny  esc navigate  ctrl+x leader  ? help               ● box  "

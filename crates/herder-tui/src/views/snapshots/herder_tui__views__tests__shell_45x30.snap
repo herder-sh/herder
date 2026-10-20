@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 239
 expression: "render(&mut app, width, height).backend()"
 ---
 " * api - app - box             1/6  | switch "
@@ -26,9 +27,9 @@ expression: "render(&mut app, width, height).backend()"
 "                                             "
 "                                             "
 "                                             "
-"                                             "
-"                                             "
-" | |Write a prompt...                        "
-" | claude - claude-opus - ask                "
-"   | working - 0s                    5h 38%  "
+" +----------------------------------------+  "
+" |   Write a prompt...                    |  "
+" |                                        |  "
+" +----------- claude - claude-opus - ask -+  "
+"   | working - 0s                  5h 38%    "
 " > send   esc done   ^c stop   s switch      "

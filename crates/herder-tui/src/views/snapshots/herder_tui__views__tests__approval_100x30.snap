@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 363
 expression: "render(&mut app, width, height).backend()"
 ---
 " herder        inbox 2 « │  chat   tasks 2   prs 1   term                                           "
@@ -29,6 +30,6 @@ expression: "render(&mut app, width, height).backend()"
 "                         │  ┃                                                                       "
 "                         │  ┃  allow    deny               y allow · n deny · ←/→ enter · f full    "
 " ─────────────────────── │  ┃                                                                       "
-" + new            ≡ menu │    ⠋ working · 0s                                   claude-main 5h 38%   "
+" + new            ≡ menu │    ⠋ working · 0s                                 claude-main 5h 38%     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  APPROVAL   ◉ 2 waiting  y allow  n deny  esc navigate  ctrl+x leader  ? help         ● box  ● m2  "

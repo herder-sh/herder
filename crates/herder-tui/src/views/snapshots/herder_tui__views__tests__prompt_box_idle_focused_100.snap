@@ -1,0 +1,29 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+assertion_line: 2097
+expression: terminal.backend()
+---
+" herder        inbox 0 « │  chat   tasks 2   prs   term                                             "
+"                         │                                                                          "
+" machines     by machine │                                                                          "
+"  ◉ box                1 │     I added GET /health; it returns 200 with the build version so        "
+"▶   ├ ◉ app · api        │     load balancers can probe it.                                         "
+"    │ ├ ● write the tes… │                                                                          "
+"    │ └ ✗ document it    │     • one route in src/api.rs                                            "
+"    └ ○ app · fix-login  │     • one test, in a child session                                       "
+"                         │                                                                          "
+" ─────────────────────── │     ▣ claude-main · claude-opus · 1m 12s                                 "
+" attention      priority │                                                                          "
+"  ◉ api · app · box      │  ┃                                                                       "
+"  ✗ document it · app    │  ┃ Good. Now remove the old target directory.                            "
+"  ● write the tests      │  ┃                                                                       "
+"                         │                                                                          "
+"                         │     ▣ claude-main · claude-opus · 0s                                     "
+"                         │                                                                          "
+"                         │  ╭───────────────────────────────────────────────────────────────────╮   "
+"                         │  │   Write a prompt…                                                 │   "
+"                         │  │                                                                   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │                                                   claude-main 5h 38%     "
+"─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
+"  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

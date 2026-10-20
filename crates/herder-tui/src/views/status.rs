@@ -57,7 +57,7 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     let shown: Vec<Hint> = hints.iter().map(|(hint, _)| hint.clone()).collect();
     let placed = ModeBar::new(ui, &shown)
         .lead(Line::from(lead))
-        .right(connections(app, ui))
+        .machines(connections(app, ui))
         .render(area, frame.buffer_mut());
     for (at, rect) in placed {
         if let Some(click) = &hints[at].1 {
@@ -66,22 +66,22 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, hits: &mut Hits) {
     }
 }
 
-/// Each machine's connection: `● box  ◌ m2  ✗ vault`.
-pub(super) fn connections(app: &App, ui: Ui) -> Line<'static> {
-    let mut spans = Vec::new();
-    for machine in &app.machines {
-        let (mark, color) = match &machine.connection {
-            ConnectionState::Connected => (ui.glyphs.connected, ui.theme.success),
-            ConnectionState::Connecting => (ui.glyphs.connecting, ui.theme.warning),
-            ConnectionState::Disconnected { .. } => (ui.glyphs.disconnected, ui.theme.error),
-        };
-        if !spans.is_empty() {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled(mark, Style::new().fg(color)));
-        spans.push(Span::styled(format!(" {}", machine.name), ui.text()));
-    }
-    Line::from(spans)
+/// Each machine's connection mark and name, as the bar shows them: `● box  ◌ m2  ✗ vault`.
+pub(super) fn connections(app: &App, ui: Ui) -> Vec<(Span<'static>, String)> {
+    app.machines
+        .iter()
+        .map(|machine| {
+            let (mark, color) = match &machine.connection {
+                ConnectionState::Connected => (ui.glyphs.connected, ui.theme.success),
+                ConnectionState::Connecting => (ui.glyphs.connecting, ui.theme.warning),
+                ConnectionState::Disconnected { .. } => (ui.glyphs.disconnected, ui.theme.error),
+            };
+            (
+                Span::styled(mark, Style::new().fg(color)),
+                machine.name.clone(),
+            )
+        })
+        .collect()
 }
 
 /// The keys that work now, for the mode and what has focus; each with its tap where one key

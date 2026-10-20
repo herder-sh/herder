@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 1466
 expression: "render(&mut app, 100, 20).backend()"
 ---
 " herder        inbox 0 « │                                                                          "
@@ -15,10 +16,10 @@ expression: "render(&mut app, 100, 20).backend()"
 " atte│   archive               archive the session                                          │       "
 "  ◉ a│   unarchive             bring an archived session back                               │       "
 "  ✗ d│                                                                                      │       "
-"  ● w│  enter run  tab complete  esc close                                                  │       "
-"     │                                                                                      │       "
-"     └──────────────────────────────────────────────────────────────────────────────────────┘       "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                            "
-" + new            ≡ menu │    ⠋ working · 0s                                          claude-main   "
+"  ● w│  enter run  tab complete  esc close                                                  │───╮   "
+"     │                                                                                      │   │   "
+"     └──────────────────────────────────────────────────────────────────────────────────────┘   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │    ⠋ working · 0s                                        claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 " esc close                                                                                   ● box  "

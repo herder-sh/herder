@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 690
 expression: "render(&mut app, 100, 14).backend()"
 ---
 " herder        inbox 0 « │  ┃                                                                       "
@@ -10,9 +11,9 @@ expression: "render(&mut app, 100, 14).backend()"
 "    │ ├ ● write the tes… │                                                                          "
 " ─────────────────────── │                                                                          "
 " attention      priority │                                                                          "
-"  ◉ api · app · box      │                                                                          "
-"  ✗ document it · app    │                                                                          "
-" ─────────────────────── │  ┃ ▌Write a prompt…                                                      "
-" + new            ≡ menu │                                                            claude-main   "
+"  ◉ api · app · box      │  ╭───────────────────────────────────────────────────────────────────╮   "
+"  ✗ document it · app    │  │   Write a prompt…                                                 │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

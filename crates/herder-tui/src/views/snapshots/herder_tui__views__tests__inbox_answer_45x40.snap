@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " inbox 2                    < back  | switch "
@@ -37,8 +38,8 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-"                                             "
-"                                             "
-"| 9000                                       "
-"| answer - write the tests                   "
+"+------------------------------------------+ "
+"| 9000                                     | "
+"|                                          | "
+"+--------------- answer - write the tests -+ "
 " > send   esc cancel                         "

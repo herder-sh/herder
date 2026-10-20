@@ -1,19 +1,23 @@
 ---
 source: crates/herder-tui/src/ui/snapshot.rs
+assertion_line: 53
 expression: dump(&buffer)
 ---
-|  PROMPT                ● box  ● m2  ◌ vault |
+|  PROMPT   esc navigate  ● box  ● m2  ◌ vau… |
 |  NAVIGATE   / commands  esc navigate        |
 
  0   0..1   fg=Reset bg=Reset
  0   1..9   fg=Black bg=Cyan BOLD
- 0   9..24  fg=Reset bg=Reset
- 0  24..25  fg=Green bg=Reset
- 0  25..31  fg=Reset bg=Reset
- 0  31..32  fg=Green bg=Reset
- 0  32..37  fg=Reset bg=Reset
- 0  37..38  fg=Yellow bg=Reset
- 0  38..45  fg=Reset bg=Reset
+ 0   9..11  fg=Reset bg=Reset
+ 0  11..14  fg=Reset bg=Reset BOLD
+ 0  14..23  fg=DarkGray bg=Reset
+ 0  23..25  fg=Reset bg=Reset
+ 0  25..26  fg=Green bg=Reset
+ 0  26..32  fg=Reset bg=Reset
+ 0  32..33  fg=Green bg=Reset
+ 0  33..38  fg=Reset bg=Reset
+ 0  38..39  fg=Yellow bg=Reset
+ 0  39..45  fg=Reset bg=Reset
  1   0..1   fg=Reset bg=Reset
  1   1..11  fg=Black bg=Blue BOLD
  1  11..13  fg=Reset bg=Reset

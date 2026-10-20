@@ -2,17 +2,21 @@
 //!
 //! - a pending approval or question, inline as a [`Request`] panel. An approval takes the
 //!   prompt's place; a question sits over it, and the prompt takes a typed answer;
-//! - the [`Prompt`], with its images' chips over the text (`image 1 · 340 KB`) and
-//!   `provider · model · mode` under it, as the Mac app's prompt box holds its model and
-//!   permission menus; and the `/` and `@` [`Popup`] over the transcript;
-//! - the status row: the spinner and how long the turn has run, and at the right the
-//!   session's account with its busiest usage window, as the Mac app's footer names it.
+//! - the [`Prompt`], a box a blank row under the transcript, with its images' chips over
+//!   the text (`image 1 · 340 KB`) and `provider · model · mode` in its bottom border, as
+//!   the Mac app's prompt box holds its model and permission menus; and the `/` and `@`
+//!   [`Popup`] over the transcript;
+//! - under the box, the status row: the spinner and how long the turn has run, and at the
+//!   right the session's account with its busiest usage window, as the Mac app's footer
+//!   names it.
 //!
 //! ```text
-//! ┃ ▌Write a prompt…
-//! ┃ claude · claude-opus-5-5 · full access
-//!   ⠋ working · 12s                                        claude-main 5h 27%
-//! ```
+//! ╭──────────────────────────────────────────────────────────╮
+//! │ █ Write a prompt…                                        │
+//! │                                                          │
+//! ╰─────────────────────── claude · claude-opus-5-5 · ask ─╯
+//!   ⠋ working · 12s                            claude-main 5h 27%
+//! //! ```
 //!
 //! A tap on a button or a choice answers; a tap on the prompt writes in it.
 
@@ -38,7 +42,7 @@ use crate::ui::{Ui, badge, fit, spread};
 /// Rows of a request's body before `f` shows the rest.
 const REQUEST_ROWS: usize = 15;
 
-/// Screens shorter than this leave out the prompt's meta line.
+/// Screens shorter than this give the prompt one text row, not two.
 const SHORT: u16 = 20;
 
 /// Where a tap on the request panel answers.
@@ -200,10 +204,10 @@ fn chips(app: &App, width: u16) -> Vec<Line<'static>> {
             badge::chip(ui, &label.replace('…', ui.glyphs.ellipsis), style)
         })
         .collect();
-    badge::chip_rows(chips, usize::from(width.saturating_sub(3)))
+    badge::chip_rows(chips, usize::from(Prompt::text_width(width)))
 }
 
-/// The prompt's meta line, `provider · model · mode`, `width` columns wide: the provider
+/// The prompt's meta, `provider · model · mode`, `width` columns wide: the provider
 /// gives way first, then the model is cut; the mode, what the agent may do, stays whole.
 fn meta(app: &App, session: &Session, width: u16) -> Line<'static> {
     let ui = app.ui();
@@ -257,11 +261,9 @@ fn mode_label(mode: herder_protocol::PermissionMode) -> &'static str {
 pub(super) struct Heights {
     request: u16,
     prompt: u16,
-    /// Whether the prompt shows its meta line.
-    meta: bool,
 }
 
-/// The controls' heights in a main pane `area`, on a screen `tall` enough for the meta line.
+/// The controls' heights in a main pane `area`, on a screen `tall` enough for a roomy prompt.
 fn heights(app: &App, session: &Session, area: Rect, compact: bool, tall: bool) -> Heights {
     let width = area.width.saturating_sub(2);
     let request = request(app, session, width, compact).map_or(0, |(panel, _)| panel.height());
@@ -284,11 +286,7 @@ fn heights(app: &App, session: &Session, area: Rect, compact: bool, tall: bool) 
         };
         Prompt::height(&app.compose.editor, width, max_lines, tall) + chips
     };
-    Heights {
-        request,
-        prompt,
-        meta: tall,
-    }
+    Heights { request, prompt }
 }
 
 /// Splits the main pane into the transcript and, below it, the controls, on a screen
@@ -382,10 +380,10 @@ pub(super) fn draw(
             }
         }
     }
-    // The status row lines up with the prompt's text.
+    // The status row lines up with the prompt's text, inside its border and padding.
     let status_text = Rect {
         x: status.x + 2.min(status.width),
-        width: status.width.saturating_sub(2),
+        width: status.width.saturating_sub(4),
         ..status
     };
     status_row(frame, status_text, app, session, compact);
@@ -417,10 +415,8 @@ pub(super) fn draw(
     let focused = app.focus == Focus::Composer;
     let mut widget = Prompt::new(ui, &app.compose.editor)
         .focused(focused)
-        .chips(chips(app, inner.width));
-    if heights.meta {
-        widget = widget.meta(meta(app, session, inner.width.saturating_sub(3)));
-    }
+        .chips(chips(app, inner.width))
+        .meta(meta(app, session, inner.width.saturating_sub(6)));
     if !session.questions.is_empty() {
         widget = widget
             .accent(ui.theme.attention)

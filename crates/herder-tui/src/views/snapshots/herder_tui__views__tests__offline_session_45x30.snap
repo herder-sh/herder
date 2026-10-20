@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 453
 expression: "render(&mut app, width, height).backend()"
 ---
 " o docs - app - vault          3/3  | switch "
@@ -30,5 +31,5 @@ expression: "render(&mut app, width, height).backend()"
 "                                             "
 "                                             "
 " laptop is offline - F fork                  "
-"                                claude-main  "
+"                              claude-main    "
 " F fork   < back   s switch   t term         "

@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 727
 expression: "render(&mut app, 100, 12).backend()"
 ---
 " herd┌ commands ─────────────────────────────────────────────────────────────────────── esc ┐       "
@@ -8,9 +9,9 @@ expression: "render(&mut app, 100, 12).backend()"
 "  ◉ b│                                                                                      │       "
 "▶   ├│ ▶ mode <mode>           read_only, ask, auto_edit or full_access                     │       "
 " ────│                                                                                      │       "
-" atte│  ✗ unknown mode yolo                                                                 │       "
-"  ◉ a│                                                                                      │       "
-" ────│  enter run  tab complete  esc close                                                  │       "
-" + ne│                                                                                      │main   "
+" atte│  ✗ unknown mode yolo                                                                 │───╮   "
+"  ◉ a│                                                                                      │   │   "
+" ────│  enter run  tab complete  esc close                                                  │k ─╯   "
+" + ne│                                                                                      │in     "
 "─────└──────────────────────────────────────────────────────────────────────────────────────┘────── "
 " esc close                                                                                   ● box  "

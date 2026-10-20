@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 329
 expression: "render(&mut app, 100, 30).backend()"
 ---
 " herder        inbox 1 « │  chat   tasks 2   prs 1   term                                           "
@@ -25,10 +26,10 @@ expression: "render(&mut app, 100, 30).backend()"
 " │ / go to            L link a PR        R retitle          : commands         │                    "
 " │ n new session      A accounts         v group by         ? help             │                    "
 " │ s switch           m fleet            H archived         q quit             │                    "
-" │ I inbox            a add machine      z fold tasks       1-9 attention row  │                    "
-" │ B board            t terminals        b sidebar                             │                    "
-" │ P all PRs          F fork             d details                             │                    "
-" │ p session PRs      E rename           r reconnect                           │                    "
-" └─────────────────────────────────────────────────────────────────────────────┘laude-main 5h 38%   "
+" │ I inbox            a add machine      z fold tasks       1-9 attention row  │────────────────╮   "
+" │ B board            t terminals        b sidebar                             │                │   "
+" │ P all PRs          F fork             d details                             │                │   "
+" │ p session PRs      E rename           r reconnect                           │ude-opus · ask ─╯   "
+" └─────────────────────────────────────────────────────────────────────────────┘ude-main 5h 38%     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  LEADER   ◉ 1 waiting  esc cancel  ? help                                             ● box  ● m2  "

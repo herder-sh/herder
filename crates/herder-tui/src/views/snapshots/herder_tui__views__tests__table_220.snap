@@ -1,6 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 2097
+assertion_line: 2141
 expression: "render(&mut app, width, 26).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                                                                                                                          │ ◉ api                         needs you  "
@@ -22,10 +22,10 @@ expression: "render(&mut app, width, 26).backend()"
 "                         │                                                                                                                                                       │                                          "
 "                         │                                                                                                                                                       │                                          "
 "                         │                                                                                                                                                       │                                          "
-"                         │                                                                                                                                                       │                                          "
-"                         │                                                                                                                                                       │                                          "
-"                         │  ┃ Write a prompt…                                                                                                                                    │                                          "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                                                                                                         │                                          "
-" + new            ≡ menu │                                                                                                                                          claude-main  │                                          "
+"                         │  ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  │                                          "
+"                         │  │ Write a prompt…                                                                                                                                 │  │                                          "
+"                         │  │                                                                                                                                                 │  │                                          "
+" ─────────────────────── │  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── claude · claude-opus · ask ─╯  │                                          "
+" + new            ≡ menu │                                                                                                                                        claude-main    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  s switch  p prs  ctrl+x leader  ? help                                                                                                   ● box  "
