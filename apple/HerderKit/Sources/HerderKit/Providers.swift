@@ -179,7 +179,7 @@ struct ProvidersView: View {
                     section(group, versions: versions.rows.first { $0.provider == group.provider }, report: report)
                 }
                 if !versions.rows.isEmpty { clis(versions) }
-                // MCP servers: their section goes here, once the machines report them.
+                if !fleet.mcpMachines.isEmpty { McpServersSection(fleet: fleet) }
                 if let report, !report.models.isEmpty { models(report.models) }
             }
             .padding(.horizontal, 20)
@@ -314,7 +314,9 @@ struct ProvidersView: View {
                 Text(ModelCatalog.providerName(group.provider)).font(.headline).foregroundStyle(Theme.text)
                 if let versions, let latest = versions.latest {
                     Text(latest).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
-                    if !versions.outdated.isEmpty {
+                    if let available = versions.available {
+                        Text("Update available → \(available)").font(.caption).foregroundStyle(Theme.accent)
+                    } else if !versions.outdated.isEmpty {
                         Text(versions.outdated.count == 1 ? "1 machine behind" : "\(versions.outdated.count) machines behind")
                             .font(.caption).foregroundStyle(Theme.accent)
                     }
@@ -404,7 +406,7 @@ struct ProvidersView: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Provider CLIs").font(.headline).foregroundStyle(Theme.text)
-                    Text("Versions on each machine, against the newest any of them has.")
+                    Text("Versions on each machine, against the newest any of them has and its vendor’s latest release.")
                         .font(.caption).foregroundStyle(Theme.secondary)
                 }
                 Spacer(minLength: 8)
@@ -652,6 +654,8 @@ struct VersionTable: View {
 /// can run; why not, on hover, when it cannot.
 struct VersionCell: View {
     let cell: ProviderVersions.Cell
+    /// Whether to show the version an update brings; off where the row says it.
+    var showsAvailable = true
     let act: (ProviderVersions.Cell) -> Void
 
     var body: some View {
@@ -662,6 +666,10 @@ struct VersionCell: View {
             case .outdated:
                 Image(systemName: "arrow.up.circle.fill").font(.caption).foregroundStyle(Theme.accent)
                 Text(cell.version ?? "").font(Theme.monoSmall).foregroundStyle(Theme.text)
+                if showsAvailable, let available = cell.available {
+                    Text("→ \(available)").font(Theme.monoSmall).foregroundStyle(Theme.accent)
+                        .help("Update available → \(available)")
+                }
             case .current, .unknown:
                 Text(cell.version ?? "Installed").font(Theme.monoSmall).foregroundStyle(Theme.secondary)
             }

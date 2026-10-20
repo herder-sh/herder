@@ -986,6 +986,7 @@ struct MachineSettingsSheet: View {
                 if machine.hosts.isEmpty {
                     accounts(machine)
                     clis(machine)
+                    McpMachineSettings(fleet: fleet, machine: machine)
                 }
                 Field(label: "Connection", hint: "Since the app opened. Round trips are pings every 15 seconds.") {
                     let log = fleet.connectionLog[hostId] ?? []
@@ -1169,10 +1170,10 @@ struct MachineSettingsSheet: View {
                             ProviderMark(provider: row.provider, size: 16).frame(width: 18)
                             Text(ModelCatalog.providerName(row.provider)).font(.subheadline).foregroundStyle(Theme.text)
                             Spacer(minLength: 8)
-                            if cell.state == .outdated, let latest = row.latest {
-                                Text("\(latest) on other machines").font(.caption).foregroundStyle(Theme.tertiary)
+                            if cell.state == .outdated, let available = cell.available {
+                                Text("Update available → \(available)").font(.caption).foregroundStyle(Theme.accent)
                             }
-                            VersionCell(cell: cell) { cell in
+                            VersionCell(cell: cell, showsAvailable: false) { cell in
                                 installing = fleet.providerTerminals.install(cell.provider, on: cell.hostId)
                             }
                         }

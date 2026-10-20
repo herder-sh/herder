@@ -104,6 +104,17 @@ struct ProviderTerminals {
     }
 }
 
+extension Fleet {
+    /// Cancels the login `key` runs: closes its terminal on the machine, which hangs up the
+    /// provider's login, so it adds no account. Its terminal then shows it ended.
+    func cancelLogin(_ key: ProviderJobKey) async throws {
+        guard let terminalId = providerTerminals[key]?.terminalId else {
+            throw HerderError.Local(detail: "the login has no terminal on the machine yet")
+        }
+        try await client.closeTerminal(hostId: key.hostId, terminalId: terminalId)
+    }
+}
+
 /// Where a login or install stands, as its row and header say it.
 enum JobProgress: Equatable {
     /// Opening the terminal on the machine.

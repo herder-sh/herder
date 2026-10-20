@@ -128,6 +128,8 @@ struct AccountSettingsTests {
         // Ended, it no longer holds its id, so the form may suggest it again.
         #expect(fleet.providerTerminals.pendingIds(on: machine.hostId).isEmpty)
         #expect(connection.view(client: fleet.client, sessionId: nil) === screen)
+        // A login the machine never opened has no terminal there to cancel.
+        await #expect(throws: HerderError.self) { try await fleet.cancelLogin(key) }
     }
     @MainActor
     @Test(.enabled(if: FakeDaemon.path != nil, "needs HERDER_FAKE_DAEMON"))
