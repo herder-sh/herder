@@ -458,6 +458,7 @@ struct Sidebar: View {
                     }
                     .buttonStyle(.plain)
                     .help("\(machine.name): \(machine.connection.label)")
+                    .accessibilityIdentifier("sidebar-machine-\(machine.name)")
                 }
             }
             .padding(14)
