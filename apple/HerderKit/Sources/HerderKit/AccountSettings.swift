@@ -277,6 +277,7 @@ struct AddAccountSheet: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(ModelCatalog.providerName(account.provider)) \(account.accountId), \(progress.label)")
+                    .accessibilityIdentifier("running-login-\(account.accountId)")
                 }
             }
         }
@@ -351,6 +352,7 @@ struct JobTerminal: View {
                 .frame(height: 390)
                 .background(.black, in: .rect(cornerRadius: Theme.corner))
                 .clipShape(.rect(cornerRadius: Theme.corner))
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("login-terminal")
             if progress == .added {
                 Label("Account added", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.success)

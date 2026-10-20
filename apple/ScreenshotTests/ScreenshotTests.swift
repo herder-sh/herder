@@ -118,7 +118,7 @@ final class ScreenshotTests: XCTestCase {
             if openAddAccount() {
                 shoot(platform("add-account-running"))
                 // The first login: Enter answers its prompt, and the account is added.
-                let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Claude'")).firstMatch
+                let first = app.descendants(matching: .any)["running-login-claude"].firstMatch
                 if wait(first, "running Claude login") {
                     press(first)
                     if wait(terminal, "login terminal again") {
@@ -135,7 +135,7 @@ final class ScreenshotTests: XCTestCase {
         }
         dismiss()
         #if os(macOS)
-        let machine = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
+        let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
         if wait(machine, "devbox in the sidebar") {
             press(machine)
             settle()
