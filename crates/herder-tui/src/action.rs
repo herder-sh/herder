@@ -154,6 +154,11 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Action> {
     if let Some(action) = compose::for_key(key, app) {
         return action;
     }
+    // Cmd keys are the terminal's: one it passes on, as Cmd-V with only an image to paste,
+    // is no NAVIGATE key.
+    if key.modifiers.contains(KeyModifiers::SUPER) {
+        return None;
+    }
     if let Some(action) = inbox::for_key(key, app) {
         return Some(Action::Inbox(action));
     }
