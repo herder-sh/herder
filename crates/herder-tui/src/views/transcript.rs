@@ -23,7 +23,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use super::markdown::{self, wrap};
+use super::markdown::{self, wrap, wrap_joined};
 use super::tools;
 use crate::action::Action;
 use crate::app::{App, Focus};
@@ -47,25 +47,60 @@ pub(crate) struct Row {
     pub fills: Vec<(u16, u16, Style)>,
     /// The item the row belongs to, by index into the items drawn.
     pub item: Option<usize>,
+    /// The column the row's text starts in, past bars and indents: a selection copies from
+    /// there ([`crate::selection`]).
+    pub text: u16,
+    /// How the row's text follows the row before it, when copied.
+    pub join: Join,
+}
+
+/// How a row's text follows the row before it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Join {
+    /// On a line of its own.
+    #[default]
+    Line,
+    /// The same line, wrapped at a space.
+    Space,
+    /// The same line, wrapped inside a word.
+    Glued,
 }
 
 impl Row {
     pub(super) fn new(line: Line<'static>) -> Self {
+        Self::text(line, 0, Join::Line)
+    }
+
+    /// A row whose text starts in column `text`, following the row before as `join` says.
+    pub(super) fn text(line: Line<'static>, text: usize, join: Join) -> Self {
         Self {
             line,
             fills: Vec::new(),
             item: None,
+            text: u16::try_from(text).unwrap_or(u16::MAX),
+            join,
         }
     }
 
     /// A row of a block on the panel, behind a bar of `bar`'s colour.
     pub(super) fn panel(ui: Ui, bar: ratatui::style::Color, rest: Vec<Span<'static>>) -> Self {
+        Self::panel_joined(ui, bar, rest, Join::Line)
+    }
+
+    /// [`Row::panel`], following the row before as `join` says.
+    pub(super) fn panel_joined(
+        ui: Ui,
+        bar: ratatui::style::Color,
+        rest: Vec<Span<'static>>,
+        join: Join,
+    ) -> Self {
         let mut spans = vec![
             Span::styled(ui.glyphs.bar, Style::new().fg(bar)),
             Span::raw(" "),
         ];
         spans.extend(rest);
-        let mut row = Self::new(Line::from(spans));
+        let text = crate::ui::width(ui.glyphs.bar) + 1;
+        let mut row = Self::text(Line::from(spans), text, join);
         row.fills.push((0, 0, ui.panel()));
         row
     }
@@ -129,8 +164,9 @@ impl<'a> Builder<'a> {
         self.rows.push(row);
     }
 
+    /// A one-line thing, its text past the indent.
     pub fn line(&mut self, line: Line<'static>) {
-        self.push(Row::new(line));
+        self.push(Row::text(line, INDENT, Join::Line));
     }
 
     /// Whether `id` is expanded.
@@ -316,7 +352,7 @@ impl<'a> Builder<'a> {
             Span::styled(label, ui.muted()),
             Span::styled("─".repeat(room - left), rule),
         ]);
-        self.line(fit(line, self.width, ui.glyphs));
+        self.push(Row::new(fit(line, self.width, ui.glyphs)));
     }
 
     /// A block: a bar of `bar`'s colour down the left on the panel, `title`, then `body`.
@@ -388,8 +424,9 @@ impl<'a> Builder<'a> {
                     let style = ui.muted().add_modifier(Modifier::ITALIC);
                     let pad = vec![Span::raw(" ".repeat(INDENT + 2))];
                     for line in text.lines().skip_while(|line| line.trim().is_empty()) {
-                        for line in wrap(&[(line.to_owned(), style)], self.width - 1, &pad, &pad) {
-                            self.line(line);
+                        let runs = [(line.to_owned(), style)];
+                        for (line, join) in wrap_joined(&runs, self.width - 1, &pad, &pad) {
+                            self.push(Row::text(line, INDENT + 2, join));
                         }
                     }
                 }
@@ -435,9 +472,9 @@ impl<'a> Builder<'a> {
         if self.padded {
             self.push(Row::panel(ui, bar, vec![]));
         }
-        let mut lines: Vec<Line<'static>> = text
+        let mut lines: Vec<(Line<'static>, Join)> = text
             .lines()
-            .flat_map(|line| wrap(&[(line.to_owned(), ui.text())], room, &[], &[]))
+            .flat_map(|line| wrap_joined(&[(line.to_owned(), ui.text())], room, &[], &[]))
             .collect();
         let badge = match from {
             From::Queued => Some(badge::subtle(ui, "queued", ui.theme.warning)),
@@ -447,12 +484,12 @@ impl<'a> Builder<'a> {
             From::User => None,
         };
         if let Some(badge) = badge
-            && let Some(first) = lines.first_mut()
+            && let Some((first, _)) = lines.first_mut()
         {
             *first = spread(first.clone(), Line::from(badge), room, ui.glyphs);
         }
-        for line in lines {
-            self.push(Row::panel(ui, bar, line.spans));
+        for (line, join) in lines {
+            self.push(Row::panel_joined(ui, bar, line.spans, join));
         }
         if let From::Failed(error) = from {
             let error = format!("{} {error}", ui.glyphs.check_fail);
@@ -608,7 +645,7 @@ pub(crate) fn rows(app: &App, session: &Session, width: u16) -> (Vec<Row>, Vec<I
 #[derive(Default)]
 pub(crate) struct Cache {
     built: Option<Built>,
-    pub(super) rows: Vec<Row>,
+    pub(crate) rows: Vec<Row>,
 }
 
 impl std::fmt::Debug for Cache {
@@ -677,6 +714,16 @@ fn cached(app: &mut App, key: SessionKey, width: u16) {
     let Some(session) = app.sessions.get(&key) else {
         return;
     };
+    // A selection is kept across rows built again as a turn streams, but not onto another
+    // session or width, whose rows are others.
+    if app
+        .transcript
+        .built
+        .as_ref()
+        .is_none_or(|built| built.session != key || built.width != width)
+    {
+        app.selection = None;
+    }
     let (rows, items) = rows(app, session, width);
     app.transcript = Cache {
         built: Some(Built::of(app, key, width)),
@@ -758,6 +805,10 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &mut App, hits: &mut Hits
             hits.click(line_area, Click::Act(Action::Chat(ChatAct::ToggleAt(item))));
         }
     }
+    if let Some(selection) = &app.selection {
+        crate::selection::highlight(buf, inner, rows, first, selection);
+    }
+    hits.text = Some(inner);
     hits.wheel(area, Wheel::Transcript);
 }
 

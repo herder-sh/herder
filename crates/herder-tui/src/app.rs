@@ -303,6 +303,10 @@ pub struct App {
     pub(crate) pressed: Option<Click>,
     /// Where the press of a drag in progress landed, and the row it last reached.
     pub(crate) dragged: Option<(u16, u16, u16)>,
+    /// The transcript text the mouse selected, until the next press or key.
+    pub(crate) selection: Option<crate::selection::Selection>,
+    /// The clicks so far of a double- or triple-click on the transcript.
+    pub(crate) clicks: Option<crate::selection::Clicks>,
     /// What the last frame's action bar buttons do, in order; empty on a wide screen.
     pub(crate) bar: Vec<Click>,
     /// The action bar button Tab moved to, which Enter presses.
@@ -361,6 +365,8 @@ impl Default for App {
             hits: Hits::default(),
             pressed: None,
             dragged: None,
+            selection: None,
+            clicks: None,
             bar: Vec::new(),
             bar_focus: None,
             leader: None,
@@ -407,6 +413,7 @@ impl App {
         match msg {
             Msg::Key(key) => {
                 self.notice = None;
+                self.selection = None;
                 if key.kind != KeyEventKind::Release && self.leader.take().is_some() {
                     return match action::for_leader(key) {
                         Some(action) => self.act(action),
@@ -488,7 +495,11 @@ impl App {
             Msg::Tick(_) => true,
             Msg::Mouse(event) => matches!(
                 event.kind,
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::Moved
+                MouseEventKind::ScrollUp
+                    | MouseEventKind::ScrollDown
+                    | MouseEventKind::Moved
+                    | MouseEventKind::Down(_)
+                    | MouseEventKind::Drag(_)
             ),
             Msg::Key(key) if self.leader.is_none() && self.bar_focus.is_none() => matches!(
                 action::for_key(*key, self),

@@ -98,6 +98,13 @@ text still pastes as text:
 
 Over SSH there is no clipboard to read: attach a file with `@path`.
 
+## Selecting text
+
+On a desktop terminal, drag over the transcript to select text; letting go copies it to the
+clipboard (OSC 52) and says "copied". Double-click copies a word, triple-click a line, and
+`c` in the transcript copies the chosen item, or the last reply. For the terminal's own
+selection, Shift-drag (Option-drag in some macOS terminals), or `:mouse off`.
+
 ## Build and test
 
 Requires Rust (the toolchain is pinned in `rust-toolchain.toml`).

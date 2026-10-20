@@ -112,8 +112,11 @@ impl App {
                 }
             }
             ChatAct::Copy => {
-                let cursor = chat.cursor.clone();
-                let text = cursor.and_then(|id| self.item_text(&id));
+                // With no item chosen, the agent's last reply.
+                let text = match chat.cursor.clone() {
+                    Some(id) => self.item_text(&id),
+                    None => self.last_reply(),
+                };
                 return match text {
                     Some(text) => {
                         self.notice = Some("copied".to_owned());
@@ -200,6 +203,25 @@ impl App {
         let doing = if open { "opening" } else { "saving" };
         self.notice = Some(format!("{doing} {count} {images}…"));
         effects
+    }
+
+    /// The text of the open session's last reply.
+    fn last_reply(&self) -> Option<String> {
+        let session = self.open_session()?;
+        session
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Item(item) => Some(item),
+                _ => None,
+            })
+            .chain(&session.streaming)
+            .filter(|item| item.parent_call_id.is_none())
+            .rev()
+            .find_map(|item| match &item.body {
+                ItemBody::AssistantMessage { text } => Some(text.clone()),
+                _ => None,
+            })
     }
 
     /// The text of the open session's item `id`, as copied: a message's text, or a tool
@@ -304,6 +326,21 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn c_with_no_item_chosen_copies_the_last_reply() {
+        let mut app = fake::chat();
+        app.focus = Focus::Transcript;
+        draw(&mut app, 120);
+        assert_eq!(app.chat.cursor, None);
+        assert_eq!(
+            press(&mut app, 'c'),
+            [Effect::Copy(
+                "Removing the old target next: first I check that nothing".to_owned()
+            )]
+        );
+        assert_eq!(app.notice.as_deref(), Some("copied"));
     }
 
     #[test]

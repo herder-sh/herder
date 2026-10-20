@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::table::Table;
-use super::transcript::Row;
+use super::transcript::{Join, Row};
 use crate::ui::{Ui, width};
 
 /// A run of text in one style.
@@ -33,10 +33,10 @@ pub(super) fn markdown(ui: Ui, text: &str, indent: usize, width: usize) -> Vec<R
             // Code keeps its indentation, on the panel from the indent to the edge.
             let style = Style::new().fg(theme.markdown_code_block);
             let runs = vec![(line.to_owned(), style)];
-            for line in wrap(&runs, room.saturating_sub(2).max(1), &[], &[]) {
+            for (line, join) in wrap_joined(&runs, room.saturating_sub(2).max(1), &[], &[]) {
                 let mut spans = vec![Span::raw(format!("{pad}  "))];
                 spans.extend(line.spans);
-                let mut row = Row::new(Line::from(spans));
+                let mut row = Row::text(Line::from(spans), indent + 2, join);
                 row.fills.push((
                     u16::try_from(indent).unwrap_or(0),
                     0,
@@ -67,10 +67,8 @@ pub(super) fn markdown(ui: Ui, text: &str, indent: usize, width: usize) -> Vec<R
             } else if is_rule(trimmed) {
                 let rule = "─".repeat(room);
                 let style = Style::new().fg(theme.markdown_horizontal_rule);
-                rows.push(Row::new(Line::from(vec![
-                    Span::raw(pad.clone()),
-                    Span::styled(rule, style),
-                ])));
+                let line = Line::from(vec![Span::raw(pad.clone()), Span::styled(rule, style)]);
+                rows.push(Row::text(line, indent, Join::Line));
                 continue;
             } else if let Some(rest) = ["- ", "* ", "+ "]
                 .iter()
@@ -115,10 +113,10 @@ pub(super) fn markdown(ui: Ui, text: &str, indent: usize, width: usize) -> Vec<R
             } else {
                 (vec![], vec![], line, base)
             };
-        for line in wrap(&inline(ui, body, style), room, &first, &next) {
+        for (line, join) in wrap_joined(&inline(ui, body, style), room, &first, &next) {
             let mut spans = vec![Span::raw(pad.clone())];
             spans.extend(line.spans);
-            rows.push(Row::new(Line::from(spans)));
+            rows.push(Row::text(Line::from(spans), indent, join));
         }
     }
     // A reply's trailing blank lines take no rows.
@@ -241,8 +239,22 @@ pub(super) fn wrap(
     first: &[Span<'static>],
     next: &[Span<'static>],
 ) -> Vec<Line<'static>> {
+    wrap_joined(runs, width, first, next)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// [`wrap`], with how each line follows the one before: the first starts a [`Join::Line`].
+pub(super) fn wrap_joined(
+    runs: &[Run],
+    width: usize,
+    first: &[Span<'static>],
+    next: &[Span<'static>],
+) -> Vec<(Line<'static>, Join)> {
     let indent = |spans: &[Span<'static>]| spans.iter().map(|s| width_of(&s.content)).sum();
     let mut lines = Vec::new();
+    let mut join = Join::Line;
     let mut spans: Vec<Span<'static>> = first.to_vec();
     let mut used: usize = indent(first);
     let mut words = 0;
@@ -276,7 +288,8 @@ pub(super) fn wrap(
             let w = width_of(token);
             let gap = space.as_ref().map_or(0, |(s, _)| width_of(s));
             if words > 0 && used + gap + w > width {
-                lines.push(Line::from(std::mem::take(&mut spans)));
+                lines.push((Line::from(std::mem::take(&mut spans)), join));
+                join = Join::Space;
                 spans = next.to_vec();
                 used = indent(next);
                 words = 0;
@@ -297,7 +310,8 @@ pub(super) fn wrap(
                     let cw = width_of(c.encode_utf8(&mut buf));
                     if used + cw > width && !part.is_empty() {
                         push(&mut spans, std::mem::take(&mut part), *style);
-                        lines.push(Line::from(std::mem::take(&mut spans)));
+                        lines.push((Line::from(std::mem::take(&mut spans)), join));
+                        join = Join::Glued;
                         spans = next.to_vec();
                         used = indent(next);
                     }
@@ -309,7 +323,7 @@ pub(super) fn wrap(
             words += 1;
         }
     }
-    lines.push(Line::from(spans));
+    lines.push((Line::from(spans), join));
     lines
 }
 

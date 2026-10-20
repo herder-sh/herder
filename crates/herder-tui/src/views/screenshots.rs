@@ -30,7 +30,7 @@ const SIZES: [(u16, u16); 3] = [(45, 40), (100, 30), (160, 40)];
 type Scene = (&'static str, fn(&Theme, Mode, u16, u16) -> Buffer);
 
 /// Every scene.
-const SCENES: [Scene; 46] = [
+const SCENES: [Scene; 47] = [
     ("components", |theme, mode, width, height| {
         gallery(theme, mode, width, height, false)
     }),
@@ -84,6 +84,25 @@ const SCENES: [Scene; 46] = [
             &mut app,
             "write the docs page too, and link it from @README.md",
         );
+        app_buffer(app, theme, width, height)
+    }),
+    ("select", |theme, _, width, height| {
+        // The reply's first lines selected, as a drag leaves them.
+        let mut app = fake::chat();
+        app_buffer_ref(&mut app, theme, width, height);
+        let rows = &app.transcript.rows;
+        let reply = rows
+            .iter()
+            .position(|row| row.line.to_string().contains("I added"))
+            .unwrap_or(0);
+        app.selection = Some(crate::selection::Selection {
+            anchor: crate::selection::Spot { row: reply, col: 5 },
+            head: crate::selection::Spot {
+                row: reply + 3,
+                col: 18,
+            },
+            grown: true,
+        });
         app_buffer(app, theme, width, height)
     }),
     ("approve", |theme, _, width, height| {
