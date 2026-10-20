@@ -63,8 +63,8 @@ struct ReachTests {
         let draft = work.draft(taken: [])
         #expect(draft.account == NewAccount(accountId: "claude-work", provider: "claude", label: "Claude-Work",
                                             configDir: "~/.claude-work"))
-        // An id taken there gets the provider's next free one.
-        #expect(work.draft(taken: ["claude-work"]).id == "claude")
+        // An id taken there gets one named after the login's email.
+        #expect(work.draft(taken: ["claude-work"]).id == "claude-me")
 
         let missingCursor = groups[2].logins[0].missing
         #expect(missingCursor.map(\.name) == ["server", "mini"])

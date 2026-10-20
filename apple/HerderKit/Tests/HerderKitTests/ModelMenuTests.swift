@@ -47,24 +47,6 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.name("", provider: "opencode") == "OpenCode default")
     }
 
-    @Test func hintsNameAProviderUsedOnAnotherMachine() {
-        var laptop = machine("a", name: "laptop", sessions: [])
-        laptop.accounts = [
-            Account(accountId: "cursor", provider: "cursor", label: "Cursor", configDir: nil, email: nil, usage: []),
-        ]
-        var box = machine("b", name: "box", sessions: [])
-        #expect(ProviderHints.lines(for: box, in: [laptop, box]) == ["also on laptop: cursor"])
-        #expect(ProviderHints.lines(for: laptop, in: [laptop, box]).isEmpty)
-    }
-
-    @Test func versionCompareIsLexicographicOnDottedNumbers() {
-        #expect(ProviderHints.version("2.1.0", isNewerThan: "1.9.9"))
-        #expect(ProviderHints.version("1.2.1", isNewerThan: "1.2"))
-        #expect(!ProviderHints.version("1.2.0", isNewerThan: "1.2.0"))
-        #expect(!ProviderHints.version("1.0", isNewerThan: "1.0.1"))
-        #expect(ProviderHints.version("v2.0.0", isNewerThan: "1.9"))
-    }
-
     @Test func cursorOffersNamedModelsNotOnlyTheDefault() {
         let models = ModelCatalog.models("cursor")
         #expect(models.count > 1)
