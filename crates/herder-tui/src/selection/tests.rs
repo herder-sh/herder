@@ -151,11 +151,12 @@ fn a_drag_starting_on_a_prompt_leaves_its_bar_out() {
     );
     // The prompt's padding rows and the blank between are empty lines.
     let [Effect::Copy(text)] = &copied[..] else {
-        panic!("{copied:?}");
+        panic!("no copy");
     };
-    assert!(text.starts_with("Add a health route.\n"), "{text:?}");
-    assert!(text.ends_with("\nThe router"), "{text:?}");
-    assert!(!text.contains('┃') && !text.contains('│'), "{text:?}");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.first(), Some(&"Add a health route."));
+    assert_eq!(lines.last(), Some(&"The router"));
+    assert!(lines.iter().all(|line| !line.contains(['┃', '│'])));
 }
 
 #[test]
