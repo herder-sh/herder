@@ -258,6 +258,7 @@ impl<B: Backend> Shared<B> {
             CommandBody::DetachTerminal { terminal_id } => {
                 terminals.detach(&terminal_id, outbox)?
             }
+            CommandBody::CloseTerminal { terminal_id } => terminals.close(&terminal_id)?,
             CommandBody::ResizeTerminal {
                 terminal_id,
                 cols,

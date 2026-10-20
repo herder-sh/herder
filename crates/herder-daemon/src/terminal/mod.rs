@@ -13,9 +13,9 @@
 //! more than [`TERMINAL_BACKLOG`](crate::hub::TERMINAL_BACKLOG) messages behind is disconnected
 //! rather than buffered without bound; it reconnects and re-attaches to get the scrollback.
 //!
-//! A terminal closes when its shell exits, or when its session is archived ([`KillOnArchive`])
-//! or the daemon stops ([`Terminals::close_all`]), which hang the shell up. The owners'
-//! terminal list ([`Hub::terminals_changed`]) is updated on every open and close; a close is
+//! A terminal closes when its shell exits, or when an owner closes it ([`Terminals::close`]),
+//! its session is archived ([`KillOnArchive`]) or the daemon stops ([`Terminals::close_all`]),
+//! which hang the shell up. The owners' terminal list ([`Hub::terminals_changed`]) is updated on every open and close; a close is
 //! announced first with the shell's exit code ([`Hub::terminal_closed`]).
 //!
 //! Owner-only access is enforced before commands get here, by [`crate::auth::authorize`].
@@ -324,6 +324,15 @@ impl Terminals {
         lock(&term.output)
             .attached
             .retain(|other| !Arc::ptr_eq(other, outbox));
+        Ok(())
+    }
+
+    /// Hangs the terminal's program up for an owner, attached or not; it closes once the
+    /// program exits, running its exit hook as for any other exit.
+    pub(crate) fn close(&self, terminal_id: &TerminalId) -> Result<(), ErrorInfo> {
+        let term = self.get(terminal_id)?;
+        info!(%terminal_id, "closing the terminal on request");
+        term.hang_up();
         Ok(())
     }
 

@@ -1170,6 +1170,7 @@
                   "set_skill_enabled",
                   "attach_terminal",
                   "detach_terminal",
+                  "close_terminal",
                   "resize_terminal",
                   "terminal_input"
                 ]

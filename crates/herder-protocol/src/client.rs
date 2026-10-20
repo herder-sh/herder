@@ -733,6 +733,15 @@ pub enum CommandBody {
         /// Target terminal.
         terminal_id: TerminalId,
     },
+    /// Close a terminal: hang up its program, whether or not this connection is attached;
+    /// owners only. It closes as if the program had exited: `terminal_closed` follows, and a
+    /// login that has not logged in adds no account and removes the config dir herder created
+    /// for it. Answered with `applied`; refused with `not_found` for a terminal that is not
+    /// open.
+    CloseTerminal {
+        /// Target terminal.
+        terminal_id: TerminalId,
+    },
     /// Change a terminal's size.
     ResizeTerminal {
         /// Target terminal.

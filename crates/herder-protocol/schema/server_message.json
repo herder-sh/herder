@@ -3173,12 +3173,19 @@
           "type": "boolean"
         },
         "can_update": {
-          "description": "Whether this OS has an update recipe, or the vendor's dedicated updater.",
+          "description": "Whether herder can update it the way it was installed: Homebrew, npm or bun, else the\nCLI's own updater.",
           "type": "boolean"
         },
         "installed": {
           "description": "Whether its CLI ran `--version` successfully.",
           "type": "boolean"
+        },
+        "latest_version": {
+          "description": "The newest release its vendor publishes, present only when it is newer than\n`version`; checked a few times a day, and never for Cursor, which publishes none.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "provider": {
           "description": "The provider.",

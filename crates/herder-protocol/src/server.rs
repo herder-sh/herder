@@ -345,12 +345,17 @@ pub struct ProviderStatus {
     /// The first line of `--version`, when it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The newest release its vendor publishes, present only when it is newer than
+    /// `version`; checked a few times a day, and never for Cursor, which publishes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
     /// The binary herder would run, as a path or a name on `PATH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
     /// Whether this OS has an install recipe herder will run in a terminal.
     pub can_install: bool,
-    /// Whether this OS has an update recipe, or the vendor's dedicated updater.
+    /// Whether herder can update it the way it was installed: Homebrew, npm or bun, else the
+    /// CLI's own updater.
     pub can_update: bool,
 }
 
