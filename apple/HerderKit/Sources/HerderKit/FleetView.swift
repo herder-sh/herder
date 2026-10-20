@@ -450,7 +450,6 @@ struct ChatsView: View {
                 ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats, query: query,
                                 title: "Chats")
                     .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         // Empty, the scroll view is as narrow as its content; the overlay takes the screen's width.
