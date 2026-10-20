@@ -15,6 +15,8 @@ final class ScreenshotTests: XCTestCase {
     func testScreenshots() throws {
         let link = try XCTUnwrap(
             ProcessInfo.processInfo.environment["HERDER_PAIR_LINK"], "needs HERDER_PAIR_LINK")
+        // A profile of its own, so a run on a developer's Mac keeps off their pairings.
+        app.launchEnvironment["HERDER_PROFILE"] = "screenshots"
         app.launch()
         #if os(macOS)
         resize(to: CGSize(width: 1440, height: 900))
@@ -79,7 +81,91 @@ final class ScreenshotTests: XCTestCase {
             shoot("ios-machines")
             #endif
         }
+        providers()
         finish()
+    }
+
+    /// The Providers page, adding accounts on `devbox` (a second login while the first runs,
+    /// then the first finished) and the machine's settings.
+    private func providers() {
+        guard section("Providers") else { return }
+        settle()
+        #if os(macOS)
+        shoot("mac-providers")
+        #else
+        shoot("ios-providers")
+        #endif
+        guard openAddAccount() else { return }
+        shoot(platform("add-account-form"))
+        let start = app.buttons["Start Login"].firstMatch
+        guard wait(start, "Start Login") else { return dismiss() }
+        press(start)
+        let terminal = app.descendants(matching: .any)["login-terminal"].firstMatch
+        _ = wait(terminal, "login terminal")
+        settle()
+        shoot(platform("add-account-login"))
+        // A second login, for another provider, while the first one waits.
+        let another = app.buttons["Add Another Account"].firstMatch
+        if wait(another, "Add Another Account") {
+            press(another)
+            let codex = app.buttons["Codex"].firstMatch
+            if wait(codex, "Codex choice") { press(codex) }
+            settle()
+            shoot(platform("add-account-second-form"))
+            press(start)
+            settle()
+            dismiss()
+            if openAddAccount() {
+                shoot(platform("add-account-running"))
+                // The first login: Enter answers its prompt, and the account is added.
+                let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Claude'")).firstMatch
+                if wait(first, "running Claude login") {
+                    press(first)
+                    if wait(terminal, "login terminal again") {
+                        press(terminal)
+                        app.typeKey(.return, modifierFlags: [])
+                        let done = app.staticTexts["Account added"].firstMatch
+                        if wait(done, "Account added") {
+                            settle()
+                            shoot(platform("add-account-finished"))
+                        }
+                    }
+                }
+            }
+        }
+        dismiss()
+        #if os(macOS)
+        let machine = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
+        if wait(machine, "devbox in the sidebar") {
+            press(machine)
+            settle()
+            shoot("mac-machine-settings")
+            dismiss()
+        }
+        #endif
+    }
+
+    /// Opens Add Account and picks `devbox` when it asks for a machine.
+    private func openAddAccount() -> Bool {
+        let add = app.buttons.matching(NSPredicate(format: "label == 'Add Account'")).firstMatch
+        guard wait(add, "Add Account") else { return false }
+        press(add)
+        settle()
+        let sheet = app.sheets.firstMatch.exists ? app.sheets.firstMatch : app
+        let devbox = sheet.buttons.matching(NSPredicate(format: "label BEGINSWITH 'devbox'")).firstMatch
+        if devbox.waitForExistence(timeout: 3) {
+            press(devbox)
+            settle()
+        }
+        return true
+    }
+
+    private func platform(_ name: String) -> String {
+        #if os(macOS)
+        "mac-\(name)"
+        #else
+        "ios-\(name)"
+        #endif
     }
 
     private func finish() {
@@ -176,7 +262,9 @@ final class ScreenshotTests: XCTestCase {
     /// Closes the sheet on screen.
     private func dismiss() {
         #if os(macOS)
-        app.typeKey(.escape, modifierFlags: [])
+        // A sheet's close button: Escape would go to a focused terminal instead.
+        let close = app.sheets.firstMatch.buttons["Close"].firstMatch
+        if close.exists { close.click() } else { app.typeKey(.escape, modifierFlags: []) }
         #else
         app.swipeDown(velocity: .fast)
         #endif

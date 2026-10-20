@@ -64,14 +64,10 @@ struct ProviderAccounts: Equatable {
         /// the same id unless taken, label, and config dir when it is in the home dir, which
         /// names the same place there.
         func draft(taken: [String]) -> AccountDraft {
-            var draft = AccountDraft(provider: provider, label: account.label,
-                                     configDir: account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "")
-            if taken.contains(account.accountId) {
-                draft.fillId(taken: taken)
-            } else {
-                draft.id = account.accountId
-            }
-            return draft
+            AccountDraft(id: taken.contains(account.accountId)
+                             ? AccountDraft.nextId(provider: provider, taken: taken, email: email) : account.accountId,
+                         provider: provider, label: account.label,
+                         configDir: account.configDir.flatMap { $0.hasPrefix("~/") ? $0 : nil } ?? "", idEdited: true)
         }
     }
 
@@ -135,16 +131,20 @@ struct ProviderAccounts: Equatable {
 }
 
 
-/// Every provider login across the machines, in one place: how much of its plan's limits is
-/// left, its tokens, cost, limit hits and failovers over a period, and where it is missing, to
-/// set it up there: the provider's own login runs on that machine, after its installer when the
-/// CLI is missing. A healthy login reads quietly; one near a limit or missing somewhere stands
-/// out and comes first.
+/// Every provider login across the machines, in one place: one card per provider with its
+/// accounts, how much of each plan's limits is left and what it cost over a period; the
+/// provider CLIs' versions on every machine, to install or update them; and one way to set the
+/// accounts up on the machines that lack them. A healthy login reads quietly; one near a limit
+/// stands out.
 struct ProvidersView: View {
     let fleet: Fleet
     @Binding var sheet: AppSheet?
     @State private var period = UsagePeriod.week
     @State private var setup: Setup?
+    @State private var detail: String?
+    @State private var settingUp = false
+    @State private var adding: Provider?
+    @State private var installs: ProviderJobKey?
     @State private var showsModels = false
 
     /// An account to log in to on a machine.
@@ -163,32 +163,29 @@ struct ProvidersView: View {
 
     var body: some View {
         let accounts = ProviderAccounts(machines: fleet.machines)
+        let versions = ProviderVersions(machines: fleet.machines)
         let answer = fleet.usageCache[period]
         let report = answer.map { UsageReport($0.machines) }
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 28) {
                 summary(accounts, report: report)
                 ForEach(answer?.failures ?? [], id: \.self) { failure in
                     Text(failure).font(.footnote).foregroundStyle(Theme.failure)
                 }
+                let gaps = SetUpGaps(accounts)
+                if !gaps.isEmpty { banner(gaps) }
                 if accounts.groups.isEmpty { empty }
                 ForEach(accounts.groups) { group in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 6) {
-                            ProviderMark(provider: group.provider, size: 13).foregroundStyle(Theme.secondary)
-                            SectionHeading(title: ModelCatalog.providerName(group.provider), count: group.logins.count)
-                        }
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 12, alignment: .top)],
-                                  alignment: .leading, spacing: 12) {
-                            ForEach(group.logins) { login in
-                                card(login, usage: report?.logins[login.id], counted: report != nil)
-                            }
-                        }
-                    }
+                    section(group, versions: versions.rows.first { $0.provider == group.provider }, report: report)
                 }
+                if !versions.rows.isEmpty { clis(versions) }
+                // MCP servers: their section goes here, once the machines report them.
                 if let report, !report.models.isEmpty { models(report.models) }
             }
-            .padding(16)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: 920, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
         .background(Theme.background)
         .navigationTitle("Providers")
@@ -206,24 +203,35 @@ struct ProvidersView: View {
             AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
                             initialDraft: setup.draft)
         }
+        .sheet(item: Binding(get: { detail.map(Detail.init) }, set: { detail = $0?.id })) { detail in
+            AccountDetailSheet(fleet: fleet, loginId: detail.id, period: period)
+        }
+        .sheet(isPresented: $settingUp) { SetUpSheet(fleet: fleet) }
+        .sheet(item: Binding(get: { adding.map(Detail.init) }, set: { adding = $0?.id })) { provider in
+            NewAccountSheet(fleet: fleet, provider: provider.id)
+        }
+        .sheet(item: $installs) { key in InstallsSheet(fleet: fleet, focus: key) }
+    }
+
+    /// A string as an `Identifiable`, for `sheet(item:)`.
+    private struct Detail: Identifiable {
+        let id: String
     }
 
     // MARK: Summary
 
-    /// The period's cost and tokens over every machine, how many logins need attention, and
+    /// The period's cost and tokens over every machine, how many logins are near a limit, and
     /// the period picker.
     private func summary(_ accounts: ProviderAccounts, report: UsageReport?) -> some View {
-        Card {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: 16) {
-                    totals(accounts, report: report)
-                    Spacer(minLength: 16)
-                    periodPicker.frame(width: 260)
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    totals(accounts, report: report)
-                    periodPicker
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 16) {
+                totals(accounts, report: report)
+                Spacer(minLength: 16)
+                periodPicker.frame(width: 260)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                totals(accounts, report: report)
+                periodPicker
             }
         }
     }
@@ -232,7 +240,7 @@ struct ProvidersView: View {
         VStack(alignment: .leading, spacing: 4) {
             if let report {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(UsageReport.dollars(report.total)).font(.title2.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text(UsageReport.dollars(report.total)).font(.title.weight(.semibold)).foregroundStyle(Theme.text)
                     Text("\(UsageReport.tokens(report.total.tokens)) tokens at API prices")
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
@@ -240,15 +248,15 @@ struct ProvidersView: View {
                 .lineLimit(1)
                 .accessibilityElement(children: .combine)
             } else {
-                ProgressView().controlSize(.small).frame(height: 28)
+                ProgressView().controlSize(.small).frame(height: 34)
             }
             let logins = accounts.groups.flatMap(\.logins)
-            let attention = logins.filter(\.needsAttention).count
+            let low = logins.filter { $0.headroom != .plenty }.count
             HStack(spacing: 0) {
                 Text("\(period.title) · \(logins.count == 1 ? "1 account" : "\(logins.count) accounts")")
                     .foregroundStyle(Theme.tertiary)
-                if attention > 0 {
-                    Text(" · \(attention) \(attention == 1 ? "needs" : "need") attention").foregroundStyle(Theme.accent)
+                if low > 0 {
+                    Text(" · \(low) near a limit").foregroundStyle(Theme.accent)
                 }
             }
             .font(.caption)
@@ -265,6 +273,23 @@ struct ProvidersView: View {
         .accessibilityLabel(period.title)
     }
 
+    /// One line for every login missing on some machine, and one action to set them all up.
+    private func banner(_ gaps: SetUpGaps) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "rectangle.stack.badge.plus").font(.title3).foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(gaps.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text(gaps.detail).font(.caption).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            PillButton(title: "Set Up…", prominent: true) { settingUp = true }
+        }
+        .padding(14)
+        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+    }
+
     private var empty: some View {
         Card(padding: 20) {
             VStack(alignment: .leading, spacing: 12) {
@@ -278,136 +303,136 @@ struct ProvidersView: View {
         }
     }
 
-    // MARK: Account card
+    // MARK: Provider
 
-    /// One login: who it is and where, the headroom it has left, each window's meter, the
-    /// period's cost and tokens, and badges only for what is worth a look.
-    private func card(_ login: ProviderAccounts.Login, usage: UsageReport.Login?, counted: Bool) -> some View {
-        let stroke = login.headroom == .plenty ? Theme.stroke : login.headroom.color.opacity(0.8)
-        return VStack(alignment: .leading, spacing: 14) {
-            identity(login)
-            headroom(login)
-            if login.session != nil || login.weekly != nil {
-                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-                    if let session = login.session { meter("Session", session) }
-                    if let weekly = login.weekly { meter("Weekly", weekly) }
+    /// A provider: its name, CLI version and a way to add an account, over its accounts.
+    private func section(_ group: ProviderAccounts.Group, versions: ProviderVersions.Row?,
+                         report: UsageReport?) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                ProviderMark(provider: group.provider, size: 20)
+                Text(ModelCatalog.providerName(group.provider)).font(.headline).foregroundStyle(Theme.text)
+                if let versions, let latest = versions.latest {
+                    Text(latest).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                    if !versions.outdated.isEmpty {
+                        Text(versions.outdated.count == 1 ? "1 machine behind" : "\(versions.outdated.count) machines behind")
+                            .font(.caption).foregroundStyle(Theme.accent)
+                    }
+                }
+                Spacer(minLength: 8)
+                PillButton(title: "Add", symbol: "plus") { adding = group.provider }
+                    .accessibilityLabel("Add \(ModelCatalog.providerName(group.provider)) Account")
+            }
+            VStack(spacing: 0) {
+                ForEach(Array(group.logins.enumerated()), id: \.element.id) { index, login in
+                    if index > 0 { RowDivider() }
+                    row(login, usage: report?.logins[login.id], counted: report != nil)
                 }
             }
-            footer(login, usage: usage, counted: counted)
+            .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+            .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
-        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(stroke))
     }
 
-    private func identity(_ login: ProviderAccounts.Login) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(login.email ?? login.account.label).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    .lineLimit(1).truncationMode(.middle)
-                if login.email == nil {
-                    Text(login.account.accountId).font(Theme.monoSmall).foregroundStyle(Theme.tertiary).lineLimit(1)
+    /// One login: who it is and where on the left, what is left of its tightest limit and what
+    /// it cost on the right; opens its details.
+    private func row(_ login: ProviderAccounts.Login, usage: UsageReport.Login?, counted: Bool) -> some View {
+        Button { detail = login.id } label: {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(login.email ?? login.account.label).font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                        if !login.fallbackOn.isEmpty { Badge(text: "Fallback") }
+                    }
+                    Text(whereabouts(login, usage: usage)).font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
-                Spacer(minLength: 4)
-                let fallbackOn = login.fallbackOn
-                if !fallbackOn.isEmpty {
-                    // Machines may disagree: name the ones it is fallback-only on, unless all.
-                    Text(fallbackOn.count == login.on.count
-                         ? "Fallback" : "Fallback on \(fallbackOn.map(\.name).joined(separator: ", "))")
-                        .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(Theme.raised, in: .capsule)
-                        .lineLimit(1)
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if let tightest = login.tightest {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("\(Int(tightest.window.percentLeft.rounded()))%")
+                                .font(.subheadline.weight(.semibold)).monospacedDigit()
+                                .foregroundStyle(tightest.window.headroom == .plenty ? Theme.text : tightest.window.headroom.color)
+                            Text("\(tightest.label.lowercased()) left").font(.caption).foregroundStyle(Theme.tertiary)
+                        }
+                        HeadroomMeter(window: tightest.window).frame(width: 96)
+                    } else {
+                        Text("No limits reported").font(.caption).foregroundStyle(Theme.tertiary)
+                    }
                 }
-            }
-            let sessions = login.sessions(in: fleet.lists.machines)
-            Text(login.on.map(\.name).joined(separator: ", ")
-                 + (sessions == 0 ? "" : sessions == 1 ? " · 1 session" : " · \(sessions) sessions"))
-                .font(.caption).foregroundStyle(Theme.secondary).lineLimit(1)
-        }
-    }
-
-    /// The headline: what is left of the tightest window.
-    @ViewBuilder private func headroom(_ login: ProviderAccounts.Login) -> some View {
-        if let tightest = login.tightest {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(Int(tightest.window.percentLeft.rounded()))%")
-                    .font(.title.weight(.semibold)).monospacedDigit()
-                    .foregroundStyle(tightest.window.headroom == .plenty ? Theme.text : tightest.window.headroom.color)
-                Text("left of the \(tightest.label.lowercased()) limit").font(.subheadline).foregroundStyle(Theme.secondary)
-            }
-            .lineLimit(1)
-            .accessibilityElement(children: .combine)
-        } else {
-            Text("No plan limits reported yet").font(.subheadline).foregroundStyle(Theme.tertiary)
-        }
-    }
-
-    private func meter(_ label: String, _ window: WindowLeft) -> some View {
-        GridRow {
-            Text(label).foregroundStyle(Theme.secondary)
-            HeadroomMeter(window: window).frame(minWidth: 60, maxWidth: 140)
-            Text("\(Int(window.percentLeft.rounded()))%").foregroundStyle(Theme.text).gridColumnAlignment(.trailing)
-            Text(window.resets.isEmpty ? "" : "resets \(window.resets)").foregroundStyle(Theme.tertiary)
-        }
-        .font(.caption.monospacedDigit())
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
-    }
-
-    /// The period's cost and tokens together, then the badges.
-    private func footer(_ login: ProviderAccounts.Login, usage: UsageReport.Login?, counted: Bool) -> some View {
-        FlowLayout(spacing: 8, lineSpacing: 8) {
-            if let usage, usage.amount.turns > 0 {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(UsageReport.dollars(usage.amount)).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                    Text("\(UsageReport.tokens(usage.amount.tokens)) tokens").font(.caption).foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let usage, usage.amount.turns > 0 {
+                        Text(UsageReport.dollars(usage.amount)).font(.subheadline).foregroundStyle(Theme.text)
+                        Text("\(UsageReport.tokens(usage.amount.tokens)) tokens").font(.caption).foregroundStyle(Theme.tertiary)
+                    } else if counted {
+                        Text("No use").font(.caption).foregroundStyle(Theme.tertiary)
+                    }
                 }
                 .monospacedDigit()
-                .padding(.trailing, 4)
-            } else if counted {
-                Text("No use \(period.label == "Month" ? "this month" : "in \(period.label)")")
-                    .font(.caption).foregroundStyle(Theme.tertiary)
-                    .padding(.trailing, 4)
+                .lineLimit(1)
+                .frame(minWidth: 72, alignment: .trailing)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
             }
-            if !login.missing.isEmpty { missing(login) }
-            if let usage, usage.limitHits + usage.failoversOut + usage.failoversIn > 0 {
-                let detail = "\(usage.limitHits) limit \(usage.limitHits == 1 ? "hit" : "hits"), "
-                    + "failed over \(usage.failoversOut) out and \(usage.failoversIn) in"
-                Chip(symbol: "arrow.triangle.swap",
-                     text: usage.limitHits > 0 ? "\(usage.limitHits) limit \(usage.limitHits == 1 ? "hit" : "hits")"
-                         : "\(usage.failoversOut + usage.failoversIn) failovers")
-                    .help(detail)
-                    .accessibilityLabel(detail)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("account-row")
     }
 
-    /// The machines that lack the login: one badge, whose menu sets it up on each.
-    private func missing(_ login: ProviderAccounts.Login) -> some View {
-        Menu {
-            ForEach(login.missing) { machine in
-                if machine.owner {
-                    Button(machine.needsInstall ? "Install and Set Up on \(machine.name)" : "Set Up on \(machine.name)") {
-                        setUp(login, on: machine)
+    /// The label (when the email leads), the machines, the open sessions and the limit hits.
+    private func whereabouts(_ login: ProviderAccounts.Login, usage: UsageReport.Login?) -> String {
+        var parts: [String] = []
+        if login.email != nil { parts.append(login.account.label) }
+        parts.append(login.on.map(\.name).joined(separator: ", "))
+        let sessions = login.sessions(in: fleet.lists.machines)
+        if sessions > 0 { parts.append(sessions == 1 ? "1 session" : "\(sessions) sessions") }
+        if let hits = usage?.limitHits, hits > 0 { parts.append(hits == 1 ? "1 limit hit" : "\(hits) limit hits") }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: CLIs
+
+    /// Each provider CLI's version per machine, against the newest seen, and the way to bring
+    /// every machine up to date.
+    private func clis(_ versions: ProviderVersions) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Provider CLIs").font(.headline).foregroundStyle(Theme.text)
+                    Text("Versions on each machine, against the newest any of them has.")
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                }
+                Spacer(minLength: 8)
+                let updatable = versions.updatable
+                if !updatable.isEmpty {
+                    PillButton(title: "Update All (\(updatable.count))", symbol: "arrow.down.circle", prominent: true) {
+                        installs = updatable.map { fleet.providerTerminals.install($0.provider, on: $0.hostId) }.first
                     }
-                    .disabled(!machine.connected)
-                } else {
-                    Button("\(machine.name): owners only") {}.disabled(true)
+                } else if versions.rows.contains(where: { !$0.outdated.isEmpty }) {
+                    PillButton(title: "Update All", symbol: "arrow.down.circle") {}
+                        .disabled(true)
+                        .help(versions.rows.flatMap(\.outdated).compactMap(\.blocked).first ?? "")
                 }
             }
-        } label: {
-            Chip(symbol: "exclamationmark.circle",
-                 text: login.missing.count == 1 ? "Missing on \(login.missing[0].name)"
-                     : "Missing on \(login.missing.count) machines",
-                 tint: Theme.accent)
+            VersionTable(versions: versions) { cell in
+                guard cell.blocked == nil, cell.action != nil else { return }
+                installs = fleet.providerTerminals.install(cell.provider, on: cell.hostId)
+            }
+            let running = fleet.providerTerminals.installs
+            if !running.isEmpty {
+                Button { installs = running.last } label: {
+                    Label(running.count == 1 ? "1 install or update" : "\(running.count) installs and updates",
+                          systemImage: "terminal")
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Missing on \(login.missing.map(\.name).joined(separator: ", "))")
     }
 
     // MARK: Models
@@ -447,16 +472,435 @@ struct ProvidersView: View {
             }
         }
     }
+}
 
-    /// Opens the add-account sheet on `machine` for `login`, running the provider's installer
-    /// there first when its CLI is missing.
-    private func setUp(_ login: ProviderAccounts.Login, on machine: ProviderAccounts.Place) {
-        let taken = fleet.machines.first { $0.hostId == machine.hostId }?.accounts.map(\.accountId) ?? []
-        if machine.needsInstall {
-            fleet.accountLogins[machine.hostId] = TerminalConnection(
-                hostId: machine.hostId, terminalId: nil, install: login.provider)
+/// The logins missing on machines whose owner this device is: what the one set-up banner
+/// counts, and the set-up sheet lists.
+struct SetUpGaps: Equatable {
+    struct Gap: Equatable, Identifiable {
+        let login: ProviderAccounts.Login
+        let machines: [ProviderAccounts.Place]
+
+        var id: String { login.id }
+    }
+
+    let gaps: [Gap]
+
+    init(_ accounts: ProviderAccounts) {
+        gaps = accounts.groups.flatMap(\.logins).compactMap { login in
+            let machines = login.missing.filter(\.owner)
+            return machines.isEmpty ? nil : Gap(login: login, machines: machines)
         }
-        setup = Setup(hostId: machine.hostId, draft: login.draft(taken: taken))
+    }
+
+    var isEmpty: Bool { gaps.isEmpty }
+
+    var title: String {
+        gaps.count == 1 ? "1 account isn’t on every machine" : "\(gaps.count) accounts aren’t on every machine"
+    }
+
+    /// The machines that lack one, by name.
+    var detail: String {
+        let names = gaps.flatMap { $0.machines.map(\.name) }.reduce(into: [String]()) { names, name in
+            if !names.contains(name) { names.append(name) }
+        }
+        let list = names.count <= 1 ? names.joined()
+            : names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        return "Set them up on \(list), so sessions there can use them and fail over to them."
+    }
+}
+
+/// Every login missing on a machine, each with a way to set it up there: the provider's own
+/// login on that machine, after its installer when the CLI is missing.
+struct SetUpSheet: View {
+    let fleet: Fleet
+    @State private var setup: ProvidersView.Setup?
+
+    var body: some View {
+        let gaps = SetUpGaps(ProviderAccounts(machines: fleet.machines))
+        SheetScaffold(title: "Set Up on Other Machines", subtitle: "Accounts some of your machines lack") {
+            if gaps.isEmpty {
+                Label("Every account is on every machine.", systemImage: "checkmark.circle")
+                    .foregroundStyle(Theme.secondary)
+            }
+            ForEach(gaps.gaps) { gap in
+                SettingsGroup(title: ModelCatalog.providerName(gap.login.provider)) {
+                    HStack(spacing: 10) {
+                        ProviderMark(provider: gap.login.provider, size: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(gap.login.email ?? gap.login.account.label).font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Theme.text)
+                            Text("On \(gap.login.on.map(\.name).joined(separator: ", "))").font(.caption)
+                                .foregroundStyle(Theme.tertiary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    ForEach(gap.machines) { place in
+                        RowDivider()
+                        SetUpRow(fleet: fleet, login: gap.login, place: place) { setup = $0 }
+                    }
+                }
+            }
+        } footer: {
+            Text("herder runs each provider’s own login on the machine, in the account’s config directory.")
+                .font(.footnote).foregroundStyle(Theme.tertiary)
+            Spacer()
+        }
+        .sheet(item: $setup) { setup in
+            AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
+                            initialDraft: setup.draft)
+        }
+    }
+}
+
+/// A machine that lacks a login, and the button that sets it up there.
+struct SetUpRow: View {
+    let fleet: Fleet
+    let login: ProviderAccounts.Login
+    let place: ProviderAccounts.Place
+    let open: (ProvidersView.Setup) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer").foregroundStyle(Theme.tertiary).frame(width: 16)
+            Text(place.name).font(.subheadline).foregroundStyle(Theme.text)
+            Spacer(minLength: 8)
+            if !place.connected {
+                Text("Not connected").font(.caption).foregroundStyle(Theme.tertiary)
+            }
+            PillButton(title: place.needsInstall ? "Install & Set Up" : "Set Up") {
+                let taken = AccountDraft.taken(on: fleet.machines.first { $0.hostId == place.hostId },
+                                               pending: fleet.providerTerminals.pendingIds(on: place.hostId))
+                if place.needsInstall { fleet.providerTerminals.install(login.provider, on: place.hostId) }
+                open(ProvidersView.Setup(hostId: place.hostId, draft: login.draft(taken: taken)))
+            }
+            .disabled(!place.connected || !place.owner)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(minHeight: 44)
+    }
+}
+
+/// The provider CLIs as a table, a row per provider and a column per machine; on narrow
+/// screens, a list per provider. `act` installs or updates one.
+struct VersionTable: View {
+    let versions: ProviderVersions
+    let act: (ProviderVersions.Cell) -> Void
+
+    var body: some View {
+        let machines = versions.rows.first?.cells ?? []
+        ViewThatFits(in: .horizontal) {
+            table(machines).frame(minWidth: CGFloat(140 + machines.count * 150), maxWidth: .infinity, alignment: .leading)
+            list
+        }
+        .background(Theme.surface, in: .rect(cornerRadius: Theme.corner))
+        .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke))
+    }
+
+    private func table(_ machines: [ProviderVersions.Cell]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+            GridRow {
+                Text("")
+                ForEach(machines) { Text($0.machine) }
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.tertiary)
+            .padding(.vertical, 10)
+            ForEach(versions.rows) { row in
+                Divider().gridCellUnsizedAxes(.horizontal)
+                GridRow {
+                    HStack(spacing: 8) {
+                        ProviderMark(provider: row.provider, size: 14)
+                        Text(ModelCatalog.providerName(row.provider)).font(.subheadline).foregroundStyle(Theme.text)
+                    }
+                    ForEach(row.cells) { cell in VersionCell(cell: cell, act: act) }
+                }
+                .padding(.vertical, 10)
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private var list: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(versions.rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { Divider() }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        ProviderMark(provider: row.provider, size: 14)
+                        Text(ModelCatalog.providerName(row.provider)).font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.text)
+                    }
+                    ForEach(row.cells) { cell in
+                        HStack {
+                            Text(cell.machine).font(.caption).foregroundStyle(Theme.secondary)
+                            Spacer()
+                            VersionCell(cell: cell, act: act)
+                        }
+                    }
+                }
+                .padding(14)
+            }
+        }
+    }
+}
+
+/// One CLI on one machine: its version, quiet when current, and the install or update herder
+/// can run; why not, on hover, when it cannot.
+struct VersionCell: View {
+    let cell: ProviderVersions.Cell
+    let act: (ProviderVersions.Cell) -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            switch cell.state {
+            case .missing:
+                Text("Not installed").font(.caption).foregroundStyle(Theme.tertiary)
+            case .outdated:
+                Image(systemName: "arrow.up.circle.fill").font(.caption).foregroundStyle(Theme.accent)
+                Text(cell.version ?? "").font(Theme.monoSmall).foregroundStyle(Theme.text)
+            case .current, .unknown:
+                Text(cell.version ?? "Installed").font(Theme.monoSmall).foregroundStyle(Theme.secondary)
+            }
+            if let action = cell.action {
+                Button(action.title) { act(cell) }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(cell.blocked == nil ? Theme.link : Theme.tertiary)
+                    .disabled(cell.blocked != nil)
+                    .help(cell.blocked ?? "\(action.title) \(ModelCatalog.providerName(cell.provider)) on \(cell.machine)")
+            }
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The installs and updates this device started, on every machine: each one's progress, and
+/// the terminal of the one picked.
+struct InstallsSheet: View {
+    let fleet: Fleet
+    let focus: ProviderJobKey
+    @State private var picked: ProviderJobKey?
+
+    var body: some View {
+        let keys = fleet.providerTerminals.installs
+        let shown = picked.flatMap { keys.contains($0) ? $0 : nil } ?? (keys.contains(focus) ? focus : keys.last)
+        SheetScaffold(title: "Install and Update", subtitle: "The vendors’ own installers, run in view", height: 720) {
+            if keys.count > 1 {
+                VStack(spacing: 0) {
+                    ForEach(Array(keys.enumerated()), id: \.element) { index, key in
+                        if index > 0 { RowDivider() }
+                        row(key, selected: key == shown)
+                    }
+                }
+                .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+                .overlay(RoundedRectangle(cornerRadius: Theme.corner).strokeBorder(Theme.stroke.opacity(0.6)))
+            }
+            if let shown { JobTerminal(fleet: fleet, key: shown) }
+        } footer: {
+            let finished = keys.filter { fleet.providerTerminals[$0].map(ProviderTerminals.running) == false }
+            if !finished.isEmpty {
+                ActionButton(title: finished.count == keys.count ? "Clear" : "Clear Finished", style: .secondary) {
+                    for key in finished { fleet.providerTerminals.clear(key) }
+                }
+                .frame(maxWidth: 180)
+            }
+            Spacer()
+            if finished.count < keys.count {
+                Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
+            }
+        }
+    }
+
+    private func row(_ key: ProviderJobKey, selected: Bool) -> some View {
+        let name = fleet.machines.first { $0.hostId == key.hostId }?.name ?? key.hostId
+        let provider: Provider = if case .install(let provider) = key.job { provider } else { "" }
+        let progress = fleet.providerTerminals[key].map { JobProgress($0.state, added: false) } ?? .ended
+        return Button { picked = key } label: {
+            HStack(spacing: 10) {
+                ProviderMark(provider: provider, size: 16)
+                Text("\(ModelCatalog.providerName(provider)) on \(name)").font(.subheadline).foregroundStyle(Theme.text)
+                Spacer()
+                JobBadge(progress: progress == .running ? .running : progress)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 40)
+            .background(selected ? Theme.raised : .clear)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One login across the machines: what is left of its plan's limits, what it cost over the
+/// period, and each machine it is on, to edit or log in again there, or missing from, to set
+/// it up there.
+struct AccountDetailSheet: View {
+    let fleet: Fleet
+    let loginId: String
+    let period: UsagePeriod
+    @State private var editing: Editing?
+    @State private var setup: ProvidersView.Setup?
+
+    /// An account on a machine, to edit.
+    struct Editing: Identifiable {
+        let hostId: HostId
+        let account: Account
+
+        var id: String { "\(hostId)/\(account.accountId)" }
+    }
+
+    var body: some View {
+        let login = ProviderAccounts(machines: fleet.machines).groups.flatMap(\.logins).first { $0.id == loginId }
+        SheetScaffold(title: login.map { $0.email ?? $0.account.label } ?? "Account",
+                      subtitle: login.map { ModelCatalog.providerName($0.provider) } ?? "", height: 680) {
+            if let login {
+                limits(login)
+                usage(login)
+                SettingsGroup(title: "Machines") {
+                    ForEach(Array(login.on.enumerated()), id: \.element.id) { index, place in
+                        if index > 0 { RowDivider() }
+                        machine(place, login: login)
+                    }
+                    ForEach(login.missing) { place in
+                        RowDivider()
+                        SetUpRow(fleet: fleet, login: login, place: place) { setup = $0 }
+                    }
+                }
+            } else {
+                Text("This account is no longer on any machine.").foregroundStyle(Theme.secondary)
+            }
+        } footer: {
+            Text("Accounts with the same provider and email share one login, and its limits.")
+                .font(.footnote).foregroundStyle(Theme.tertiary)
+            Spacer()
+        }
+        .sheet(item: $editing) { editing in
+            EditAccountSheet(fleet: fleet, hostId: editing.hostId, account: editing.account)
+        }
+        .sheet(item: $setup) { setup in
+            AddAccountSheet(fleet: fleet, hostId: setup.hostId, initialProvider: setup.draft.provider,
+                            initialDraft: setup.draft)
+        }
+    }
+
+    @ViewBuilder private func limits(_ login: ProviderAccounts.Login) -> some View {
+        Field(label: "Plan limits") {
+            if login.session == nil && login.weekly == nil {
+                Text("No limits reported yet").font(.subheadline).foregroundStyle(Theme.tertiary)
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                    if let session = login.session { meter("Session", session) }
+                    if let weekly = login.weekly { meter("Weekly", weekly) }
+                }
+            }
+        }
+    }
+
+    private func meter(_ label: String, _ window: WindowLeft) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(Theme.secondary)
+            HeadroomMeter(window: window).frame(minWidth: 120, maxWidth: 220)
+            Text("\(Int(window.percentLeft.rounded()))% left").foregroundStyle(Theme.text)
+            Text(window.resets.isEmpty ? "" : "resets \(window.resets)").foregroundStyle(Theme.tertiary)
+        }
+        .font(.subheadline.monospacedDigit())
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private func usage(_ login: ProviderAccounts.Login) -> some View {
+        let usage = fleet.usageCache[period].map { UsageReport($0.machines) }?.logins[login.id] ?? UsageReport.Login()
+        Field(label: period.title) {
+            HStack(spacing: 10) {
+                tile("Cost", UsageReport.dollars(usage.amount))
+                tile("Tokens", UsageReport.tokens(usage.amount.tokens))
+                tile("Limit hits", "\(usage.limitHits)")
+                tile("Failovers", "\(usage.failoversOut) out · \(usage.failoversIn) in")
+            }
+        }
+    }
+
+    private func tile(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(Theme.tertiary)
+            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.text)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
+    }
+
+    /// A machine the login is on: its accounts there, each to edit.
+    private func machine(_ place: ProviderAccounts.Place, login: ProviderAccounts.Login) -> some View {
+        let accounts = fleet.machines.first { $0.hostId == place.hostId }?.accounts
+            .filter { place.accounts.contains($0.accountId) } ?? []
+        return VStack(spacing: 0) {
+            ForEach(accounts, id: \.accountId) { account in
+                HStack(spacing: 10) {
+                    Image(systemName: "desktopcomputer").foregroundStyle(Theme.secondary).frame(width: 16)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(place.name).font(.subheadline).foregroundStyle(Theme.text)
+                        Text("\(account.label) · \(account.accountId)").font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
+                    }
+                    if account.fallback { Badge(text: "Fallback") }
+                    Spacer(minLength: 8)
+                    if place.owner {
+                        PillButton(title: "Edit…") { editing = Editing(hostId: place.hostId, account: account) }
+                            .disabled(!place.connected)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(minHeight: 48)
+            }
+        }
+    }
+}
+
+/// A small quiet capsule: fallback-only, and the like.
+struct Badge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Theme.raised, in: .capsule)
+            .lineLimit(1)
+    }
+}
+
+/// A compact button for actions inside a card or section header; `prominent` for the one that
+/// matters most there.
+struct PillButton: View {
+    let title: String
+    var symbol: String?
+    var prominent = false
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let symbol { Image(systemName: symbol).imageScale(.small) }
+                Text(title)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(prominent ? Theme.onPrimary : Theme.text)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(prominent ? Theme.primary : Theme.raised, in: .capsule)
+            .opacity(enabled ? 1 : 0.45)
+            .contentShape(.capsule)
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
     }
 }
 
