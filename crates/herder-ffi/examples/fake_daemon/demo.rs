@@ -13,6 +13,10 @@
 //!   where it finished the work;
 //! - a finished session on `laptop`.
 //!
+//! Each machine also has fake provider CLIs ([`CLIS`]): their versions differ between machines,
+//! `devbox` and `studio` can install and update them, and adding an account runs a login that
+//! waits for Enter, then reports the account logged in.
+//!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
 //! machine shares, as `--share` prints.
 //!
@@ -32,11 +36,12 @@ use herder_adapters::{
 };
 use herder_client_core::{Client, ConnectionState, PairResult, PairingUri};
 use herder_daemon::auth::{Auth, PAIRING_TTL};
-use herder_daemon::login::Logins;
+use herder_daemon::login::{self, Logins};
 use herder_daemon::mcp;
 use herder_daemon::projects::{
     Discovery, OnSessionsChanged, Overrides, ProjectEntry, ProjectsConfig,
 };
+use herder_daemon::providers::{InstallRecipe, Providers};
 use herder_daemon::resources::{Admission, ReadHost, Reading, ResourcesConfig};
 use herder_daemon::session::{AccountConfig, Accounts, Adapters, EventSink, SessionManager, Setup};
 use herder_daemon::settings::Settings;
@@ -130,6 +135,39 @@ const REPOS: &[&str] = &["api", "web", "infra"];
 
 /// An account: its id, provider and label.
 type Account = (&'static str, &'static str, &'static str);
+
+/// A provider CLI on a machine: the provider and its version, `None` where it is not installed.
+type Cli = (&'static str, Option<&'static str>);
+
+/// Each machine's provider CLIs, and whether herder can install and update them there.
+const CLIS: &[(&str, &[Cli], bool)] = &[
+    (
+        "devbox",
+        &[
+            ("claude", Some("2.1.14 (Claude Code)")),
+            ("codex", Some("codex-cli 0.46.0")),
+            ("cursor", Some("2025.10.02-7a1b2c")),
+        ],
+        true,
+    ),
+    (
+        "studio",
+        &[
+            ("claude", Some("2.1.9 (Claude Code)")),
+            ("codex", Some("codex-cli 0.46.0")),
+            ("cursor", None),
+        ],
+        true,
+    ),
+    (
+        "laptop",
+        &[
+            ("claude", Some("2.1.14 (Claude Code)")),
+            ("codex", Some("codex-cli 0.41.0")),
+        ],
+        false,
+    ),
+];
 
 /// The machines: name, cores, memory in GiB, accounts.
 const MACHINES: &[(&str, u32, u64, &[Account])] = &[
@@ -643,7 +681,13 @@ impl Daemon {
             code: auth.mint("sam", None, PAIRING_TTL)?.code,
         };
         let terminals = Terminals::new(Arc::clone(&hub), PathBuf::from("/bin/sh"));
-        let logins = Logins::new(HashMap::new(), config_file, sessions.clone());
+        let (binaries, recipes) = clis(dir, name)?;
+        let logins = Logins::new(login::programs(&binaries), config_file, sessions.clone());
+        let mut providers = Providers::new(binaries);
+        for (provider, recipe) in recipes {
+            providers = providers.with_recipe(provider, recipe);
+        }
+        providers.publish_to(Arc::clone(&hub));
         let server = Server::new(
             tls,
             auth,
@@ -654,6 +698,7 @@ impl Daemon {
             host.clone(),
         );
         server.manage_settings(settings)?;
+        server.manage_providers(providers)?;
         let server = tokio::spawn(server.run(vec![listener], shutdown.clone()));
         Ok(Self {
             id: host.id,
@@ -760,6 +805,107 @@ fn origins(dir: &Path) -> Result<PathBuf> {
 
 /// Clones the origin of `repo` into `<dir>/<repo>`, with GitHub's `acme/<repo>` as its origin,
 /// which git rewrites to the bare one so checkpoints reach it; returns the clone's path.
+/// Writes the fake provider CLIs of machine `name` into `dir`: each one prints its version,
+/// runs a login that waits for Enter and then reports its config dir logged in, and answers
+/// its provider's status check. Returns them, by provider, with the recipes that install or
+/// update them where the machine has any: the recipe writes the version the CLI then prints.
+fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recipe>)> {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    let (_, clis, recipes) = CLIS
+        .iter()
+        .find(|(machine, _, _)| *machine == name)
+        .context("a machine without CLIs")?;
+    // Writes the version and the CLI's binary, as a vendor installer would.
+    let install = bin.join("install.sh");
+    std::fs::write(
+        &install,
+        "bin=$(dirname \"$0\")\n\
+         echo \"Installing $1 $2...\"\n\
+         sleep 2\n\
+         printf '%s\\n' \"$2\" > \"$bin/$1.version\"\n\
+         printf '#!/bin/sh\\nexec /bin/sh \"%s\" \"$@\"\\n' \"$bin/$1.sh\" > \"$bin/$1\"\n\
+         chmod +x \"$bin/$1\"\n\
+         echo Done.\n",
+    )?;
+    let mut binaries = HashMap::new();
+    let mut installs = Vec::new();
+    for provider in ["claude", "codex", "cursor", "grok", "opencode"] {
+        let (parsed, var, latest) = match provider {
+            "claude" => (
+                Provider::Claude,
+                "CLAUDE_CONFIG_DIR",
+                "2.1.14 (Claude Code)",
+            ),
+            "codex" => (Provider::Codex, "CODEX_HOME", "codex-cli 0.46.0"),
+            "cursor" => (Provider::Cursor, "CURSOR_CONFIG_DIR", "2025.10.02-7a1b2c"),
+            "grok" => (Provider::Grok, "GROK_HOME", "0.1.0"),
+            _ => (Provider::Opencode, "XDG_DATA_HOME", "0.15.2"),
+        };
+        let path = bin.join(provider);
+        let version = bin.join(format!("{provider}.version"));
+        let script = bin.join(format!("{provider}.sh"));
+        // A CLI that is not installed is one whose binary does not exist.
+        binaries.insert(parsed.clone(), path.clone());
+        let installed = clis
+            .iter()
+            .find(|(cli, _)| *cli == provider)
+            .and_then(|(_, v)| *v);
+        if *recipes && clis.iter().any(|(cli, _)| *cli == provider) {
+            installs.push((
+                parsed,
+                InstallRecipe {
+                    program: PathBuf::from("/bin/sh"),
+                    args: vec![
+                        install.display().to_string(),
+                        provider.into(),
+                        latest.into(),
+                    ],
+                },
+            ));
+        }
+        std::fs::write(&script, cli(var, &version))?;
+        if let Some(installed) = installed {
+            std::fs::write(&version, format!("{installed}\n"))?;
+            std::fs::write(
+                &path,
+                format!("#!/bin/sh\nexec /bin/sh '{}' \"$@\"\n", script.display()),
+            )?;
+            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+        }
+    }
+    Ok((binaries, installs))
+}
+
+/// A provider and the recipe that installs or updates it.
+type Recipe = (Provider, InstallRecipe);
+
+/// A fake provider CLI whose config dir is in `var` and whose version is in the file `version`.
+fn cli(var: &str, version: &Path) -> String {
+    format!(
+        r#"dir="${{{var}:-$HOME/.herder-demo-login}}"
+case "$*" in
+  --version) cat '{version}' ;;
+  "auth status --json"|"status --format json")
+    if [ -f "$dir/.demo-login" ]; then echo '{{"loggedIn":true,"isAuthenticated":true}}'
+    else echo '{{"loggedIn":false,"isAuthenticated":false}}'; fi ;;
+  "login status"|"auth list") [ -f "$dir/.demo-login" ] ;;
+  *)
+    echo 'Opening your browser to sign in...'
+    echo
+    echo 'If it did not open, visit:'
+    echo '  https://login.example.com/device?code=DEMO-4821'
+    echo
+    printf 'Press Enter once you have signed in. '
+    read -r _
+    mkdir -p "$dir" && touch "$dir/.demo-login"
+    echo 'Signed in.' ;;
+esac
+"#,
+        version = version.display(),
+    )
+}
+
 fn clone(origins: &Path, repo: &str, dir: &Path) -> Result<String> {
     std::fs::create_dir_all(dir)?;
     let bare = path(&origins.join(format!("{repo}.git")))?;

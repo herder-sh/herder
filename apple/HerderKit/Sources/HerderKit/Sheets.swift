@@ -956,6 +956,8 @@ struct MachineSettingsSheet: View {
     @State private var editingAccount: Account?
     @State private var showingAccountSettings = false
     @State private var addingAccount = false
+    @State private var setup: ProvidersView.Setup?
+    @State private var installing: ProviderJobKey?
     @State private var confirmingForget = false
     @State private var error: String?
     /// The address a Connect is switching to, until it answers or fails.
@@ -980,6 +982,10 @@ struct MachineSettingsSheet: View {
                 if let resources = machine.resources, machine.hosts.isEmpty {
                     TurnLimitField(fleet: fleet, hostId: hostId, load: TurnLoad(resources),
                                    canChange: machine.role == .owner && machine.connection == .connected)
+                }
+                if machine.hosts.isEmpty {
+                    accounts(machine)
+                    clis(machine)
                 }
                 Field(label: "Connection", hint: "Since the app opened. Round trips are pings every 15 seconds.") {
                     let log = fleet.connectionLog[hostId] ?? []
@@ -1031,57 +1037,6 @@ struct MachineSettingsSheet: View {
                 if machine.role == .owner && machine.connection == .connected && machine.hosts.isEmpty {
                     BackupField(fleet: fleet, machine: machine)
                 }
-                Field(label: "Accounts",
-                      hint: "A session at its limit rotates to another of the provider's accounts.") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if machine.accounts.isEmpty {
-                            Text("No accounts yet").foregroundStyle(Theme.tertiary)
-                        }
-                        ForEach(machine.accounts, id: \.accountId) { account in
-                            HStack {
-                                Text(account.label).foregroundStyle(Theme.text)
-                                Text(account.provider).foregroundStyle(Theme.secondary)
-                                Spacer()
-                                Text(account.accountId).font(Theme.monoSmall).foregroundStyle(Theme.tertiary)
-                                if machine.role == .owner {
-                                    Button("Edit") {
-                                        editingAccount = account
-                                        showingAccountSettings = true
-                                    }.disabled(machine.connection != .connected)
-                                }
-                            }
-                            .font(.subheadline)
-                        }
-                        if machine.role == .owner {
-                            ActionButton(title: fleet.accountLogins[hostId] == nil ? "Add Account" : "Account Login",
-                                         style: .secondary) { addingAccount = true }
-                                .disabled(machine.connection != .connected)
-                        } else {
-                            Text("Only the machine owner can add accounts.")
-                                .font(.footnote).foregroundStyle(Theme.tertiary)
-                        }
-                        ForEach(ProviderHints.hints(for: machine, in: fleet.machines), id: \.provider) { hint in
-                            Button {
-                                let status = machine.providers.first { $0.provider == hint.provider }
-                                if !hint.missing || (status?.installed == false && status?.canInstall == true) {
-                                    fleet.accountLogins[hostId] = TerminalConnection(
-                                        hostId: hostId, terminalId: nil, install: hint.provider)
-                                }
-                                addingAccount = true
-                            } label: {
-                                Text(hint.text).font(.footnote).foregroundStyle(Theme.tertiary)
-                            }
-                            .disabled(machine.role != .owner || machine.connection != .connected)
-                            .buttonStyle(.plain)
-                        }
-                        if machine.failover.pin {
-                            Label("Failover pinned: sessions stay on their account", systemImage: "pin")
-                                .font(.footnote).foregroundStyle(Theme.tertiary)
-                        }
-                    }
-                    .padding(12)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.corner))
-                }
                 if let error {
                     Text(error).font(.footnote).foregroundStyle(Theme.failure)
                 }
@@ -1095,12 +1050,11 @@ struct MachineSettingsSheet: View {
         .sheet(isPresented: $showingAccountSettings) {
             if let editingAccount { EditAccountSheet(fleet: fleet, hostId: hostId, account: editingAccount) }
         }
-        .sheet(isPresented: $addingAccount) {
-            AddAccountSheet(
-                fleet: fleet,
-                hostId: hostId,
-                initialProvider: fleet.accountLogins[hostId]?.install ?? "claude")
+        .sheet(isPresented: $addingAccount) { AddAccountSheet(fleet: fleet, hostId: hostId) }
+        .sheet(item: $setup) { setup in
+            AddAccountSheet(fleet: fleet, hostId: hostId, initialProvider: setup.draft.provider, initialDraft: setup.draft)
         }
+        .sheet(item: $installing) { key in InstallsSheet(fleet: fleet, focus: key) }
         .onAppear { name = machine?.name ?? "" }
         .confirmationDialog("Forget \(machine?.name ?? "") on this device?", isPresented: $confirmingForget,
                             titleVisibility: .visible) {
@@ -1110,6 +1064,123 @@ struct MachineSettingsSheet: View {
             }
         } message: {
             Text("Pair again to get it back.")
+        }
+    }
+
+    /// The machine's accounts, each to edit; adding one; and the logins its other machines have
+    /// that it lacks, to set up here.
+    private func accounts(_ machine: Machine) -> some View {
+        let owner = machine.role == .owner
+        let connected = machine.connection == .connected
+        let missing = SetUpGaps(ProviderAccounts(machines: fleet.machines)).gaps.compactMap { gap in
+            gap.machines.first { $0.hostId == hostId }.map { (login: gap.login, place: $0) }
+        }
+        let running = fleet.providerTerminals.pendingIds(on: hostId).count
+        return VStack(alignment: .leading, spacing: 8) {
+            SettingsGroup(title: "Accounts") {
+                if machine.accounts.isEmpty {
+                    Text("No accounts yet").font(.subheadline).foregroundStyle(Theme.tertiary)
+                        .padding(.horizontal, 14).frame(minHeight: 44)
+                }
+                ForEach(Array(machine.accounts.enumerated()), id: \.element.accountId) { index, account in
+                    if index > 0 { RowDivider() }
+                    HStack(spacing: 10) {
+                        ProviderMark(provider: account.provider, size: 16).frame(width: 18)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(account.email ?? account.label).font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
+                            Text(account.email == nil ? account.accountId : "\(account.label) · \(account.accountId)")
+                                .font(Theme.monoSmall).foregroundStyle(Theme.tertiary).lineLimit(1)
+                        }
+                        if account.fallback { Badge(text: "Fallback") }
+                        Spacer(minLength: 8)
+                        if owner {
+                            PillButton(title: "Edit…") {
+                                editingAccount = account
+                                showingAccountSettings = true
+                            }
+                            .disabled(!connected)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .frame(minHeight: 48)
+                }
+                RowDivider()
+                HStack(spacing: 10) {
+                    if owner {
+                        PillButton(title: "Add Account", symbol: "plus") { addingAccount = true }.disabled(!connected)
+                        if running > 0 {
+                            Text(running == 1 ? "1 login running" : "\(running) logins running")
+                                .font(.caption).foregroundStyle(Theme.accent)
+                        }
+                    } else {
+                        Text("Only the machine’s owner can add accounts.").font(.footnote).foregroundStyle(Theme.tertiary)
+                    }
+                    Spacer()
+                    if machine.failover.pin {
+                        Label("Failover pinned", systemImage: "pin").font(.caption).foregroundStyle(Theme.tertiary)
+                            .help("Sessions stay on their account when it hits a limit.")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+            }
+            if !missing.isEmpty {
+                SettingsGroup(title: "On your other machines") {
+                    ForEach(Array(missing.enumerated()), id: \.element.login.id) { index, gap in
+                        if index > 0 { RowDivider() }
+                        HStack(spacing: 10) {
+                            ProviderMark(provider: gap.login.provider, size: 16).frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(gap.login.email ?? gap.login.account.label).font(.subheadline)
+                                    .foregroundStyle(Theme.text).lineLimit(1)
+                                Text("On \(gap.login.on.map(\.name).joined(separator: ", "))").font(.caption)
+                                    .foregroundStyle(Theme.tertiary).lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            PillButton(title: gap.place.needsInstall ? "Install & Set Up" : "Set Up") {
+                                let taken = AccountDraft.taken(on: machine, pending: fleet.providerTerminals.pendingIds(on: hostId))
+                                if gap.place.needsInstall { fleet.providerTerminals.install(gap.login.provider, on: hostId) }
+                                setup = ProvidersView.Setup(hostId: hostId, draft: gap.login.draft(taken: taken))
+                            }
+                            .disabled(!connected)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .frame(minHeight: 48)
+                    }
+                }
+            }
+            Text("A session at its limit rotates to another of its provider’s accounts here.")
+                .font(.footnote).foregroundStyle(Theme.tertiary)
+        }
+    }
+
+    /// The provider CLIs here: each one's version against the newest your machines have, and
+    /// its install or update.
+    @ViewBuilder private func clis(_ machine: Machine) -> some View {
+        let rows = ProviderVersions(machines: fleet.machines).rows
+        if !rows.isEmpty {
+            SettingsGroup(title: "Provider CLIs") {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { RowDivider() }
+                    if let cell = row.cells.first(where: { $0.hostId == hostId }) {
+                        HStack(spacing: 10) {
+                            ProviderMark(provider: row.provider, size: 16).frame(width: 18)
+                            Text(ModelCatalog.providerName(row.provider)).font(.subheadline).foregroundStyle(Theme.text)
+                            Spacer(minLength: 8)
+                            if cell.state == .outdated, let latest = row.latest {
+                                Text("\(latest) on other machines").font(.caption).foregroundStyle(Theme.tertiary)
+                            }
+                            VersionCell(cell: cell) { cell in
+                                installing = fleet.providerTerminals.install(cell.provider, on: cell.hostId)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                    }
+                }
+            }
         }
     }
 

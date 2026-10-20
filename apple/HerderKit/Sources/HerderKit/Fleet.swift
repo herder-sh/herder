@@ -28,10 +28,11 @@ public final class Fleet {
     var renaming: SessionKey?
     /// A short note about something that just finished, shown briefly.
     var toast: Toast?
-    /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
-    var accountLogins: [HostId: TerminalConnection] = [:]
+    /// The provider logins and installs this device started; see `ProviderTerminals`.
+    var providerTerminals = ProviderTerminals()
     /// The last AWS sign-in across the machines, kept while its sign-ins run; see `AwsSignIn`.
     var awsSignIn: AwsSignIn?
+    /// Each session's open shells, kept while the app runs; see `SessionTerminals`.
     @ObservationIgnored var sessionTerminals: [SessionKey: SessionTerminals] = [:]
     @ObservationIgnored private var subscriptions: [SessionKey: Task<Void, Never>] = [:]
     /// Images of user messages, fetched once: by attachment id.
