@@ -662,5 +662,7 @@ struct ProjectSessions: View {
                 Text("No sessions match.").foregroundStyle(Theme.tertiary)
             }
         }
+        // Full width, so the scroll view around it spans the screen rather than its widest row.
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
