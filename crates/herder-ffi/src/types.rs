@@ -784,6 +784,9 @@ pub enum CommandBody {
     DetachTerminal {
         terminal_id: TerminalId,
     },
+    CloseTerminal {
+        terminal_id: TerminalId,
+    },
     ResizeTerminal {
         terminal_id: TerminalId,
         cols: u16,
@@ -1113,6 +1116,9 @@ pub struct ProviderStatus {
     pub provider: Provider,
     pub installed: bool,
     pub version: Option<String>,
+    // Defaulted, so Swift and Kotlin code that builds a status, as tests do, need not name it.
+    #[uniffi(default)]
+    pub latest_version: Option<String>,
     pub binary: Option<String>,
     pub can_install: bool,
     pub can_update: bool,

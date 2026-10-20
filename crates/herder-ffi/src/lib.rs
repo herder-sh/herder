@@ -406,6 +406,20 @@ impl Client {
         Ok(self.terminal(stream))
     }
 
+    /// Closes a terminal, streamed or not, hanging up its program; a login not yet logged in
+    /// adds no account. Owners only.
+    pub async fn close_terminal(
+        &self,
+        host_id: HostId,
+        terminal_id: TerminalId,
+    ) -> Result<(), HerderError> {
+        let client = self.inner.clone();
+        call(&self.handle, async move {
+            client.close_terminal(host_id, terminal_id).await
+        })
+        .await
+    }
+
     /// Logs an existing account in again in a login terminal; owners only.
     pub async fn log_in_account(
         &self,

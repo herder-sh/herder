@@ -130,7 +130,7 @@ fn profiles(text: &str) -> Vec<AwsProfile> {
 }
 
 /// `name` in one of the directories of `path`, if it is a file there.
-fn find(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+pub(crate) fn find(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     std::env::split_paths(path)
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(name))

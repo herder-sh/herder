@@ -1152,6 +1152,35 @@ async fn adding_an_account_relays_its_login_and_saves_the_account() {
     assert!(!config_dir.exists());
     drop(stream);
 
+    // A cancelled login adds nothing, and only an owner may cancel it.
+    let stream = client
+        .add_account(host.clone(), new_account("codex-2"), 80, 24)
+        .await
+        .unwrap();
+    let mut screen = Screen::default();
+    screen.read_until(&stream, "Code: ").await;
+    assert!(config_dir.exists());
+    let refused = member
+        .close_terminal(host.clone(), stream.terminal_id())
+        .await
+        .err();
+    assert!(
+        matches!(&refused, Some(Error::Rejected { info }) if info.code == ErrorCode::Forbidden),
+        "{refused:?}"
+    );
+    client
+        .close_terminal(host.clone(), stream.terminal_id())
+        .await
+        .unwrap();
+    assert_eq!(login_exit(&stream, &mut screen).await, None);
+    assert!(
+        screen.text.contains("account codex-2 was not added"),
+        "{}",
+        screen.text
+    );
+    assert!(!config_dir.exists());
+    drop(stream);
+
     let stream = client
         .add_account(host.clone(), new_account("codex-2"), 80, 24)
         .await

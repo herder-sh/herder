@@ -824,6 +824,7 @@ mod tests {
             provider: Provider::Claude,
             installed: false,
             version: None,
+            latest_version: None,
             binary: Some("claude".into()),
             can_install: true,
             can_update: false,

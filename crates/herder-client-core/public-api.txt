@@ -200,6 +200,14 @@ impl Client {
 }
 
 impl Client {
+    pub async fn close_terminal(
+        &self,
+        host_id: HostId,
+        terminal_id: TerminalId,
+    ) -> Result<(), Error> {}
+}
+
+impl Client {
     pub async fn log_in_account(
         &self,
         host_id: HostId,
