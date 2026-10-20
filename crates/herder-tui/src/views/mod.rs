@@ -49,6 +49,7 @@ mod secrets;
 mod sessions;
 mod status;
 mod switch;
+mod table;
 mod tabs;
 mod terminals;
 mod tools;

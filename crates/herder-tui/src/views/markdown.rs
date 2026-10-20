@@ -1,11 +1,12 @@
 //! Light Markdown for the transcript, in the theme's `markdown*` tokens: headings, lists,
 //! quotes, rules, fenced code on the panel background, and inline `code`, **strong**,
-//! *emphasis* and [links](url). Text is wrapped here, at word boundaries, so the transcript
+//! *emphasis* and [links](url), and [tables](super::table). Text is wrapped here, at word boundaries, so the transcript
 //! knows how many rows it takes.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use super::table::Table;
 use super::transcript::Row;
 use crate::ui::{Ui, width};
 
@@ -20,7 +21,8 @@ pub(super) fn markdown(ui: Ui, text: &str, indent: usize, width: usize) -> Vec<R
     let room = width.saturating_sub(indent).max(1);
     let mut rows = Vec::new();
     let mut code = false;
-    for line in text.lines() {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
         let trimmed = line.trim_start();
         let depth = line.len() - trimmed.len();
         if trimmed.starts_with("```") {
@@ -46,6 +48,14 @@ pub(super) fn markdown(ui: Ui, text: &str, indent: usize, width: usize) -> Vec<R
         }
         if trimmed.is_empty() {
             rows.push(Row::new(Line::raw("")));
+            continue;
+        }
+        if let Some(mut table) = lines.peek().and_then(|next| Table::start(line, next)) {
+            lines.next();
+            while let Some(row) = lines.next_if(|row| !row.trim().is_empty() && row.contains('|')) {
+                table.push(row);
+            }
+            rows.extend(table.rows(ui, indent, room));
             continue;
         }
         let (first, next, body, style): (Vec<Span>, Vec<Span>, &str, Style) =

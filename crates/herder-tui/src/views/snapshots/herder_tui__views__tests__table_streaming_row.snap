@@ -1,0 +1,17 @@
+---
+source: crates/herder-tui/src/views/tests.rs
+assertion_line: 2151
+expression: "render(&mut app, 100, 12).backend()"
+---
+" herder        inbox 0 « │     ┌─────────┬─────┬─────┐                                              "
+"                         │     │         │ P2S │ X2D │                                              "
+" machines     by machine │     ├─────────┼─────┼─────┤                                              "
+"  ◉ box                1 │     │ Nozzles │ 1   │ **2 │                                              "
+"▶   ├ ◉ app · api        │     └─────────┴─────┴─────┘▌                                             "
+" ─────────────────────── │                                                                          "
+" attention      priority │                                                                          "
+"  ◉ api · app · box      │                                                                          "
+" ─────────────────────── │  ┃ Write a prompt…                                                       "
+" + new            ≡ menu │                                                            claude-main   "
+"─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
+"  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  ? help           ● box  "
