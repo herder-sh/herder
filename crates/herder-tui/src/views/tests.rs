@@ -2115,3 +2115,89 @@ fn scrolling_a_long_transcript_keeps_up_with_key_repeat() {
     eprintln!("a scroll step: {step:?}; a frame laying the transcript out: {rebuild:?}");
     assert!(step * 4 < rebuild, "{step:?} a step, {rebuild:?} a rebuild");
 }
+
+/// The table a user saw drawn as raw text (P2d.13).
+const PRINTERS: &str = "Here is how they compare:\n\n\
+    | | P2S | X2D |\n\
+    |---|---|---|\n\
+    | Price (US, Bambu store) | $549 / $749 with AMS 2 Pro | $649 / $899 with AMS 2 Pro |\n\
+    | Nozzles | 1 | **2** |\n\
+    | Build volume | 256×256×256 mm | 256×256×260 mm with one nozzle, 235.5×256×256 mm with both |\n\
+    \nBoth print PLA at 220°C.";
+
+/// `s2` open with `text` as the agent's answer, streaming still if `streaming`.
+fn answered(text: &str, streaming: bool) -> App {
+    let mut app = open_s2(Vec::new());
+    let (done, live) = if streaming {
+        (Vec::new(), vec![item("t1", assistant(text))])
+    } else {
+        (vec![added("t1", assistant(text))], Vec::new())
+    };
+    fake::feed(&mut app, "h1", "s2", update("s2", 10, done, live));
+    press(&mut app, KeyCode::Esc);
+    app
+}
+
+#[test]
+fn a_table_draws_in_boxes_at_its_natural_width_or_wrapped() {
+    for width in [220, 120] {
+        let mut app = answered(PRINTERS, false);
+        insta::assert_snapshot!(
+            format!("table_{width}"),
+            render(&mut app, width, 26).backend()
+        );
+    }
+}
+
+#[test]
+fn a_table_aligns_its_columns_and_keeps_inline_styles() {
+    let text = "| Left | Centre | Right |\n|:--|:-:|--:|\n| `code` | *emph* | [link](http://x) |\n\
+                | 漢字 | 🐑 | 1.5 |";
+    let mut app = answered(text, false);
+    let terminal = render(&mut app, 100, 14);
+    insta::assert_snapshot!(terminal.backend());
+    let buffer = terminal.backend().buffer();
+    let theme = &app.theme;
+    // The first `symbol` right of the sidebar.
+    let at = |symbol: &str| {
+        (0..buffer.area.height)
+            .flat_map(|y| (26..buffer.area.width).map(move |x| (x, y)))
+            .find(|&(x, y)| buffer[(x, y)].symbol() == symbol)
+            .map(|pos| &buffer[pos])
+            .unwrap()
+    };
+    assert_eq!(at("┌").fg, theme.border);
+    assert!(at("L").modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(at("c").fg, theme.markdown_code);
+}
+
+#[test]
+fn a_table_on_a_phone_wraps_its_cells_within_their_columns() {
+    let mut app = answered(PRINTERS, false);
+    app.glyphs = Some(crate::ui::glyphs::Glyphs::Unicode);
+    insta::assert_snapshot!(render(&mut app, 45, 30).backend());
+}
+
+#[test]
+fn a_table_too_wide_to_wrap_shows_each_row_as_a_block() {
+    let text = "| Model | Nozzles | Volume | Speed | Price | Enclosed |\n\
+                |---|--:|---|--:|--:|---|\n\
+                | P2S | 1 | 256×256×256 mm | 600 mm/s | $549 | yes |\n\
+                | X2D | **2** | 256×256×260 mm | 600 mm/s | $649 | yes |";
+    let mut app = answered(text, false);
+    app.glyphs = Some(crate::ui::glyphs::Glyphs::Unicode);
+    insta::assert_snapshot!(render(&mut app, 45, 30).backend());
+}
+
+#[test]
+fn a_streaming_table_draws_its_rows_so_far() {
+    // The delimiter row still coming in.
+    let mut app = answered("| | P2S | X2D |\n|---|--", true);
+    insta::assert_snapshot!(
+        "table_streaming_delimiter",
+        render(&mut app, 100, 12).backend()
+    );
+    // A row cut off mid-cell.
+    let mut app = answered("| | P2S | X2D |\n|---|---|---|\n| Nozzles | 1 | **2", true);
+    insta::assert_snapshot!("table_streaming_row", render(&mut app, 100, 12).backend());
+}
