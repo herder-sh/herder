@@ -1,9 +1,12 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 1948
 expression: "rows.join(\"\\n\")"
 ---
-                         │  ┃ ▌Write a prompt…                                                                       │                                          
- ─────────────────────── │  ┃ claude · claude-opus-5-5 · full access                                                 │                                          
- + new            ≡ menu │    ⠋ working · 1m 12s                                                 claude-main 5h 38%  │                                          
+                         │  ╭─────────────────────────────────────────────────────────────────────────────────────╮  │                                          
+                         │  │   Write a prompt…                                                                   │  │                                          
+                         │  │                                                                                     │  │                                          
+ ─────────────────────── │  ╰──────────────────────────────────────────── claude · claude-opus-5-5 · full access ─╯  │                                          
+ + new            ≡ menu │    ⠋ working · 1m 12s                                               claude-main 5h 38%    │                                          
 ─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── 
   PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+c stop  ctrl+x leader  ctrl+x ? help                                 ● box

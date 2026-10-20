@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 973
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                      │ ◉ api                         needs you  "
@@ -35,10 +36,10 @@ expression: terminal.backend()
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
 "                         │                                                   │                                          "
-"                         │                                                   │                                          "
-"                         │                                                   │                                          "
-"                         │  ┃ ▌Write a prompt…                               │                                          "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                     │                                          "
-" + new            ≡ menu │    ⠋ working · 0s                    claude-main  │                                          "
+"                         │  ╭─────────────────────────────────────────────╮  │                                          "
+"                         │  │   Write a prompt…                           │  │                                          "
+"                         │  │                                             │  │                                          "
+" ─────────────────────── │  ╰──────────────── claude · claude-opus · ask ─╯  │                                          "
+" + new            ≡ menu │    ⠋ working · 0s                  claude-main    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────────────────── "
 " esc close                                                                                                       ● box  "

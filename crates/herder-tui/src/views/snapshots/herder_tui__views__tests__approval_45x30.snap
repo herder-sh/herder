@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 363
 expression: "render(&mut app, width, height).backend()"
 ---
 " ! api - app - box             1/6  | switch "
@@ -30,5 +31,5 @@ expression: "render(&mut app, width, height).backend()"
 " | rm -rf target/                            "
 " |                                           "
 " |  allow    deny         y allow - n deny   "
-"   | working - 0s                    5h 38%  "
+"   | working - 0s                  5h 38%    "
 " y allow   n deny   i write   < back         "

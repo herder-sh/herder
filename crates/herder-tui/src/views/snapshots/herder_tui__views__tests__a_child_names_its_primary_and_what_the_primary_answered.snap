@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 964
 expression: "render(&mut app, 110, 20).backend()"
 ---
 " herder        inbox 2 « │     · question for the primary session: Which port should the server use?          "
@@ -15,10 +16,10 @@ expression: "render(&mut app, 110, 20).backend()"
 " attention      priority │  ┃                                                                                 "
 "  ◉ api · app · box      │  ┃ ? question                                                      asked 0s ago    "
 "  ◉ write the tests      │  ┃ Which port should the server use?                                               "
-"  ◉ fix-login · app      │  ┃  1 8080                                                                         "
-"  ✗ document it · app    │  ┃  2 3000                                                                         "
-"                         │  ┃ or type an answer…                                                              "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                                      "
-" + new            ≡ menu │    ⠋ working · 0s                                                    claude-main   "
+"  ◉ fix-login · app      │  ╭─────────────────────────────────────────────────────────────────────────────╮   "
+"  ✗ document it · app    │  │ or type an answer…                                                          │   "
+"                         │  │                                                                             │   "
+" ─────────────────────── │  ╰──────────────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │    ⠋ working · 0s                                                  claude-main     "
 "─────────────────────────┴─────────────────────────────────────────────────────────────────────────────────── "
 "  APPROVAL   ◉ 2 waiting  1-9 pick  i type an answer  esc navigate  ctrl+x leader  ? help              ● box  "

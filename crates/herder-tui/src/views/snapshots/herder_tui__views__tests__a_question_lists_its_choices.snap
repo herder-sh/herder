@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 658
 expression: "render(&mut app, 100, 20).backend()"
 ---
 " herder        inbox 1 « │                                                                          "
@@ -15,10 +16,10 @@ expression: "render(&mut app, 100, 20).backend()"
 " attention      priority │  ┃                                                                       "
 "  ◉ api · app · box      │  ┃ ? question                                            asked 0s ago    "
 "  ✗ document it · app    │  ┃ Which database should the cache use?                                  "
-"  ● write the tests      │  ┃  1 SQLite                                                             "
-"                         │  ┃  2 Postgres                                                           "
-"                         │  ┃ or type an answer…                                                    "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                            "
-" + new            ≡ menu │    ⠋ working · 0s                                          claude-main   "
+"  ● write the tests      │  ╭───────────────────────────────────────────────────────────────────╮   "
+"                         │  │ or type an answer…                                                │   "
+"                         │  │                                                                   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │    ⠋ working · 0s                                        claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  APPROVAL   ◉ 1 waiting  1-9 pick  i type an answer  esc navigate  ctrl+x leader  ? help    ● box  "

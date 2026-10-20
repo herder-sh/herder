@@ -1,22 +1,26 @@
 //! Input editors, over [`ratatui_textarea::TextArea`]: the editing stays the text area's, the
 //! look is the theme's.
 //!
-//! - [`Prompt`]: a bar down the left in the accent while it has focus, the attachments'
-//!   chips over the text, the text on the panel background, and right under it the meta line
-//!   (`provider · model · mode`), as the Mac app's prompt box carries its model and
-//!   permission menus inside its bottom edge. No blank rows: every row says something.
+//! - [`Prompt`]: a rounded box, in the accent while it has focus and the border colour
+//!   otherwise, so it reads as an input and never as a sent message (those have a bar down
+//!   the left on the panel background). One column of padding inside, two text rows at least,
+//!   the attachments' chips over the text, and `provider · model · mode` set in the bottom
+//!   border at the right, as the Mac app's prompt box carries its model and permission menus
+//!   inside its bottom edge.
 //! - [`Field`]: a one-line field with a label, for dialog searches and forms.
 //!
 //! ```text
-//! ┃ write the docs page too▌
-//! ┃ claude · opus · ask
+//! ╭──────────────────────────────────────────────╮
+//! │ write the docs page too█                     │
+//! │                                              │
+//! ╰───────────────────────── claude · opus · ask ─╯
 //! ```
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
+use ratatui::widgets::{Block, BorderType, Widget};
 use ratatui_textarea::TextArea;
 
 use super::{Ui, fill, fit};
@@ -42,7 +46,7 @@ fn cursor(ui: Ui, buf: &mut Buffer, x: u16, y: u16) {
     }
 }
 
-/// The prompt: the editor in its panel.
+/// The prompt: the editor in its box.
 pub struct Prompt<'a, 'b> {
     ui: Ui<'a>,
     editor: &'a TextArea<'b>,
@@ -52,6 +56,9 @@ pub struct Prompt<'a, 'b> {
     placeholder: Option<&'a str>,
     chips: Vec<Line<'a>>,
 }
+
+/// Columns the box takes from the text: a border and a column of padding a side.
+const FRAME: u16 = 4;
 
 impl<'a, 'b> Prompt<'a, 'b> {
     pub fn new(ui: Ui<'a>, editor: &'a TextArea<'b>) -> Self {
@@ -79,73 +86,103 @@ impl<'a, 'b> Prompt<'a, 'b> {
         self
     }
 
-    /// The line under the text: `provider · model · mode`.
+    /// What the bottom border carries at its right: `provider · model · mode`.
     pub fn meta(mut self, meta: impl Into<Line<'a>>) -> Self {
         self.meta = Some(meta.into());
         self
     }
 
-    /// Whether the prompt has the keys: the bar takes the accent and the cursor shows.
+    /// Whether the prompt has the keys: the border takes the accent and the cursor shows.
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
     }
 
-    /// The bar's colour in place of the accent: `attention` for an answer, say.
+    /// The border's colour with focus in place of the accent: `attention` for an answer, say.
     pub fn accent(mut self, color: Color) -> Self {
         self.accent = Some(color);
         self
     }
 
+    /// Columns of text in a prompt `width` wide.
+    pub fn text_width(width: u16) -> u16 {
+        width.saturating_sub(FRAME).max(1)
+    }
+
     /// Rows a prompt takes `width` columns wide with `editor`'s text, which shows at most
-    /// `max_lines` lines before it scrolls.
-    pub fn height(editor: &TextArea, width: u16, max_lines: u16, meta: bool) -> u16 {
-        let room = usize::from(width.saturating_sub(3)).max(1);
+    /// `max_lines` lines before it scrolls; `roomy`, at least two, so even empty it reads as
+    /// a box to write in.
+    pub fn height(editor: &TextArea, width: u16, max_lines: u16, roomy: bool) -> u16 {
+        let room = usize::from(Self::text_width(width));
         let lines = Wrapped::new(editor, room).rows.len();
         let lines = u16::try_from(lines).unwrap_or(u16::MAX);
-        lines.clamp(1, max_lines.max(1)) + u16::from(meta)
+        let least = if roomy { 2 } else { 1 };
+        lines.clamp(least, max_lines.max(least)) + 2
     }
 
     pub fn render(self, area: Rect, buf: &mut Buffer) {
         let ui = self.ui;
         let theme = ui.theme;
         let area = area.intersection(buf.area);
-        if area.height == 0 || area.width < 4 {
+        if area.height < 3 || area.width <= FRAME {
             return;
         }
-        let bar_color = match (self.focused, self.accent) {
+        let border = match (self.focused, self.accent) {
             (true, Some(color)) => color,
             (true, None) => theme.primary,
             (false, _) => theme.border,
         };
-        fill(buf, area, ui.panel());
-        for y in area.top()..area.bottom() {
-            buf[(area.x, y)].set_symbol(ui.glyphs.bar).set_fg(bar_color);
+        fill(buf, area, ui.base());
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(border))
+            .render(area, buf);
+        let inner = Rect {
+            x: area.x + 2,
+            y: area.y + 1,
+            width: area.width - FRAME,
+            height: area.height - 2,
+        };
+        // The meta in the bottom border, a space either side and a stroke before the corner.
+        if let Some(meta) = self.meta {
+            let room = usize::from(inner.width.saturating_sub(2));
+            let meta = fit(meta, room, ui.glyphs);
+            let width = u16::try_from(super::line_width(&meta)).unwrap_or(u16::MAX);
+            if width > 0 {
+                let x = area.right() - 3 - width;
+                let row = Rect::new(x - 1, area.bottom() - 1, width + 2, 1);
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(meta.spans);
+                spans.push(Span::raw(" "));
+                Line::from(spans).render(row, buf);
+            }
         }
-        // The meta line, where there is a row for it beside the text's.
-        let meta_rows = u16::from(self.meta.is_some() && area.height > 1);
         // The chips and the blank row under them leave the text a row at least.
         let chip_rows = match self.chips.len() {
             0 => 0,
             rows => u16::try_from(rows + 1).unwrap_or(u16::MAX),
         }
-        .min(area.height.saturating_sub(meta_rows + 1));
-        for (y, row) in (area.y..area.y + chip_rows.saturating_sub(1)).zip(self.chips) {
-            let row_area = Rect::new(area.x + 2, y, area.width - 3, 1);
+        .min(inner.height - 1);
+        for (y, row) in (inner.y..inner.y + chip_rows.saturating_sub(1)).zip(self.chips) {
+            let row_area = Rect {
+                y,
+                height: 1,
+                ..inner
+            };
             fit(row, usize::from(row_area.width), ui.glyphs).render(row_area, buf);
         }
         let text = Rect {
-            x: area.x + 2,
-            y: area.y + chip_rows,
-            width: area.width - 3,
-            height: area.height.saturating_sub(meta_rows + chip_rows).max(1),
+            y: inner.y + chip_rows,
+            height: inner.height - chip_rows,
+            ..inner
         };
         if self.editor.is_empty() {
-            // The placeholder starts where the text will; with focus, after the cursor.
+            // With focus the cursor, then a space, then the placeholder: never the one on the
+            // other.
             let placeholder = self
                 .placeholder
                 .unwrap_or_else(|| self.editor.placeholder_text());
-            let after = u16::from(self.focused);
+            let after = if self.focused { 2 } else { 0 };
             let rest = Rect {
                 x: text.x + after,
                 width: text.width.saturating_sub(after),
@@ -161,7 +198,7 @@ impl<'a, 'b> Prompt<'a, 'b> {
             )
             .render(rest, buf);
             if self.focused {
-                cursor(ui, buf, text.x, text.y);
+                buf[(text.x, text.y)].modifier.insert(Modifier::REVERSED);
             }
         } else {
             Wrapped::new(self.editor, usize::from(text.width)).render(
@@ -170,12 +207,6 @@ impl<'a, 'b> Prompt<'a, 'b> {
                 ui.text(),
                 self.focused,
             );
-        }
-        if let Some(meta) = self.meta
-            && meta_rows > 0
-        {
-            let row = Rect::new(text.x, area.bottom() - 1, text.width, 1);
-            fit(meta, usize::from(row.width), ui.glyphs).render(row, buf);
         }
     }
 }
@@ -480,10 +511,10 @@ mod tests {
     fn prompts() {
         for width in [45, 100] {
             snapshot::each(&format!("prompt-{width}"), |variant| {
-                snapshot::render(variant, width, 11, |ui, area, buf| {
+                snapshot::render(variant, width, 13, |ui, area, buf| {
                     let focused = editor("write the docs page too, and link it from @README.md");
                     let height = Prompt::height(&focused, width, 6, true);
-                    assert_eq!(height, if width < 50 { 3 } else { 2 });
+                    assert_eq!(height, 4);
                     Prompt::new(ui, &focused)
                         .meta(meta(ui))
                         .focused(true)
@@ -499,7 +530,7 @@ mod tests {
                     let answer = editor("h2 under Reference");
                     let last = Rect {
                         y: below.bottom() + 1,
-                        height: 2,
+                        height: 3,
                         ..area
                     };
                     Prompt::new(ui, &answer)
@@ -536,7 +567,7 @@ mod tests {
         let wrapped = Wrapped::new(&editor, 4);
         assert_eq!(wrapped.rows.len(), 2);
         assert_eq!(wrapped.cursor, (1, 0));
-        assert_eq!(Prompt::height(&editor, 7, 6, false), 2);
+        assert_eq!(Prompt::height(&editor, 8, 6, false), 4);
     }
 
     #[test]

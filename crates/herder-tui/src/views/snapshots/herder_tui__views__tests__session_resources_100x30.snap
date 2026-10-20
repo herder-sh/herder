@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                                             "
@@ -25,10 +26,10 @@ expression: terminal.backend()
 "                         │                                                                          "
 "                         │                                                                          "
 "                         │                                                                          "
-"                         │                                                                          "
-"                         │                                                                          "
-"                         │  ┃ ▌Write a prompt…                                                      "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                            "
-" + new            ≡ menu │                                                            claude-main   "
+"                         │  ╭───────────────────────────────────────────────────────────────────╮   "
+"                         │  │   Write a prompt…                                                 │   "
+"                         │  │                                                                   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  / commands  @ mention  ctrl+x ? help               ● box  "

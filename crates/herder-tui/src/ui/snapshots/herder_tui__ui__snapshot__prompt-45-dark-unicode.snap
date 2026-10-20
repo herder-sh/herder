@@ -1,44 +1,54 @@
 ---
 source: crates/herder-tui/src/ui/snapshot.rs
+assertion_line: 53
 expression: dump(&buffer)
 ---
-|┃ write the docs page too, and link it from  |
-|┃ @README.md                                 |
-|┃ claude-main · opus · ask                   |
+|╭───────────────────────────────────────────╮|
+|│ write the docs page too, and link it from │|
+|│ @README.md                                │|
+|╰──────────────── claude-main · opus · ask ─╯|
 |                                             |
-|┃ Write a prompt…                            |
-|┃ claude-main · opus · ask                   |
+|╭───────────────────────────────────────────╮|
+|│ Write a prompt…                           │|
+|│                                           │|
+|╰──────────────── claude-main · opus · ask ─╯|
 |                                             |
-|┃ h2 under Reference                         |
-|┃                                            |
-|                                             |
-|                                             |
+|╭───────────────────────────────────────────╮|
+|│ h2 under Reference                        │|
+|╰───────────────────────────────────────────╯|
 
- 0   0..1   fg=#7aa2f7 bg=#181a20
- 0   1..2   fg=#e6e6e6 bg=#181a20
- 0   2..3   fg=#e6e6e6 bg=#181a20 REVERSED
- 0   3..45  fg=#e6e6e6 bg=#181a20
- 1   0..1   fg=#7aa2f7 bg=#181a20
- 1   1..45  fg=#e6e6e6 bg=#181a20
- 2   0..1   fg=#7aa2f7 bg=#181a20
- 2   1..13  fg=#e6e6e6 bg=#181a20
- 2  13..26  fg=#7f8492 bg=#181a20
- 2  26..45  fg=#e6e6e6 bg=#181a20
- 3   0..45  fg=#e6e6e6 bg=#111216
- 4   0..1   fg=#3b3f4a bg=#181a20
- 4   1..2   fg=#e6e6e6 bg=#181a20
- 4   2..44  fg=#7f8492 bg=#181a20
- 4  44..45  fg=#e6e6e6 bg=#181a20
- 5   0..1   fg=#3b3f4a bg=#181a20
- 5   1..13  fg=#e6e6e6 bg=#181a20
- 5  13..26  fg=#7f8492 bg=#181a20
- 5  26..45  fg=#e6e6e6 bg=#181a20
- 6   0..45  fg=#e6e6e6 bg=#111216
- 7   0..1   fg=#e879c6 bg=#181a20
- 7   1..2   fg=#e6e6e6 bg=#181a20
- 7   2..3   fg=#e6e6e6 bg=#181a20 REVERSED
- 7   3..45  fg=#e6e6e6 bg=#181a20
- 8   0..1   fg=#e879c6 bg=#181a20
- 8   1..45  fg=#e6e6e6 bg=#181a20
+ 0   0..45  fg=#7aa2f7 bg=#111216
+ 1   0..1   fg=#7aa2f7 bg=#111216
+ 1   1..2   fg=#e6e6e6 bg=#111216
+ 1   2..3   fg=#e6e6e6 bg=#111216 REVERSED
+ 1   3..44  fg=#e6e6e6 bg=#111216
+ 1  44..45  fg=#7aa2f7 bg=#111216
+ 2   0..1   fg=#7aa2f7 bg=#111216
+ 2   1..44  fg=#e6e6e6 bg=#111216
+ 2  44..45  fg=#7aa2f7 bg=#111216
+ 3   0..18  fg=#7aa2f7 bg=#111216
+ 3  18..29  fg=#e6e6e6 bg=#111216
+ 3  29..42  fg=#7f8492 bg=#111216
+ 3  42..45  fg=#7aa2f7 bg=#111216
+ 4   0..45  fg=#e6e6e6 bg=#111216
+ 5   0..45  fg=#3b3f4a bg=#111216
+ 6   0..1   fg=#3b3f4a bg=#111216
+ 6   1..2   fg=#e6e6e6 bg=#111216
+ 6   2..43  fg=#7f8492 bg=#111216
+ 6  43..44  fg=#e6e6e6 bg=#111216
+ 6  44..45  fg=#3b3f4a bg=#111216
+ 7   0..1   fg=#3b3f4a bg=#111216
+ 7   1..44  fg=#e6e6e6 bg=#111216
+ 7  44..45  fg=#3b3f4a bg=#111216
+ 8   0..18  fg=#3b3f4a bg=#111216
+ 8  18..29  fg=#e6e6e6 bg=#111216
+ 8  29..42  fg=#7f8492 bg=#111216
+ 8  42..45  fg=#3b3f4a bg=#111216
  9   0..45  fg=#e6e6e6 bg=#111216
-10   0..45  fg=#e6e6e6 bg=#111216
+10   0..45  fg=#e879c6 bg=#111216
+11   0..1   fg=#e879c6 bg=#111216
+11   1..2   fg=#e6e6e6 bg=#111216
+11   2..3   fg=#e6e6e6 bg=#111216 REVERSED
+11   3..44  fg=#e6e6e6 bg=#111216
+11  44..45  fg=#e879c6 bg=#111216
+12   0..45  fg=#e879c6 bg=#111216

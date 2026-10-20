@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " fork                                < back  "
@@ -40,5 +41,5 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 " laptop is offline - F fork                  "
-"                                claude-main  "
+"                              claude-main    "
 " esc close                                   "

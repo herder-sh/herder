@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 474
 expression: "render(&mut app, 100, 24).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks   prs   term                                               "
@@ -23,6 +24,6 @@ expression: "render(&mut app, 100, 24).backend()"
 "                   └──────────────────────────────────────────────────────────┘                     "
 "                         │                                                                          "
 " ─────────────────────── │  laptop is offline · F fork                                              "
-" + new            ≡ menu │                                                            claude-main   "
+" + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 " esc close                                                                       ● vault  ● devbox  "

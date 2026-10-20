@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │  chat   tasks 1   prs   term                                                              │ ● Fix the flaky reconnect tes…  running  "
@@ -35,10 +36,10 @@ expression: terminal.backend()
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
-"                         │                                                                                           │                                          "
-"                         │                                                                                           │                                          "
-"                         │  ┃ ▌Write a prompt…                                                                       │                                          "
-" ─────────────────────── │  ┃ claude · claude-opus · full access                                                     │                                          "
-" + new            ≡ menu │    ✗ model opus-9 is not available on claude-main                     claude-main 5h 31%  │                                          "
+"                         │  ╭─────────────────────────────────────────────────────────────────────────────────────╮  │                                          "
+"                         │  │   Write a prompt…                                                                   │  │                                          "
+"                         │  │                                                                                     │  │                                          "
+" ─────────────────────── │  ╰──────────────────────────────────────────────── claude · claude-opus · full access ─╯  │                                          "
+" + new            ≡ menu │    ✗ model opus-9 is not available on claude-main                   claude-main 5h 31%    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  PROMPT   enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+c stop  ctrl+x leader  ctrl+x ? help                                 ● box  "

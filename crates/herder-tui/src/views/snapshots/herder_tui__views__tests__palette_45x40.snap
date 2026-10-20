@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 973
 expression: terminal.backend()
 ---
 " herder                              < back  "
@@ -36,9 +37,9 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-"                                             "
-"                                             "
-" | |Write a prompt...                        "
-" | claude - claude-opus - ask                "
-"   | working - 0s               claude-main  "
+" +----------------------------------------+  "
+" |   Write a prompt...                    |  "
+" |                                        |  "
+" +----------- claude - claude-opus - ask -+  "
+"   | working - 0s             claude-main    "
 " > ok   esc close                            "

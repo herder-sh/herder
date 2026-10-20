@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 239
 expression: "render(&mut app, width, height).backend()"
 ---
 " herder        inbox 1 « │  chat   tasks 2   prs 1   term                                                            │ ● api                           running  "
@@ -29,10 +30,10 @@ expression: "render(&mut app, width, height).backend()"
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
 "                         │                                                                                           │                                          "
-"                         │                                                                                           │                                          "
-"                         │                                                                                           │                                          "
-"                         │  ┃ ▌Write a prompt…                                                                       │                                          "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                                             │                                          "
-" + new            ≡ menu │    ⠋ working · 0s                                                     claude-main 5h 38%  │                                          "
+"                         │  ╭─────────────────────────────────────────────────────────────────────────────────────╮  │                                          "
+"                         │  │   Write a prompt…                                                                   │  │                                          "
+"                         │  │                                                                                     │  │                                          "
+" ─────────────────────── │  ╰──────────────────────────────────────────────────────── claude · claude-opus · ask ─╯  │                                          "
+" + new            ≡ menu │    ⠋ working · 0s                                                   claude-main 5h 38%    │                                          "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────── "
 "  PROMPT   ◉ 1 waiting  enter send  alt+enter newline  / commands  @ mention  esc navigate  ctrl+c stop  ctrl+x leader  ctrl+x ? help              ● box  ● m2  "

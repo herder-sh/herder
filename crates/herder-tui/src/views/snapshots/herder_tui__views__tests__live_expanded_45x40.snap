@@ -1,12 +1,11 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " * Fix the flaky reconnect...  3/7  | switch "
 " ! 1 need you  * 2 running          |    !   "
 "                                             "
-"                                             "
-"    > Read crates/herder-client-cor...  1s   "
 "    * Grep "reconnect" in crates (4...  1s   "
 "                                             "
 " | $ cargo test -p herder-client-c...  14s   "
@@ -38,7 +37,9 @@ expression: terminal.backend()
 "    second attempt could land before the     "
 "    first one closed.                        "
 "                                             "
-" | Write a prompt...                         "
-" | claude - claude-opus - full access        "
-"   x model opus-9 is not available on cl...  "
+" +----------------------------------------+  "
+" | Write a prompt...                      |  "
+" |                                        |  "
+" +--- claude - claude-opus - full access -+  "
+"   x model opus-9 is not available on ...    "
 " i write   < back   ^c stop   s switch       "

@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 983
 expression: terminal.backend()
 ---
 " herder        inbox 2 « │ inbox · 2 waiting on you                   every machine · newest first  "
@@ -26,9 +27,9 @@ expression: terminal.backend()
 "                         │                                                                          "
 "                         │                                                                          "
 "                         │                                                                          "
-"                         │                                                                          "
-"                         │                                                                          "
-" ─────────────────────── │ ┃ 9000                                                                   "
-" + new            ≡ menu │ ┃ answer · write the tests                                               "
+"                         │ ╭─────────────────────────────────────────────────────────────────────╮  "
+"                         │ │ 9000                                                                │  "
+" ─────────────────────── │ │                                                                     │  "
+" + new            ≡ menu │ ╰────────────────────────────────────────── answer · write the tests ─╯  "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  NAVIGATE   enter send  esc cancel  ctrl+x ? help                                           ● box  "

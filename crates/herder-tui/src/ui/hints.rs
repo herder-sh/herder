@@ -1,9 +1,9 @@
 //! The key-hint bar: the keys that work right now, from one list of [`Hint`]s.
 //!
 //! - [`ModeBar`], on a desktop: a lead (the mode badge, a notice), the hints as `key label`,
-//!   and a right side (each machine's connection). Hints that do not fit are left out whole,
+//!   and at the right each machine's connection. Hints that do not fit are left out whole,
 //!   from the second-to-last back: a hint is never cut, and the last (help, or the way out)
-//!   stays.
+//!   stays. Machine names give way to it, cut with an ellipsis, then the last machines.
 //! - [`ButtonBar`], on a phone: the same hints as buttons a finger or Tab reaches. Tab's focus
 //!   is drawn solid, and the bar scrolls so it stays in view.
 //!
@@ -45,8 +45,11 @@ pub struct ModeBar<'a> {
     ui: Ui<'a>,
     lead: Line<'a>,
     hints: &'a [Hint],
-    right: Line<'a>,
+    machines: Vec<(Span<'a>, String)>,
 }
+
+/// Columns a machine's name keeps, ellipsis included, before the machine is left out.
+const SHORTEST_NAME: usize = 4;
 
 impl<'a> ModeBar<'a> {
     pub fn new(ui: Ui<'a>, hints: &'a [Hint]) -> Self {
@@ -54,7 +57,7 @@ impl<'a> ModeBar<'a> {
             ui,
             lead: Line::default(),
             hints,
-            right: Line::default(),
+            machines: Vec::new(),
         }
     }
 
@@ -64,9 +67,9 @@ impl<'a> ModeBar<'a> {
         self
     }
 
-    /// What sits at the right end: each machine's connection.
-    pub fn right(mut self, right: impl Into<Line<'a>>) -> Self {
-        self.right = right.into();
+    /// What sits at the right end: each machine's connection mark and name.
+    pub fn machines(mut self, machines: Vec<(Span<'a>, String)>) -> Self {
+        self.machines = machines;
         self
     }
 
@@ -86,19 +89,19 @@ impl<'a> ModeBar<'a> {
         } else {
             start
         };
-        // The right side, when it fits beside the lead.
-        let right_width = u16::try_from(line_width(&self.right)).unwrap_or(u16::MAX);
-        let mut limit = end;
-        if right_width > 0 && start + lead_width + gap + right_width <= end {
-            let right_x = end - right_width;
-            self.right
-                .render(Rect::new(right_x, area.y, right_width, 1), buf);
-            limit = right_x.saturating_sub(gap);
-        }
-        let mut placed = Vec::new();
         // The last hint, help or the way out, is never left out: room is kept for it.
         let last = self.hints.len().saturating_sub(1);
         let kept = self.hints.last().map_or(0, |hint| hint.width() + gap);
+        // The machines, in what the lead and the last hint leave.
+        let right = machines(self.machines, usize::from(end.saturating_sub(x + kept)), ui);
+        let right_width = u16::try_from(line_width(&right)).unwrap_or(u16::MAX);
+        let mut limit = end;
+        if right_width > 0 {
+            let right_x = end - right_width;
+            right.render(Rect::new(right_x, area.y, right_width, 1), buf);
+            limit = right_x.saturating_sub(gap);
+        }
+        let mut placed = Vec::new();
         let mut full = false;
         for (at, hint) in self.hints.iter().enumerate() {
             let hint_width = hint.width();
@@ -124,6 +127,40 @@ impl<'a> ModeBar<'a> {
         }
         placed
     }
+}
+
+/// `machines` as `● box  ● m2` in at most `room` columns: whole if they fit, else each name
+/// cut to the longest that lets them all fit, with an ellipsis; machines whose names would
+/// keep fewer than [`SHORTEST_NAME`] columns are left out from the last.
+fn machines<'a>(machines: Vec<(Span<'a>, String)>, room: usize, ui: Ui) -> Line<'a> {
+    let line = |machines: &[(Span<'a>, String)], cap: usize| {
+        let mut spans = Vec::new();
+        for (mark, name) in machines {
+            if !spans.is_empty() {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(mark.clone());
+            let name = super::fit(Line::raw(name.clone()), cap, ui.glyphs);
+            let name: String = name.spans.iter().map(|span| &*span.content).collect();
+            spans.push(Span::styled(format!(" {name}"), ui.text()));
+        }
+        Line::from(spans)
+    };
+    let longest = machines
+        .iter()
+        .map(|(_, name)| width(name))
+        .max()
+        .unwrap_or(0);
+    for shown in (1..=machines.len()).rev() {
+        let machines = &machines[..shown];
+        for cap in (SHORTEST_NAME.min(longest)..=longest).rev() {
+            let line = line(machines, cap);
+            if line_width(&line) <= room {
+                return line;
+            }
+        }
+    }
+    Line::default()
 }
 
 /// The phone's bar of buttons.
@@ -221,16 +258,22 @@ mod tests {
         ]
     }
 
-    fn connections(ui: Ui) -> Line<'static> {
+    fn connections(ui: Ui) -> Vec<(Span<'static>, String)> {
         let theme = ui.theme;
-        Line::from(vec![
-            Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
-            Span::styled(" box  ", ui.text()),
-            Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
-            Span::styled(" m2  ", ui.text()),
-            Span::styled(ui.glyphs.connecting, Style::new().fg(theme.warning)),
-            Span::styled(" vault", ui.text()),
-        ])
+        vec![
+            (
+                Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
+                "box".to_owned(),
+            ),
+            (
+                Span::styled(ui.glyphs.connected, Style::new().fg(theme.success)),
+                "m2".to_owned(),
+            ),
+            (
+                Span::styled(ui.glyphs.connecting, Style::new().fg(theme.warning)),
+                "vault".to_owned(),
+            ),
+        ]
     }
 
     #[test]
@@ -242,7 +285,7 @@ mod tests {
                     let badge = badge::solid(ui, "PROMPT", ui.theme.primary);
                     let placed = ModeBar::new(ui, &hints)
                         .lead(badge)
-                        .right(connections(ui))
+                        .machines(connections(ui))
                         .render(area, buf);
                     // Hints never overlap and never pass the right side.
                     assert!(placed.windows(2).all(|w| w[0].1.right() < w[1].1.x));
@@ -252,6 +295,60 @@ mod tests {
                         .render(Rect { y: 1, ..area }, buf);
                 })
             });
+        }
+    }
+
+    #[test]
+    fn a_bar_cuts_machine_names_not_hints_and_keeps_help() {
+        let mut hints = hints();
+        hints.extend([Hint::new("ctrl+c", "stop"), Hint::new("ctrl+x ?", "help")]);
+        for width in [60, 100, 160] {
+            let variants = snapshot::variants();
+            let ui = variants[0].ui();
+            let mut buf = Buffer::empty(Rect::new(0, 0, width, 1));
+            let machines = vec![
+                (
+                    Span::raw(ui.glyphs.connected),
+                    "Coingate-CJH9FXV367".to_owned(),
+                ),
+                (Span::raw(ui.glyphs.connected), "trash-can".to_owned()),
+            ];
+            let placed = ModeBar::new(ui, &hints)
+                .lead(badge::solid(ui, "PROMPT", ui.theme.primary))
+                .machines(machines)
+                .render(buf.area, &mut buf);
+            let row: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+            // Help, the last hint, always shows; every hint shown is whole.
+            assert_eq!(
+                placed.last().map(|(at, _)| *at),
+                Some(hints.len() - 1),
+                "{row}"
+            );
+            for (at, _) in &placed {
+                let hint = &hints[*at];
+                assert!(
+                    row.contains(&format!("{} {}", hint.key, hint.label)),
+                    "{row}"
+                );
+            }
+            // Both machines show, each whole or cut with an ellipsis.
+            let right = &row[row.find(ui.glyphs.connected).expect(&row)..];
+            for name in ["Coingate-CJH9FXV367", "trash-can"] {
+                let shown = right
+                    .split(ui.glyphs.connected)
+                    .map(str::trim)
+                    .filter(|shown| !shown.is_empty())
+                    .find(|shown| name.starts_with(shown.trim_end_matches('…')))
+                    .unwrap_or_else(|| panic!("{name} in {row}"));
+                assert!(shown == name || shown.ends_with('…'), "{row}");
+            }
+            if width >= 100 {
+                assert!(right.contains("Coingate-CJH9FXV367"), "{row}");
+            } else {
+                assert!(right.contains('…'), "{row}");
+            }
+            // Nothing in the last column.
+            assert_eq!(buf[(width - 1, 0)].symbol(), " ", "{row}");
         }
     }
 

@@ -235,19 +235,17 @@ impl Gallery {
                 (false, Focus::Prompt) => ("PROMPT", theme.primary),
                 (false, Focus::List) => ("NAVIGATE", theme.secondary),
             };
-            let connection = |mark, color, name| {
-                [
-                    Span::styled(mark, Style::new().fg(color)),
-                    Span::styled(format!(" {name}"), ui.text()),
-                ]
+            let connection = |mark, color, name: &str| {
+                (Span::styled(mark, Style::new().fg(color)), name.to_owned())
             };
-            let mut right = Vec::new();
-            right.extend(connection(ui.glyphs.connected, theme.success, "box  "));
-            right.extend(connection(ui.glyphs.connected, theme.success, "m2  "));
-            right.extend(connection(ui.glyphs.connecting, theme.warning, "vault"));
+            let machines = vec![
+                connection(ui.glyphs.connected, theme.success, "box"),
+                connection(ui.glyphs.connected, theme.success, "m2"),
+                connection(ui.glyphs.connecting, theme.warning, "vault"),
+            ];
             ModeBar::new(ui, &hints)
                 .lead(badge::solid(ui, mode, color))
-                .right(Line::from(right))
+                .machines(machines)
                 .render(bar, buf);
         }
 

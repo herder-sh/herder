@@ -1,44 +1,53 @@
 ---
 source: crates/herder-tui/src/ui/snapshot.rs
+assertion_line: 53
 expression: dump(&buffer)
 ---
-|┃ write the docs page too, and link it from  |
-|┃ @README.md                                 |
-|┃ claude-main · opus · ask                   |
+|╭───────────────────────────────────────────╮|
+|│ write the docs page too, and link it from │|
+|│ @README.md                                │|
+|╰──────────────── claude-main · opus · ask ─╯|
 |                                             |
-|┃ Write a prompt…                            |
-|┃ claude-main · opus · ask                   |
+|╭───────────────────────────────────────────╮|
+|│ Write a prompt…                           │|
+|│                                           │|
+|╰──────────────── claude-main · opus · ask ─╯|
 |                                             |
-|┃ h2 under Reference                         |
-|┃                                            |
-|                                             |
-|                                             |
+|╭───────────────────────────────────────────╮|
+|│ h2 under Reference                        │|
+|╰───────────────────────────────────────────╯|
 
- 0   0..1   fg=Cyan bg=Reset
- 0   1..2   fg=Reset bg=Reset
- 0   2..3   fg=Reset bg=Reset REVERSED
- 0   3..45  fg=Reset bg=Reset
+ 0   0..45  fg=Cyan bg=Reset
  1   0..1   fg=Cyan bg=Reset
- 1   1..45  fg=Reset bg=Reset
+ 1   1..2   fg=Reset bg=Reset
+ 1   2..3   fg=Reset bg=Reset REVERSED
+ 1   3..44  fg=Reset bg=Reset
+ 1  44..45  fg=Cyan bg=Reset
  2   0..1   fg=Cyan bg=Reset
- 2   1..13  fg=Reset bg=Reset
- 2  13..26  fg=DarkGray bg=Reset
- 2  26..45  fg=Reset bg=Reset
- 3   0..45  fg=Reset bg=Reset
- 4   0..1   fg=DarkGray bg=Reset
- 4   1..2   fg=Reset bg=Reset
- 4   2..44  fg=DarkGray bg=Reset
- 4  44..45  fg=Reset bg=Reset
- 5   0..1   fg=DarkGray bg=Reset
- 5   1..13  fg=Reset bg=Reset
- 5  13..26  fg=DarkGray bg=Reset
- 5  26..45  fg=Reset bg=Reset
- 6   0..45  fg=Reset bg=Reset
- 7   0..1   fg=Magenta bg=Reset
- 7   1..2   fg=Reset bg=Reset
- 7   2..3   fg=Reset bg=Reset REVERSED
- 7   3..45  fg=Reset bg=Reset
- 8   0..1   fg=Magenta bg=Reset
- 8   1..45  fg=Reset bg=Reset
+ 2   1..44  fg=Reset bg=Reset
+ 2  44..45  fg=Cyan bg=Reset
+ 3   0..18  fg=Cyan bg=Reset
+ 3  18..29  fg=Reset bg=Reset
+ 3  29..42  fg=DarkGray bg=Reset
+ 3  42..45  fg=Cyan bg=Reset
+ 4   0..45  fg=Reset bg=Reset
+ 5   0..45  fg=DarkGray bg=Reset
+ 6   0..1   fg=DarkGray bg=Reset
+ 6   1..2   fg=Reset bg=Reset
+ 6   2..43  fg=DarkGray bg=Reset
+ 6  43..44  fg=Reset bg=Reset
+ 6  44..45  fg=DarkGray bg=Reset
+ 7   0..1   fg=DarkGray bg=Reset
+ 7   1..44  fg=Reset bg=Reset
+ 7  44..45  fg=DarkGray bg=Reset
+ 8   0..18  fg=DarkGray bg=Reset
+ 8  18..29  fg=Reset bg=Reset
+ 8  29..45  fg=DarkGray bg=Reset
  9   0..45  fg=Reset bg=Reset
-10   0..45  fg=Reset bg=Reset
+10   0..45  fg=Magenta bg=Reset
+11   0..1   fg=Magenta bg=Reset
+11   1..2   fg=Reset bg=Reset
+11   2..3   fg=Reset bg=Reset REVERSED
+11   3..44  fg=Reset bg=Reset
+11  44..45  fg=Magenta bg=Reset
+12   0..45  fg=Magenta bg=Reset

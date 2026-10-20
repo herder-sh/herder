@@ -1,6 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
-assertion_line: 2110
+assertion_line: 2154
 expression: terminal.backend()
 ---
 " herder        inbox 0 « │     ┌──────┬────────┬───────┐                                            "
@@ -11,9 +11,9 @@ expression: terminal.backend()
 "    │ ├ ● write the tes… │     └──────┴────────┴───────┘                                            "
 " ─────────────────────── │                                                                          "
 " attention      priority │                                                                          "
-"  ◉ api · app · box      │                                                                          "
-"  ✗ document it · app    │                                                                          "
-" ─────────────────────── │  ┃ Write a prompt…                                                       "
-" + new            ≡ menu │                                                            claude-main   "
+"  ◉ api · app · box      │  ╭───────────────────────────────────────────────────────────────────╮   "
+"  ✗ document it · app    │  │ Write a prompt…                                                   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  ? help           ● box  "

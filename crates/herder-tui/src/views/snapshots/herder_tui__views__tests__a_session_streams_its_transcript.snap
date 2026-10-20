@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 392
 expression: "render(&mut app, 100, 30).backend()"
 ---
 " herder        inbox 0 « │  chat   tasks 2   prs   term                                             "
@@ -25,10 +26,10 @@ expression: "render(&mut app, 100, 30).backend()"
 "                         │                                                                          "
 "                         │                                                                          "
 "                         │                                                                          "
-"                         │                                                                          "
-"                         │                                                                          "
-"                         │  ┃ Write a prompt…                                                       "
-" ─────────────────────── │  ┃ claude · claude-opus · ask                                            "
-" + new            ≡ menu │                                                            claude-main   "
+"                         │  ╭───────────────────────────────────────────────────────────────────╮   "
+"                         │  │ Write a prompt…                                                   │   "
+"                         │  │                                                                   │   "
+" ─────────────────────── │  ╰────────────────────────────────────── claude · claude-opus · ask ─╯   "
+" + new            ≡ menu │                                                          claude-main     "
 "─────────────────────────┴───────────────────────────────────────────────────────────────────────── "
 "  NAVIGATE   i write  j/k scroll  [ ] items  e expand  c copy  esc sidebar  ? help           ● box  "

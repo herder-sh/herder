@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 644
 expression: terminal.backend()
 ---
 " ! api - app - box             1/4  | switch "
@@ -13,12 +14,12 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-"                                             "
-"                                             "
-" | [image 1 - 340 KB] [image 2 - 1.2 MB]     "
-" | [image 3 - loading...]                    "
-" |                                           "
-" | why does the sidebar overlap here?        "
-" | claude - claude-opus - ask                "
-"                                claude-main  "
+" +----------------------------------------+  "
+" | [image 1 - 340 KB] [image 2 - 1.2 MB]  |  "
+" | [image 3 - loading...]                 |  "
+" |                                        |  "
+" | why does the sidebar overlap here?     |  "
+" |                                        |  "
+" +----------- claude - claude-opus - ask -+  "
+"                              claude-main    "
 " > send   esc done   s switch   t term       "

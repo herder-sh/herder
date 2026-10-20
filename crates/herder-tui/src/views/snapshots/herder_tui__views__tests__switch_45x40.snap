@@ -1,5 +1,6 @@
 ---
 source: crates/herder-tui/src/views/tests.rs
+assertion_line: 973
 expression: terminal.backend()
 ---
 " ! api - app - box             1/4  | switch "
@@ -36,9 +37,9 @@ expression: terminal.backend()
 "                                             "
 "                                             "
 "                                             "
-"                                             "
-"                                             "
-" | s                                         "
-" | claude - claude-opus - ask                "
-"                         Weekly - Fable 93%  "
+" +----------------------------------------+  "
+" | s                                      |  "
+" |                                        |  "
+" +----------- claude - claude-opus - ask -+  "
+"                       Weekly - Fable 93%    "
 " > send   esc done   s switch   t term       "
