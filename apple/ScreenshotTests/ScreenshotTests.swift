@@ -88,15 +88,26 @@ final class ScreenshotTests: XCTestCase {
     /// The Providers page, adding accounts on `devbox` (a second login while the first runs,
     /// then the first finished) and the machine's settings.
     private func providers() {
+        #if os(macOS)
         guard section("Providers") else { return }
         settle()
-        #if os(macOS)
         shoot("mac-providers")
         #else
+        // On the iPhone, Providers is a link at the top of Machines, not a tab.
+        guard section("Machines") else { return }
+        let link = app.descendants(matching: .any)["providers-link"].firstMatch
+        guard wait(link, "Providers link") else { return }
+        press(link)
+        settle()
         shoot("ios-providers")
         #endif
         guard openAddAccount() else { return }
         shoot(platform("add-account-form"))
+        #if os(iOS)
+        // The concurrent logins are shot on the Mac; the phone stops at the form.
+        dismiss()
+        return
+        #else
         let start = app.buttons["Start Login"].firstMatch
         guard wait(start, "Start Login") else { return dismiss() }
         press(start)
@@ -134,7 +145,6 @@ final class ScreenshotTests: XCTestCase {
             }
         }
         dismiss()
-        #if os(macOS)
         let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
         if wait(machine, "devbox in the sidebar") {
             press(machine)
