@@ -1,8 +1,8 @@
-//! When the event loop draws: after input at once; after what the machines sent (sessions,
-//! host resources) at most every [`BACKGROUND_FRAME`], so a burst of updates draws once; while
-//! a spinner turns, every [`SPINNER_FRAME`]; and otherwise never. An idle desktop screen is
-//! drawn no more than it changes, and every frame is a diff against the last, so only the
-//! cells that changed are written.
+//! When the event loop draws: after input and a session's events at once; after the machine
+//! lists (sessions, host resources) at most every [`BACKGROUND_FRAME`], so a burst of them
+//! draws once; while a spinner turns, every [`SPINNER_FRAME`]; and otherwise never. An idle
+//! desktop screen is drawn no more than it changes, and every frame is a diff against the
+//! last, so only the cells that changed are written.
 //!
 //! A phone over mosh may still lose track of the screen. On a narrow screen the whole frame is
 //! written again every [`RESYNC`] while idle ([`Paint::Resync`]): every cell over the shown
@@ -11,13 +11,13 @@
 
 use std::time::{Duration, Instant};
 
-use crate::app::App;
+use crate::app::{App, Msg};
 use crate::views::{NARROW, Paint};
 
 /// How often the screen is drawn while a spinner turns: the slower glyph set's frame.
 pub const SPINNER_FRAME: Duration = Duration::from_millis(120);
 
-/// The least time between two frames drawn for what the machines sent.
+/// The least time between two frames drawn for the machine lists.
 pub const BACKGROUND_FRAME: Duration = Duration::from_millis(250);
 
 /// How long a narrow screen sits idle before its frame is written again.
@@ -30,7 +30,7 @@ pub struct Pace {
     last_paint: Instant,
     /// When every cell was last written, by a full repaint or a resync.
     last_resync: Instant,
-    /// What the machines sent waits to be drawn.
+    /// A machine list waits to be drawn.
     pending: bool,
 }
 
@@ -52,11 +52,12 @@ impl Pace {
         }
     }
 
-    /// Whether to draw after a batch of messages: at once for `input`, which the user waits
-    /// on; for what the machines sent, once [`BACKGROUND_FRAME`] passed since the last frame,
-    /// else later, with what else comes by then.
-    pub fn after(&mut self, input: bool, now: Instant) -> Option<Paint> {
-        if input || now.duration_since(self.last_paint) >= BACKGROUND_FRAME {
+    /// Whether to draw after a batch of messages: at once when `urgent`, input or a
+    /// session's events, which the user waits on; for the machine lists, once
+    /// [`BACKGROUND_FRAME`] passed since the last frame, else later, with what else comes by
+    /// then.
+    pub fn after(&mut self, urgent: bool, now: Instant) -> Option<Paint> {
+        if urgent || now.duration_since(self.last_paint) >= BACKGROUND_FRAME {
             return Some(Paint::Diff);
         }
         self.pending = true;
@@ -91,6 +92,12 @@ impl Pace {
         let background = self.pending && since_paint >= BACKGROUND_FRAME;
         (spinner || background).then_some(Paint::Diff)
     }
+}
+
+/// Whether `msg` is drawn at once: all but the machine lists. A session's events are: the
+/// user waits on a sent prompt's echo turning into its turn.
+pub fn urgent(msg: &Msg) -> bool {
+    !matches!(msg, Msg::Machines(_))
 }
 
 /// Whether the screen is laid out as a phone's, where the terminal may be mosh's.
@@ -141,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn what_the_machines_send_is_drawn_at_most_every_background_frame() {
+    fn the_machine_lists_are_drawn_at_most_every_background_frame() {
         let app = idle(119);
         let start = Instant::now();
         let mut pace = Pace::new(start);
@@ -160,6 +167,21 @@ mod tests {
         assert_eq!(pace.wait(&app, due), None);
         // Input draws at once.
         assert_eq!(pace.after(true, due), Some(Paint::Diff));
+    }
+
+    #[test]
+    fn a_session_update_is_drawn_at_once() {
+        let update = Msg::Session {
+            key: fake::key("h1", "s2"),
+            update: fake::update("s2", 3, Vec::new(), Vec::new()),
+        };
+        assert!(urgent(&update));
+        assert!(!urgent(&Msg::Machines(Vec::new())));
+        let start = Instant::now();
+        let mut pace = Pace::new(start);
+        pace.painted(Paint::Diff, start);
+        let soon = start + Duration::from_millis(40);
+        assert_eq!(pace.after(urgent(&update), soon), Some(Paint::Diff));
     }
 
     #[test]
