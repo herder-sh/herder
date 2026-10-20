@@ -42,6 +42,9 @@ impl Key {
         if self.mods.contains(KeyModifiers::ALT) {
             name.push_str("alt+");
         }
+        if self.mods.contains(KeyModifiers::SUPER) {
+            name.push_str("cmd+");
+        }
         match self.code {
             KeyCode::Char(' ') => name.push_str("space"),
             KeyCode::Char(c) => name.push(c),
@@ -79,6 +82,14 @@ const fn ctrl(c: char) -> Key {
     Key {
         code: KeyCode::Char(c),
         mods: KeyModifiers::CONTROL,
+    }
+}
+
+/// `c` with Cmd, which crossterm calls Super.
+const fn cmd(c: char) -> Key {
+    Key {
+        code: KeyCode::Char(c),
+        mods: KeyModifiers::SUPER,
     }
 }
 
@@ -537,7 +548,10 @@ pub const COMPOSER: &[Keys] = &[
     keys(&[alt(KeyCode::Enter), ctrl('j')], "new line"),
     keys(&[ch('/')], "at the start: commands; // sends a literal /"),
     keys(&[ch('@')], "mention a task child, or a file"),
-    keys(&[ctrl('v')], "attach the clipboard's image"),
+    keys(
+        &[ctrl('v'), cmd('v')],
+        "attach the clipboard's image (cmd+v: Ghostty 1.3.1+)",
+    ),
     keys(&[UP, DOWN], "earlier prompts; in a popup, move"),
     keys(&[ctrl('p'), ctrl('n')], "in a popup: move"),
     keys(&[TAB], "in a popup: complete; else switch pane"),
@@ -780,13 +794,14 @@ mod tests {
     }
 
     /// Every key worth pressing: each printable character, Ctrl and each letter, Alt-Enter,
-    /// and the named keys.
+    /// Cmd-V, and the named keys.
     fn every_key() -> Vec<KeyEvent> {
         let mut keys: Vec<KeyEvent> = (' '..='~')
             .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
             .chain(('a'..='z').map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)))
             .collect();
         keys.push(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+        keys.push(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SUPER));
         keys.extend(
             [
                 KeyCode::Enter,
