@@ -191,6 +191,7 @@ final class ScreenshotTests: XCTestCase {
             type("notion", into: "mcp-name")
             let http = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'HTTP'")).firstMatch
             if wait(http, "HTTP transport") { press(http) }
+            settle()
             type("https://mcp.notion.com/mcp", into: "mcp-url")
             settle()
             shoot(platform("mcp-add"))
@@ -227,16 +228,19 @@ final class ScreenshotTests: XCTestCase {
     }
 
     #if os(macOS)
-    /// Cancels the Codex login still waiting, from the list of running logins.
+    /// Cancels the Codex login still waiting, from the list of running logins. Its id is
+    /// `codex-2`, as devbox has a `codex` account already.
     private func cancelLogin() {
         guard openAddAccount() else { return }
-        let cancel = app.buttons["Cancel Login codex"].firstMatch
+        let cancel = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Cancel Login codex'")).firstMatch
         guard wait(cancel, "Cancel Login codex") else { return dismiss() }
         press(cancel)
         settle()
         shoot("mac-cancel-login")
         confirmCancel()
-        let ended = app.buttons.matching(NSPredicate(format: "label == 'Codex codex, Ended'")).firstMatch
+        // The row is the running login's spinner until it ends, so it is matched by any type.
+        let ended = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH 'Codex codex' AND label ENDSWITH ', Ended'")).firstMatch
         if wait(ended, "cancelled login ended") {
             settle()
             shoot("mac-cancel-login-ended")
@@ -251,11 +255,16 @@ final class ScreenshotTests: XCTestCase {
         if wait(confirm, "Cancel Login confirmation") { press(confirm) }
     }
 
-    /// Types `text` into the field with accessibility id `field`.
+    /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
+    /// field that just appeared may still be moving into place when first pressed.
     private func type(_ text: String, into field: String) {
         let input = app.descendants(matching: .any)[field].firstMatch
         guard wait(input, field) else { return }
         press(input)
+        for _ in 0..<6 where (input.value(forKey: "hasKeyboardFocus") as? Bool) != true {
+            Thread.sleep(forTimeInterval: 0.5)
+            press(input)
+        }
         input.typeText(text)
     }
 
