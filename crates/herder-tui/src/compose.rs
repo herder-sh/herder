@@ -58,7 +58,7 @@ pub enum Act {
     Confirm,
     /// Show the pending request at full height, or back at its usual.
     Full,
-    /// Ctrl-V: attach the clipboard's image to the prompt.
+    /// Ctrl-V or Cmd-V: attach the clipboard's image to the prompt.
     PasteImage,
     /// Take the prompt's last image off.
     Unattach,
@@ -251,7 +251,10 @@ pub fn for_key(key: KeyEvent, app: &App) -> Option<Option<Action>> {
         KeyCode::Up if row == 0 => compose(Act::Recall(1)),
         KeyCode::Down if row == last && app.compose.recall.is_some() => compose(Act::Recall(-1)),
         KeyCode::Esc => compose(Act::Leave),
-        KeyCode::Char('v') if ctrl => compose(Act::PasteImage),
+        // Cmd-V reaches here only when the terminal had no text to paste; see the README.
+        KeyCode::Char('v') if ctrl || key.modifiers.contains(KeyModifiers::SUPER) => {
+            compose(Act::PasteImage)
+        }
         // Takes the last image off, then leaves without Esc, which a phone keyboard may lack.
         KeyCode::Backspace if app.compose.editor.is_empty() && !app.compose.images.is_empty() => {
             compose(Act::Unattach)
@@ -1535,6 +1538,31 @@ mod tests {
                 Origin::Session(key("h1", "s1"))
             )]
         );
+    }
+
+    #[test]
+    fn cmd_v_attaches_the_clipboards_image_and_a_text_paste_stays_text() {
+        let mut app = writing();
+        // A terminal with only an image to paste passes Cmd-V on as a key.
+        let effects = press_with(&mut app, KeyCode::Char('v'), KeyModifiers::SUPER);
+        assert_eq!(
+            effects,
+            [Effect::Attach {
+                source: Source::Clipboard,
+                word: None,
+            }]
+        );
+        assert!(app.compose.editor.is_empty());
+        // Plain v types, and text Cmd-V pastes, as before.
+        assert_eq!(press(&mut app, KeyCode::Char('v')), []);
+        assert_eq!(app.update(Msg::Paste("sv".into())), []);
+        assert_eq!(app.compose.editor.lines(), ["vsv"]);
+        assert_eq!(app.compose.loading, 1);
+        // Outside the composer Cmd-V is no NAVIGATE key: `v` would regroup the sessions.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.focus, Focus::Transcript);
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SUPER);
+        assert_eq!(crate::action::for_key(key, &app), None);
     }
 
     #[test]

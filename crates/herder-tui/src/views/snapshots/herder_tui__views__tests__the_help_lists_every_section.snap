@@ -71,7 +71,7 @@ expression: terminal.backend()
 "     │  alt+enter, ctrl+j    new line                                                       │       "
 "     │  /                    at the start: commands; // sends a literal /                   │       "
 "     │  @                    mention a task child, or a file                                │       "
-"     │  ctrl+v               attach the clipboard's image                                   │       "
+"     │  ctrl+v, cmd+v        attach the clipboard's image (cmd+v: Ghostty 1.3.1+)           │       "
 "     │  ↑, ↓                 earlier prompts; in a popup, move                              │       "
 "     │  ctrl+p, ctrl+n       in a popup: move                                               │       "
 "     │  tab                  in a popup: complete; else switch pane                         │       "
