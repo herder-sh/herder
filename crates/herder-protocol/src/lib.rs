@@ -59,8 +59,9 @@ pub use server::{
     UsageWindow, VaultStatus, VaultVolume,
 };
 pub use settings::{
-    BackupSettings, DaemonSettings, FollowUpSettings, LogFormat, LogSettings, ProjectDiscovery,
-    ProviderBinary, ResourceSettings, TitleSettings,
+    BackupSettings, DaemonSettings, FollowUpSettings, HERDER_MCP_SERVER, LogFormat, LogSettings,
+    McpServerSettings, McpTransport, ProjectDiscovery, ProviderBinary, ResourceSettings,
+    TitleSettings, is_valid_mcp_server_name,
 };
 pub use skills::{
     AccountSkills, LibrarySkill, MAX_SKILL_BYTES, MAX_SKILL_NAME_CHARS, ProviderReload,

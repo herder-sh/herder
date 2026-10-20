@@ -9,7 +9,7 @@
 //! The wire format is JSON-RPC 2.0 without the `"jsonrpc"` member, one message per line.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// A request herder sends.
 #[derive(Debug, Serialize)]
@@ -94,6 +94,13 @@ pub struct ThreadStartParams<'a> {
     pub cwd: &'a str,
     pub approval_policy: AskForApproval,
     pub sandbox: SandboxMode,
+    /// Config overrides for the thread, as dotted `config.toml` keys: the MCP servers.
+    #[serde(skip_serializing_if = "no_config")]
+    pub config: &'a Map<String, Value>,
+}
+
+fn no_config(config: &&Map<String, Value>) -> bool {
+    config.is_empty()
 }
 
 /// `thread/resume`: reopens a thread from its rollout file, which Codex finds by id under
@@ -109,6 +116,9 @@ pub struct ThreadResumeParams<'a> {
     pub sandbox: SandboxMode,
     /// herder has the history already; only the thread is wanted.
     pub exclude_turns: bool,
+    /// Config overrides for the thread, as in `thread/start`.
+    #[serde(skip_serializing_if = "no_config")]
+    pub config: &'a Map<String, Value>,
 }
 
 #[derive(Debug, Serialize)]

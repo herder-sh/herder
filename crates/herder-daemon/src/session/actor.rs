@@ -1992,6 +1992,24 @@ impl Actor {
             }
             None => None,
         };
+        let mcp_servers = match self.inner.mcp_servers.get() {
+            Some(servers) => {
+                let project = self
+                    .inner
+                    .journal
+                    .projects()
+                    .of_repo(&session.repo)
+                    .map(|project| project.project_id.clone())
+                    .filter(|_| !session.chat);
+                let herder = self.inner.mcp.get().map(|mcp| crate::mcp::servers::Herder {
+                    binary: mcp.herder(),
+                    data_dir: mcp.data_dir(),
+                    session_id: &session.session_id,
+                });
+                servers.for_session(project.as_ref(), herder.as_ref())
+            }
+            None => Vec::new(),
+        };
         let launcher = match self.inner.scopes.get() {
             Some(scopes) => {
                 let limits = scopes.limits(session.parent.is_some());
@@ -2013,6 +2031,7 @@ impl Actor {
             seed,
             resume,
             mcp,
+            mcp_servers,
             launcher,
             skills,
         })

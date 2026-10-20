@@ -207,6 +207,7 @@ pub async fn serve(
         Some(Arc::clone(&admission)),
         shutdown.clone(),
     ));
+    sessions.use_mcp_servers(settings.mcp_servers())?;
     let budget = admission.budget();
     info!(
         max_turns = budget.max_turns,
@@ -356,6 +357,7 @@ mod tests {
             mode: config::Mode::Host,
             vault: None,
             retention: Default::default(),
+            mcp_servers: Vec::new(),
         };
         let shutdown = CancellationToken::new();
         let task = tokio::spawn({

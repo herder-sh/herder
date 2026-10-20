@@ -58,6 +58,7 @@ fn request(seed: Vec<Item>) -> StartRequest {
         seed,
         resume: None,
         mcp: None,
+        mcp_servers: Vec::new(),
         launcher: Vec::new(),
         skills: None,
     }

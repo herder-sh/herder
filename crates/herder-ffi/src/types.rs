@@ -16,13 +16,14 @@ use herder_protocol::{
     EscalationReason, Event, EventBody, FailoverSettings, FailoverTotal, FleetHost, FollowUp,
     FollowUpReason, FollowUpSettings, HistoryPart, HostId, HostReplication, HostResources,
     HostUsage, Image, Item, ItemBody, ItemId, LibrarySkill, LinkedVault, LogFormat, LogSettings,
-    Mergeable, PermissionMode, PrState, Pressure, Project, ProjectDiscovery, ProjectId, PromptFile,
-    PromptId, Provider, ProviderBinary, ProviderReload, ProviderStatus, PullRequest, QuestionId,
-    QueuedPrompt, Relay, ResourceSettings, ReviewStatus, Role, Route, SecretAccess, SecretInfo,
-    SecretSet, SecretValue, SessionHead, SessionId, SessionSkill, SessionStatus, SessionUsage,
-    SkillFile, SkillReload, SkillSource, SkillsStatus, Terminal, TerminalId, TerminalPurpose,
-    Timestamp, TitleSettings, TitleSource, TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal,
-    UsageWindow, UserId, VaultStatus, VaultVolume,
+    McpServerSettings, McpTransport, Mergeable, PermissionMode, PrState, Pressure, Project,
+    ProjectDiscovery, ProjectId, PromptFile, PromptId, Provider, ProviderBinary, ProviderReload,
+    ProviderStatus, PullRequest, QuestionId, QueuedPrompt, Relay, ResourceSettings, ReviewStatus,
+    Role, Route, SecretAccess, SecretInfo, SecretRef, SecretSet, SecretValue, SessionHead,
+    SessionId, SessionSkill, SessionStatus, SessionUsage, SkillFile, SkillReload, SkillSource,
+    SkillsStatus, Terminal, TerminalId, TerminalPurpose, Timestamp, TitleSettings, TitleSource,
+    TurnError, TurnId, TurnUsage, UsagePeriod, UsageTotal, UsageWindow, UserId, VaultStatus,
+    VaultVolume,
 };
 use serde_json::Value as Json;
 
@@ -77,6 +78,13 @@ uniffi::custom_type!(SecretValue, String, {
     lower: |value| value.expose().to_owned(),
     try_lift: |value| SecretValue::new(value)
         .ok_or_else(|| uniffi::deps::anyhow::anyhow!("a secret's value is 1 to 64 KiB without a NUL")),
+});
+
+// A secret as a session names it, `NAME` or `set/NAME`; refused as `SecretRef` parses it.
+uniffi::custom_type!(SecretRef, String, {
+    remote,
+    lower: |secret| secret.to_string(),
+    try_lift: |secret| secret.parse().map_err(|err: String| uniffi::deps::anyhow::anyhow!(err)),
 });
 
 // A tool call's arguments, as JSON text.
@@ -1134,6 +1142,33 @@ pub struct DaemonSettings {
     pub projects: ProjectDiscovery,
     pub backup: BackupSettings,
     pub follow_ups: FollowUpSettings,
+    pub mcp_servers: Vec<McpServerSettings>,
+}
+
+#[uniffi::remote(Record)]
+pub struct McpServerSettings {
+    pub name: String,
+    pub enabled: bool,
+    pub project: Option<ProjectId>,
+    pub transport: McpTransport,
+}
+
+#[uniffi::remote(Enum)]
+pub enum McpTransport {
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        secrets: Vec<SecretRef>,
+    },
+    Http {
+        url: String,
+        headers: HashMap<String, String>,
+    },
+    Sse {
+        url: String,
+        headers: HashMap<String, String>,
+    },
 }
 
 #[uniffi::remote(Record)]

@@ -117,6 +117,11 @@ pub struct StartRequest {
     /// herder's MCP server for this session, which the adapter registers with the CLI as
     /// `herder`, next to the user's own servers; absent when the daemon serves none.
     pub mcp: Option<McpServer>,
+    /// The user's MCP servers for this session, which the adapter registers with the CLI
+    /// under their names, none `herder`, for this run only: never in the account's config
+    /// dir, and never with a header or variable value on a command line. A server the CLI
+    /// cannot reach the way it says is left out.
+    pub mcp_servers: Vec<UserMcpServer>,
     /// Program and arguments the CLI is run through, such as `systemd-run --scope ... --`: the
     /// CLI's own program and arguments follow it. Empty runs the CLI directly. A replayed
     /// fixture ignores it.
@@ -151,6 +156,78 @@ pub struct McpServer {
     pub command: PathBuf,
     /// Its arguments.
     pub args: Vec<String>,
+}
+
+/// An MCP server of the user's, as the CLI is to reach it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserMcpServer {
+    /// What the CLI registers it as: ASCII letters, digits, `-` and `_`, never `herder`.
+    pub name: String,
+    /// How the CLI reaches it.
+    pub transport: McpTransport,
+}
+
+/// How the CLI reaches a user's MCP server. Variables and headers may hold secrets: Debug
+/// shows their names only.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpTransport {
+    /// A program the CLI runs, speaking MCP on its stdin and stdout.
+    Stdio {
+        /// The program, looked up on `PATH` when it is a bare name.
+        command: String,
+        /// Its arguments.
+        args: Vec<String>,
+        /// Variables the CLI adds to its environment.
+        env: BTreeMap<String, String>,
+    },
+    /// A server at a URL, over streamable HTTP.
+    Http {
+        /// The URL.
+        url: String,
+        /// Headers sent with every request.
+        headers: BTreeMap<String, String>,
+    },
+    /// A server at a URL, over HTTP with server-sent events.
+    Sse {
+        /// The URL.
+        url: String,
+        /// Headers sent with every request.
+        headers: BTreeMap<String, String>,
+    },
+}
+
+impl std::fmt::Debug for UserMcpServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserMcpServer")
+            .field("name", &self.name)
+            .field("transport", &self.transport)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for McpTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = |map: &BTreeMap<String, String>| map.keys().cloned().collect::<Vec<_>>();
+        match self {
+            Self::Stdio { command, args, env } => f
+                .debug_struct("Stdio")
+                .field("command", command)
+                .field("args", args)
+                .field("env", &names(env))
+                .finish(),
+            Self::Http { url, headers } => f
+                .debug_struct("Http")
+                .field("url", url)
+                .field("headers", &names(headers))
+                .finish(),
+            Self::Sse { url, headers } => f
+                .debug_struct("Sse")
+                .field("url", url)
+                .field("headers", &names(headers))
+                .finish(),
+        }
+    }
 }
 
 /// A running session of a vendor CLI.

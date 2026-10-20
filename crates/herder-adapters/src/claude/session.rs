@@ -10,6 +10,7 @@ use herder_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tempfile::TempPath;
 use tokio::sync::{mpsc, oneshot};
 
 use super::wire::{
@@ -52,6 +53,7 @@ pub(super) fn fatal(message: impl Into<String>) -> TurnError {
 pub(super) async fn start(
     transport: Transport,
     request: StartRequest,
+    mcp_config: Option<TempPath>,
 ) -> Result<AdapterSession, TurnError> {
     let Transport {
         stdin,
@@ -60,6 +62,7 @@ pub(super) async fn start(
     } = transport;
     let (event_tx, events) = mpsc::channel(EVENT_BUFFER);
     let mut session = Session {
+        _mcp_config: mcp_config,
         stdin: Some(stdin),
         events: event_tx,
         model: None,
@@ -216,6 +219,8 @@ struct Streaming {
 }
 
 struct Session {
+    /// The file the user's MCP servers were passed in, removed once the CLI is gone.
+    _mcp_config: Option<TempPath>,
     /// `None` once closed, which asks `claude` to exit.
     stdin: Option<mpsc::Sender<String>>,
     events: mpsc::Sender<AdapterEvent>,

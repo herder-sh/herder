@@ -40,6 +40,7 @@
 //! clients' commands.
 
 mod rpc;
+pub mod servers;
 mod shim;
 
 use std::collections::HashMap;

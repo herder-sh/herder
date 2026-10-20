@@ -422,6 +422,25 @@ public final class Fleet {
         return settings.projects.dir
     }
 
+    /// The MCP servers every session on a machine gets next to herder's own, in order; owners
+    /// only.
+    func mcpServers(on hostId: HostId) async throws -> [McpServerSettings] {
+        guard case .settings(let settings, _, _, _) = try await client.send(hostId: hostId, command: .getSettings)
+        else { throw HerderError.Local(detail: "the machine did not send its settings") }
+        return settings.mcpServers
+    }
+
+    /// Replaces the MCP servers on a machine, to add, change, remove or turn them on and off,
+    /// keeping its other settings; owners only. Each session's agent gets them from its next
+    /// start. The machine refuses an invalid server, or a name used twice or `herder`, with
+    /// `badRequest`.
+    func setMcpServers(_ servers: [McpServerSettings], on hostId: HostId) async throws {
+        guard case .settings(var settings, _, _, _) = try await client.send(hostId: hostId, command: .getSettings)
+        else { throw HerderError.Local(detail: "the machine did not send its settings") }
+        settings.mcpServers = servers
+        _ = try await client.send(hostId: hostId, command: .setSettings(settings: settings))
+    }
+
     /// Replaces a project's settings on a machine; owners only.
     func setProjectSettings(
         _ projectId: ProjectId, on hostId: HostId, name: String, mode: PermissionMode?, account: AccountId?,

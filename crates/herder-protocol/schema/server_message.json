@@ -1344,6 +1344,14 @@
           "description": "Logging.",
           "$ref": "#/$defs/LogSettings"
         },
+        "mcp_servers": {
+          "description": "The user's MCP servers, which every session's CLI gets next to herder's own, in this\norder; none from daemons before them.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/McpServerSettings"
+          }
+        },
         "projects": {
           "description": "Where projects are discovered.",
           "$ref": "#/$defs/ProjectDiscovery"
@@ -2886,6 +2894,139 @@
         "format"
       ]
     },
+    "McpServerSettings": {
+      "description": "One `[[mcp_servers]]` entry: an MCP server of the user's that sessions' CLIs connect to,\nwhatever their provider and account. It is passed to each CLI as it starts, so a change\nreaches a running session when its CLI next starts.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether sessions get it; a disabled server stays configured.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "What the CLI registers it as, unique among the servers; see\n[`is_valid_mcp_server_name`].",
+          "type": "string"
+        },
+        "project": {
+          "description": "The project whose sessions get it; every session, chats too, when absent.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transport": {
+          "description": "How the CLI reaches it.",
+          "$ref": "#/$defs/McpTransport"
+        }
+      },
+      "required": [
+        "name",
+        "enabled",
+        "transport"
+      ]
+    },
+    "McpTransport": {
+      "description": "How a CLI reaches an MCP server.",
+      "oneOf": [
+        {
+          "description": "A program the CLI runs, speaking MCP on its stdin and stdout.",
+          "type": "object",
+          "properties": {
+            "args": {
+              "description": "Its arguments.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "command": {
+              "description": "The program, a name looked up on `PATH`, an absolute path, or one starting with\n`~/`.",
+              "type": "string"
+            },
+            "env": {
+              "description": "Variables added to its environment, kept in the daemon's config file as given.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "secrets": {
+              "description": "Secrets from the host's vault, each added to its environment as the variable of\nits name: the program runs through `herder secret run`, so a value is never in\nthe config file, on a command line or before an agent.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/SecretRef"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "stdio"
+            }
+          },
+          "required": [
+            "type",
+            "command"
+          ]
+        },
+        {
+          "description": "A server at a URL, over MCP's streamable HTTP transport.",
+          "type": "object",
+          "properties": {
+            "headers": {
+              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "type": {
+              "type": "string",
+              "const": "http"
+            },
+            "url": {
+              "description": "Its `http` or `https` URL.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "description": "A server at a URL, over MCP's older HTTP with server-sent events transport. Codex\ncannot reach one, so its sessions go without it.",
+          "type": "object",
+          "properties": {
+            "headers": {
+              "description": "Headers sent with every request, kept in the daemon's config file as given.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "default": {}
+            },
+            "type": {
+              "type": "string",
+              "const": "sse"
+            },
+            "url": {
+              "description": "Its `http` or `https` URL.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        }
+      ]
+    },
     "Mergeable": {
       "description": "Whether a pull request can merge cleanly.",
       "oneOf": [
@@ -3529,6 +3670,11 @@
         "description",
         "updated_at"
       ]
+    },
+    "SecretRef": {
+      "description": "A secret as a host's session names it: `NAME`, or `set/NAME` when more than one set granted to the host has `NAME`.",
+      "type": "string",
+      "pattern": "^([a-z0-9]+(-[a-z0-9]+)*/)?[A-Z_][A-Z0-9_]*$"
     },
     "SecretSet": {
       "description": "A set of secrets on a vault, and the hosts it is granted to.",

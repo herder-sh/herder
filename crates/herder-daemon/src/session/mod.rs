@@ -269,6 +269,7 @@ use titles::Titler;
 pub use titles::{TitleCli, TitleClis, TitlesConfig};
 
 use crate::config::ProjectSettings;
+use crate::mcp::servers::UserServers;
 use crate::mcp::{self, Control, Mcp};
 use crate::projects::{self, Overrides};
 use crate::prs::{self, PrTracker};
@@ -404,6 +405,8 @@ struct Inner {
     stalls: OnceLock<Arc<Stalls>>,
     /// herder's MCP server, once started.
     mcp: OnceLock<Arc<Mcp>>,
+    /// The user's MCP servers, once set.
+    mcp_servers: OnceLock<Arc<UserServers>>,
     /// The daemon as agents drive it through `overview` and `command`, once set.
     control: OnceLock<Arc<dyn Control>>,
     /// The vault's secrets, for `secrets` and `herder secret run`, once set.
@@ -576,6 +579,7 @@ impl SessionManager {
                 prs: OnceLock::new(),
                 stalls: OnceLock::new(),
                 mcp: OnceLock::new(),
+                mcp_servers: OnceLock::new(),
                 control: OnceLock::new(),
                 secrets: OnceLock::new(),
                 tasks,
@@ -1073,6 +1077,15 @@ impl SessionManager {
             .secrets
             .set(secrets)
             .map_err(|_| anyhow::anyhow!("sessions use secrets already"))
+    }
+
+    /// Gives every session's CLI the user's MCP servers `servers` from its next start, as they
+    /// are at each start; once per manager. Without it, CLIs get herder's own server only.
+    pub fn use_mcp_servers(&self, servers: Arc<UserServers>) -> anyhow::Result<()> {
+        self.inner
+            .mcp_servers
+            .set(servers)
+            .map_err(|_| anyhow::anyhow!("sessions use MCP servers already"))
     }
 
     /// Runs every session's CLI in a scope of `scopes` from its next start; once per manager.

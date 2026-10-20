@@ -8,13 +8,16 @@
 //! which enables `serde_json`'s `preserve_order` for the whole workspace and so changes the
 //! bytes of herder-protocol's committed JSON Schema.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use herder_protocol::Image;
+use herder_protocol::{HERDER_MCP_SERVER, Image};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::{McpServer, McpTransport, UserMcpServer};
 
 /// The only ACP version there is.
 pub(super) const PROTOCOL_VERSION: u16 = 1;
@@ -50,6 +53,17 @@ pub(super) struct InitializeResponse {
 pub(super) struct AgentCapabilities {
     #[serde(default)]
     pub prompt_capabilities: PromptCapabilities,
+    #[serde(default)]
+    pub mcp_capabilities: McpCapabilities,
+}
+
+/// The MCP transports an agent connects to beyond stdio, which every agent must.
+#[derive(Default, Deserialize)]
+pub(super) struct McpCapabilities {
+    #[serde(default)]
+    pub http: bool,
+    #[serde(default)]
+    pub sse: bool,
 }
 
 /// Content a prompt may carry beyond text; ACP agents all take text and resource links.
@@ -59,9 +73,44 @@ pub(super) struct PromptCapabilities {
     pub image: bool,
 }
 
-/// `session/new` params.
-pub(super) fn new_session(cwd: &Path) -> Value {
-    json!({"cwd": cwd, "mcpServers": []})
+/// `session/new` params: herder's MCP server as `herder`, then the user's under their names,
+/// leaving out those over a transport the agent did not say it takes.
+pub(super) fn new_session(
+    cwd: &Path,
+    herder: Option<&McpServer>,
+    servers: &[UserMcpServer],
+    takes: &McpCapabilities,
+) -> Value {
+    let pairs = |map: &BTreeMap<String, String>| -> Vec<Value> {
+        map.iter()
+            .map(|(name, value)| json!({"name": name, "value": value}))
+            .collect()
+    };
+    let herder = herder.map(|mcp| {
+        json!({
+            "name": HERDER_MCP_SERVER,
+            "command": mcp.command,
+            "args": mcp.args,
+            "env": [],
+        })
+    });
+    let user = servers.iter().filter_map(|server| {
+        let name = &server.name;
+        Some(match &server.transport {
+            McpTransport::Stdio { command, args, env } => {
+                json!({"name": name, "command": command, "args": args, "env": pairs(env)})
+            }
+            McpTransport::Http { url, headers } if takes.http => {
+                json!({"type": "http", "name": name, "url": url, "headers": pairs(headers)})
+            }
+            McpTransport::Sse { url, headers } if takes.sse => {
+                json!({"type": "sse", "name": name, "url": url, "headers": pairs(headers)})
+            }
+            McpTransport::Http { .. } | McpTransport::Sse { .. } => return None,
+        })
+    });
+    let servers: Vec<Value> = herder.into_iter().chain(user).collect();
+    json!({"cwd": cwd, "mcpServers": servers})
 }
 
 #[derive(Deserialize)]
@@ -321,5 +370,60 @@ pub(super) enum Outcome {
 impl Outcome {
     pub(super) fn response(self) -> Value {
         json!({"outcome": self})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn servers_over_a_transport_the_agent_does_not_take_are_left_out() {
+        let url = |kind: &str| format!("https://example.com/{kind}");
+        let servers = [
+            UserMcpServer {
+                name: "local".into(),
+                transport: McpTransport::Stdio {
+                    command: "server".into(),
+                    args: Vec::new(),
+                    env: BTreeMap::new(),
+                },
+            },
+            UserMcpServer {
+                name: "remote".into(),
+                transport: McpTransport::Http {
+                    url: url("mcp"),
+                    headers: BTreeMap::new(),
+                },
+            },
+            UserMcpServer {
+                name: "events".into(),
+                transport: McpTransport::Sse {
+                    url: url("sse"),
+                    headers: BTreeMap::new(),
+                },
+            },
+        ];
+        let names = |takes: McpCapabilities| -> Vec<String> {
+            let params = new_session(Path::new("/w"), None, &servers, &takes);
+            params["mcpServers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|server| server["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let none = McpCapabilities::default();
+        assert_eq!(names(none), ["local"]);
+        let http = McpCapabilities {
+            http: true,
+            sse: false,
+        };
+        assert_eq!(names(http), ["local", "remote"]);
+        let both = McpCapabilities {
+            http: true,
+            sse: true,
+        };
+        assert_eq!(names(both), ["local", "remote", "events"]);
     }
 }
