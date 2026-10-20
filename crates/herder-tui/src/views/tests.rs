@@ -2275,3 +2275,39 @@ fn the_prompt_box_reads_as_an_input() {
         }
     }
 }
+
+#[test]
+fn the_details_panel_wraps_long_lines_at_words() {
+    // A long machine name and account label, as on a real fleet, in the 40-column panel.
+    let mut app = fake::chat();
+    let mut machines = app.machines.clone();
+    machines[0].name = "fable-workstation-eu-central".to_owned();
+    machines[0].accounts[0].label = "Fable team weekly plan (eu-central)".to_owned();
+    app.update(Msg::Machines(machines));
+    fake::with_resources(&mut app, fake::host_resources(4), true);
+    for width in [160, 190] {
+        let terminal = render(&mut app, width, 40);
+        assert_last_column_blank(terminal.backend().buffer());
+        insta::assert_snapshot!(format!("details_long_{width}"), terminal.backend());
+        // The panel: right of the last separator, past its inset.
+        let rows = screen_rows(&terminal, 0);
+        let panel: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                let at = row.rfind('│').map_or(0, |at| at + '│'.len_utf8());
+                row[at..].trim().to_owned()
+            })
+            .collect();
+        let text = panel.join("\n");
+        // Wrapped whole: each word is on one row, the rest of a line indented under it.
+        assert!(
+            text.contains("Resources ·\nfable-workstation-eu-central\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Usage · Fable team weekly plan\n(eu-central)\n"),
+            "{text}"
+        );
+        assert!(!text.contains('…'), "{text}");
+    }
+}

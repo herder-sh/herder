@@ -41,12 +41,44 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, over: bool) {
         y: area.y,
         height: area.height,
     };
-    let lines = lines(app, inner.width);
-    let lines: Vec<Line> = lines
+    let lines = lines(app, inner.width)
         .into_iter()
-        .map(|line| crate::ui::fit(line, usize::from(inner.width), ui.glyphs))
-        .collect();
+        .flat_map(|line| fold(ui, line, usize::from(inner.width)))
+        .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// `line` in lines `width` wide: whole if it fits, else wrapped at word boundaries with the
+/// rest indented; a word wider than a line is cut with an ellipsis, never split.
+fn fold(ui: Ui, line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if crate::ui::line_width(&line) <= width {
+        return vec![line];
+    }
+    const INDENT: &str = "  ";
+    let room = width.saturating_sub(INDENT.len()).max(1);
+    let runs: Vec<super::markdown::Run> = line
+        .spans
+        .iter()
+        .map(|span| {
+            let text = span
+                .content
+                .split_inclusive(char::is_whitespace)
+                .map(|word| {
+                    let bare = word.trim_end();
+                    let fitted = crate::ui::fit(Line::raw(bare), room, ui.glyphs);
+                    let mut fitted: String = fitted
+                        .spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect();
+                    fitted.push_str(&word[bare.len()..]);
+                    fitted
+                })
+                .collect();
+            (text, line.style.patch(span.style))
+        })
+        .collect();
+    super::markdown::wrap(&runs, width, &[], &[Span::raw(INDENT)])
 }
 
 /// The panel's lines, `width` columns wide.
