@@ -530,6 +530,7 @@ pub fn authorize(role: Role, command: &CommandBody) -> Result<(), ErrorInfo> {
             | CommandBody::AwsSsoLogin { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
+            | CommandBody::CloseTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
             | CommandBody::TerminalInput { .. }
     );
@@ -1048,6 +1049,22 @@ mod tests {
             provider: herder_protocol::Provider::Cursor,
             cols: 80,
             rows: 24,
+        };
+        assert!(authorize(alice.role, &command).is_ok());
+        alice.role = Role::Member;
+        assert_eq!(
+            authorize(alice.role, &command).unwrap_err().code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn only_owners_may_close_a_terminal() {
+        let (_tmp, auth) = open();
+        let code = auth.mint("alice", None, PAIRING_TTL).unwrap().code;
+        let mut alice = pair(&auth, "fp-a", &code).unwrap();
+        let command = CommandBody::CloseTerminal {
+            terminal_id: herder_protocol::TerminalId::new("t1"),
         };
         assert!(authorize(alice.role, &command).is_ok());
         alice.role = Role::Member;

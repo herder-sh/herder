@@ -824,6 +824,20 @@ impl Client {
             .await
     }
 
+    /// Closes a terminal of a machine, whether or not this client streams it: hangs up its
+    /// program, which ends every stream of it with [`TerminalEvent::Closed`]; owners only.
+    /// Closing a login before it has logged in adds no account, and removes the config dir the
+    /// machine created for it.
+    pub async fn close_terminal(
+        &self,
+        host_id: HostId,
+        terminal_id: TerminalId,
+    ) -> Result<(), Error> {
+        self.send(host_id, CommandBody::CloseTerminal { terminal_id })
+            .await
+            .map(|_| ())
+    }
+
     /// Logs an existing account of a machine in again: runs its provider's own login in the
     /// account's config dir, in a login terminal of `cols` by `rows`, and streams it, however
     /// long it takes to connect; owners only. Once the provider reports the account logged

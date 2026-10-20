@@ -22,6 +22,7 @@ rcgen.workspace = true
 ring.workspace = true
 rusqlite.workspace = true
 rustls.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

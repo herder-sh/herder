@@ -829,6 +829,7 @@ impl SessionManager {
             | CommandBody::AwsSsoLogin { .. }
             | CommandBody::AttachTerminal { .. }
             | CommandBody::DetachTerminal { .. }
+            | CommandBody::CloseTerminal { .. }
             | CommandBody::ResizeTerminal { .. }
             | CommandBody::TerminalInput { .. }
             | CommandBody::PairDevice => {

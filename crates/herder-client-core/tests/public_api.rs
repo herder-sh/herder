@@ -91,6 +91,7 @@ fn the_objects_and_their_futures_are_send() {
         ));
         future(client.install_provider(host.clone(), herder_protocol::Provider::Claude, 80, 24));
         future(client.log_in_account(host.clone(), herder_protocol::AccountId::new("a"), 80, 24));
+        future(client.close_terminal(host.clone(), TerminalId::new("t")));
         future(client.list_aws_profiles(host.clone()));
         future(client.aws_sso_login(host.clone(), "prod".into(), 80, 24));
         future(client.attach_terminal(host, TerminalId::new("t")));

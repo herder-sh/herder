@@ -453,6 +453,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
         command(CommandBody::DetachTerminal {
             terminal_id: terminal_id(),
         }),
+        command(CommandBody::CloseTerminal {
+            terminal_id: terminal_id(),
+        }),
         command(CommandBody::ResizeTerminal {
             terminal_id: terminal_id(),
             cols: 80,
@@ -1128,6 +1131,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     provider: Provider::Claude,
                     installed: true,
                     version: Some("2.1.0 (Claude Code)".into()),
+                    latest_version: Some("2.1.4".into()),
                     binary: Some("claude".into()),
                     can_install: true,
                     can_update: true,
@@ -1136,6 +1140,7 @@ fn server_fixtures() -> Vec<ServerMessage> {
                     provider: Provider::Gemini,
                     installed: false,
                     version: None,
+                    latest_version: None,
                     binary: None,
                     can_install: false,
                     can_update: false,

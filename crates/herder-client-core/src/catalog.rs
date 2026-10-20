@@ -334,6 +334,7 @@ mod tests {
                     provider: (*provider).clone(),
                     installed: true,
                     version: Some((*version).into()),
+                    latest_version: None,
                     binary: Some(provider.as_str().into()),
                     can_install: true,
                     can_update: true,

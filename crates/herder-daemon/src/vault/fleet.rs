@@ -515,6 +515,7 @@ fn target(command: &CommandBody) -> Option<&SessionId> {
         | CommandBody::AwsSsoLogin { .. }
         | CommandBody::AttachTerminal { .. }
         | CommandBody::DetachTerminal { .. }
+        | CommandBody::CloseTerminal { .. }
         | CommandBody::ResizeTerminal { .. }
         | CommandBody::TerminalInput { .. } => None,
     }

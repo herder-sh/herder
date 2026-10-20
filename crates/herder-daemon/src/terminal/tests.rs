@@ -275,3 +275,39 @@ async fn a_login_is_hung_up_once_it_has_logged_in() {
     assert_eq!(exit_code, None);
     assert_eq!(exit.recv_timeout(TIMEOUT).unwrap(), None);
 }
+
+#[tokio::test]
+async fn closing_a_login_hangs_it_up_and_runs_its_exit() {
+    let f = fixture();
+    let outbox = Arc::new(Outbox::default());
+    let (ended, exit) = std::sync::mpsc::channel();
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "sleep 60"]);
+    let terminal_id = f
+        .terminals
+        .open_login(
+            AccountId::new("claude-2"),
+            command,
+            80,
+            24,
+            &outbox,
+            LoginHooks {
+                done: Box::new(|| false),
+                on_exit: Box::new(move |exit_code| {
+                    let _ = ended.send(exit_code);
+                    String::new()
+                }),
+            },
+        )
+        .unwrap();
+    assert_eq!(f.next_list().await.len(), 1);
+    // Any owner may close it, attached or not.
+    f.terminals.detach(&terminal_id, &outbox).unwrap();
+    f.terminals.close(&terminal_id).unwrap();
+    assert_eq!(f.next_closed().await, (terminal_id.clone(), None));
+    assert_eq!(f.next_list().await, []);
+    // The login's cleanup runs as for any other end.
+    assert_eq!(exit.recv_timeout(TIMEOUT).unwrap(), None);
+    let err = f.terminals.close(&terminal_id).unwrap_err();
+    assert_eq!(err.code, ErrorCode::NotFound);
+}
