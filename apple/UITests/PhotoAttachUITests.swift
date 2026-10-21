@@ -22,6 +22,9 @@ final class PhotoAttachUITests: XCTestCase {
 
         // The picker runs out of process; its photos show as images in the app's hierarchy. On a
         // simulator's first use of its library they take a minute to load.
+        // The newest photo comes first: on CI the one added just before the tests, ready to hand
+        // over. The simulator's own photos may still be loading then, and the picker never hands
+        // over one of those.
         let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 120), "the photo library did not open")
         // By its point: on CI the out-of-process picker's images can report no hit point while
