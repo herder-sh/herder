@@ -188,7 +188,9 @@ final class ScreenshotTests: XCTestCase {
         let add = app.buttons["Add MCP Server"].firstMatch
         if wait(add, "Add MCP Server") {
             press(add)
-            type("notion", into: "mcp-name")
+            // Return puts the keyboard away, so the sheet holds still while the transport changes
+            // and the URL field takes the next press.
+            type("notion\n", into: "mcp-name")
             let http = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'HTTP'")).firstMatch
             if wait(http, "HTTP transport") { press(http) }
             settle()
