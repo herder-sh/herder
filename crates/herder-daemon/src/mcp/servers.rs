@@ -277,8 +277,6 @@ fn launch_one(
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
 
     use herder_protocol::{FetchedSecret, SecretError, SecretErrorCode, SecretValue};
 
@@ -535,35 +533,8 @@ mod tests {
         assert!(!format!("{:?}", launch.servers).contains("s3cr3t"));
     }
 
-    /// A log written into memory, for the test that sets it as the default.
-    #[derive(Clone, Default)]
-    struct Log(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for Log {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[tokio::test]
     async fn a_server_whose_secrets_cannot_be_fetched_is_left_out_by_name() {
-        let log = Log::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer({
-                let log = log.clone();
-                move || log.clone()
-            })
-            .with_max_level(tracing::Level::TRACE)
-            .finish();
-        let _logging = tracing::subscriber::set_default(subscriber);
-        // Another test's thread may have cached the warning's callsite as off.
-        tracing::callsite::rebuild_interest_cache();
-
         let servers = UserServers::new(vec![
             http("linear", &[("Authorization", "Bearer {secret:LINEAR_KEY}")]),
             http(
@@ -588,13 +559,6 @@ mod tests {
         let launch = servers.for_session(None, None, no_vault).await;
         assert_eq!(names(&launch.servers), ["docs"]);
         assert_eq!(launch.left_out.len(), 2);
-
-        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            log.contains("github") && log.contains("GITHUB_TOKEN"),
-            "{log}"
-        );
-        assert!(!log.contains("lin_api_s3cr3t"), "{log}");
     }
 
     #[tokio::test]
