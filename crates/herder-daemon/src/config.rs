@@ -88,17 +88,22 @@
 //! [[mcp_servers]]
 //! name = "linear"
 //! url = "https://mcp.linear.app/mcp" # a server at a URL, over streamable HTTP
-//! headers = { Authorization = "Bearer ..." }
+//! headers = { Authorization = "Bearer {secret:linear/API_KEY}" } # {secret:NAME} or
+//!                                  # {secret:set/NAME} takes the value from the host's vault
 //! transport = "sse"                # the older HTTP with server-sent events instead
 //! project = "github.com/herder-sh/herder" # only this project's sessions get it; every
 //!                                  # session by default
 //! enabled = false                  # kept, but no session gets it; true by default
 //! ```
 //!
-//! `env` and `headers` are kept in this file as given, so a secret is better in `secrets`,
-//! which only a stdio server takes. Owners list, add, change, remove and turn servers on and
-//! off from a client, as part of the settings; a change reaches each session when its CLI next
-//! starts.
+//! `env` and `headers` are kept in this file as given, so a secret is better in the vault: a
+//! stdio server's in `secrets`, a header's as a `{secret:...}` placeholder. Each start of a
+//! session's CLI fetches a header's secrets for that session, so the vault grants and audits
+//! them as for `herder secret run`, and only the CLI gets their values; a server whose secrets
+//! the vault does not hand out is left out of that run, and the session says so. One secret
+//! in a set granted to several hosts so serves all of them. Owners list, add, change, remove
+//! and turn servers on and off from a client, as part of the settings; a change reaches each
+//! session when its CLI next starts.
 //!
 //! # Resources
 //!
@@ -733,10 +738,15 @@ fn resolve_mcp_server(
             );
             let command = entry.command.context("a stdio server needs a `command`")?;
             mcp_command(&command, env)?;
-            for name in entry.env.keys() {
+            for (name, value) in &entry.env {
                 ensure!(
                     !name.is_empty() && !name.contains(['=', '\0']),
                     "env: {name:?} is not a variable name"
+                );
+                ensure!(
+                    !value.contains("{secret:"),
+                    "env: {name}: a variable takes no `{{secret:...}}`; name the secret in \
+                     `secrets` instead"
                 );
             }
             McpTransport::Stdio {
@@ -760,7 +770,7 @@ fn resolve_mcp_server(
                 matches!(parsed.scheme(), "http" | "https"),
                 "url {url:?} is not http or https"
             );
-            for name in entry.headers.keys() {
+            for (name, value) in &entry.headers {
                 ensure!(
                     !name.is_empty()
                         && name
@@ -768,6 +778,9 @@ fn resolve_mcp_server(
                             .all(|byte| byte.is_ascii_graphic() && byte != b':'),
                     "headers: {name:?} is not a header name"
                 );
+                if let Err(err) = crate::mcp::servers::header_secrets(value) {
+                    bail!("headers: {name}: {err}");
+                }
             }
             let headers = entry.headers;
             match kind {
@@ -2553,7 +2566,7 @@ mod tests {
              args = [\"stdio\"]\nenv = { GITHUB_HOST = \"github.com\" }\n\
              secrets = [\"GITHUB_TOKEN\", \"work/JIRA_TOKEN\"]\n\n\
              [[mcp_servers]]\nname = \"linear\"\nurl = \"https://mcp.linear.app/mcp\"\n\
-             headers = { Authorization = \"Bearer t\" }\nenabled = false\n\
+             headers = { Authorization = \"Bearer {secret:linear/API_KEY}\" }\nenabled = false\n\
              project = \"github.com/herder-sh/herder\"\n\n\
              [[mcp_servers]]\nname = \"legacy\"\nurl = \"http://127.0.0.1:9000/sse\"\n\
              transport = \"sse\"\n",
@@ -2582,7 +2595,10 @@ mod tests {
                     project: Some(ProjectId::new("github.com/herder-sh/herder")),
                     transport: McpTransport::Http {
                         url: "https://mcp.linear.app/mcp".into(),
-                        headers: HashMap::from([("Authorization".into(), "Bearer t".into())]),
+                        headers: HashMap::from([(
+                            "Authorization".into(),
+                            "Bearer {secret:linear/API_KEY}".into()
+                        )]),
                     },
                 },
                 McpServerSettings {
@@ -2635,6 +2651,20 @@ mod tests {
             (
                 "name = \"x\"\ncommand = \"x\"\ntimeout = 5",
                 "unknown field",
+            ),
+            (
+                "name = \"x\"\nurl = \"https://e.com\"\n\
+                 headers = { Authorization = \"Bearer {secret:KEY\" }",
+                "headers: Authorization: `{secret:` is never closed",
+            ),
+            (
+                "name = \"x\"\nurl = \"https://e.com\"\n\
+                 headers = { Authorization = \"Bearer {secret:Linear/KEY}\" }",
+                "`Linear/KEY` is not a secret name",
+            ),
+            (
+                "name = \"x\"\ncommand = \"x\"\nenv = { KEY = \"{secret:KEY}\" }",
+                "name the secret in `secrets` instead",
             ),
         ] {
             let path = write(tmp.path(), &format!("[[mcp_servers]]\n{entry}\n"));

@@ -211,7 +211,10 @@ pub enum McpTransport {
         /// Its `http` or `https` URL.
         url: String,
         /// Headers sent with every request, such as `Authorization`, kept in the daemon's
-        /// config file as given.
+        /// config file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`
+        /// placeholders (`SecretRef`), which take the secret's value from the host's vault
+        /// as a session's CLI starts, so the value is never in the config file; a session
+        /// whose secrets the vault does not hand out goes without the server.
         #[serde(default)]
         headers: HashMap<String, String>,
     },
@@ -220,7 +223,8 @@ pub enum McpTransport {
     Sse {
         /// Its `http` or `https` URL.
         url: String,
-        /// Headers sent with every request, kept in the daemon's config file as given.
+        /// Headers sent with every request, kept in the daemon's config file as given; a
+        /// value may hold `{secret:NAME}` or `{secret:set/NAME}` placeholders, as for `http`.
         #[serde(default)]
         headers: HashMap<String, String>,
     },

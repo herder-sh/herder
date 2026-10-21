@@ -247,7 +247,14 @@ mod tests {
         let config = Config::load_file(&path).unwrap();
         let settings = Settings::new(&config, None, CancellationToken::new());
         let servers = settings.mcp_servers();
-        assert!(servers.for_session(None, None).is_empty());
+        let no_secrets = |_| -> crate::mcp::SecretsFuture { unreachable!("no server has secrets") };
+        assert!(
+            servers
+                .for_session(None, None, no_secrets)
+                .await
+                .servers
+                .is_empty()
+        );
         let mut new = config.settings();
         new.mcp_servers.push(herder_protocol::McpServerSettings {
             name: "docs".into(),
@@ -269,10 +276,58 @@ mod tests {
         };
         assert!(!restart_required);
         let names: Vec<_> = servers
-            .for_session(None, None)
+            .for_session(None, None, no_secrets)
+            .await
+            .servers
             .into_iter()
             .map(|server| server.name)
             .collect();
         assert_eq!(names, ["docs"]);
+    }
+
+    #[tokio::test]
+    async fn header_placeholders_are_checked_and_kept_as_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.toml");
+        std::fs::write(&path, "").unwrap();
+        let config = Config::load_file(&path).unwrap();
+        let settings = Settings::new(&config, None, CancellationToken::new());
+        let with_header = |value: &str| {
+            let mut new = config.settings();
+            new.mcp_servers.push(herder_protocol::McpServerSettings {
+                name: "linear".into(),
+                enabled: true,
+                project: None,
+                transport: herder_protocol::McpTransport::Http {
+                    url: "https://mcp.linear.app/mcp".into(),
+                    headers: [("Authorization".to_owned(), value.to_owned())].into(),
+                },
+            });
+            CommandBody::SetSettings {
+                settings: Box::new(new),
+            }
+        };
+
+        let refused = settings
+            .command(with_header("Bearer {secret:linear/API_KEY"))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest);
+        assert!(
+            refused.message.contains("never closed"),
+            "{}",
+            refused.message
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+
+        settings
+            .command(with_header("Bearer {secret:linear/API_KEY}"))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[[mcp_servers]]\nname = \"linear\"\nurl = \"https://mcp.linear.app/mcp\"\n\
+             headers = { Authorization = \"Bearer {secret:linear/API_KEY}\" }\n"
+        );
     }
 }
