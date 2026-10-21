@@ -4,7 +4,7 @@
 //! the names and the command from the `secrets` tool; the values reach only the program.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use herder_adapters::{
@@ -35,11 +35,15 @@ use tokio_util::sync::CancellationToken;
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A CLI whose agent runs every prompt with `sh -c`, in the session's environment and folder,
-/// and answers with the exit status and output.
-struct Shell;
+/// and answers with the exit status and output. It keeps every start request.
+#[derive(Clone, Default)]
+struct Shell {
+    starts: Arc<Mutex<Vec<StartRequest>>>,
+}
 
 impl Adapter for Shell {
     fn start(&self, request: StartRequest) -> StartFuture {
+        self.starts.lock().unwrap().push(request.clone());
         Box::pin(async move {
             let (commands, mut received) = mpsc::unbounded_channel();
             let (events, rx) = mpsc::channel(16);
@@ -137,12 +141,17 @@ async fn vault(dir: &Path, shutdown: CancellationToken) -> Vault {
     vault
 }
 
-/// A host daemon on `dir` running the [`Shell`] CLI, serving MCP with the herder binary under
+/// A host daemon on `dir` running the `shell` CLI, serving MCP with the herder binary under
 /// test, and replicating to `vault`.
-async fn host(dir: &Path, vault: &Vault, shutdown: CancellationToken) -> SessionManager {
+async fn host(
+    dir: &Path,
+    vault: &Vault,
+    shell: Shell,
+    shutdown: CancellationToken,
+) -> SessionManager {
     let fake = Provider::Other("fake".into());
     let mut adapters = Adapters::new();
-    adapters.register(fake.clone(), Arc::new(Shell));
+    adapters.register(fake.clone(), Arc::new(shell));
     let accounts = Accounts::from([(
         AccountId::new("work"),
         AccountConfig {
@@ -266,7 +275,7 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
     std::fs::create_dir_all(&host_dir).unwrap();
     let shutdown = CancellationToken::new();
     let vault = vault(&vault_dir, shutdown.clone()).await;
-    let sessions = host(&host_dir, &vault, shutdown.clone()).await;
+    let sessions = host(&host_dir, &vault, Shell::default(), shutdown.clone()).await;
 
     // The owner keeps three secrets on the vault, two of them named alike, and grants their
     // sets to the host once it replicated there.
@@ -417,6 +426,216 @@ async fn a_session_runs_a_command_with_secrets_it_never_sees() {
 
     if let Some(out) = std::env::var_os("HERDER_SECRET_TRANSCRIPT") {
         std::fs::write(out, &transcript).unwrap();
+    }
+    shutdown.cancel();
+}
+
+/// A log written into memory.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Every file under `dir` that holds `needle`.
+fn files_holding(dir: &Path, needle: &[u8]) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(files_holding(&path, needle));
+        } else if let Ok(bytes) = std::fs::read(&path)
+            && bytes.windows(needle.len()).any(|window| window == needle)
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_header_takes_a_vault_secret_only_the_cli_gets() {
+    use herder_adapters::McpTransport as Launch;
+    use herder_daemon::mcp::servers::UserServers;
+    use herder_protocol::{McpServerSettings, McpTransport};
+
+    const VALUE: &str = "lin_api_7f3c9e1b2d";
+    let log = Log::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer({
+            let log = log.clone();
+            move || log.clone()
+        })
+        .with_env_filter("herder=trace,herder_daemon=trace,herder_adapters=trace")
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (vault_dir, host_dir) = (tmp.path().join("v"), tmp.path().join("h"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    let shutdown = CancellationToken::new();
+    let vault = vault(&vault_dir, shutdown.clone()).await;
+    let shell = Shell::default();
+    let sessions = host(&host_dir, &vault, shell.clone(), shutdown.clone()).await;
+    let server = |name: &str, header: &str| McpServerSettings {
+        name: name.into(),
+        enabled: true,
+        project: None,
+        transport: McpTransport::Http {
+            url: format!("https://{name}.example.com/mcp"),
+            headers: [("Authorization".to_owned(), header.to_owned())].into(),
+        },
+    };
+    let servers = UserServers::new(vec![
+        server("linear", "Bearer {secret:prod/LINEAR_KEY}"),
+        server("github", "Bearer {secret:GITHUB_TOKEN}"),
+        server("staging", "Bearer {secret:dev/LINEAR_KEY}"),
+        server("docs", "Bearer public"),
+    ]);
+    sessions.use_mcp_servers(Arc::new(servers)).unwrap();
+
+    // The owner keeps the key in `prod`, granted to the host, and another in `dev`, not.
+    let owner = Client::open(tmp.path().join("c").display().to_string(), "test".into()).unwrap();
+    let link = PairingUri {
+        hosts: vec![vault.addr.to_string()],
+        fingerprint: vault.fingerprint.clone(),
+        code: vault.auth.mint("alice", None, PAIRING_TTL).unwrap().code,
+    };
+    owner.pair(link.to_string()).await.unwrap();
+    let send = async |command| owner.send(HostId::new("vault"), command).await.unwrap();
+    for (set, value) in [("prod", VALUE), ("dev", "lin_api_dev")] {
+        send(CommandBody::CreateSecretSet { set: set.into() }).await;
+        send(CommandBody::PutSecret {
+            set: set.into(),
+            name: "LINEAR_KEY".into(),
+            description: "Linear API key".into(),
+            value: SecretValue::new(value).unwrap(),
+        })
+        .await;
+    }
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let grant = CommandBody::GrantSecretSet {
+            set: "prod".into(),
+            host_id: HostId::new("devbox"),
+        };
+        // The host is known once it has replicated.
+        if owner.send(HostId::new("vault"), grant).await.is_ok() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the host never replicated"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let created = CommandBody::CreateSession {
+        repo: None,
+        project_id: None,
+        branch: None,
+        account_id: Some(AccountId::new("work")),
+        provider: None,
+        model: None,
+        permission_mode: Some(PermissionMode::FullAccess),
+        failover_pin: None,
+        chat: true,
+    };
+    let CommandResult::SessionCreated { session_id } =
+        sessions.handle(alice(), created).await.unwrap()
+    else {
+        panic!("expected a session");
+    };
+    // What the CLI's own commands see of it: nothing.
+    let answer = run(&sessions, &session_id, "env").await;
+    assert!(!answer.contains(VALUE), "{answer}");
+
+    // The CLI gets the header with the value, and the servers it could have.
+    let start = shell.starts.lock().unwrap()[0].clone();
+    let names: Vec<&str> = start.mcp_servers.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["linear", "docs"]);
+    assert_eq!(
+        start.mcp_servers[0].transport,
+        Launch::Http {
+            url: "https://linear.example.com/mcp".into(),
+            headers: [("Authorization".to_owned(), format!("Bearer {VALUE}"))].into(),
+        }
+    );
+    // Not in its environment or on the command line it runs behind.
+    assert!(!format!("{:?} {:?}", start.env, start.launcher).contains(VALUE));
+
+    // The session says which servers it goes without, and why, by name.
+    let events = sessions.read_since(&session_id, 0, 10_000).await.unwrap();
+    let notice: Vec<&ItemBody> = events
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::ItemAdded { item } if item.body != ItemBody::Unknown => Some(&item.body),
+            _ => None,
+        })
+        .filter(|body| match body {
+            ItemBody::ToolCall { name, .. } => name == "herder_mcp",
+            ItemBody::ToolResult { output, .. } => output.contains("MCP server"),
+            _ => false,
+        })
+        .collect();
+    let [
+        ItemBody::ToolCall { input, .. },
+        ItemBody::ToolResult {
+            output, is_error, ..
+        },
+    ] = notice.as_slice()
+    else {
+        panic!("expected the herder_mcp notice: {events:?}");
+    };
+    assert_eq!(input, &json!({ "left_out": ["github", "staging"] }));
+    assert!(is_error);
+    assert!(
+        output.contains("without the MCP server github: cannot fetch GITHUB_TOKEN")
+            && output.contains("without the MCP server staging: cannot fetch dev/LINEAR_KEY"),
+        "{output}"
+    );
+
+    // The value is in no event, no file the daemons wrote, and no log line.
+    let journal = serde_json::to_string(&events).unwrap();
+    assert!(!journal.contains(VALUE));
+    assert_eq!(
+        files_holding(tmp.path(), VALUE.as_bytes()),
+        Vec::<std::path::PathBuf>::new()
+    );
+    let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("the MCP server is left out") && log.contains("GITHUB_TOKEN"),
+        "{log}"
+    );
+    assert!(!log.contains(VALUE), "{log}");
+
+    if let Some(out) = std::env::var_os("HERDER_MCP_HEADER_TRANSCRIPT") {
+        let shown = format!(
+            "daemon.toml (as written):\n  linear  Authorization = \"Bearer {{secret:prod/LINEAR_KEY}}\"\n  \
+             github  Authorization = \"Bearer {{secret:GITHUB_TOKEN}}\"\n  \
+             staging Authorization = \"Bearer {{secret:dev/LINEAR_KEY}}\"\n  \
+             docs    Authorization = \"Bearer public\"\n\n\
+             servers the CLI got: {names:?}\n\
+             linear's header, as the CLI got it: Authorization = Bearer {}…({} chars, matches the vault)\n\n\
+             session notice ({}):\n{output}\n\n\
+             value found in: journal={} files={} log={} env/command line={}\n",
+            &VALUE[..8],
+            VALUE.len(),
+            "herder_mcp",
+            journal.contains(VALUE),
+            !files_holding(tmp.path(), VALUE.as_bytes()).is_empty(),
+            log.contains(VALUE),
+            format!("{:?} {:?}", start.env, start.launcher).contains(VALUE),
+        );
+        std::fs::write(out, shown).unwrap();
     }
     shutdown.cancel();
 }

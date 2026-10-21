@@ -493,7 +493,14 @@ from the host's vault as variables of their names; or `Http { url, headers }` an
 changes, removes or toggles them by sending `SetSettings` with the list changed; an invalid
 server, or a name used twice, is refused with `bad_request`. A change applies without a
 restart, to each session's agent from its next start, so it does not set `restart_required`.
-`env` and `headers` are kept in the daemon's config file as given, and sent back to owners.
+`env` and `headers` are kept in the daemon's config file as given, and sent back to owners. A
+header value may hold `{secret:NAME}` or `{secret:set/NAME}` placeholders, such as
+`Bearer {secret:linear/API_KEY}`: the daemon fills them in from the host's vault, for the
+session and under its grant, each time a session's CLI starts, so one key in a set granted to
+several hosts serves all of them. A malformed placeholder is refused with `bad_request`. A
+server whose secrets the vault does not hand out is left out of that run, and the session's
+transcript says so with a `herder_mcp` tool call and its failed result, naming the server and
+the secret, never a value.
 
 ### Turn usage (client API 10)
 

@@ -8,13 +8,15 @@ use std::time::Duration;
 
 use anyhow::Result;
 use herder_adapters::{
-    AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest, transcript,
+    AdapterCommand, AdapterEvent, AdapterSession, Capabilities, StartRequest, UserMcpServer,
+    transcript,
 };
 use herder_protocol::{
     AccountId, Answer, Answerer, ApprovalDecision, ApprovalId, ApprovalOutcome, Attachment,
     CommandResult, ErrorClass, ErrorCode, ErrorInfo, EscalationReason, EventBody, FollowUp, Image,
     Item, ItemBody, ItemId, MAX_PROMPT_ATTACHMENT_BYTES, PermissionMode, PrState, PromptFile,
-    PromptId, QuestionId, Route, SessionId, SessionStatus, Timestamp, TurnError, TurnId, UserId,
+    PromptId, QuestionId, Route, SecretRef, SessionId, SessionStatus, Timestamp, TurnError, TurnId,
+    UserId,
 };
 use herder_store::{NativeSession, QueuedPrompt, Session};
 use herder_tasktools::{self as tasktools, AnswerInput, RequestRef, ToolError, WaitForOutput};
@@ -33,6 +35,8 @@ use super::tasks::Tasks;
 use super::titles;
 use super::{AccountConfig, Inner, error};
 use crate::handoff;
+use crate::mcp::SecretsFuture;
+use crate::mcp::servers::{Launch, LeftOut};
 use crate::resources::{OomKill, Permit, Ticket, processes};
 use crate::worktree::{self, checkpoint};
 
@@ -41,6 +45,10 @@ const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// The tool name of the setup command's tool call item, which herder makes, not the agent.
 const SETUP_TOOL: &str = "herder_setup";
+
+/// The tool name of the item that says which of the user's MCP servers a start of the CLI
+/// left out, which herder makes, not the agent.
+const MCP_TOOL: &str = "herder_mcp";
 
 /// A command for one session, from the user `by` (`None` for the primary session's agent),
 /// answered on `reply`.
@@ -1627,9 +1635,13 @@ impl Actor {
                 self.set_status(SessionStatus::NeedsYou).await;
                 continue;
             }
+            let mut left_out = Vec::new();
             if self.adapter.is_none() {
                 match self.start_adapter().await {
-                    Ok(adapter) => self.adapter = Some(adapter),
+                    Ok((adapter, servers_left_out)) => {
+                        self.adapter = Some(adapter);
+                        left_out = servers_left_out;
+                    }
                     Err(error) => {
                         if let Err(err) = self.user_message(&turn_id, &original).await {
                             warn!("cannot journal prompt: {err:#}");
@@ -1666,6 +1678,7 @@ impl Actor {
                 return;
             }
             self.save_queue().await;
+            self.servers_left_out(&turn_id, left_out).await;
             if let Some(adapter) = &self.adapter {
                 // A closed channel means the CLI is gone; its `exited` fails this turn.
                 let _ = adapter.commands.send(AdapterCommand::SendPrompt {
@@ -1856,8 +1869,9 @@ impl Actor {
 
     /// Starts the session's CLI on its account: resuming the CLI's own session when a
     /// same-provider account switch carried it over ([`handoff::native`]), else, or when that
-    /// fails, seeded with the journal's transcript.
-    async fn start_adapter(&self) -> Result<AdapterSession, TurnError> {
+    /// fails, seeded with the journal's transcript. Also returns the user's MCP servers it
+    /// goes without.
+    async fn start_adapter(&self) -> Result<(AdapterSession, Vec<LeftOut>), TurnError> {
         let session = &self.session;
         let account = self
             .inner
@@ -1888,10 +1902,17 @@ impl Actor {
                 )
                 .await;
         }
+        let servers = self.user_mcp_servers().await;
         if let Some(native_id) = self.carry_over(account.config_dir.as_deref(), &env).await {
-            let request = self.start_request(&account, env.clone(), Vec::new(), Some(native_id))?;
+            let request = self.start_request(
+                &account,
+                env.clone(),
+                servers.servers.clone(),
+                Vec::new(),
+                Some(native_id),
+            )?;
             match adapter.start(request).await {
-                Ok(started) => return Ok(started),
+                Ok(started) => return Ok((started, servers.left_out)),
                 Err(err) => warn!(
                     session_id = %session.session_id,
                     "cannot resume the CLI's own session, replaying the transcript: {}",
@@ -1915,8 +1936,82 @@ impl Actor {
             })
             .collect();
         let seed = handoff::transcript(items, handoff::budget(&session.provider, &session.model));
-        let request = self.start_request(&account, env, seed, None)?;
-        adapter.start(request).await
+        let request = self.start_request(&account, env, servers.servers, seed, None)?;
+        Ok((adapter.start(request).await?, servers.left_out))
+    }
+
+    /// The user's MCP servers this start of the session's CLI gets, their headers' secrets
+    /// fetched for the session from the host's vault, as `herder secret run` fetches them.
+    async fn user_mcp_servers(&self) -> Launch {
+        let session = &self.session;
+        let Some(servers) = self.inner.mcp_servers.get() else {
+            return Launch::default();
+        };
+        let project = self
+            .inner
+            .journal
+            .projects()
+            .of_repo(&session.repo)
+            .map(|project| project.project_id.clone())
+            .filter(|_| !session.chat);
+        let herder = self.inner.mcp.get().map(|mcp| crate::mcp::servers::Herder {
+            binary: mcp.herder(),
+            data_dir: mcp.data_dir(),
+            session_id: &session.session_id,
+        });
+        let host = self.inner.secrets.get().cloned();
+        let fetch = |secrets: Vec<SecretRef>| -> SecretsFuture {
+            let (host, session_id) = (host.clone(), session.session_id.clone());
+            Box::pin(async move {
+                match host {
+                    Some(host) => host.fetch(&session_id, &secrets).await,
+                    None => Err(super::tasks::no_vault()),
+                }
+            })
+        };
+        servers
+            .for_session(project.as_ref(), herder.as_ref(), fetch)
+            .await
+    }
+
+    /// Journals, in `turn_id`, the user's MCP servers the CLI went without when it started, as
+    /// a herder tool call whose failed result says why, by name: a session's user learns it
+    /// there, as a setup command's failure.
+    async fn servers_left_out(&self, turn_id: &TurnId, left_out: Vec<LeftOut>) {
+        if left_out.is_empty() {
+            return;
+        }
+        let item = |body| Item {
+            agent_message: None,
+            follow_up: None,
+            parent_call_id: None,
+            id: ItemId::new(ulid::Ulid::generate().to_string()),
+            turn_id: turn_id.clone(),
+            body,
+        };
+        let servers: Vec<&str> = left_out.iter().map(|out| out.server.as_str()).collect();
+        let call = item(ItemBody::ToolCall {
+            name: MCP_TOOL.to_owned(),
+            input: serde_json::json!({ "left_out": servers }),
+        });
+        let output = left_out
+            .iter()
+            .map(|out| {
+                format!(
+                    "This run goes without the MCP server {}: {}.",
+                    out.server,
+                    out.reason.trim_end_matches('.')
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = item(ItemBody::ToolResult {
+            call_id: call.id.clone(),
+            output,
+            is_error: true,
+        });
+        self.log(EventBody::ItemAdded { item: call }).await;
+        self.log(EventBody::ItemAdded { item: result }).await;
     }
 
     /// The CLI session to resume on the session's account, whose config dir is `to`: the last
@@ -1973,6 +2068,7 @@ impl Actor {
         &self,
         account: &AccountConfig,
         mut env: BTreeMap<String, String>,
+        mcp_servers: Vec<UserMcpServer>,
         seed: Vec<Item>,
         resume: Option<String>,
     ) -> Result<StartRequest, TurnError> {
@@ -1991,24 +2087,6 @@ impl Actor {
                 })?)
             }
             None => None,
-        };
-        let mcp_servers = match self.inner.mcp_servers.get() {
-            Some(servers) => {
-                let project = self
-                    .inner
-                    .journal
-                    .projects()
-                    .of_repo(&session.repo)
-                    .map(|project| project.project_id.clone())
-                    .filter(|_| !session.chat);
-                let herder = self.inner.mcp.get().map(|mcp| crate::mcp::servers::Herder {
-                    binary: mcp.herder(),
-                    data_dir: mcp.data_dir(),
-                    session_id: &session.session_id,
-                });
-                servers.for_session(project.as_ref(), herder.as_ref())
-            }
-            None => Vec::new(),
         };
         let launcher = match self.inner.scopes.get() {
             Some(scopes) => {
