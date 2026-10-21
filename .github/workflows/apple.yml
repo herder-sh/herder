@@ -129,6 +129,10 @@ jobs:
         timeout-minutes: 20
         run: |
           xcrun simctl bootstatus "$device"
+          # The photo test picks the newest photo, which the picker shows first. The simulator's own
+          # photos can still be loading when it runs, and the picker then never hands one over;
+          # this one is in the library, ready, once addmedia returns.
+          xcrun simctl addmedia "$device" apple/App/Assets.xcassets/AppIcon.appiconset/icon-ios-1024.png
           # Two daemons and the link a device paired with both shares. They start only now, after
           # the build: the link's codes expire 10 minutes after the daemons mint them. They run
           # until stdin closes, so keep it open for the job.
