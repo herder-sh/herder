@@ -15,7 +15,9 @@
 //!
 //! Each machine also has fake provider CLIs ([`CLIS`]): their versions differ between machines,
 //! `devbox` and `studio` can install and update them, and adding an account runs a login that
-//! waits for Enter, then reports the account logged in.
+//! waits for Enter, then reports the account logged in. Claude Code's vendor publishes a newer
+//! release than any machine has ([`LATEST`]), and the machines have MCP servers of the user's
+//! ([`MCP_SERVERS`]): stdio and HTTP ones, a disabled one and one for a single project.
 //!
 //! [`Demo::start`] returns once all of it is in place, with the link a device paired with every
 //! machine shares, as `--share` prints.
@@ -166,6 +168,51 @@ const CLIS: &[(&str, &[Cli], bool)] = &[
             ("codex", Some("codex-cli 0.41.0")),
         ],
         false,
+    ),
+];
+
+/// The newest release each provider's vendor publishes, newer than any machine has; updating
+/// Claude Code installs it.
+const LATEST: &[(&str, &str)] = &[("claude", "2.1.20")];
+
+/// Each machine's MCP servers, as its `daemon.toml` has them; `laptop` has none yet.
+const MCP_SERVERS: &[(&str, &str)] = &[
+    (
+        "devbox",
+        r#"
+[[mcp_servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_HOST = "github.com" }
+secrets = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+
+[[mcp_servers]]
+name = "linear"
+url = "https://mcp.linear.app/mcp"
+headers = { Authorization = "Bearer lin_demo_0000" }
+
+[[mcp_servers]]
+name = "postgres"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/acme_dev"]
+project = "github.com/acme/api"
+
+[[mcp_servers]]
+name = "sentry"
+url = "https://mcp.sentry.dev/sse"
+transport = "sse"
+enabled = false
+"#,
+    ),
+    (
+        "studio",
+        r#"
+[[mcp_servers]]
+name = "linear"
+url = "https://mcp.linear.app/mcp"
+headers = { Authorization = "Bearer lin_demo_0000" }
+"#,
     ),
 ];
 
@@ -630,7 +677,14 @@ impl Daemon {
         ));
         sessions.admit_turns(Arc::clone(&admission))?;
         let config_file = dir.join("daemon.toml");
-        std::fs::write(&config_file, "[resources]\nmax_turns = 16\n")?;
+        let mcp_servers = MCP_SERVERS
+            .iter()
+            .find(|(machine, _)| *machine == name)
+            .map_or("", |(_, servers)| servers);
+        std::fs::write(
+            &config_file,
+            format!("[resources]\nmax_turns = 16\n{mcp_servers}"),
+        )?;
         let settings = Arc::new(Settings::new(
             &Config::load_file(&config_file)?,
             Some(Arc::clone(&admission)),
@@ -687,6 +741,9 @@ impl Daemon {
         let mut providers = Providers::new(binaries);
         for (provider, recipe) in recipes {
             providers = providers.with_recipe(provider, recipe);
+        }
+        for (provider, version) in LATEST {
+            providers = providers.with_latest(Provider::from((*provider).to_owned()), version);
         }
         providers.publish_to(Arc::clone(&hub));
         let server = Server::new(
@@ -836,7 +893,7 @@ fn clis(dir: &Path, name: &str) -> Result<(HashMap<Provider, PathBuf>, Vec<Recip
             "claude" => (
                 Provider::Claude,
                 "CLAUDE_CONFIG_DIR",
-                "2.1.14 (Claude Code)",
+                "2.1.20 (Claude Code)",
             ),
             "codex" => (Provider::Codex, "CODEX_HOME", "codex-cli 0.46.0"),
             "cursor" => (Provider::Cursor, "CURSOR_CONFIG_DIR", "2025.10.02-7a1b2c"),

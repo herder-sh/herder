@@ -258,26 +258,34 @@ struct AddAccountSheet: View {
                 if index > 0 { RowDivider() }
                 if let connection = fleet.providerTerminals[key], let account = connection.account {
                     let progress = JobProgress(connection.state, added: added(account.accountId))
-                    Button { shown = key } label: {
-                        HStack(spacing: 12) {
-                            ProviderMark(provider: account.provider, size: 18).frame(width: 22)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(account.label ?? account.accountId).font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Theme.text)
-                                Text("\(ModelCatalog.providerName(account.provider)) · \(account.accountId)")
-                                    .font(.caption).foregroundStyle(Theme.tertiary)
+                    HStack(spacing: 10) {
+                        Button { shown = key } label: {
+                            HStack(spacing: 12) {
+                                ProviderMark(provider: account.provider, size: 18).frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(account.label ?? account.accountId).font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Theme.text)
+                                    Text("\(ModelCatalog.providerName(account.provider)) · \(account.accountId)")
+                                        .font(.caption).foregroundStyle(Theme.tertiary)
+                                }
+                                Spacer(minLength: 8)
+                                JobBadge(progress: progress)
                             }
-                            Spacer(minLength: 8)
-                            JobBadge(progress: progress)
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                            .frame(minHeight: 52)
+                            .contentShape(.rect)
                         }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 52)
-                        .contentShape(.rect)
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(ModelCatalog.providerName(account.provider)) \(account.accountId), \(progress.label)")
+                        .accessibilityIdentifier("running-login-\(account.accountId)")
+                        if !progress.finished { CancelLoginButton(fleet: fleet, key: key, compact: true) }
+                        Button { shown = key } label: {
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Theme.tertiary)
+                                .frame(width: 20, height: 44).contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHidden(true)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(ModelCatalog.providerName(account.provider)) \(account.accountId), \(progress.label)")
-                    .accessibilityIdentifier("running-login-\(account.accountId)")
+                    .padding(.horizontal, 14)
                 }
             }
         }
@@ -307,8 +315,8 @@ struct AddAccountSheet: View {
         } else {
             if case .add = key.job {
                 ActionButton(title: "Add Another Account", style: .secondary) { freshForm() }.frame(maxWidth: 220)
+                CancelLoginButton(fleet: fleet, key: key, compact: false).frame(maxWidth: 160)
             }
-            // Cancel Login goes here, once the daemon can close a login's terminal.
             Spacer()
             Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
         }
@@ -390,6 +398,54 @@ struct JobTerminal: View {
         case (_, .ended): "The login ended without the provider reporting the account logged in."
         case (_, .failed(let message)): message
         default: "Finish the provider’s own login below, on \(machine?.name ?? "the machine")."
+        }
+    }
+}
+
+/// Cancels a running login, once asked to confirm: closes its terminal on the machine, which
+/// hangs up the provider's login, so it adds no account. `compact` for a row, else a footer's.
+struct CancelLoginButton: View {
+    let fleet: Fleet
+    let key: ProviderJobKey
+    let compact: Bool
+    @State private var confirming = false
+
+    private var connection: TerminalConnection? { fleet.providerTerminals[key] }
+
+    private var subject: String {
+        switch key.job {
+        case .add(let id), .relogin(let id): id
+        case .install(let provider): ModelCatalog.providerName(provider)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if compact {
+                PillButton(title: "Cancel") { confirming = true }
+            } else {
+                ActionButton(title: "Cancel Login", style: .secondary) { confirming = true }
+            }
+        }
+        // The terminal has an id once the machine opened it.
+        .disabled(connection?.terminalId == nil)
+        .accessibilityLabel("Cancel Login \(subject)")
+        .confirmationDialog("Cancel the login of \(subject)?", isPresented: $confirming, titleVisibility: .visible) {
+            Button("Cancel Login", role: .destructive) {
+                Task { await cancel() }
+            }
+            Button("Keep Running", role: .cancel) {}
+        } message: {
+            Text(key.job == .relogin(subject) ? "The account keeps its current login."
+                 : "The machine closes the login’s terminal and adds no account.")
+        }
+    }
+
+    private func cancel() async {
+        do {
+            try await fleet.cancelLogin(key)
+        } catch {
+            fleet.toast = .failure("Could not cancel the login of \(subject)", error)
         }
     }
 }
@@ -556,7 +612,7 @@ struct EditAccountSheet: View {
         } footer: {
             if let login {
                 if ProviderTerminals.running(login) {
-                    // Cancel Login goes here, once the daemon can close a login's terminal.
+                    CancelLoginButton(fleet: fleet, key: key, compact: false).frame(maxWidth: 160)
                     Spacer()
                     Text("Keeps running if you close this").font(.footnote).foregroundStyle(Theme.tertiary)
                 } else {

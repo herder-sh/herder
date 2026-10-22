@@ -97,6 +97,14 @@ impl Providers {
         providers
     }
 
+    /// Reports `version` as `provider`'s newest release, as a check of its vendor would; for
+    /// tests and the demo, which reach no vendor.
+    pub fn with_latest(self, provider: Provider, version: &str) -> Self {
+        lock(&self.inner.latest).insert(provider, version.to_owned());
+        self.refresh();
+        self
+    }
+
     /// Announces later probes through `hub`.
     pub fn publish_to(&self, hub: Arc<Hub>) {
         *lock(&self.inner.hub) = Some(hub);

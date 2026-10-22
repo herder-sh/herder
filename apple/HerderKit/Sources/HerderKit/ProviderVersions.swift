@@ -2,14 +2,15 @@ import Foundation
 import Herder
 
 /// Each provider CLI's version on each machine that runs sessions, against the newest any of
-/// them has: what is behind, what is missing, and what herder can install or update there.
+/// them has and the newest its vendor publishes: what is behind, what is missing, and what
+/// herder can install or update there.
 struct ProviderVersions: Equatable {
     /// A provider's CLI on one machine.
     struct Cell: Equatable, Identifiable {
         enum State: Equatable {
             /// Installed, as new as any machine has.
             case current
-            /// Installed, older than another machine's.
+            /// Installed, older than another machine's or than its vendor's newest release.
             case outdated
             /// Installed, with a version herder cannot read.
             case unknown
@@ -22,6 +23,9 @@ struct ProviderVersions: Equatable {
         /// The version the CLI printed, trimmed to its number where it has one.
         let version: String?
         let state: State
+        /// The version an update brings, when outdated: the vendor's newest release, or another
+        /// machine's newer one.
+        var available: String? = nil
         /// What herder can run for it now, if anything.
         let action: Action?
         /// Why the action cannot run, when there is one to run and it cannot.
@@ -40,6 +44,8 @@ struct ProviderVersions: Equatable {
         let provider: Provider
         /// The newest version any machine has.
         let latest: String?
+        /// The newest release its vendor publishes, when a machine reports one newer than its own.
+        var available: String? = nil
         let cells: [Cell]
 
         var id: Provider { provider }
@@ -60,13 +66,9 @@ struct ProviderVersions: Equatable {
             + reported.union(used).subtracting(ModelCatalog.knownProviders).sorted()
         rows = providers.map { provider in
             let statuses = machines.compactMap { machine in machine.providers.first { $0.provider == provider } }
-            // The newest version a machine reports; the daemon's own latest-version check, once
-            // it reports one, belongs here.
-            let latest = statuses.compactMap(\.version).map(Self.number)
-                .max { Self.version($1, isNewerThan: $0) }
-            return Row(provider: provider, latest: latest, cells: machines.map { machine in
-                Self.cell(provider, on: machine, latest: latest)
-            })
+            let latest = Self.newest(statuses.compactMap(\.version))
+            return Row(provider: provider, latest: latest, available: Self.newest(statuses.compactMap(\.latestVersion)),
+                       cells: machines.map { machine in Self.cell(provider, on: machine, latest: latest) })
         }
     }
 
@@ -77,10 +79,14 @@ struct ProviderVersions: Equatable {
         let status = machine.providers.first { $0.provider == provider }
         let version = status?.version.map(number)
         let state: Cell.State
+        var available: String?
         if status?.installed != true {
             state = .missing
-        } else if let version, !version.isEmpty, let latest {
-            state = self.version(latest, isNewerThan: version) ? .outdated : .current
+        } else if let version, !version.isEmpty, latest != nil || status?.latestVersion != nil {
+            // The machine's own check of the vendor, and the newest another machine has.
+            available = newest([status?.latestVersion, latest].compactMap { $0 })
+                .flatMap { self.version($0, isNewerThan: version) ? $0 : nil }
+            state = available == nil ? .current : .outdated
         } else {
             state = .unknown
         }
@@ -100,7 +106,12 @@ struct ProviderVersions: Equatable {
         default: nil
         }
         return Cell(hostId: machine.hostId, machine: machine.name, provider: provider, version: version,
-                    state: state, action: action, blocked: blocked)
+                    state: state, available: available, action: action, blocked: blocked)
+    }
+
+    /// The newest of `versions`, each as its number.
+    private static func newest(_ versions: [String]) -> String? {
+        versions.map(number).max { version($1, isNewerThan: $0) }
     }
 
     /// The version's number, `2.1.14` of `2.1.14 (Claude Code)`; the line itself without one.

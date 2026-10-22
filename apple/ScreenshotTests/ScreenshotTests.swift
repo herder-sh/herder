@@ -101,10 +101,27 @@ final class ScreenshotTests: XCTestCase {
         settle()
         shoot("ios-providers")
         #endif
+        mcpServers()
         guard openAddAccount() else { return }
         shoot(platform("add-account-form"))
         #if os(iOS)
-        // The concurrent logins are shot on the Mac; the phone stops at the form.
+        // The concurrent logins are shot on the Mac; the phone starts one and cancels it.
+        let start = app.buttons["Start Login"].firstMatch
+        guard wait(start, "Start Login") else { return dismiss() }
+        press(start)
+        _ = wait(app.descendants(matching: .any)["login-terminal"].firstMatch, "login terminal")
+        settle()
+        let cancel = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Cancel Login '")).firstMatch
+        if wait(cancel, "Cancel Login") {
+            press(cancel)
+            settle()
+            shoot("ios-cancel-login")
+            confirmCancel()
+            if wait(app.buttons["Done"].firstMatch, "cancelled login ended") {
+                settle()
+                shoot("ios-cancel-login-ended")
+            }
+        }
         dismiss()
         return
         #else
@@ -145,14 +162,112 @@ final class ScreenshotTests: XCTestCase {
             }
         }
         dismiss()
+        cancelLogin()
         let machine = app.descendants(matching: .any)["sidebar-machine-devbox"].firstMatch
         if wait(machine, "devbox in the sidebar") {
             press(machine)
             settle()
             shoot("mac-machine-settings")
+            // Its MCP servers, below the accounts and CLIs.
+            app.sheets.firstMatch.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -400)
+            settle()
+            shoot("mac-machine-settings-mcp")
             dismiss()
         }
         #endif
+    }
+
+    /// The MCP servers on the Providers page: the list, adding one to every machine, editing
+    /// one with a header, and importing a README's JSON.
+    private func mcpServers() {
+        let github = app.descendants(matching: .any)["mcp-server-github"].firstMatch
+        guard wait(github, "MCP servers") else { return }
+        reveal(github)
+        settle()
+        shoot(platform("mcp-servers"))
+        let add = app.buttons["Add MCP Server"].firstMatch
+        if wait(add, "Add MCP Server") {
+            press(add)
+            // Return puts the keyboard away, so the sheet holds still while the transport changes
+            // and the URL field takes the next press.
+            type("notion\n", into: "mcp-name")
+            let http = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'HTTP'")).firstMatch
+            if wait(http, "HTTP transport") { press(http) }
+            settle()
+            type("https://mcp.notion.com/mcp", into: "mcp-url")
+            settle()
+            shoot(platform("mcp-add"))
+            let save = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Add to'")).firstMatch
+            if wait(save, "Add to machines") { press(save) }
+            settle()
+        }
+        let linear = app.descendants(matching: .any)["mcp-server-linear"].firstMatch
+        if wait(linear, "linear server") {
+            reveal(linear)
+            press(linear)
+            settle()
+            shoot(platform("mcp-edit"))
+            dismiss()
+        }
+        let paste = app.buttons["Paste JSON"].firstMatch
+        if wait(paste, "Paste JSON") {
+            reveal(paste)
+            press(paste)
+            type(#"{"mcpServers": {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/srv/shared"]}, "context7": {"type": "http", "url": "https://mcp.context7.com/mcp"}}}"#,
+                 into: "mcp-json")
+            settle()
+            shoot(platform("mcp-import"))
+            let importing = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Import 2'")).firstMatch
+            if wait(importing, "Import 2 Servers") { press(importing) }
+            settle()
+            let imported = app.descendants(matching: .any)["mcp-server-context7"].firstMatch
+            if wait(imported, "imported server") {
+                reveal(imported)
+                settle()
+                shoot(platform("mcp-imported"))
+            }
+        }
+    }
+
+    #if os(macOS)
+    /// Cancels the Codex login still waiting, from the list of running logins. Its id is
+    /// `codex-2`, as devbox has a `codex` account already.
+    private func cancelLogin() {
+        guard openAddAccount() else { return }
+        let cancel = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Cancel Login codex'")).firstMatch
+        guard wait(cancel, "Cancel Login codex") else { return dismiss() }
+        press(cancel)
+        settle()
+        shoot("mac-cancel-login")
+        confirmCancel()
+        // The row is the running login's spinner until it ends, so it is matched by any type.
+        let ended = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH 'Codex codex' AND label ENDSWITH ', Ended'")).firstMatch
+        if wait(ended, "cancelled login ended") {
+            settle()
+            shoot("mac-cancel-login-ended")
+        }
+        dismiss()
+    }
+    #endif
+
+    /// Answers the Cancel Login confirmation.
+    private func confirmCancel() {
+        let confirm = app.buttons.matching(NSPredicate(format: "label == 'Cancel Login'")).firstMatch
+        if wait(confirm, "Cancel Login confirmation") { press(confirm) }
+    }
+
+    /// Types `text` into the field with accessibility id `field`, once it has the keyboard: a
+    /// field that just appeared may still be moving into place when first pressed.
+    private func type(_ text: String, into field: String) {
+        let input = app.descendants(matching: .any)[field].firstMatch
+        guard wait(input, field) else { return }
+        press(input)
+        for _ in 0..<6 where (input.value(forKey: "hasKeyboardFocus") as? Bool) != true {
+            Thread.sleep(forTimeInterval: 0.5)
+            press(input)
+        }
+        input.typeText(text)
     }
 
     /// Opens Add Account and picks `devbox` when it asks for a machine.

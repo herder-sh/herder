@@ -3,10 +3,37 @@ import Herder
 import Testing
 
 struct ProviderVersionsTests {
-    private func status(_ provider: Provider, _ version: String?, canInstall: Bool = true, canUpdate: Bool = true)
-        -> ProviderStatus {
-        ProviderStatus(provider: provider, installed: version != nil, version: version, binary: nil,
-                       canInstall: canInstall, canUpdate: version != nil && canUpdate)
+    private func status(_ provider: Provider, _ version: String?, latest: String? = nil, canInstall: Bool = true,
+                        canUpdate: Bool = true) -> ProviderStatus {
+        ProviderStatus(provider: provider, installed: version != nil, version: version, latestVersion: latest,
+                       binary: nil, canInstall: canInstall, canUpdate: version != nil && canUpdate)
+    }
+
+    @Test func aNewerVendorReleaseMarksEveryMachineBehindIt() {
+        // devbox has the newest any machine has, but Claude Code's vendor publishes a newer one.
+        let devbox = machine("a", name: "devbox", sessions: [], providers: [
+            status("claude", "2.1.14 (Claude Code)", latest: "2.1.20"),
+        ])
+        // studio's check has not answered yet: it is behind devbox, and gets the vendor's release.
+        let studio = machine("b", name: "studio", sessions: [], providers: [status("claude", "2.1.9 (Claude Code)")])
+        let laptop = machine("c", name: "laptop", sessions: [], providers: [
+            status("claude", "2.1.9 (Claude Code)", latest: "2.1.20"),
+        ])
+        let claude = ProviderVersions(machines: [devbox, studio, laptop]).rows[0]
+        #expect(claude.latest == "2.1.14")
+        #expect(claude.available == "2.1.20")
+        #expect(claude.cells.map(\.state) == [.outdated, .outdated, .outdated])
+        #expect(claude.cells.map(\.available) == ["2.1.20", "2.1.14", "2.1.20"])
+        #expect(claude.cells[0].action == .update)
+    }
+
+    @Test func noVendorReleaseLeavesTheNewestMachineCurrent() {
+        let devbox = machine("a", name: "devbox", sessions: [], providers: [status("claude", "2.1.14")])
+        let studio = machine("b", name: "studio", sessions: [], providers: [status("claude", "2.1.9")])
+        let claude = ProviderVersions(machines: [devbox, studio]).rows[0]
+        #expect(claude.available == nil)
+        #expect(claude.cells.map(\.state) == [.current, .outdated])
+        #expect(claude.cells.map(\.available) == [nil, "2.1.14"])
     }
 
     @Test func eachMachineIsComparedWithTheNewestAnyHas() {

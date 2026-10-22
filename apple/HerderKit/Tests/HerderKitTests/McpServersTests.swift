@@ -45,3 +45,177 @@ struct McpServersTests {
         #expect(try await fleet.mcpServers(on: machine.hostId).isEmpty)
     }
 }
+
+struct McpImportTests {
+    @Test func claudeDesktopsConfigImportsEachServer() throws {
+        let servers = try McpImport.parse("""
+        {
+          "mcpServers": {
+            "filesystem": {
+              "command": "npx",
+              "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/sam/Desktop"]
+            },
+            "github": {
+              "command": "docker",
+              "args": ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"],
+              "env": {"GITHUB_HOST": "github.com", "PORT": 8080}
+            }
+          }
+        }
+        """)
+        #expect(servers == [
+            McpServerSettings(name: "filesystem", enabled: true, project: nil, transport: .stdio(
+                command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/sam/Desktop"],
+                env: [:], secrets: [])),
+            McpServerSettings(name: "github", enabled: true, project: nil, transport: .stdio(
+                command: "docker", args: ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"],
+                env: ["GITHUB_HOST": "github.com", "PORT": "8080"], secrets: [])),
+        ])
+    }
+
+    @Test func typeAndUrlPickTheTransport() throws {
+        let servers = try McpImport.parse("""
+        {"mcpServers": {
+          "linear": {"type": "http", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": "Bearer t"}},
+          "legacy": {"type": "sse", "url": "http://127.0.0.1:9000/sse"},
+          "plain": {"url": "https://mcp.example.com/mcp"},
+          "streamed": {"type": "streamable-http", "url": "https://mcp.example.com/stream"},
+          "local": {"type": "stdio", "command": "uvx", "args": ["mcp-server-time"], "disabled": true}
+        }}
+        """)
+        #expect(servers.map(\.name) == ["legacy", "linear", "local", "plain", "streamed"])
+        #expect(servers[0].transport == .sse(url: "http://127.0.0.1:9000/sse", headers: [:]))
+        #expect(servers[1].transport == .http(url: "https://mcp.linear.app/mcp", headers: ["Authorization": "Bearer t"]))
+        #expect(servers[2].transport == .stdio(command: "uvx", args: ["mcp-server-time"], env: [:], secrets: []))
+        #expect(!servers[2].enabled)
+        // A url alone is streamable HTTP, as the daemon reads it.
+        #expect(servers[3].transport == .http(url: "https://mcp.example.com/mcp", headers: [:]))
+        #expect(servers[4].transport == .http(url: "https://mcp.example.com/stream", headers: [:]))
+    }
+
+    @Test func aReadmesFragmentAndVsCodesServersImportToo() throws {
+        let fragment = try McpImport.parse("""
+        "sentry": {"url": "https://mcp.sentry.dev/sse", "type": "sse"}
+        """)
+        #expect(fragment.map(\.name) == ["sentry"])
+        let vscode = try McpImport.parse(#"{"servers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}"#)
+        #expect(vscode.map(\.name) == ["time"])
+        let bare = try McpImport.parse(#"{"time": {"command": "uvx"}}"#)
+        #expect(bare.map(\.name) == ["time"])
+    }
+
+    @Test func namesAreCleanedIntoOnesTheMachinesTake() throws {
+        let servers = try McpImport.parse(#"""
+        {"mcpServers": {"@acme/docs server": {"command": "docs"}, "herder": {"command": "other"},
+                        "acme-docs-server": {"command": "third"}}}
+        """#)
+        #expect(servers.map(\.name) == ["acme-docs-server", "acme-docs-server-2", "herder-server"])
+        #expect(servers.allSatisfy { McpServers.nameProblem($0.name, taken: []) == nil })
+    }
+
+    @Test func whatCannotBeImportedSaysWhy() {
+        #expect(throws: McpImport.Failure.self) { try McpImport.parse("") }
+        #expect(throws: McpImport.Failure.self) { try McpImport.parse("not json") }
+        #expect(throws: McpImport.Failure(message: "ws has type websocket; herder takes stdio, http and sse.")) {
+            try McpImport.parse(#"{"mcpServers": {"ws": {"type": "websocket", "url": "wss://x"}}}"#)
+        }
+        #expect(throws: McpImport.Failure(message: "empty has no command or url.")) {
+            try McpImport.parse(#"{"mcpServers": {"empty": {}}}"#)
+        }
+        #expect(throws: McpImport.Failure.self) {
+            try McpImport.parse(#"{"command": "npx", "args": []}"#)
+        }
+    }
+}
+
+struct McpValidationTests {
+    private func draft(_ body: (inout McpServerDraft) -> Void) -> McpServerDraft {
+        var draft = McpServerDraft()
+        draft.name = "github"
+        draft.command = "npx"
+        body(&draft)
+        return draft
+    }
+
+    @Test func namesFollowTheMachinesRules() {
+        #expect(McpServers.nameProblem("github_2-x", taken: []) == nil)
+        #expect(McpServers.nameProblem("", taken: []) != nil)
+        #expect(McpServers.nameProblem("my server", taken: []) != nil)
+        #expect(McpServers.nameProblem("ünicode", taken: []) != nil)
+        #expect(McpServers.nameProblem(String(repeating: "a", count: 65), taken: []) != nil)
+        #expect(McpServers.nameProblem("herder", taken: [])?.contains("herder’s own") == true)
+        #expect(McpServers.nameProblem("linear", taken: ["linear"])?.contains("exists") == true)
+    }
+
+    @Test func eachTransportChecksItsOwnFields() {
+        #expect(draft { _ in }.problem(taken: []) == nil)
+        #expect(draft { $0.command = "" }.problem(taken: []) != nil)
+        #expect(draft { $0.command = "bin/server" }.problem(taken: []) != nil)
+        #expect(draft { $0.command = "~/bin/server" }.problem(taken: []) == nil)
+        #expect(draft { $0.env = [McpPair(key: "A=B", value: "1")] }.problem(taken: []) != nil)
+        #expect(draft { $0.env = [McpPair(key: "A", value: "1"), McpPair(key: "A", value: "2")] }.problem(taken: []) != nil)
+        #expect(draft { $0.secrets = ["GITHUB_TOKEN", "work/JIRA_TOKEN"] }.problem(taken: []) == nil)
+        #expect(draft { $0.secrets = ["github_token"] }.problem(taken: []) != nil)
+        #expect(draft { $0.secrets = ["Work/TOKEN"] }.problem(taken: []) != nil)
+
+        let http = { (body: (inout McpServerDraft) -> Void) in draft { $0.kind = .http; $0.url = "https://mcp.example.com"; body(&$0) } }
+        #expect(http { _ in }.problem(taken: []) == nil)
+        #expect(http { $0.url = "ftp://mcp.example.com" }.problem(taken: []) != nil)
+        #expect(http { $0.url = "mcp.example.com" }.problem(taken: []) != nil)
+        #expect(http { $0.headers = [McpPair(key: "Authorization", value: "Bearer t")] }.problem(taken: []) == nil)
+        #expect(http { $0.headers = [McpPair(key: "Bad:Name", value: "x")] }.problem(taken: []) != nil)
+        // The stdio fields typed before switching are not sent, so they are not checked.
+        #expect(http { $0.command = "" }.problem(taken: []) == nil)
+    }
+
+    @Test func aDraftSendsOnlyItsTransportsFields() {
+        let server = McpServerSettings(name: "docs", enabled: false, project: "github.com/acme/api", transport: .stdio(
+            command: "docs-mcp", args: ["--root", "/srv/my docs"], env: ["B": "2", "A": "1"], secrets: ["DOCS_TOKEN"]))
+        var draft = McpServerDraft(server)
+        #expect(draft.args == "--root\n/srv/my docs")
+        #expect(draft.server == server)
+        draft.kind = .sse
+        draft.url = " https://docs.example.com/sse "
+        #expect(draft.server.transport == .sse(url: "https://docs.example.com/sse", headers: [:]))
+    }
+}
+
+struct McpCopyTests {
+    private let linear = McpServerSettings(name: "linear", enabled: true, project: nil,
+                                           transport: .http(url: "https://mcp.linear.app/mcp", headers: [:]))
+    private let github = McpServerSettings(name: "github", enabled: true, project: nil,
+                                           transport: .stdio(command: "npx", args: [], env: [:], secrets: []))
+
+    @Test func mergeReplacesASameNamedServerInPlaceAndAppendsTheRest() {
+        var newer = linear
+        newer.enabled = false
+        let sentry = McpServerSettings(name: "sentry", enabled: true, project: nil,
+                                       transport: .sse(url: "https://mcp.sentry.dev/sse", headers: [:]))
+        #expect(McpServers.merge([newer, sentry], into: [linear, github]) == [newer, github, sentry])
+        #expect(McpServers.replaced([newer, sentry], in: [linear, github]) == ["linear"])
+    }
+
+    @MainActor
+    @Test func addingToSeveralMachinesKeepsEachOnesOwnServers() async {
+        var machines: [HostId: [McpServerSettings]] = ["devbox": [github, linear], "studio": [], "laptop": [linear]]
+        let lists = McpServerLists(
+            read: { host in
+                guard let servers = machines[host] else { throw HerderError.Local(detail: "\(host) is gone") }
+                return servers
+            },
+            write: { servers, host in
+                if host == "laptop" { throw HerderError.Local(detail: "laptop refused") }
+                machines[host] = servers
+            })
+        var docs = github
+        docs.name = "docs"
+        let failures = await lists.add([docs, linear], to: ["devbox", "studio", "laptop", "gone"])
+        #expect(machines["devbox"] == [github, linear, docs])
+        #expect(machines["studio"] == [docs, linear])
+        // A machine that refuses keeps what it had, and says so.
+        #expect(machines["laptop"] == [linear])
+        #expect(Set(failures.keys) == ["laptop", "gone"])
+        #expect(failures["laptop"]?.contains("laptop refused") == true)
+        #expect(lists.servers(on: "studio") == [docs, linear])
+    }
+}

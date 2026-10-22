@@ -112,7 +112,7 @@ final class VaultSecrets {
 
     /// Why `name` cannot name a set, as the vault checks it: lowercase ASCII letters, digits and
     /// single hyphens inside, at most 64.
-    static func setNameProblem(_ name: String) -> String? {
+    nonisolated static func setNameProblem(_ name: String) -> String? {
         let valid = (1...64).contains(name.count)
             && name.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
             && !name.hasPrefix("-") && !name.hasSuffix("-") && !name.contains("--")
@@ -121,7 +121,7 @@ final class VaultSecrets {
 
     /// Whether `name` may name a secret, as an environment variable: uppercase ASCII letters,
     /// digits and underscores, not starting with a digit, at most 64.
-    static func isValidSecretName(_ name: String) -> Bool {
+    nonisolated static func isValidSecretName(_ name: String) -> Bool {
         guard let first = name.first, !first.isNumber else { return false }
         return name.count <= 64
             && name.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
