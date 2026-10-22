@@ -274,14 +274,19 @@ impl ToolHandler for TaskTools {
                 .and_then(|inner| inner.secrets.get().cloned());
             match secrets_of_host {
                 Some(host) => host.fetch(&caller, &secrets).await,
-                None => Err(SecretError {
-                    code: SecretErrorCode::NoVault,
-                    message: "this host is not linked to a vault, so it has no secrets".into(),
-                    secret: None,
-                    candidates: Vec::new(),
-                }),
+                None => Err(no_vault()),
             }
         })
+    }
+}
+
+/// Why a session of a host without secrets gets none.
+pub(super) fn no_vault() -> SecretError {
+    SecretError {
+        code: SecretErrorCode::NoVault,
+        message: "this host is not linked to a vault, so it has no secrets".into(),
+        secret: None,
+        candidates: Vec::new(),
     }
 }
 

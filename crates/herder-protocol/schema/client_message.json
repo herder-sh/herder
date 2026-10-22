@@ -3491,7 +3491,7 @@
           "type": "object",
           "properties": {
             "headers": {
-              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given.",
+              "description": "Headers sent with every request, such as `Authorization`, kept in the daemon's\nconfig file as given. A value may hold `{secret:NAME}` or `{secret:set/NAME}`\nplaceholders (`SecretRef`), which take the secret's value from the host's vault\nas a session's CLI starts, so the value is never in the config file; a session\nwhose secrets the vault does not hand out goes without the server.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
@@ -3517,7 +3517,7 @@
           "type": "object",
           "properties": {
             "headers": {
-              "description": "Headers sent with every request, kept in the daemon's config file as given.",
+              "description": "Headers sent with every request, kept in the daemon's config file as given; a\nvalue may hold `{secret:NAME}` or `{secret:set/NAME}` placeholders, as for `http`.",
               "type": "object",
               "additionalProperties": {
                 "type": "string"
