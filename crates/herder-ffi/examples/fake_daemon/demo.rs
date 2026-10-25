@@ -11,7 +11,7 @@
 //!   primary with three children it spawned over herder's MCP server, and a finished session;
 //! - a session that started on `devbox` and was handed off to `studio`, onto its Team account,
 //!   where it finished the work;
-//! - a finished session on `laptop`.
+//! - on `laptop`, a finished session and a Claude session waiting on a multi-select question.
 //!
 //! Each machine also has fake provider CLIs ([`CLIS`]): their versions differ between machines,
 //! `devbox` and `studio` can install and update them, and adding an account runs a login that
@@ -72,6 +72,7 @@ const AGENTS: &str =
 const LEDGER: &str =
     "Move invoices onto the new ledger tables, with a migration that is safe to rerun.";
 const DATES: &str = "Upgrade date-fns to v4 and fix whatever breaks.";
+const BROWSERS: &str = "Run the checkout e2e suite in more browsers.";
 const RETENTION: &str =
     "Roll out the 30-day log retention policy: Terraform, the Loki Helm values and the runbook.";
 const TERRAFORM: &str = "Set the log bucket lifecycle to 30 days in terraform/modules/logs and \
@@ -96,6 +97,7 @@ const SCRIPTS: &[(&str, &str, &str)] = &[
     ("claude-work", LEDGER, "limit.jsonl"),
     ("claude-personal", LEDGER, "failover.jsonl"),
     ("codex", DATES, "approval.jsonl"),
+    ("claude-personal", BROWSERS, "question.jsonl"),
     ("claude-personal", RETENTION, "task.jsonl"),
     ("claude-personal", TERRAFORM, "child-terraform.jsonl"),
     ("claude-personal", HELM, "child-helm.jsonl"),
@@ -416,6 +418,16 @@ impl Scenario<'_> {
             )
             .await?;
         self.prompt("devbox", &dates, DATES).await?;
+        let browsers = self
+            .session(
+                "laptop",
+                "claude-personal",
+                "web",
+                "checkout-browsers",
+                "Run checkout e2e in more browsers",
+            )
+            .await?;
+        self.prompt("laptop", &browsers, BROWSERS).await?;
 
         let retention = self
             .session(
@@ -475,6 +487,13 @@ impl Scenario<'_> {
                 events
                     .iter()
                     .any(|body| matches!(body, EventBody::ChildReported { .. }))
+            })
+            .await?;
+        self.daemon("laptop")?
+            .until(&browsers, |events| {
+                events
+                    .iter()
+                    .any(|body| matches!(body, EventBody::QuestionAsked { .. }))
             })
             .await?;
         Ok(())

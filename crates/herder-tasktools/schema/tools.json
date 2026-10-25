@@ -203,7 +203,7 @@
                     "description": "A child's question or approval request that waits for an answer.",
                     "oneOf": [
                       {
-                        "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                        "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it\nlists choices, or `choices` when it also takes several.",
                         "type": "object",
                         "properties": {
                           "choices": {
@@ -216,6 +216,10 @@
                           "kind": {
                             "type": "string",
                             "const": "question"
+                          },
+                          "multi_select": {
+                            "description": "Whether several choices may be picked, with `choices`.",
+                            "type": "boolean"
                           },
                           "question_id": {
                             "description": "The question.",
@@ -439,7 +443,7 @@
                 "description": "What it waits for.",
                 "oneOf": [
                   {
-                    "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it lists choices.",
+                    "description": "The child asked a question. Answer with `question_id` and `text`, or `choice` when it\nlists choices, or `choices` when it also takes several.",
                     "type": "object",
                     "properties": {
                       "choices": {
@@ -452,6 +456,10 @@
                       "kind": {
                         "type": "string",
                         "const": "question"
+                      },
+                      "multi_select": {
+                        "description": "Whether several choices may be picked, with `choices`.",
+                        "type": "boolean"
                       },
                       "question_id": {
                         "description": "The question.",
@@ -532,7 +540,7 @@
     },
     {
       "name": "answer",
-      "description": "Answer a question or approval request that a child put to you, unblocking it. Pass the `child` that asked; for a question add `question_id` with `text`, or `choice` when it lists choices; for an approval add `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
+      "description": "Answer a question or approval request that a child put to you, unblocking it. Pass the `child` that asked; for a question add `question_id` with `text`, or `choice` when it lists choices, or `choices` to pick several when it is `multi_select`; for an approval add `approval_id` with `decision`. Your answer is final and the child acts on it, so escalate instead when the decision belongs to the user. Fails with `already_resolved` when someone answered first.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -550,6 +558,15 @@
             "format": "uint32",
             "minimum": 0
           },
+          "choices": {
+            "description": "Positions of the chosen answers in a multi-select question's `choices`, from 0.",
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
           "decision": {
             "description": "`allow` runs the tool call once, `deny` refuses it.",
             "oneOf": [
@@ -566,7 +583,7 @@
             ]
           },
           "question_id": {
-            "description": "The question to answer. Pass it with `text` or `choice`.",
+            "description": "The question to answer. Pass it with `text`, `choice` or `choices`.",
             "type": "string"
           },
           "text": {
@@ -1085,6 +1102,56 @@
                     "null"
                   ]
                 },
+                "threads": {
+                  "description": "Chat threads linked to the session, in the order they were linked. A vault lists none.",
+                  "type": "array",
+                  "items": {
+                    "description": "A chat thread linked to a session: the thread's messages reach the session, and the bot\nposts the session's answers there.",
+                    "type": "object",
+                    "properties": {
+                      "bot_id": {
+                        "description": "The bot that holds the thread, on the session's host.",
+                        "type": "string"
+                      },
+                      "channel_id": {
+                        "description": "The channel or direct message the thread is in, as the chat names it.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "description": "The chat.",
+                        "oneOf": [
+                          {
+                            "description": "A Slack app, connected over Socket Mode.",
+                            "type": "string",
+                            "const": "slack"
+                          },
+                          {
+                            "description": "A Telegram bot.",
+                            "type": "string",
+                            "const": "telegram"
+                          }
+                        ]
+                      },
+                      "thread_id": {
+                        "description": "The thread within the channel, as the chat names it: Slack's `thread_ts`.",
+                        "type": "string"
+                      },
+                      "url": {
+                        "description": "Web link to the thread; absent when the chat gives none.",
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "bot_id",
+                      "channel_id",
+                      "thread_id"
+                    ]
+                  }
+                },
                 "title": {
                   "description": "The session's current title, from its latest `title_changed`; absent until it has one.",
                   "type": [
@@ -1192,6 +1259,10 @@
                   "import_skill",
                   "pull_skills",
                   "set_skill_enabled",
+                  "list_bots",
+                  "put_bot",
+                  "remove_bot",
+                  "get_bot_status",
                   "attach_terminal",
                   "detach_terminal",
                   "close_terminal",

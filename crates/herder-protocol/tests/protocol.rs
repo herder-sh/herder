@@ -560,6 +560,9 @@ fn client_fixtures() -> Vec<ClientMessage> {
             text: "Use the staging database".into(),
         },
         Answer::Choice { index: 1 },
+        Answer::Choices {
+            indices: vec![0, 2],
+        },
     ] {
         messages.push(command(CommandBody::AnswerQuestion {
             session_id: session_id(),
@@ -1884,6 +1887,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 turn_id: turn_id(),
                 text: "Which database should the migration target?".into(),
                 choices: vec![],
+                multi_select: false,
                 routed_to: Route::Primary,
                 reason: None,
             },
@@ -1909,6 +1913,7 @@ fn task_fixtures() -> Vec<ServerMessage> {
                 turn_id: turn_id(),
                 text: "Force-push the branch?".into(),
                 choices: vec!["Yes".into(), "No".into()],
+                multi_select: false,
                 routed_to: Route::User,
                 reason: Some(EscalationReason::ExceedsAuthority),
             },
@@ -1919,6 +1924,30 @@ fn task_fixtures() -> Vec<ServerMessage> {
             EventBody::QuestionAnswered {
                 question_id: question_id(),
                 answer: Answer::Choice { index: 1 },
+                answered_by: Answerer::User,
+            },
+        ),
+        event(
+            8,
+            None,
+            EventBody::QuestionAsked {
+                question_id: question_id(),
+                turn_id: turn_id(),
+                text: "Which checks should run?".into(),
+                choices: vec!["Lint".into(), "Tests".into(), "Docs".into()],
+                multi_select: true,
+                routed_to: Route::User,
+                reason: None,
+            },
+        ),
+        event(
+            9,
+            owner,
+            EventBody::QuestionAnswered {
+                question_id: question_id(),
+                answer: Answer::Choices {
+                    indices: vec![0, 1],
+                },
                 answered_by: Answerer::User,
             },
         ),

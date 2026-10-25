@@ -123,6 +123,7 @@ async fn agent(
                         turn_id: turn_id.clone(),
                         text: "A or B?".into(),
                         choices: vec!["A".into(), "B".into()],
+                        multi_select: false,
                     });
                     blocked = Some(turn_id);
                 } else if let Some(command) = text.strip_prefix("Run ") {

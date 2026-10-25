@@ -376,6 +376,8 @@ pub enum AdapterEvent {
         text: String,
         /// Answers to pick from; empty for a free-text answer.
         choices: Vec<String>,
+        /// Whether several choices may be picked, answered with `Answer::Choices`.
+        multi_select: bool,
     },
     /// The provider reported the account's limit windows.
     UsageReported {

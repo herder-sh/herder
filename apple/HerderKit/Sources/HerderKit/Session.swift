@@ -13,7 +13,7 @@ struct SessionKey: Hashable, Sendable {
 struct Pending: Hashable {
     enum Kind: Hashable {
         case approval(summary: String)
-        case question(text: String, choices: [String])
+        case question(text: String, choices: [String], multiSelect: Bool)
     }
 
     /// The approval or question id.
@@ -178,11 +178,11 @@ struct SessionModel {
             escalate(&approvals, id: id, reason: reason, note: note, at: at)
         case .approvalResolved(let id, _, _):
             approvals.removeAll { $0.id == id }
-        case .questionAsked(let id, let turnId, let text, let choices, let routedTo, let reason):
+        case .questionAsked(let id, let turnId, let text, let choices, let multiSelect, let routedTo, let reason):
             if questions.isEmpty { questionRun = 0 }
             questionRun += 1
             questions.append(Pending(
-                id: id, turnId: turnId, kind: .question(text: text, choices: choices),
+                id: id, turnId: turnId, kind: .question(text: text, choices: choices, multiSelect: multiSelect),
                 routedTo: routedTo, reason: reason, since: at))
         case .questionEscalated(let id, let reason, let note):
             escalate(&questions, id: id, reason: reason, note: note, at: at)
@@ -244,7 +244,7 @@ struct SessionModel {
             notice("Turn failed: \(summary)", .error, detail: summary == error.message ? nil : error.message)
         case .approvalRequested(_, _, _, let summary, let routedTo, let reason):
             asked("Approval", summary, routedTo, reason)
-        case .questionAsked(let id, _, let text, let choices, let routedTo, let reason):
+        case .questionAsked(let id, _, let text, let choices, _, let routedTo, let reason):
             log.append(.question(AskedQuestion(
                 id: id, seq: event.seq, text: text, choices: choices, routedTo: routedTo, reason: reason)))
         case .approvalEscalated(_, let reason, let note): escalated("Approval", reason, note)
@@ -312,12 +312,17 @@ struct SessionModel {
     private func answerText(_ id: QuestionId, _ answer: Answer) -> String {
         switch answer {
         case .text(let text): text
-        case .choice(let index):
-            questions.first { $0.id == id }.flatMap { pending -> String? in
-                guard case .question(_, let choices) = pending.kind, Int(index) < choices.count else { return nil }
-                return choices[Int(index)]
-            } ?? "choice \(index + 1)"
+        case .choice(let index): choiceText(id, index)
+        case .choices(let indices): indices.map { choiceText(id, $0) }.joined(separator: ", ")
         }
+    }
+
+    /// The label of choice `index` while the question is still pending, else its number.
+    private func choiceText(_ id: QuestionId, _ index: UInt32) -> String {
+        questions.first { $0.id == id }.flatMap { pending -> String? in
+            guard case .question(_, let choices, _) = pending.kind, Int(index) < choices.count else { return nil }
+            return choices[Int(index)]
+        } ?? "choice \(index + 1)"
     }
 
     /// Adds the events that matter to `moments`, before `apply` changes the state: a turn's tool
@@ -353,7 +358,7 @@ struct SessionModel {
             }
         case .approvalRequested(_, let turnId, _, let summary, _, _): add(.approval(summary), turn: turnId)
         case .approvalResolved(_, let decision, let answeredBy): add(.decided(decision, byUser: answeredBy == .user))
-        case .questionAsked(_, let turnId, let text, _, _, _): add(.question(text), turn: turnId)
+        case .questionAsked(_, let turnId, let text, _, _, _, _): add(.question(text), turn: turnId)
         case .questionAnswered(let id, let answer, let answeredBy):
             add(.answered(answerText(id, answer), byUser: answeredBy == .user))
         case .childSpawned(let child, _, let task): add(.spawned(child, task: task))
@@ -465,7 +470,7 @@ struct SessionModel {
         case .approvalRequested(_, _, _, let summary, _, _): return "Approval asked: \(summary)"
         case .approvalEscalated: return "Approval escalated to you"
         case .approvalResolved(_, let decision, _): return "Approval \(decision)"
-        case .questionAsked(_, _, let text, _, _, _): return "Question: \(firstLine(text))"
+        case .questionAsked(_, _, let text, _, _, _, _): return "Question: \(firstLine(text))"
         case .questionEscalated: return "Question escalated to you"
         case .questionAnswered: return "Question answered"
         case .childSpawned(_, _, let task): return "Spawned child: \(task)"
@@ -514,7 +519,7 @@ struct SessionModel {
         guard let pending = approvals.first ?? questions.first else { return nil }
         let kind: PendingRequest.Kind = switch pending.kind {
         case .approval(let summary): .approval(summary: summary)
-        case .question(let text, let choices): .question(text: text, choices: choices)
+        case .question(let text, let choices, let multiSelect): .question(text: text, choices: choices, multiSelect: multiSelect)
         }
         let reason = pending.routedTo == .primary
             ? "Asked the primary session first; you can still answer"
@@ -556,7 +561,7 @@ struct SessionModel {
         if let request = forUser.first {
             switch request.kind {
             case .approval(let summary): return summary
-            case .question(let text, _): return text
+            case .question(let text, _, _): return text
             }
         }
         switch state {
@@ -722,10 +727,14 @@ struct AskedQuestion: Hashable {
     var answer: Answer?
     var answeredBy: Answerer?
 
-    /// The index of the choice the answer picked; `nil` unanswered or answered in words.
-    var picked: Int? {
-        guard case .choice(let index)? = answer, Int(index) < choices.count else { return nil }
-        return Int(index)
+    /// The indices of the choices the answer picked; empty unanswered or answered in words.
+    var picked: Set<Int> {
+        let indices: [UInt32] = switch answer {
+        case .choice(let index)?: [index]
+        case .choices(let indices)?: indices
+        case .text?, nil: []
+        }
+        return Set(indices.map(Int.init).filter { $0 < choices.count })
     }
 }
 

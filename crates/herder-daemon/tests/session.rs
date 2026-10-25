@@ -1220,6 +1220,15 @@ async fn question_is_journaled_for_the_user_and_its_answer_reaches_the_adapter()
         .handle(bob(), answer("question-1", Answer::Choice { index: 2 }))
         .await;
     assert_eq!(no_such_choice.unwrap_err().code, ErrorCode::BadRequest);
+    // Several choices answer only a multi-select question.
+    let several = Answer::Choices {
+        indices: vec![0, 1],
+    };
+    let several = daemon
+        .manager
+        .handle(bob(), answer("question-1", several))
+        .await;
+    assert_eq!(several.unwrap_err().code, ErrorCode::BadRequest);
     let result = daemon
         .manager
         .handle(bob(), answer("question-1", Answer::Choice { index: 1 }))
@@ -1320,6 +1329,45 @@ async fn an_answers_image_reaches_the_agent_right_after_the_turn_ahead_of_the_qu
     daemon.stop().await;
     let store = Store::open(dir.path().join("herder.db")).unwrap();
     assert!(store.queued_prompts(&session).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_multi_select_question_takes_several_choices() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::open(dir.path(), "multi_select.jsonl", Default::default()).await;
+    let session = daemon.create().await;
+    daemon.prompt(alice(), &session, "Set up CI.").await;
+    daemon.until_status(SessionStatus::NeedsYou).await;
+
+    let answer = |indices: Vec<u32>| CommandBody::AnswerQuestion {
+        session_id: session.clone(),
+        question_id: QuestionId::new("question-1"),
+        answer: Answer::Choices { indices },
+        images: Vec::new(),
+        files: Vec::new(),
+    };
+    // None, one it does not have, or one twice is refused.
+    for indices in [vec![], vec![0, 3], vec![2, 2]] {
+        let refused = daemon.manager.handle(bob(), answer(indices.clone())).await;
+        assert_eq!(
+            refused.unwrap_err().code,
+            ErrorCode::BadRequest,
+            "{indices:?}"
+        );
+    }
+    let result = daemon.manager.handle(bob(), answer(vec![0, 2])).await;
+    assert_eq!(result.unwrap(), CommandResult::Applied);
+    daemon.until_status(SessionStatus::Idle).await;
+
+    let journal = daemon.journal(&session).await;
+    let EventBody::QuestionAsked { multi_select, .. } = &journal[4].body else {
+        panic!("expected question_asked");
+    };
+    assert!(multi_select);
+    assert_eq!(
+        describe(&journal)[6],
+        "bob: question_answered question-1 Choices { indices: [0, 2] }"
+    );
 }
 
 #[tokio::test]

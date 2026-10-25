@@ -627,7 +627,7 @@ private struct Composer: View {
     private var forkable: Bool { model.loaded && model.parent == nil }
 
     private var placeholder: String {
-        if case .question(_, let choices) = model.questions.first?.kind {
+        if case .question(_, let choices, _) = model.questions.first?.kind {
             return choices.isEmpty ? "Type an answer…" : "Type your own answer…"
         }
         if model.parent != nil {
