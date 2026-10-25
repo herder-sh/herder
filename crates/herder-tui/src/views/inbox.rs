@@ -166,18 +166,25 @@ fn entry(app: &App, ui: Ui, waiting: &Waiting<'_>, width: usize, compact: bool) 
         What::Approval(approval) => wrap(&mut body, &approval.summary, ui.text(), width),
         What::Question(question) => {
             wrap(&mut body, &question.text, ui.text(), width);
-            for (at, choice) in question.choices.iter().enumerate() {
+            // A multi-select question shows a box per choice; digits pick, Enter submits.
+            let indent = if question.multi_select { 8 } else { 4 };
+            for (at, choice) in (0..).zip(&question.choices) {
                 let mut lines = Vec::new();
-                wrap(&mut lines, choice, ui.text(), width.saturating_sub(4));
+                wrap(&mut lines, choice, ui.text(), width.saturating_sub(indent));
                 for (row, mut line) in lines.into_iter().enumerate() {
-                    let number = if row == 0 {
-                        format!("  {} ", at + 1)
-                    } else {
-                        "    ".to_owned()
+                    let number = match (row, question.multi_select) {
+                        (0, false) => format!("  {} ", at + 1),
+                        (0, true) if question.picked.contains(&at) => format!("  {} [x] ", at + 1),
+                        (0, true) => format!("  {} [ ] ", at + 1),
+                        _ => " ".repeat(indent),
                     };
                     line.spans.insert(0, Span::styled(number, ui.accent()));
                     body.push(line);
                 }
+            }
+            if question.multi_select {
+                let hint = "1-9 pick several · enter submit · a type an answer";
+                wrap(&mut body, hint, ui.muted(), width);
             }
         }
     }

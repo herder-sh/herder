@@ -13,6 +13,7 @@ use crate::inbox::{InboxAction, What};
 use crate::mouse::{self, Click, Hits};
 use crate::prs::PrAction;
 use crate::secrets::Pick;
+use crate::session::PendingQuestion;
 use crate::ui::hints::{ButtonBar, Hint};
 
 /// Most characters of a question's choice its button shows.
@@ -201,7 +202,11 @@ fn session_buttons(app: &App) -> Vec<Button> {
             act(Act::Approve(ApprovalDecision::Deny)),
         ));
     } else if let Some(question) = session.questions.first() {
-        buttons.extend(choices(&question.choices, |at| act(Act::Choose(at))));
+        buttons.extend(choices(question, |at| act(Act::Choose(at))));
+        // In the composer, its send submits the picks.
+        if question.picks().is_some() && app.focus != Focus::Composer {
+            buttons.push(button("⏎", "submit", act(Act::Submit)));
+        }
     }
     if app.focus == Focus::Composer {
         buttons.push(button("⏎", "send", act(Act::Submit)));
@@ -244,7 +249,7 @@ fn inbox_buttons(app: &App) -> Vec<Button> {
             buttons.push(button("n", "deny", char('n')));
         }
         Some(What::Question(question)) => {
-            buttons.extend(choices(&question.choices, |at| {
+            buttons.extend(choices(question, |at| {
                 Click::Act(Action::Inbox(InboxAction::Choose(at)))
             }));
             buttons.push(button("⏎", "answer", mouse::key(KeyCode::Enter)));
@@ -255,14 +260,22 @@ fn inbox_buttons(app: &App) -> Vec<Button> {
     buttons
 }
 
-/// A button per choice of a question, up to the nine digits pick.
-fn choices(choices: &[String], click: impl Fn(u32) -> Click) -> Vec<Button> {
+/// A button per choice of a question, up to the nine digits pick; a picked choice of a
+/// multi-select question is ticked.
+fn choices(question: &PendingQuestion, click: impl Fn(u32) -> Click) -> Vec<Button> {
     (0..9u32)
-        .zip(choices)
-        .map(|(at, choice)| Button {
-            key: (at + 1).to_string(),
-            label: super::sessions::clip(choice, CHOICE),
-            click: click(at),
+        .zip(&question.choices)
+        .map(|(at, choice)| {
+            let tick = if question.picked.contains(&at) {
+                "✓ "
+            } else {
+                ""
+            };
+            Button {
+                key: (at + 1).to_string(),
+                label: super::sessions::clip(&format!("{tick}{choice}"), CHOICE),
+                click: click(at),
+            }
         })
         .collect()
 }
