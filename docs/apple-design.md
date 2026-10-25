@@ -97,10 +97,24 @@ Rules:
   size class is compact and `DesktopShell` otherwise, so an iPad in slide-over gets the iPhone
   layout. Code that differs per layout reads `horizontalSizeClass`, not `#if os(iOS)`, unless
   the difference is a platform API (AppKit text view, hover, keyboard shortcuts).
-- **The sidebar** (`Sidebar`, `SidebarRail`) lists Board, Usage, Skills, Machines, Vault, then the projects, then each machine's connection at the bottom. It starts
-  collapsed to the rail (`sidebarCollapsed`), which leaves the width to the session; ⇧⌘\
-  toggles it. The window's traffic lights sit in its top bar (`Sidebar.topBar`, 52 pt on the
-  Mac).
+- **The sidebar** (`Sidebar`, `SidebarRail`) is grouped: what the user works on (Board, Chats), then **Workspace**, the setup (Providers, Skills, Machines, Vault), then the
+  projects, then one footer line for the machines (`MachinesFooter`). It starts collapsed to
+  the rail (`sidebarCollapsed`), which leaves the width to the session and lists the same
+  things in the same order; ⇧⌘\ toggles it. The window's traffic lights sit in its top bar
+  (`Sidebar.topBar`, 52 pt on the Mac).
+- **A row shows only live state**: an amber count of what waits for the user, a blue count
+  of what is running, nothing when quiet (`SidebarRow`). A project's state glyph, idle or
+  done, is not shown there.
+- **Projects are in the user's order** (`ProjectOrder`). Dragging a project onto another puts
+  it in that one's place and switches the sort to Manual, the default; the ⇅ menu also sorts by
+  Recent activity, Needs you first (waiting count, then running count, then recency) or Name.
+  The sort and the manual order are saved per device (`projectSort`, `projectOrder`), and the
+  pane title's `Switcher` lists projects in the same order. Projects with no activity for 30
+  days (`ProjectGroup.quiet`) fold under "N more", unless one waits for the user or is open.
+  The sessions no project holds yet stay last.
+- **The machines footer** is a dot per machine coloured by its connection (`ConnectionMark`)
+  and a summary ("4 machines · 1 offline"). Clicking it opens a popover with each machine's
+  status, each row opening its page, and a link to Machines. On the rail it is the dots alone.
 - **The list pane** is 380 pt (`ListAndSession`). ⌘\ hides it to give the session the whole
   width (`listHidden`); with no session open it always shows.
 - **The pane header** (`Pane`) is a `PageHeader` (§8.4): the title (a menu of sections and
@@ -113,8 +127,8 @@ Rules:
   `ListAndSession`'s Back on narrow regular, `ChildBanner`'s Back (⌘[) from a child to its
   parent.
 
-Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-narrow.png`,
-`ios-home.png`.
+Screenshots: `mac-home.png` (rail), `mac-sidebar-expanded.png`, `mac-sidebar-machines.png`
+(the machines popover), `mac-narrow.png`, `ios-home.png`.
 
 ---
 
