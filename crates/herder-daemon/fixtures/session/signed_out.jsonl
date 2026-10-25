@@ -1,0 +1,13 @@
+# The account's login expired: the first turn fails as auth. The prompts sent meanwhile are
+# held; once the account is logged in again they run on the same CLI, in the order sent.
+{"expect": {"type": "send_prompt", "turn_id": "turn-1", "text": "Refactor the parser."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-1"}}
+{"emit": {"type": "turn_failed", "turn_id": "turn-1", "error": {"class": "auth", "message": "Not logged in · Please run /login"}}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-2", "text": "Add tests."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-2"}}
+{"emit": {"type": "item_completed", "item": {"id": "c-1", "turn_id": "turn-2", "body": {"type": "assistant_message", "text": "Added the tests."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-2"}}
+{"expect": {"type": "send_prompt", "turn_id": "turn-3", "text": "Update the docs."}}
+{"emit": {"type": "turn_started", "turn_id": "turn-3"}}
+{"emit": {"type": "item_completed", "item": {"id": "c-2", "turn_id": "turn-3", "body": {"type": "assistant_message", "text": "Updated the docs."}}}}
+{"emit": {"type": "turn_completed", "turn_id": "turn-3"}}

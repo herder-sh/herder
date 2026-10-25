@@ -310,11 +310,13 @@ impl Session {
             .unwrap_or(slug)
     }
 
-    /// Whether the session waits on a user: its status says so, or an approval or question
-    /// is put to the user.
+    /// Whether the session waits on a user: its status says so, its account needs logging in
+    /// again, or an approval or question is put to the user.
     pub fn needs_user(&self) -> bool {
-        self.status == SessionStatus::NeedsYou
-            || self.approvals.iter().any(|a| a.routed_to == Route::User)
+        matches!(
+            self.status,
+            SessionStatus::NeedsYou | SessionStatus::NeedsLogin
+        ) || self.approvals.iter().any(|a| a.routed_to == Route::User)
             || self.questions.iter().any(|q| q.routed_to == Route::User)
     }
 
@@ -861,6 +863,21 @@ mod tests {
         ));
         assert_eq!(session.title(), "write the tests");
         assert_eq!(session.parent, Some(SessionId::new("s2")));
+    }
+
+    #[test]
+    fn a_session_whose_account_needs_login_needs_the_user() {
+        let mut session = Session::new(SessionId::new("s1"));
+        session.apply(update(
+            "s1",
+            1,
+            vec![
+                created("herder/api", None, None),
+                status(SessionStatus::NeedsLogin),
+            ],
+            vec![],
+        ));
+        assert!(session.needs_user());
     }
 
     #[test]
