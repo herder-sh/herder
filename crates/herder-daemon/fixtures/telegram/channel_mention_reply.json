@@ -1,0 +1,51 @@
+{
+  "update_id": 900000009,
+  "message": {
+    "message_id": 403,
+    "from": {
+      "id": 700000001,
+      "is_bot": false,
+      "first_name": "Ada",
+      "username": "ada",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": -1002000000001,
+      "title": "team",
+      "type": "supergroup"
+    },
+    "date": 1761400520,
+    "reply_to_message": {
+      "message_id": 401,
+      "from": {
+        "id": 700000001,
+        "is_bot": false,
+        "first_name": "Ada",
+        "username": "ada",
+        "language_code": "en"
+      },
+      "chat": {
+        "id": -1002000000001,
+        "title": "team",
+        "type": "supergroup"
+      },
+      "date": 1761400400,
+      "text": "@trash_can_bot What does the bot do?",
+      "entities": [
+        {
+          "type": "mention",
+          "offset": 0,
+          "length": 14
+        }
+      ]
+    },
+    "text": "@trash_can_bot and how is it tested?",
+    "entities": [
+      {
+        "type": "mention",
+        "offset": 0,
+        "length": 14
+      }
+    ]
+  }
+}

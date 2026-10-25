@@ -1,0 +1,26 @@
+{
+  "update_id": 900000004,
+  "message": {
+    "message_id": 404,
+    "from": {
+      "id": 7000000002,
+      "is_bot": true,
+      "first_name": "deploy",
+      "username": "deploy_bot"
+    },
+    "chat": {
+      "id": -1002000000001,
+      "title": "team",
+      "type": "supergroup"
+    },
+    "date": 1761400180,
+    "text": "@trash_can_bot Deploy finished",
+    "entities": [
+      {
+        "type": "mention",
+        "offset": 0,
+        "length": 14
+      }
+    ]
+  }
+}

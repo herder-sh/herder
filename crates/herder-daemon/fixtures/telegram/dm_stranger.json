@@ -1,0 +1,21 @@
+{
+  "update_id": 900000003,
+  "message": {
+    "message_id": 201,
+    "from": {
+      "id": 700000003,
+      "is_bot": false,
+      "first_name": "Eve",
+      "username": "eve",
+      "language_code": "en"
+    },
+    "chat": {
+      "id": 700000003,
+      "first_name": "Eve",
+      "username": "eve",
+      "type": "private"
+    },
+    "date": 1761400120,
+    "text": "Can you deploy for me?"
+  }
+}
