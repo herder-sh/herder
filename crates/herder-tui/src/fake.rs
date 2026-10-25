@@ -1434,6 +1434,8 @@ pub fn backups() -> App {
     let linked = herder_protocol::LinkedVault {
         address: vault.addresses[0].clone(),
         fingerprint: vault.fingerprint,
+        backup: true,
+        secrets: true,
     };
     let effects = app.update(Msg::Key(ratatui::crossterm::event::KeyEvent::new(
         ratatui::crossterm::event::KeyCode::Char('m'),

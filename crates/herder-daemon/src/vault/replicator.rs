@@ -9,6 +9,9 @@
 //! images (`[vault] attachments`), every image a batch's prompts carried goes just ahead of
 //! the batch; otherwise none does. While connected, it carries the host's secret requests
 //! too ([`HostSecrets`]).
+//!
+//! The `[vault]` table's switches say which of the two it does: with `backup` off it sends the
+//! vault nothing of the journal, and with `secrets` off it carries no secret requests.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -181,13 +184,21 @@ impl Replicator {
         // Sessions another host took over while this host was gone stop here before they
         // replicate again, retried on every keepalive until it worked; the vault drops this
         // connection when one is taken over later.
-        let mut released = self.release_recovered().await;
+        let mut released = !self.vault.backup || self.release_recovered().await;
         let mut link = Link::new(acked);
-        let (_attached, mut asks) = self.secrets.attach();
+        // Without secrets, no request ever comes: the sender drops with this statement.
+        let (_attached, mut asks) = if self.vault.secrets {
+            let (attached, asks) = self.secrets.attach();
+            (Some(attached), asks)
+        } else {
+            (None, tokio::sync::mpsc::unbounded_channel().1)
+        };
         let mut keepalive = tokio::time::interval_at(Instant::now() + KEEPALIVE, KEEPALIVE);
         let mut heard = Instant::now();
         loop {
-            self.pump(&mut ws, &mut link).await?;
+            if self.vault.backup {
+                self.pump(&mut ws, &mut link).await?;
+            }
             tokio::select! {
                 () = self.changed.notified() => {}
                 Some(ask) = asks.recv() => send(&mut ws, link.ask(ask)).await?,

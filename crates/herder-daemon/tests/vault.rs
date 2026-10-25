@@ -3,6 +3,7 @@
 //! catches up when it is back, and a client paired with the vault sees every host's sessions,
 //! read-only, and the hosts with their liveness. A host's device replicates and reads nothing.
 //! A host fetches the secrets of the sets granted to it, and only those, each fetch audited.
+//! A host backs up and fetches secrets only as its `[vault]` switches say, each without the other.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -204,7 +205,7 @@ impl HostDaemon {
         let runtime = Runtime::new();
         let dir = dir.to_owned();
         let secrets = Arc::new(HostSecrets::default());
-        secrets.set_linked(true);
+        secrets.set_linked(vault.secrets);
         let host_secrets = Arc::clone(&secrets);
         let sessions = runtime
             .handle()
@@ -1563,6 +1564,75 @@ async fn a_vault_without_its_key_keeps_working_but_hands_out_no_secrets() {
         "{}",
         error.message
     );
+    host.runtime.kill().await;
+    vault.runtime.kill().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_backs_up_and_fetches_secrets_only_as_its_switches_say() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (host_dir, vault_dir) = (tmp.path().join("host"), tmp.path().join("vault"));
+    std::fs::create_dir_all(&host_dir).unwrap();
+    seed(&host_dir, 2, 3);
+    let vault = Vault::start(&vault_dir, 0).await;
+    let client = Client::open(
+        tmp.path().join("client").display().to_string(),
+        "test".into(),
+    )
+    .unwrap();
+    client
+        .pair(vault.pairing_link("alice"))
+        .await
+        .map(one_machine)
+        .unwrap();
+
+    // Backup off: the host connects, so its sessions get secrets, but replicates nothing.
+    let config = VaultConfig {
+        backup: false,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
+    machine_when(&client, |m| {
+        m.hosts.iter().any(|h| h.host_id == host_id() && h.online)
+    })
+    .await;
+    for command in [
+        CommandBody::CreateSecretSet { set: "prod".into() },
+        CommandBody::PutSecret {
+            set: "prod".into(),
+            name: "TOKEN".into(),
+            description: "Token".into(),
+            value: SecretValue::new("token-value").unwrap(),
+        },
+        CommandBody::GrantSecretSet {
+            set: "prod".into(),
+            host_id: host_id(),
+        },
+    ] {
+        assert_eq!(
+            secret_command(&client, command).await,
+            Ok(CommandResult::Applied)
+        );
+    }
+    assert_eq!(
+        fetch(&host, "s1", &["TOKEN"]).await.unwrap(),
+        [("prod/TOKEN".to_owned(), "token-value".to_owned())]
+    );
+    // The fetch was answered on the connection after anything a backup would have sent.
+    assert!(Vault::held(&vault_dir).is_empty());
+    assert!(Vault::summaries(&vault_dir).is_empty());
+    host.runtime.kill().await;
+
+    // Secrets off: the host replicates everything, and its sessions get no secrets.
+    let config = VaultConfig {
+        pairing_code: None,
+        secrets: false,
+        ..vault.config()
+    };
+    let host = HostDaemon::start(&host_dir, config).await;
+    caught_up(&host_dir, &vault_dir).await;
+    let refused = fetch(&host, "s2", &["TOKEN"]).await.unwrap_err();
+    assert_eq!(refused.code, SecretErrorCode::NoVault);
     host.runtime.kill().await;
     vault.runtime.kill().await;
 }

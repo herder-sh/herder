@@ -1538,7 +1538,7 @@
           ]
         },
         {
-          "description": "Say where this daemon backs its sessions up; owners only. Answered with `vault_link`.\nIt changes nothing, so a resend is answered afresh.",
+          "description": "Say which vault this daemon is linked to; owners only. Answered with `vault_link`.\nIt changes nothing, so a resend is answered afresh.",
           "type": "object",
           "properties": {
             "type": {
@@ -1551,7 +1551,7 @@
           ]
         },
         {
-          "description": "Back this host's sessions up to a vault from now on, without a restart; owners only.\nThe daemon connects to the vault at the first of `addresses` that answers, pairs with\n`pairing_code` and replicates every session there; only once the vault accepted it\ndoes it keep the vault as the `[vault]` table of its config. Refused with `conflict`\nwhile it backs up to a vault already, and with `unsupported` on a vault.",
+          "description": "Link this host to a vault from now on, without a restart; owners only. The daemon\nconnects to the vault at the first of `addresses` that answers and pairs with\n`pairing_code`; only once the vault accepted it does it keep the vault as the `[vault]`\ntable of its config, and then replicates every session there with `backup` and fetches\nits sessions' secrets from it with `secrets`. Clients offer both on for a new link.\nRefused with `conflict` while it is linked to a vault already, as a host links to one\nvault at most, and with `unsupported` on a vault.",
           "type": "object",
           "properties": {
             "addresses": {
@@ -1561,6 +1561,10 @@
                 "type": "string"
               }
             },
+            "backup": {
+              "description": "Whether the host replicates its sessions to the vault.",
+              "type": "boolean"
+            },
             "fingerprint": {
               "description": "SHA-256 of the vault's TLS certificate, lowercase hex.",
               "type": "string"
@@ -1568,6 +1572,10 @@
             "pairing_code": {
               "description": "A host-only code from the vault's `pair_vault_host`.",
               "type": "string"
+            },
+            "secrets": {
+              "description": "Whether the host's sessions fetch secrets from the vault.",
+              "type": "boolean"
             },
             "type": {
               "type": "string",
@@ -1578,11 +1586,36 @@
             "type",
             "addresses",
             "fingerprint",
-            "pairing_code"
+            "pairing_code",
+            "backup",
+            "secrets"
           ]
         },
         {
-          "description": "Stop backing this host's sessions up: stop replicating and remove the `[vault]` table\nof its config; owners only. What the vault holds stays there. Refused with `not_found`\nwhen it backs up nowhere.",
+          "description": "Change what this host does with the vault it is linked to, without relinking: turning\n`backup` off stops replicating and on resumes it from where the vault left off; turning\n`secrets` off forgets every value held and refuses fetches. Owners only; answered with\n`applied`. Kept in the `[vault]` table of its config. Refused with `not_found` when it is\nlinked to no vault, and with `unsupported` on a vault.",
+          "type": "object",
+          "properties": {
+            "backup": {
+              "description": "Whether the host replicates its sessions to the vault.",
+              "type": "boolean"
+            },
+            "secrets": {
+              "description": "Whether the host's sessions fetch secrets from the vault.",
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "set_vault_link"
+            }
+          },
+          "required": [
+            "type",
+            "backup",
+            "secrets"
+          ]
+        },
+        {
+          "description": "Unlink this host from its vault: stop replicating and fetching secrets, and remove the\n`[vault]` table of its config; owners only. What the vault holds stays there. Refused\nwith `not_found` when it is linked to no vault.",
           "type": "object",
           "properties": {
             "type": {
