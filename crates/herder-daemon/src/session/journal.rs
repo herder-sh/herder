@@ -408,7 +408,10 @@ fn heads(store: &Store, projects: &Projects) -> herder_store::Result<Vec<Session
     let mut need_you: HashMap<SessionId, u32> = HashMap::new();
     for session in &sessions {
         if let Some(parent) = &session.parent
-            && session.status == SessionStatus::NeedsYou
+            && matches!(
+                session.status,
+                SessionStatus::NeedsYou | SessionStatus::NeedsLogin
+            )
         {
             *need_you.entry(parent.clone()).or_default() += 1;
         }

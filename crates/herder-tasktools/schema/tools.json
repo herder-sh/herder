@@ -260,7 +260,7 @@
                   }
                 },
                 "status": {
-                  "description": "`running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `error` when it cannot continue, `archived` when it was archived, by herder once all its pull requests merged or by hand (send unarchives it).",
+                  "description": "`running` while it works or waits on you, `waiting_for_capacity` while its next turn waits for this machine to have room (it still counts as working), `idle` when its turn ended, `needs_you` when it waits on the user, `needs_login` while its account needs logging in again (what you send it waits until then), `error` when it cannot continue, `archived` when it was archived, by herder once all its pull requests merged or by hand (send unarchives it).",
                   "oneOf": [
                     {
                       "description": "Waiting for a prompt.",
@@ -281,6 +281,11 @@
                       "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
                       "type": "string",
                       "const": "needs_you"
+                    },
+                    {
+                      "description": "Its account needs logging in again (`Account.needs_login`): prompts sent meanwhile are\nheld in the queue instead of starting turns that would fail, and run in order once the\naccount is logged in again or the session switches to another account.",
+                      "type": "string",
+                      "const": "needs_login"
                     },
                     {
                       "description": "Cannot continue without intervention.",
@@ -378,6 +383,11 @@
                     "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
                     "type": "string",
                     "const": "needs_you"
+                  },
+                  {
+                    "description": "Its account needs logging in again (`Account.needs_login`): prompts sent meanwhile are\nheld in the queue instead of starting turns that would fail, and run in order once the\naccount is logged in again or the session switches to another account.",
+                    "type": "string",
+                    "const": "needs_login"
                   },
                   {
                     "description": "Cannot continue without intervention.",
@@ -700,6 +710,14 @@
                   "description": "Display label chosen by the owner.",
                   "type": "string"
                 },
+                "needs_login": {
+                  "description": "Since when the account needs logging in again on this host: a turn on it failed as\n`auth`. Its sessions hold their prompts meanwhile (`needs_login`); herder never moves\nthem to another account by itself. Cleared by logging in again, or by the next turn on\nit that completes; absent while the account works.",
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
                 "provider": {
                   "description": "Provider the account belongs to.",
                   "type": "string",
@@ -875,7 +893,7 @@
                   "type": "boolean"
                 },
                 "children_need_you": {
-                  "description": "How many of this session's children are `needs_you`; 0 for a child.",
+                  "description": "How many of this session's children are `needs_you` or `needs_login`; 0 for a child.",
                   "type": "integer",
                   "format": "uint32",
                   "minimum": 0
@@ -1037,6 +1055,11 @@
                       "description": "Blocked on a user: an approval or question routed or escalated to the user, or a failed turn to act on.",
                       "type": "string",
                       "const": "needs_you"
+                    },
+                    {
+                      "description": "Its account needs logging in again (`Account.needs_login`): prompts sent meanwhile are\nheld in the queue instead of starting turns that would fail, and run in order once the\naccount is logged in again or the session switches to another account.",
+                      "type": "string",
+                      "const": "needs_login"
                     },
                     {
                       "description": "Cannot continue without intervention.",
