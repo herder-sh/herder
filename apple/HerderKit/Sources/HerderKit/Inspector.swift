@@ -100,10 +100,9 @@ private struct MomentGroupView: View {
                         .tracking(0.6)
                         .foregroundStyle(Theme.secondary)
                     Spacer()
-                    Text(turn.started, format: .relative(presentation: .named))
+                    RelativeTime(date: turn.started)
                         .font(.caption2)
                         .foregroundStyle(Theme.tertiary)
-                        .help(turn.started.formatted(date: .abbreviated, time: .standard))
                 }
             }
             VStack(alignment: .leading, spacing: 8) {

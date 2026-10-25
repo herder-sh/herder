@@ -46,7 +46,7 @@ struct DesktopShell: View {
         case .project(let id):
             let project = lists.projects.first { $0.id == id }
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: project?.name ?? "Project", subtitle: project?.machines.joined(separator: ", ") ?? "",
+                Pane(title: project?.name ?? "Project", status: project?.machines.joined(separator: ", ") ?? "",
                      state: project?.state, icon: ProjectIcon(projectId: project?.projectId, name: project?.name, image: fleet.projectIcon(project?.projectId), size: 30),
                      switcher: switcher, query: $query) {
                     drafting({ $0.projectId == id }) {
@@ -59,13 +59,13 @@ struct DesktopShell: View {
                         }
                     }
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { draft = Draft.inProject(id, fleet: fleet) }
+                    PaneButton(title: "New Session", symbol: "plus", prominent: true) { draft = Draft.inProject(id, fleet: fleet) }
                     IconButton(symbol: "gearshape", help: "Project Settings") { sheet = .projectSettings(projectId: id) }
                 }
             }
         case .chats:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Chats", subtitle: "About no project", switcher: switcher, query: $query) {
+                Pane(title: "Chats", switcher: switcher, query: $query) {
                     drafting(\.isChat) {
                         ScrollView {
                             ProjectSessions(fleet: fleet, live: lists.chats, archived: lists.archivedChats,
@@ -75,50 +75,50 @@ struct DesktopShell: View {
                     }
                 } actions: {
                     let started = Draft.chat(fleet: fleet)
-                    PaneButton(title: "New Chat", symbol: "plus") { draft = started }
+                    PaneButton(title: "New Chat", symbol: "plus", prominent: true) { draft = started }
                         .disabled(started == nil)
                 }
             }
         case .board:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Board", subtitle: subtitle(lists), switcher: switcher, query: $query) {
+                Pane(title: "Board", status: connectionStatus(lists), switcher: switcher, query: $query) {
                     drafting { BoardView(fleet: fleet, sheet: $sheet, selection: $session, query: query) }
                 } actions: {
-                    PaneButton(title: "New Session", symbol: "plus") { sheet = .newSession }
+                    PaneButton(title: "New Session", symbol: "plus", prominent: true) { sheet = .newSession }
                 }
             }
         case .pullRequests:
             ListAndSession(fleet: fleet, session: $session, draft: $draft, typed: $typed, opened: opened) {
-                Pane(title: "Pull Requests", subtitle: "Linked to sessions", switcher: switcher, query: $query) {
+                Pane(title: "Pull Requests", switcher: switcher, query: $query) {
                     drafting { PullRequestsView(fleet: fleet, selection: $session, query: query) }
                 } actions: {
                     EmptyView()
                 }
             }
         case .skills:
-            Pane(title: "Skills", subtitle: "The skill library and project skills", switcher: switcher) {
+            Pane(title: "Skills", switcher: switcher) {
                 SkillsView(fleet: fleet, session: session)
             } actions: {
                 EmptyView()
             }
         case .providers:
-            Pane(title: "Providers", subtitle: "Accounts, plan limits and usage", switcher: switcher) {
+            Pane(title: "Providers", switcher: switcher) {
                 ProvidersView(fleet: fleet, sheet: $sheet)
             } actions: {
-                PaneButton(title: "Add Account", symbol: "plus") { sheet = .addAccount }
+                PaneButton(title: "Add Account", symbol: "plus", prominent: true) { sheet = .addAccount }
             }
         case .machines:
-            Pane(title: "Machines", subtitle: subtitle(lists), switcher: switcher) {
+            Pane(title: "Machines", status: connectionStatus(lists), switcher: switcher) {
                 MachinesView(fleet: fleet, sheet: $sheet)
             } actions: {
                 if !AwsSignIn.machines(fleet.machines).isEmpty {
                     PaneButton(title: "AWS Sign-in", symbol: "key") { sheet = .awsSignIn }
                 }
                 IconButton(symbol: "qrcode", help: "Pair Another Device") { sheet = .share }
-                PaneButton(title: "Add Machine", symbol: "plus") { sheet = .pair }
+                PaneButton(title: "Add Machine", symbol: "plus", prominent: true) { sheet = .pair }
             }
         case .vault:
-            Pane(title: "Vault", subtitle: "Replicated hosts and their sessions", switcher: switcher) {
+            Pane(title: "Vault", switcher: switcher) {
                 VaultView(fleet: fleet, sheet: $sheet)
             } actions: {
                 EmptyView()
@@ -165,7 +165,7 @@ struct DesktopShell: View {
 
     private var switcher: Switcher { Switcher(fleet: fleet, item: $item, session: $session) }
 
-    private func subtitle(_ lists: Lists) -> String {
+    private func connectionStatus(_ lists: Lists) -> String {
         let connected = lists.machines.filter(\.connected).count
         if lists.machines.isEmpty { return "No machines yet" }
         if connected < lists.machines.count { return "\(connected) of \(lists.machines.count) machines connected" }
@@ -229,11 +229,12 @@ private struct ListAndSession<List: View>: View {
     }
 }
 
-/// A pane with herder's header: a title, a quiet subtitle, the pane's actions, then the content.
+/// A pane: its `PageHeader`, a search field when it has one, then the content.
 struct Pane<Content: View, Actions: View>: View {
     let title: String
-    var subtitle = ""
-    /// A project's rolled-up state, before the subtitle.
+    /// The page's live status sentence (`PageHeader.status`).
+    var status = ""
+    /// A project's rolled-up state, before the status.
     var state: SessionState?
     /// A project's tile before the title.
     var icon: ProjectIcon?
@@ -246,43 +247,7 @@ struct Pane<Content: View, Actions: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
-                if let icon { icon.padding(.trailing, 4) }
-                VStack(alignment: .leading, spacing: 2) {
-                    if let switcher {
-                        Menu {
-                            switcher.items
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
-                                Image(systemName: "chevron.down").font(.footnote.weight(.bold)).foregroundStyle(Theme.secondary)
-                            }
-                            .contentShape(.rect)
-                        }
-                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-                        .help("Switch section or project")
-                    } else {
-                        Text(title).font(.title2.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
-                    }
-                    if state != nil || !subtitle.isEmpty {
-                        HStack(spacing: 4) {
-                            if let state {
-                                StatusGlyph(state: state, size: 7, pulses: false)
-                                Text(subtitle.isEmpty ? state.label : "\(state.label) ·")
-                            }
-                            if !subtitle.isEmpty { Text(subtitle) }
-                        }
-                        .font(.footnote).foregroundStyle(Theme.secondary).lineLimit(1)
-                    }
-                }
-                Spacer()
-                // The actions take their room before the title, so a label never wraps.
-                HStack(spacing: 8) { actions }
-                    .layoutPriority(1)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 22)
-            .padding(.bottom, 10)
+            PageHeader(title: title, status: status, state: state, icon: icon, switcher: switcher) { actions }
             if let query {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(Theme.tertiary)
@@ -338,9 +303,11 @@ struct Switcher {
 }
 
 /// A labelled header button in herder's style; just its icon where the label does not fit.
+/// `prominent` for the page's main action, in the primary style.
 struct PaneButton: View {
     let title: String
     let symbol: String
+    var prominent = false
     let action: () -> Void
 
     var body: some View {
@@ -356,7 +323,7 @@ struct PaneButton: View {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(Theme.text)
             .frame(height: 30)
-            .background(Theme.raised, in: .rect(cornerRadius: 8))
+            .primaryFill(in: .rect(cornerRadius: 8), on: prominent)
             .hitTarget()
         }
         .buttonStyle(.plain)
@@ -580,7 +547,7 @@ private struct SidebarRow: View {
                 } else if badge > 0 {
                     Text("\(badge)")
                         .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(attention ? Theme.onPrimary : Theme.tertiary)
+                        .foregroundStyle(attention ? Theme.background : Theme.tertiary)
                         .padding(.horizontal, attention ? 7 : 0)
                         .padding(.vertical, attention ? 2 : 0)
                         .background(attention ? Theme.accent : .clear, in: .capsule)

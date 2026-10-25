@@ -371,7 +371,7 @@ struct AwsSignInSheet: View {
                 Spacer(minLength: 8)
                 if case .waiting(let device) = status {
                     Text(device.userCode).font(Theme.mono).foregroundStyle(Theme.text).textSelection(.enabled)
-                    Button("Approve") { open(device) }.buttonStyle(.borderedProminent).controlSize(.small)
+                    PillButton(title: "Approve", prominent: true) { open(device) }
                 }
                 statusLabel(status)
                 if row.connection != nil {

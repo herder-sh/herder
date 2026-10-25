@@ -1081,10 +1081,10 @@ struct HeaderLabel: View {
             if let title { Text(title).lineLimit(1) }
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(selected ? Theme.onPrimary : tint)
+        .foregroundStyle(selected ? Theme.text : tint)
         .padding(.horizontal, title == nil ? 0 : 11)
         .frame(minWidth: 32, minHeight: 32, maxHeight: 32)
-        .background(selected ? Theme.primary : Theme.bubble, in: .rect(cornerRadius: 9))
+        .primaryFill(in: .rect(cornerRadius: 9), on: selected, off: Theme.bubble)
         .hitTarget()
     }
 }
