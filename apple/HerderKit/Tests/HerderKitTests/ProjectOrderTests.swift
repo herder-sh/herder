@@ -11,7 +11,7 @@ private func project(
         SessionSummary(key: SessionKey(hostId: "h", sessionId: "\(name)-\(index)"), title: "", project: name,
                        branch: "", machine: "h", state: state, activity: "", age: "")
     }
-    return ProjectGroup(projectId: "acme/\(name)", name: name, machines: ["h"], live: live, archived: [],
+    return ProjectGroup(projectId: "acme/\(name)", name: name, live: live, archived: [],
                         recency: recency, quiet: quiet)
 }
 
@@ -26,7 +26,7 @@ struct ProjectOrderTests {
         project("alpha", recency: 2),
         project("bravo", recency: 1, states: [.needsYou, .running]),
         project("delta", recency: 3, states: [.needsYou]),
-        ProjectGroup(projectId: nil, name: "No project yet", machines: [], live: [], archived: [], recency: 4),
+        ProjectGroup(projectId: nil, name: "No project yet", live: [], archived: [], recency: 4),
     ]
 
     private func names(_ sort: ProjectSort, manual: [String] = []) -> [String] {

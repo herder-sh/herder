@@ -8,7 +8,6 @@ struct ProjectGroup: Hashable, Identifiable {
     /// `nil` for sessions whose project is not known yet.
     let projectId: String?
     let name: String
-    let machines: [String]
     /// Its task trees with a session that is not archived, without their archived children: an
     /// archived parent stays only to lead its live children.
     var live: [SessionSummary]
@@ -154,19 +153,13 @@ struct Lists: Equatable {
         let groups = grouped.map { projectId, members -> (ProjectGroup, Date?) in
             let name = projectId.map { projectName($0, machines: machines) } ?? "No project yet"
             let (live, archived) = split(members, now: now)
-            var machineNames = machines.filter { machine in
-                projectId != nil && machine.projects.contains { $0.projectId == projectId }
-            }.map(\.name)
-            for entry in members where !machineNames.contains(entry.machineName) {
-                machineNames.append(entry.machineName)
-            }
             var paths: [String] = []
             for project in machines.flatMap(\.projects) where project.projectId == projectId {
                 for path in project.paths where !paths.contains(path) { paths.append(path) }
             }
             let lastActive = members.compactMap(\.model.updatedAt).max()
             let group = ProjectGroup(
-                projectId: projectId, name: name, machines: machineNames,
+                projectId: projectId, name: name,
                 live: live, archived: archived, paths: paths,
                 age: Timestamp.age(lastActive, now: now),
                 quiet: lastActive.map { now.timeIntervalSince($0) > 30 * 24 * 3600 } ?? true)

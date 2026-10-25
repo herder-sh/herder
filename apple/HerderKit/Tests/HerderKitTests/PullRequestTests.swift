@@ -136,7 +136,6 @@ struct RoundTwoTests {
                               defaultAccount: nil, setupCommand: nil)
         let lists = Lists(machines: [machine("h", name: "alpha", sessions: [], projects: [project])], sessions: [:])
         #expect(lists.projects.map(\.name) == ["new"])
-        #expect(lists.projects[0].machines == ["alpha"])
     }
 
     @Test func retriesThatFailAlikeFoldIntoOneRun() {

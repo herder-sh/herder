@@ -279,6 +279,75 @@ struct BoardTests {
         #expect(sections[0].trees.map(\.lead.title) == ["Herder new", "Herder old"])
     }
 
+    @Test func nameSortsTasksByTitleInOneUntitledSection() {
+        let trees = [
+            task("01A", "beta", hoursAgo: 1),
+            task("01B", "Alpha", hoursAgo: 50),
+            task("01C", "Task 10", hoursAgo: 2),
+            task("01D", "Task 9", hoursAgo: nil),
+        ]
+        let sections = BoardSection.sections(trees, by: .name, now: Self.now, calendar: Self.calendar)
+        #expect(sections.map(\.title) == [""])
+        #expect(sections[0].trees.map(\.lead.title) == ["Alpha", "beta", "Task 9", "Task 10"])
+        #expect(BoardSection.sections([], by: .name, now: Self.now).isEmpty)
+    }
+
+    @Test func theBoardAndSessionListsOfferTheirOwnSorts() {
+        #expect(BoardSort.board.map(\.title) == ["Recent", "Created", "Project"])
+        #expect(BoardSort.sessions.map(\.title) == ["Recent", "Created", "Name"])
+        #expect(BoardSort.boardKey != BoardSort.sessionsKey)
+    }
+
+    // MARK: Project lists and Chats
+
+    @Test func aProjectListNamesTheMachineOnlyWhenItsSessionsSpanMachines() {
+        var onA = Script("01A", host: "host-a")
+        var alsoOnA = Script("01B", host: "host-a")
+        var onB = Script("01C", host: "host-b")
+        var hostA = machine("host-a", name: "alpha", sessions: ["01A", "01B"])
+        var hostB = machine("host-b", name: "beta", sessions: ["01C"])
+        for index in hostA.sessions.indices { hostA.sessions[index].projectId = "github.com/acme/app" }
+        hostB.sessions[0].projectId = "github.com/acme/app"
+        let sessions = [
+            onA.key: onA.model([created(task: "One", branch: "p1-one")]),
+            alsoOnA.key: alsoOnA.model([created(task: "Two", branch: "")]),
+            onB.key: onB.model([created(task: "Three", branch: "p1-three")]),
+        ]
+        let spanning = Lists(machines: [hostA, hostB], sessions: sessions).projects[0]
+        #expect(ProjectSessions.spansMachines(spanning.sessions))
+        let three = spanning.sessions.first { $0.title == "Three" }
+        #expect(three.map { ProjectSessions.context($0, machines: true) } == "beta · p1-three")
+
+        let single = Lists(machines: [hostA], sessions: sessions).projects[0]
+        #expect(!ProjectSessions.spansMachines(single.sessions))
+        let lines = single.sessions.map { ProjectSessions.context($0, machines: false) }
+        #expect(lines.sorted() == ["", "p1-one"])
+    }
+
+    @Test func aProjectsHeaderSaysWhatWaitsAndWorksAndHowManyTasks() {
+        var waiting = Script("01A")
+        var working = Script("01B")
+        var child = Script("01C")
+        var idle = Script("01D")
+        var archived = Script("01E")
+        let project = projectLists([
+            waiting.model([
+                created(task: "Waiting"),
+                .approvalRequested(approvalId: "a", turnId: "t", toolCallId: "i", summary: "Run cargo test?",
+                                   routedTo: .user, reason: nil),
+            ]),
+            working.model([created(task: "Working"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+            child.model([created(task: "Child", parent: "01B"), .sessionStatusChanged(status: .running, retryAt: nil)]),
+            idle.model([created(task: "Idle")]),
+            archived.model([created(task: "Archived"), .sessionStatusChanged(status: .archived, retryAt: nil)]),
+        ]).projects[0]
+        // A child is no task of its own; an archived one counts.
+        #expect(ProjectSessions.status(live: project.live, archived: project.archived)
+            == "1 waiting for you · 1 working · 4 sessions")
+        let quiet = projectLists([idle.model([created(task: "Idle")])]).projects[0]
+        #expect(ProjectSessions.status(live: quiet.live, archived: quiet.archived) == "1 session")
+    }
+
     @Test func aULIDsTimeIsItsFirstTenCharacters() {
         #expect(ULID.date("01ARZ3NDEKTSV4RRFFQ69G5FAV").map { ($0.timeIntervalSince1970 * 1000).rounded() } == 1_469_922_850_259)
         #expect(ULID.date("01A") == nil)
